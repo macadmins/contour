@@ -1,6 +1,6 @@
 # contour profile -- Configuration Profile Toolkit
 
-`contour profile` is a CLI toolkit for managing Apple configuration profiles (`.mobileconfig`). It handles normalization, validation, signing, UUID management, payload inspection, and documentation generation for macOS fleets.
+`contour profile` is a CLI toolkit for managing Apple configuration profiles (`.mobileconfig`). It handles normalization, validation, signing, UUID management, payload inspection, and documentation generation for Apple device management.
 
 Aimed at Mac admins who manage profiles across MDM solutions, GitOps repositories, or local development workflows.
 
