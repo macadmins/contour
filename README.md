@@ -4,7 +4,7 @@
 
 # Contour
 
-**The Swiss Army Knife for macOS MDM Profiles**
+**The Swiss Army Knife for Apple Device Management Profiles**
 
 One binary, multiple tools. A Mac admin's special tooling to slice and dice configuration profiles, validate, sign, and prepare them for MDM migration and GitOps work — start transforming existing profiles and create new ones.
 
