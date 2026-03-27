@@ -24,7 +24,9 @@ pub fn parse_mobileconfig(content: &[u8]) -> Result<RuleSet> {
         // Check if this is a Santa payload
         let payload_type = payload_dict.get("PayloadType").and_then(|v| v.as_string());
 
-        if payload_type != Some("com.google.santa") {
+        if payload_type != Some("com.northpolesec.santa")
+            && payload_type != Some("com.google.santa")
+        {
             continue;
         }
 

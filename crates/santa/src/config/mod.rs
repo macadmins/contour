@@ -49,7 +49,7 @@ impl Default for SantaConfig {
             sync_url: None,
             machine_owner_plist: None,
             block_usb: false,
-            identifier: "com.google.santa".to_string(),
+            identifier: "com.northpolesec.santa".to_string(),
             org: "Example Org".to_string(),
         }
     }
@@ -86,7 +86,7 @@ pub fn generate_config(config: &SantaConfig) -> Result<Vec<u8>> {
     let mut payload: HashMap<String, Value> = HashMap::new();
     payload.insert(
         "PayloadType".to_string(),
-        Value::String("com.google.santa".to_string()),
+        Value::String("com.northpolesec.santa".to_string()),
     );
     payload.insert(
         "PayloadIdentifier".to_string(),

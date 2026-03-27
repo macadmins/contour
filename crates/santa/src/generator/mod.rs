@@ -83,7 +83,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     let mut payload: HashMap<String, Value> = HashMap::new();
     payload.insert(
         "PayloadType".to_string(),
-        Value::String("com.google.santa".to_string()),
+        Value::String("com.northpolesec.santa".to_string()),
     );
     payload.insert(
         "PayloadIdentifier".to_string(),
@@ -201,7 +201,7 @@ pub fn generate_payload_plist(rules: &RuleSet, options: &GeneratorOptions) -> Re
     let mut payload: HashMap<String, Value> = HashMap::new();
     payload.insert(
         "PayloadType".to_string(),
-        Value::String("com.google.santa".to_string()),
+        Value::String("com.northpolesec.santa".to_string()),
     );
     payload.insert(
         "PayloadIdentifier".to_string(),

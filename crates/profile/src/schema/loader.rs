@@ -128,16 +128,22 @@ pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
         .filter(|c| c.kind == mdm_schema::PayloadKind::MdmProfile)
     {
         if existing_types.contains(&cap.payload_type) {
-            // Apple schema overrides ProfileCreator — replace in place
+            // Merge Apple keys into existing ProfileCreator manifest.
+            // Apple keys take precedence where both define the same key,
+            // but ProfileCreator-only keys (legacy) are preserved.
             if let Some(existing) = manifests
                 .iter_mut()
                 .find(|m| m.payload_type == cap.payload_type)
             {
                 let apple = capability_to_manifest(cap);
-                existing.fields = apple.fields;
-                existing.field_order = apple.field_order;
+                // Merge fields: Apple overrides, ProfileCreator fills gaps
+                for (key, field) in apple.fields {
+                    existing.fields.insert(key.clone(), field);
+                    if !existing.field_order.contains(&key) {
+                        existing.field_order.push(key);
+                    }
+                }
                 existing.platforms = apple.platforms;
-                // Keep ProfileCreator's title/description if Apple's is generic
                 if !apple.description.is_empty() {
                     existing.description = apple.description;
                 }

@@ -128,7 +128,7 @@ pub fn run(
     // Check if santactl is available
     if !is_santactl_available() {
         print_error("santactl not found. Please install Santa first.");
-        print_info("Install Santa from: https://github.com/google/santa/releases");
+        print_info("Install Santa from: https://github.com/northpolesec/santa/releases");
         anyhow::bail!("santactl not available");
     }
 

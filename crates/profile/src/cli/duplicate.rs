@@ -331,7 +331,7 @@ mod tests {
             payload_uuid: "0FEE6FAB-1234-5678-9ABC-DEF012345678".to_string(),
             payload_display_name: "Santa Configuration".to_string(),
             payload_content: vec![PayloadContent {
-                payload_type: "com.google.santa".to_string(),
+                payload_type: "com.northpolesec.santa".to_string(),
                 payload_version: 1,
                 payload_identifier: "com.example.santa-configuration.santa".to_string(),
                 payload_uuid: "E08BF479-AAAA-BBBB-CCCC-DDDDEEEEEEEE".to_string(),
