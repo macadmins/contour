@@ -23,6 +23,7 @@ pub mod output;
 pub mod scan;
 pub mod trainer;
 pub mod validation;
+pub mod string_utils;
 pub mod yaml_edit;
 
 pub use app_discovery::{extract_team_id, find_apps_recursive};
@@ -39,4 +40,5 @@ pub use output::{
 pub use scan::{AppInfo, discover_apps, multi_select, select_apps};
 pub use trainer::workflows::{MscpWorkflow, PppcWorkflow, ProfileWorkflow, SantaWorkflow};
 pub use trainer::{TrainerContext, TrainerWorkflow};
+pub use string_utils::levenshtein_distance;
 pub use validation::{ValidationIssue, ValidationResult, ValidationSeverity};

@@ -501,12 +501,13 @@ fn plist_value_type_name(value: &Value) -> &'static str {
 
 /// Find the closest matching key in the manifest using simple edit distance.
 fn find_closest_key(key: &str, manifest: &PayloadManifest) -> Option<String> {
+    use contour_core::levenshtein_distance;
     let key_lower = key.to_lowercase();
     let mut best: Option<(String, usize)> = None;
 
     for known_key in manifest.fields.keys() {
         let known_lower = known_key.to_lowercase();
-        let distance = levenshtein(&key_lower, &known_lower);
+        let distance = levenshtein_distance(&key_lower, &known_lower);
         // Only suggest if distance is small relative to key length
         let threshold = (key.len() / 3).max(2);
         if distance <= threshold {
@@ -519,35 +520,6 @@ fn find_closest_key(key: &str, manifest: &PayloadManifest) -> Option<String> {
     best.map(|(k, _)| k)
 }
 
-/// Simple Levenshtein distance (no external crate needed for this).
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a_len = a.len();
-    let b_len = b.len();
-
-    if a_len == 0 {
-        return b_len;
-    }
-    if b_len == 0 {
-        return a_len;
-    }
-
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-
-    let mut prev: Vec<usize> = (0..=b_len).collect();
-    let mut curr = vec![0; b_len + 1];
-
-    for i in 1..=a_len {
-        curr[0] = i;
-        for j in 1..=b_len {
-            let cost = usize::from(a_bytes[i - 1] != b_bytes[j - 1]);
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-
-    prev[b_len]
-}
 
 // ── Tests ────────────────────────────────────────────────────────────
 
@@ -632,12 +604,12 @@ mod tests {
 
     #[test]
     fn test_levenshtein_distance() {
-        assert_eq!(levenshtein("", ""), 0);
-        assert_eq!(levenshtein("abc", "abc"), 0);
-        assert_eq!(levenshtein("abc", ""), 3);
-        assert_eq!(levenshtein("", "abc"), 3);
-        assert_eq!(levenshtein("kitten", "sitting"), 3);
-        assert_eq!(levenshtein("abc", "abd"), 1);
+        assert_eq!(contour_core::levenshtein_distance("", ""), 0);
+        assert_eq!(contour_core::levenshtein_distance("abc", "abc"), 0);
+        assert_eq!(contour_core::levenshtein_distance("abc", ""), 3);
+        assert_eq!(contour_core::levenshtein_distance("", "abc"), 3);
+        assert_eq!(contour_core::levenshtein_distance("kitten", "sitting"), 3);
+        assert_eq!(contour_core::levenshtein_distance("abc", "abd"), 1);
     }
 
     #[test]

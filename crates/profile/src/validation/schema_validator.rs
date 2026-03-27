@@ -581,40 +581,7 @@ fn reverse_dns_similarity(_unknown: &str, unknown_parts: &[&str], known: &str) -
     score.min(100)
 }
 
-/// Calculate Levenshtein edit distance between two strings
-/// Used for comparing individual segments of reverse-DNS identifiers
-fn levenshtein_distance(a: &str, b: &str) -> usize {
-    let a_chars: Vec<char> = a.chars().collect();
-    let b_chars: Vec<char> = b.chars().collect();
-    let a_len = a_chars.len();
-    let b_len = b_chars.len();
-
-    if a_len == 0 {
-        return b_len;
-    }
-    if b_len == 0 {
-        return a_len;
-    }
-
-    // Use two rows instead of full matrix for memory efficiency
-    let mut prev_row: Vec<usize> = (0..=b_len).collect();
-    let mut curr_row: Vec<usize> = vec![0; b_len + 1];
-
-    for (i, a_char) in a_chars.iter().enumerate() {
-        curr_row[0] = i + 1;
-
-        for (j, b_char) in b_chars.iter().enumerate() {
-            let cost = usize::from(a_char != b_char);
-            curr_row[j + 1] = (prev_row[j + 1] + 1) // deletion
-                .min(curr_row[j] + 1) // insertion
-                .min(prev_row[j] + cost); // substitution
-        }
-
-        std::mem::swap(&mut prev_row, &mut curr_row);
-    }
-
-    prev_row[b_len]
-}
+use contour_core::levenshtein_distance;
 
 /// Find a schema key similar to the given unknown key.
 ///

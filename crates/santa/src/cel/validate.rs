@@ -261,35 +261,7 @@ fn find_closest_field(input: &str, fields: &[FieldInfo]) -> Option<String> {
         .map(|f| format!("did you mean '{}'?", f.name))
 }
 
-/// Standard Levenshtein distance between two strings.
-fn levenshtein_distance(a: &str, b: &str) -> usize {
-    let a_len = a.len();
-    let b_len = b.len();
-
-    if a_len == 0 {
-        return b_len;
-    }
-    if b_len == 0 {
-        return a_len;
-    }
-
-    // Use a single-row buffer for space efficiency.
-    let mut prev_row: Vec<usize> = (0..=b_len).collect();
-    let mut curr_row = vec![0; b_len + 1];
-
-    for (i, a_ch) in a.chars().enumerate() {
-        curr_row[0] = i + 1;
-        for (j, b_ch) in b.chars().enumerate() {
-            let cost = usize::from(a_ch != b_ch);
-            curr_row[j + 1] = (prev_row[j + 1] + 1)
-                .min(curr_row[j] + 1)
-                .min(prev_row[j] + cost);
-        }
-        std::mem::swap(&mut prev_row, &mut curr_row);
-    }
-
-    prev_row[b_len]
-}
+use contour_core::levenshtein_distance;
 
 #[cfg(test)]
 mod tests {
