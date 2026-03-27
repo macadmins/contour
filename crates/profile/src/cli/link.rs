@@ -188,15 +188,17 @@ fn handle_link_separate(
     // Write each profile
     for (original_path, profile) in &result.profiles {
         let output_path = if let Some(ref dir) = out_dir {
-            let filename = original_path
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("path has no filename: {}", original_path.display()))?;
+            let filename = original_path.file_name().ok_or_else(|| {
+                anyhow::anyhow!("path has no filename: {}", original_path.display())
+            })?;
             dir.join(filename)
         } else {
             // Write next to original with -linked suffix
             let stem = original_path
                 .file_stem()
-                .ok_or_else(|| anyhow::anyhow!("path has no file stem: {}", original_path.display()))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("path has no file stem: {}", original_path.display())
+                })?
                 .to_string_lossy();
             let new_name = format!("{stem}-linked.mobileconfig");
             original_path
@@ -302,7 +304,10 @@ fn print_dry_run(
         } else {
             println!("Would link {} profiles:", profiles.len());
             for (path, _) in profiles {
-                let stem = path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_else(|| path.to_string_lossy());
+                let stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_else(|| path.to_string_lossy());
                 let output_path = if let Some(dir) = output {
                     format!("{dir}/{stem}.mobileconfig")
                 } else {

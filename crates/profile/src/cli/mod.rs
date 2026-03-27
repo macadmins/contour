@@ -20,6 +20,7 @@ pub mod payload;
 pub mod scan;
 pub mod search;
 pub mod sign;
+pub mod synthesize;
 pub mod unsign;
 pub mod uuid;
 pub mod validate;
@@ -480,6 +481,27 @@ pub enum Commands {
     Command {
         #[command(subcommand)]
         action: CommandAction,
+    },
+
+    /// Synthesize mobileconfig profiles from managed preference plists
+    Synthesize {
+        #[arg(help = "Plist file(s) or directory of managed preferences", required = true, num_args = 1..)]
+        paths: Vec<std::path::PathBuf>,
+
+        #[arg(short, long, help = "Output directory for generated mobileconfigs")]
+        output: Option<std::path::PathBuf>,
+
+        #[arg(long, help = "Organization reverse domain (e.g., com.yourorg)")]
+        org: Option<String>,
+
+        #[arg(long, help = "Validate keys against Apple schema")]
+        validate: bool,
+
+        #[arg(long, help = "Preview without writing files")]
+        dry_run: bool,
+
+        #[arg(long, help = "Interactive mode -- select which plists to synthesize")]
+        interactive: bool,
     },
 }
 

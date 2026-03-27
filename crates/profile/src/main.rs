@@ -499,6 +499,24 @@ fn main() -> Result<()> {
                 cli::command::handle_command_info(&command_type, output_mode)?;
             }
         },
+        Commands::Synthesize {
+            paths,
+            output,
+            org,
+            validate,
+            dry_run,
+            interactive,
+        } => {
+            cli::synthesize::handle_synthesize(
+                &paths,
+                output.as_deref(),
+                org.as_deref(),
+                validate,
+                dry_run,
+                interactive,
+                output_mode,
+            )?;
+        }
         Commands::Ddm { action } => match action {
             DdmAction::Parse {
                 paths,

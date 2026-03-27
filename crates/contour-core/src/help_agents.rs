@@ -181,6 +181,13 @@ contour profile generate <payload_type> --full --fragment -o fragment/
 # Output: fragment.toml + platforms/macos/configuration-profiles/*.mobileconfig
 ```
 
+## Synthesize mobileconfigs from managed preferences
+```
+1. contour profile synthesize /Library/Managed\ Preferences/ --dry-run --json  # preview
+2. contour profile synthesize /Library/Managed\ Preferences/ -o profiles/ --org com.yourco --validate
+3. contour profile validate profiles/ --recursive --json  # verify output
+```
+
 ## Key flags
 - `--full` — include all fields, not just required
 - `--interactive` — pick segments and set values interactively

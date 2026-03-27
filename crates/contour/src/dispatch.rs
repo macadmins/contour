@@ -662,6 +662,24 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 profile::cli::command::handle_command_info(&command_type, output_mode)?;
             }
         },
+        Commands::Synthesize {
+            paths,
+            output,
+            org,
+            validate,
+            dry_run,
+            interactive,
+        } => {
+            profile::cli::synthesize::handle_synthesize(
+                &paths,
+                output.as_deref(),
+                org.as_deref(),
+                validate,
+                dry_run,
+                interactive,
+                output_mode,
+            )?;
+        }
         Commands::Ddm { action } => match action {
             DdmAction::Parse {
                 paths,
