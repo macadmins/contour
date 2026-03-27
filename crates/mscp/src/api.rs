@@ -2,7 +2,10 @@
 //!
 //! Wraps the low-level Parquet readers from [`mscp_schema`] with convenient
 //! lookup and filtering functions.
-#![allow(dead_code, reason = "public API surface — consumed by CLI and external callers")]
+#![allow(
+    dead_code,
+    reason = "public API surface — consumed by CLI and external callers"
+)]
 
 use anyhow::Result;
 use mscp_schema::{

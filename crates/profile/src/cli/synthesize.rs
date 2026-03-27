@@ -520,7 +520,6 @@ fn find_closest_key(key: &str, manifest: &PayloadManifest) -> Option<String> {
     best.map(|(k, _)| k)
 }
 
-
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
