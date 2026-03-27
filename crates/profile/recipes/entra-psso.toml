@@ -1,0 +1,28 @@
+[recipe]
+name = "entra-psso"
+description = "Microsoft Entra ID Platform SSO with Secure Enclave"
+vendor = "Microsoft"
+
+[[profile]]
+filename = "entra-psso-secure-enclave.mobileconfig"
+payload_type = "com.apple.extensiblesso"
+display_name = "Platform SSO – Entra ID (Secure Enclave)"
+description = "Configures Microsoft Entra ID SSO Extension with Platform SSO using Secure Enclave-backed keys"
+removal_disallowed = true
+
+[profile.fields]
+Type = "Redirect"
+TeamIdentifier = "UBF8T346G9"
+ExtensionIdentifier = "com.microsoft.CompanyPortalMac.ssoextension"
+URLs = ["https://login.microsoftonline.com", "https://login.microsoft.com", "https://sts.windows.net"]
+ScreenLockedBehavior = "DoNotHandle"
+
+[profile.extra_fields]
+"PlatformSSO.AuthenticationMethod" = "UserSecureEnclaveKey"
+"PlatformSSO.UseSharedDeviceKeys" = true
+"PlatformSSO.EnableAuthorization" = true
+"PlatformSSO.EnableCreateUserAtLogin" = true
+"PlatformSSO.NewUserAuthorizationMode" = "Standard"
+"PlatformSSO.UserAuthorizationMode" = "Standard"
+"PlatformSSO.TokenToUserMapping.AccountName" = "preferred_username"
+"PlatformSSO.TokenToUserMapping.FullName" = "name"

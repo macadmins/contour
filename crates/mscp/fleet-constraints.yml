@@ -1,0 +1,101 @@
+# Fleet Constraint Definitions
+# Profiles and payload keys that conflict with Fleet native capabilities
+#
+# When --fleet-mode is enabled, these profiles will be:
+# - Excluded entirely (if listed in excluded_profiles)
+# - Have specific keys stripped (if listed in payload_key_exclusions)
+#
+# Purpose: Let admins create mSCP baselines without worrying about Fleet conflicts
+#
+# ## Munki Script Exclusions (Defense-in-Depth Control)
+#
+# Each excluded profile can optionally skip Munki compliance script generation:
+#   exclude_munki_scripts: false  # Default: keep compliance checks (defense-in-depth)
+#   exclude_munki_scripts: true   # Skip compliance checks (trust MDM entirely)
+#
+# When set to true, list affected mSCP rule IDs:
+#   affected_rules:
+#     - os_filevault_enabled
+#
+# Use Cases:
+# - Defense-in-depth (default): Profile excluded, but Munki still checks compliance
+# - Single source of truth: Profile excluded AND Munki skips checks (trust Fleet)
+
+# Profiles to exclude entirely (skip during processing)
+excluded_profiles:
+  # FileVault / Disk Encryption
+  - filename: com.apple.MCX.FileVault2.mobileconfig
+    reason: "Conflicts with Fleet's enable_disk_encryption native setting"
+    fleet_alternative: "Use Fleet's enable_disk_encryption feature"
+    exclude_munki_scripts: false  # Set to true to skip Munki compliance checks (default: false = defense-in-depth)
+    affected_rules:  # mSCP rule IDs that check FileVault compliance
+      - os_filevault_enabled
+      # Uncomment to exclude additional FileVault-related rules:
+      # - os_filevault_destroy_key_standby
+
+  # Software Updates
+  - filename: com.apple.SoftwareUpdate.mobileconfig
+    reason: "Conflicts with Fleet's macos_updates/ipados_updates native settings"
+    fleet_alternative: "Use Fleet's macos_updates configuration"
+    exclude_munki_scripts: false
+    affected_rules: []  # Add rule IDs here if needed
+
+  # Setup Assistant
+  - filename: com.apple.SetupAssistant.managed.mobileconfig
+    reason: "Conflicts with Fleet's macos_setup native feature"
+    fleet_alternative: "Use Fleet's macos_setup configuration"
+    exclude_munki_scripts: false
+    affected_rules: []  # Add rule IDs here if needed
+
+  # Smart Card
+  - filename: com.apple.security.smartcard.mobileconfig
+    reason: "Smart card enforcement may conflict with Fleet MDM authentication or cause lockouts"
+    fleet_alternative: "Configure smart card settings via Fleet custom profiles if needed"
+    exclude_munki_scripts: false
+    affected_rules: []  # Add rule IDs here if needed
+
+# Payload keys to strip from profiles (without excluding entire profile)
+payload_key_exclusions:
+  - payload_type: com.apple.MCX
+    keys_to_remove:
+      - dontAllowFDEDisable
+      - DestroyFVKeyOnStandby
+      - dontAllowFDEEnable
+    reason: "FileVault settings conflict with Fleet's enable_disk_encryption"
+    fleet_alternative: "Use Fleet's enable_disk_encryption setting"
+
+  - payload_type: com.apple.SoftwareUpdate
+    keys_to_remove:
+      - AutomaticCheckEnabled
+      - AutomaticDownload
+      - AutomaticallyInstallMacOSUpdates
+      - ConfigDataInstall
+      - CriticalUpdateInstall
+    reason: "Software Update settings conflict with Fleet's macos_updates/ipados_updates"
+    fleet_alternative: "Use Fleet's macos_updates configuration"
+
+# Fleet native capabilities (for reference)
+fleet_native_capabilities:
+  disk_encryption:
+    - enable_disk_encryption
+    - macos_minimum_version
+    - ipados_minimum_version
+
+  software_updates:
+    - macos_updates.deadline
+    - macos_updates.minimum_version
+    - ipados_updates.deadline
+    - ipados_updates.minimum_version
+
+  setup_assistant:
+    - macos_setup.bootstrap_package
+    - macos_setup.enable_end_user_authentication
+    - macos_setup.macos_setup_assistant
+
+# Profiles that are safe to use with Fleet (reference list)
+safe_for_fleet:
+  - com.apple.security.firewall
+  - com.apple.screensaver
+  - com.apple.loginwindow
+  - com.apple.applicationaccess
+  - com.apple.systempreferences

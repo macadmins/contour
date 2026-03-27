@@ -1,0 +1,157 @@
+# Jamf Pro Constraints and Exclusions
+#
+# This file defines profiles and settings that conflict with Jamf Pro's native capabilities.
+# When --jamf-mode is enabled with --jamf-exclude-conflicts, these profiles will be:
+# - Excluded entirely (if listed in excluded_profiles)
+# - Have specific keys stripped (if listed in payload_key_exclusions)
+#
+# Purpose: Let admins create mSCP baselines without worrying about Jamf conflicts
+#
+# ## Munki Script Exclusions (Defense-in-Depth Control)
+#
+# Each excluded profile can optionally skip Munki compliance script generation:
+#   exclude_munki_scripts: false  # Default: keep compliance checks (defense-in-depth)
+#   exclude_munki_scripts: true   # Skip compliance checks (trust MDM entirely)
+#
+# When set to true, list affected mSCP rule IDs:
+#   affected_rules:
+#     - os_filevault_enabled
+#
+# Use Cases:
+# - Defense-in-depth (default): Profile excluded, but Munki still checks compliance
+# - Single source of truth: Profile excluded AND Munki skips checks (trust Jamf)
+
+## Profiles to Exclude Entirely
+# These profiles conflict with Jamf Pro's native management capabilities
+excluded_profiles:
+  # FileVault / Disk Encryption
+  - filename: com.apple.MCX.FileVault2.mobileconfig
+    reason: "Jamf Pro has native FileVault enforcement via Security & Privacy payload"
+    jamf_alternative: "Use Jamf Pro > Computers > Configuration Profiles > Security & Privacy > FileVault"
+    exclude_munki_scripts: false  # Set to true to skip Munki compliance checks (default: false = defense-in-depth)
+    affected_rules:  # mSCP rule IDs that check FileVault compliance
+      - os_filevault_enabled
+      # Uncomment to exclude additional FileVault-related rules:
+      # - os_filevault_destroy_key_standby
+
+  - filename: com.apple.security.FDERecoveryKeyEscrow.mobileconfig
+    reason: "Jamf Pro manages FileVault recovery key escrow natively"
+    jamf_alternative: "Enable 'Require FileVault' in Security & Privacy payload"
+    exclude_munki_scripts: false
+    affected_rules: []
+
+  # Software Updates (if using Jamf Patch Management)
+  - filename: com.apple.SoftwareUpdate.mobileconfig
+    reason: "Conflicts with Jamf Pro Patch Management"
+    jamf_alternative: "Use Jamf Pro > Patch Management policies"
+    note: "Only exclude if you're using Jamf's native patch management"
+    exclude_munki_scripts: false
+    affected_rules: []
+
+  # Setup Assistant (if using Jamf PreStage Enrollments)
+  - filename: com.apple.SetupAssistant.managed.mobileconfig
+    reason: "Conflicts with Jamf PreStage Enrollment settings"
+    exclude_munki_scripts: false
+    affected_rules: []
+    jamf_alternative: "Configure in Jamf Pro > PreStage Enrollments"
+    note: "Only exclude if using PreStage Enrollments"
+
+## Payload Keys to Strip (Not Entire Profiles)
+# These specific keys within profiles conflict with Jamf capabilities
+payload_key_exclusions:
+  # FileVault-related keys in other profiles
+  - payload_type: com.apple.MCX
+    keys_to_remove:
+      - dontAllowFDEDisable
+      - DestroyFVKeyOnStandby
+      - dontAllowFDEEnable
+    reason: "FileVault settings conflict with Jamf Pro's FileVault management"
+    jamf_alternative: "Use Security & Privacy payload in Jamf"
+
+  # Software Update keys (if using Jamf Patch Management)
+  - payload_type: com.apple.SoftwareUpdate
+    keys_to_remove:
+      - AutomaticCheckEnabled
+      - AutomaticDownload
+      - AutomaticallyInstallMacOSUpdates
+      - ConfigDataInstall
+      - CriticalUpdateInstall
+    reason: "Software update settings conflict with Jamf Patch Management"
+    jamf_alternative: "Use Jamf Pro > Patch Management"
+    conditional: "Only strip if using Jamf Patch Management"
+
+  # Enrollment-related keys
+  - payload_type: com.apple.mdm
+    keys_to_remove:
+      - AccessRights
+      - ServerURL
+      - Topic
+    reason: "MDM enrollment is handled by Jamf Pro enrollment process"
+    jamf_alternative: "Managed automatically during enrollment"
+
+## Jamf Pro Native Capabilities
+# Document what Jamf handles natively so admins know what to skip in mSCP
+jamf_native_capabilities:
+  - category: "Device Encryption"
+    capabilities:
+      - "FileVault enforcement and escrow"
+      - "Recovery key rotation"
+      - "Institutional recovery keys"
+    jamf_location: "Configuration Profiles > Security & Privacy"
+
+  - category: "Software Updates"
+    capabilities:
+      - "macOS update enforcement"
+      - "Patch management for applications"
+      - "Deferred updates"
+    jamf_location: "Patch Management / Policies"
+
+  - category: "Enrollment & Provisioning"
+    capabilities:
+      - "PreStage Enrollments"
+      - "Automated Device Enrollment (DEP)"
+      - "Setup Assistant configuration"
+    jamf_location: "PreStage Enrollments"
+
+  - category: "Inventory Collection"
+    capabilities:
+      - "Hardware inventory"
+      - "Application inventory"
+      - "Extension attributes"
+    jamf_location: "Automatically collected"
+
+  - category: "Remote Management"
+    capabilities:
+      - "Remote wipe/lock"
+      - "Remote commands"
+      - "Lost mode"
+    jamf_location: "Management commands"
+
+## Safe for Jamf (Recommended to Deploy via Profile)
+# These settings work well when deployed via configuration profiles in Jamf
+safe_for_jamf:
+  - com.apple.security.firewall
+  - com.apple.screensaver
+  - com.apple.loginwindow
+  - com.apple.applicationaccess
+  - com.apple.systempreferences
+  - com.apple.preference.security
+  - com.apple.security.password
+  - com.apple.Safari
+  - com.apple.SubmitDiagInfo
+  - com.apple.SoftwareUpdate  # If NOT using Jamf Patch Management
+  - com.apple.systemmigration
+  - com.apple.TimeMachine
+  - com.apple.USB.HIDEmulation
+
+## Notes for Admins
+# 1. Review this file before generating baselines for Jamf
+# 2. Uncomment/comment sections based on your Jamf configuration
+# 3. If you use Jamf Patch Management, keep Software Update exclusions
+# 4. If you use PreStage Enrollments, keep Setup Assistant exclusions
+# 5. Custom profiles not listed here will be included by default
+# 6. Use --jamf-exclude-conflicts flag to apply these exclusions
+
+## Version
+version: "1.0"
+last_updated: "2025-01-22"

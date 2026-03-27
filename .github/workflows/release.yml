@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build x86_64-unknown-linux-gnu
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Extract version from tag
+        id: meta
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Set SOURCE_DATE_EPOCH
+        run: |
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct ${{ github.ref_name }})" >> $GITHUB_ENV
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu -p contour
+
+      - name: Strip binary
+        run: strip target/x86_64-unknown-linux-gnu/release/contour
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-gnu/release/contour dist/
+          cd dist
+          ARCHIVE="contour-${{ steps.meta.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz"
+          tar -czf "$ARCHIVE" contour
+          sha256sum "$ARCHIVE" > checksums.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: contour-x86_64-unknown-linux-gnu
+          path: dist/*.tar.gz
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: checksums-x86_64-unknown-linux-gnu
+          path: dist/checksums.txt
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Contour ${{ github.ref_name }}
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/checksums.txt
+          generate_release_notes: true

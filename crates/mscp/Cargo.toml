@@ -1,0 +1,76 @@
+[package]
+name = "mscp"
+version = "0.1.3"
+description = "Post-process mSCP output into MDM-ready configurations"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "mscp"
+path = "src/main.rs"
+
+[dependencies]
+contour-core.workspace = true
+mscp-schema.workspace = true
+
+# CLI
+clap.workspace = true
+clap_complete.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+yaml_serde.workspace = true
+toml.workspace = true
+plist.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Crypto
+sha2.workspace = true
+
+# File system
+walkdir.workspace = true
+
+# Parallelism
+rayon.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Terminal
+colored.workspace = true
+
+# Date/time
+chrono.workspace = true
+
+# Validation
+jsonschema.workspace = true
+
+# Git integration
+git2.workspace = true
+
+# Interactive prompts
+inquire.workspace = true
+
+# Memory allocator
+mimalloc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+assert_cmd.workspace = true
+predicates.workspace = true
+
+[build-dependencies]
+chrono.workspace = true
+
+[lints]
+workspace = true

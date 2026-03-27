@@ -1,0 +1,22 @@
+[package]
+name = "contour-profiles"
+version = "0.1.3"
+description = "Shared mobileconfig profile building utilities for Contour tools"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+plist.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

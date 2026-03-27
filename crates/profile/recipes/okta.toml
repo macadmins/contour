@@ -1,0 +1,81 @@
+[recipe]
+name = "okta"
+description = "Okta Verify with Platform SSO (Secure Enclave), SCEP, and Associated Domains"
+vendor = "Okta"
+variables = ["OKTA_DOMAIN", "SCEP_CHALLENGE", "REGISTRATION_TOKEN"]
+secrets = ["SCEP_CHALLENGE", "REGISTRATION_TOKEN"]
+
+[[profile]]
+filename = "okta-sso-extension.mobileconfig"
+payload_type = "com.apple.extensiblesso"
+display_name = "Okta SSO Extension"
+description = "Configures Okta Extensible SSO with Platform SSO for passwordless authentication using Secure Enclave-backed keys"
+removal_disallowed = true
+
+[profile.fields]
+Type = "Redirect"
+TeamIdentifier = "B7F62B65BN"
+ExtensionIdentifier = "com.okta.mobile.auth-service-extension"
+URLs = ["https://{{OKTA_DOMAIN}}"]
+
+[profile.extra_fields]
+"PlatformSSO.AuthenticationMethod" = "UserSecureEnclaveKey"
+"PlatformSSO.UseSharedDeviceKeys" = true
+"PlatformSSO.AccountDisplayName" = "Okta Fastpass"
+"PlatformSSO.LoginFrequency" = 64800
+"PlatformSSO.EnableCreateUserAtLogin" = false
+"PlatformSSO.EnableAuthorization" = false
+"PlatformSSO.NewUserAuthorizationMode" = "Standard"
+"PlatformSSO.RegistrationToken" = "{{REGISTRATION_TOKEN}}"
+"PlatformSSO.TokenToUserMapping.AccountName" = "preferred_username"
+"PlatformSSO.TokenToUserMapping.FullName" = "name"
+
+[[profile]]
+filename = "okta-associated-domains.mobileconfig"
+payload_type = "com.apple.associated-domains"
+display_name = "Okta Associated Domains"
+description = "Enables Associated Domains for Okta SSO Extension"
+
+[profile.fields]
+Configuration = [{ApplicationIdentifier = "B7F62B65BN.com.okta.mobile", AssociatedDomains = ["webcredentials:{{OKTA_DOMAIN}}", "authsrv:{{OKTA_DOMAIN}}"], EnableDirectDownloads = true}]
+
+[[profile]]
+filename = "okta-device-access-scep.mobileconfig"
+payload_type = "com.apple.security.scep"
+display_name = "Okta Device Access SCEP"
+description = "SCEP certificate enrollment for Okta Device Access (macOS 14+)"
+
+[profile.extra_fields]
+"PayloadContent.URL" = "https://{{OKTA_DOMAIN}}/api/v1/certificateAuthorities/default/scep"
+"PayloadContent.Name" = "Okta Device Access CA"
+"PayloadContent.Challenge" = "{{SCEP_CHALLENGE}}"
+"PayloadContent.Keysize" = 2048
+"PayloadContent.Key Type" = "RSA"
+"PayloadContent.Key Usage" = 5
+"PayloadContent.KeyIsExtractable" = false
+"PayloadContent.AllowAllAppsAccess" = true
+
+[[profile]]
+filename = "okta-app-config.mobileconfig"
+payload_type = "com.okta.mobile"
+display_name = "Okta Verify Configuration"
+description = "Managed preferences for Okta Verify"
+
+[profile.fields]
+"OktaVerify.OrgUrl" = "https://{{OKTA_DOMAIN}}"
+"OktaVerify.EnrollmentOptions" = "SilentEnrollmentDisabled"
+"OktaVerify.ReportDiagnostics" = false
+"OktaVerify.EnableOSQueryCustomChecks" = false
+
+[[profile]]
+filename = "okta-security-restrictions.mobileconfig"
+payload_type = "com.apple.applicationaccess"
+display_name = "Okta Security Restrictions"
+description = "Security restrictions complementing Okta Device Access"
+
+[profile.fields]
+allowPasswordAutoFill = true
+allowFingerprintForUnlock = true
+allowAutoUnlock = true
+allowEraseContentAndSettings = false
+forceEncryptedBackup = true

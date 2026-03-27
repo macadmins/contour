@@ -1,0 +1,66 @@
+[recipe]
+name = "santa"
+description = "Santa endpoint security — configuration, PPPC (Full Disk Access), and system extension approval"
+vendor = "North Pole Security"
+variables = []
+
+[[profile]]
+filename = "santa-config.mobileconfig"
+payload_type = "com.northpolesec.santa"
+display_name = "Santa Configuration"
+description = "Santa endpoint security agent configuration — binary authorization and monitoring"
+removal_disallowed = true
+
+[profile.fields]
+ClientMode = 1
+FailClosed = false
+EnableBadSignatureProtection = true
+EnablePageZeroProtection = true
+EnableSysxCache = true
+SyncBaseURL = "https://{{SANTA_SYNC_SERVER}}/api/santa/"
+MachineOwnerPlist = "/Library/Preferences/com.apple.mdm.plist"
+MachineOwnerKey = "UserShortName"
+MachineIDPlist = "/Library/Preferences/com.apple.mdm.plist"
+MachineIDKey = "UDID"
+EventLogType = "protobuf"
+EnableMachineIDDecoration = true
+
+[profile.extra_fields]
+AboutText = "Managed by IT Security"
+MoreInfoURL = "https://{{COMPANY_WIKI}}/santa"
+UnknownBlockMessage = "This application has not been approved. Contact IT if you need access."
+BannedBlockMessage = "This application is blocked by security policy."
+EventDetailURL = "https://{{SANTA_SYNC_SERVER}}/blockables/%file_sha%"
+EventDetailText = "View details"
+
+[[profile]]
+filename = "santa-tcc.mobileconfig"
+payload_type = "com.apple.TCC.configuration-profile-policy"
+display_name = "Santa Privacy Preferences"
+description = "Grants Full Disk Access and SystemPolicySysAdminFiles to the Santa endpoint security system extension"
+removal_disallowed = true
+
+[profile.extra_fields]
+"Services.SystemPolicyAllFiles" = [{Identifier = "com.northpolesec.santa.daemon", IdentifierType = "bundleID", TeamIdentifier = "ZLCNA8GP43", CodeRequirement = 'identifier "com.northpolesec.santa.daemon" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "ZLCNA8GP43"', Allowed = true, StaticCode = false}]
+
+[[profile]]
+filename = "santa-sysext.mobileconfig"
+payload_type = "com.apple.system-extension-policy"
+display_name = "Santa System Extension"
+description = "Approves the Santa endpoint security system extension"
+removal_disallowed = true
+
+[profile.extra_fields]
+AllowUserOverrides = false
+AllowedTeamIdentifiers = ["ZLCNA8GP43"]
+AllowedSystemExtensions = {ZLCNA8GP43 = ["com.northpolesec.santa.daemon"]}
+AllowedSystemExtensionTypes = {ZLCNA8GP43 = ["EndpointSecurityExtension"]}
+
+[[profile]]
+filename = "santa-notifications.mobileconfig"
+payload_type = "com.apple.notificationsettings"
+display_name = "Santa Notifications"
+description = "Configures notification settings for Santa alerts"
+
+[profile.extra_fields]
+NotificationSettings = [{BundleIdentifier = "com.northpolesec.santa", NotificationsEnabled = true, AlertType = 1, ShowInNotificationCenter = true, ShowInLockScreen = false, CriticalAlertEnabled = true}]

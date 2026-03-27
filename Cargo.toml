@@ -1,0 +1,205 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["crates/fleet"]
+default-members = ["crates/contour"]
+
+[workspace.package]
+authors = ["Declarative IT GmbH"]
+license = "Apache-2.0"
+edition = "2024"
+rust-version = "1.85"
+repository = "https://github.com/declarativeit/contour"
+readme = "README.md"
+keywords = ["macos", "mdm", "mobileconfig", "configuration"]
+categories = ["command-line-utilities", "config"]
+
+[workspace.dependencies]
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+yaml_serde = "0.10"
+toml = "0.9"
+plist = "1.8"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Crypto & encoding
+sha2 = "0.11.0-rc"
+base64 = "0.22"
+uuid = { version = "1.20", features = ["v4", "v5", "serde"] }
+cms = "0.2"
+
+# File system
+walkdir = "2.5"
+glob = "0.3"
+
+# Parallelism
+rayon = "1.11"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Terminal
+colored = "3.1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Regex
+regex = "1.12"
+
+# Validation
+jsonschema = "0.40"
+
+# Git (for mscp)
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-openssl", "vendored-libgit2"] }
+
+# Interactive (for mscp)
+inquire = "0.9"
+
+# CSV (for santa)
+csv = "1.4"
+
+# CEL (for santa bundle classification)
+cel-interpreter = "0.8"
+
+# Arrow/Parquet (for mdm-schema)
+arrow = "54"
+parquet = { version = "54", features = ["arrow"] }
+bytes = "1"
+indexmap = "2"
+
+# Diff
+similar = "2.7"
+
+# Directories
+dirs = "6.0"
+
+# Memory allocator
+mimalloc = "0.1"
+
+# Internal crates
+contour-core = { path = "crates/contour-core", version = "0.1.3" }
+contour-profiles = { path = "crates/contour-profiles", version = "0.1.3" }
+mdm-schema = { path = "crates/mdm-schema", version = "0.1.3" }
+mscp-schema = { path = "crates/mscp-schema", version = "0.1.3" }
+
+[workspace.dependencies.tempfile]
+version = "3.24"
+
+[workspace.dependencies.assert_cmd]
+version = "2.1"
+
+[workspace.dependencies.predicates]
+version = "3.1"
+
+[workspace.lints.rust]
+# Microsoft Rust Guidelines (M-STATIC-VERIFICATION) — compiler lints
+ambiguous_negative_literals = "warn"
+missing_debug_implementations = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+# Microsoft Rust Guidelines (M-STATIC-VERIFICATION) — lint categories
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+# Microsoft Rust Guidelines (M-STATIC-VERIFICATION) — restriction lints
+allow_attributes_without_reason = "warn"
+as_pointer_underscore = "warn"
+assertions_on_result_states = "warn"
+clone_on_ref_ptr = "warn"
+deref_by_slicing = "warn"
+disallowed_script_idents = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets = "warn"
+fn_to_numeric_cast_any = "warn"
+map_err_ignore = "warn"
+redundant_type_annotations = "warn"
+renamed_function_params = "warn"
+semicolon_if_nothing_returned = "allow" # conflicts with semicolon_outside_block
+semicolon_outside_block = "warn"
+# string_to_string removed — clippy::implicit_clone covers it
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unneeded_field_pattern = "warn"
+unused_result_ok = "warn"
+
+# Per guidelines: may cause issues with structured logging otherwise
+literal_string_with_formatting_args = "allow"
+
+# Transitive dependency version conflicts (out of our control)
+multiple_crate_versions = "allow"
+
+# Project-specific allowances — correctness & safety
+cast_precision_loss = "allow"       # intentional for display/chart calculations
+cast_possible_truncation = "allow"  # display calculations, CLI context
+cast_sign_loss = "allow"            # display calculations
+
+# Project-specific allowances — API design
+module_name_repetitions = "allow"
+too_many_lines = "allow"
+too_many_arguments = "allow"        # CLI handlers receive many params from clap
+fn_params_excessive_bools = "allow" # CLI handlers receive many bool flags from clap
+struct_excessive_bools = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"  # builder-pattern methods
+unnecessary_wraps = "allow"         # Result return types kept for future error handling
+unused_self = "allow"               # methods may use self in future; keeps API stable
+ref_option = "allow"                # &Option<T> is idiomatic for optional params in this codebase
+needless_pass_by_value = "allow"    # CLI tool — pass-by-value is fine for small types
+
+# Project-specific allowances — documentation
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+# Project-specific allowances — style
+doc_markdown = "allow"
+similar_names = "allow"
+if_not_else = "allow"
+uninlined_format_args = "allow"     # both styles acceptable
+redundant_closure = "allow"         # explicit closures sometimes aid readability
+match_same_arms = "allow"           # separate arms can aid clarity
+trivially_copy_pass_by_ref = "allow" # CLI tool — perf difference negligible
+collapsible_if = "allow"            # uncollapsed can be more readable
+doc_link_with_quotes = "allow"
+struct_field_names = "allow"         # declaration_type on Declaration, etc — clear naming
+format_push_string = "allow"        # push_str(&format!) is readable; writeln! rewrite is noisy
+redundant_closure_for_method_calls = "allow"
+map_unwrap_or = "allow"             # map().unwrap_or() is readable
+manual_let_else = "allow"           # match { Some(x) => x, None => return } is clear
+single_match_else = "allow"         # match for single pattern is sometimes clearer
+redundant_else = "allow"            # explicit else {} aids readability
+unnested_or_patterns = "allow"      # A | B vs A | B — style preference
+needless_range_loop = "allow"       # for i in 0..len is sometimes clearer than enumerate
+cast_possible_wrap = "allow"        # usize to isize wrapping — CLI context
+assigning_clones = "allow"          # clone assignment patterns
+manual_strip = "allow"              # manual prefix stripping is clear
+if_then_some_else_none = "allow"    # if/else Some/None is clear
+items_after_statements = "allow"    # items after statements is common in this codebase
+ptr_arg = "allow"                   # &PathBuf vs &Path — CLI tool, not a library API
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

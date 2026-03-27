@@ -1,0 +1,53 @@
+[package]
+name = "contour"
+version = "0.1.3"
+description = "Unified macOS MDM configuration toolkit"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "contour"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+profile = { path = "../profile" }
+pppc = { path = "../pppc" }
+btm = { path = "../btm" }
+notifications = { path = "../notifications" }
+support = { path = "../support" }
+santa = { path = "../santa" }
+mscp = { path = "../mscp" }
+contour-core.workspace = true
+
+# CLI
+clap.workspace = true
+clap_complete.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Terminal
+colored.workspace = true
+inquire.workspace = true
+
+# Serialization
+serde_json.workspace = true
+
+# Memory allocator
+mimalloc.workspace = true
+
+[build-dependencies]
+chrono.workspace = true
+
+[lints]
+workspace = true

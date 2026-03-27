@@ -1,1 +1,50 @@
-.DS_Store
+# Build artifacts (Cargo)
+/target/
+**/cargo-target/
+/dist/
+
+# Cargo
+Cargo.lock
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+./mise
+*.swp
+*.swo
+*~
+**/*.db
+**/cargo-target
+**/venv
+**/.direnv
+*.wasm
+*.xcodeproj
+
+# macOS
+**/*.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Test artifacts
+*.profraw
+*.profdata
+/coverage/
+
+# Worktrees
+.worktrees/
+
+# Package build artifacts
+pkg/*/payload/
+pkg/*/build/
+
+# Generated output
+output/
+*.mobileconfig
+
+# Project config (user-specific)
+.contour/
+/crates/mscp-schema/data
+/crates/mdm-schema/data
