@@ -18,13 +18,12 @@ One binary, multiple tools. A Mac admin's special tooling to slice and dice conf
 | [`contour mscp`](docs/contour-mscp.md) | Transform macOS Security Compliance Project baselines into MDM-ready profiles and scripts. |
 | [`contour btm`](docs/contour-btm.md) | Generate Background Task Management (service management) profiles for managed login items. |
 | [`contour notifications`](docs/contour-notifications.md) | Generate notification settings profiles with per-app control. |
-| `contour support` | Root3 Support App profile generator. (TBD) |
 
 ## Highlights
 
 - **GitOps-ready** — Every tool follows `init → scan → generate`. Version-control your configs, generate profiles in CI.
 - **Fragment output** — `--fragment` prepares for Fleet GitOps directory structures.
-- **LLM-friendly** — `contour help-llm` provides progressive discovery for AI-assisted workflows.
+- **LLM-friendly** — `contour help-ai` provides progressive discovery for AI-agent-assisted workflows.
 - **One binary** — All tools ship as a single `contour` binary (22 MB, native ARM64).
 
 ## Install
