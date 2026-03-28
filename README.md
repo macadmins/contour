@@ -21,10 +21,10 @@ One binary, multiple tools. A Mac admin's special tooling to slice and dice conf
 
 ## Highlights
 
-- **GitOps-ready** — Every tool follows `init → scan → generate`. Version-control your configs, generate profiles in CI.
-- **Fragment output** — `--fragment` prepares for Fleet GitOps directory structures.
-- **LLM-friendly** — `contour help-ai` provides progressive discovery for AI-agent-assisted workflows.
-- **One binary** — All tools ship as a single `contour` binary (22 MB, native ARM64).
+- **GitOps-ready** — Every tool follows `init → scan → generate`. Version-control configs, generate/validate profiles in CI pipelines.
+- **Fragment output** — `--fragment` prepares artifacts for Fleet GitOps directory structures.
+- **LLM-friendly** — `contour help-ai` provides progressive config/schema discovery for AI-agent-assisted workflows.
+- **One binary** — All tools ship as a single `contour` binary (23 MB, native signed  + notarized for Apple Silicorn, Linux for CI/CD).
 
 ## Install
 
@@ -65,7 +65,7 @@ contour notifications generate notifications.toml --combined -o notifications.mo
 ```bash
 contour --help          # Overview of all tools
 contour <tool> --help   # Tool-specific help
-contour help-llm        # LLM-optimized help for AI-assisted workflows
+contour help-ai         # LLM-optimized help for AI-assisted workflows
 ```
 
 ## Documentation
