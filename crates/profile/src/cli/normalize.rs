@@ -13,6 +13,31 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Restore placeholder sentinels and XML comments in a written profile file.
+///
+/// Called after `parser::write_profile()` to undo the lossy plist round-trip for
+/// placeholders and comments that the plist crate cannot represent.
+fn restore_and_rewrite(
+    path: &Path,
+    placeholder_mapping: &[(String, String)],
+    comments: &[parser::XmlComment],
+) -> Result<()> {
+    if placeholder_mapping.is_empty() && comments.is_empty() {
+        return Ok(());
+    }
+    let mut content = fs::read(path)?;
+    if !placeholder_mapping.is_empty() {
+        content = parser::restore_placeholders(&content, placeholder_mapping);
+    }
+    if !comments.is_empty() {
+        let text = String::from_utf8_lossy(&content);
+        let restored = parser::restore_comments(&text, comments);
+        content = restored.into_bytes();
+    }
+    fs::write(path, content)?;
+    Ok(())
+}
+
 pub fn handle_normalize_pasteboard(
     output: Option<&str>,
     org_domain: Option<&str>,
@@ -28,6 +53,8 @@ pub fn handle_normalize_pasteboard(
 
     let pasteboard_bytes = parser::read_pasteboard_bytes()?;
     let fixup_result = parser::parse_profile_lenient_from_bytes(&pasteboard_bytes)?;
+    let placeholder_mapping = fixup_result.placeholder_mapping;
+    let extracted_comments = fixup_result.comments;
     let mut profile = fixup_result.profile;
 
     if output_mode == OutputMode::Human {
@@ -38,7 +65,7 @@ pub fn handle_normalize_pasteboard(
         }
         if !fixup_result.placeholders.is_empty() {
             println!(
-                "  {} Substituted {} placeholder(s)",
+                "  {} Preserved {} placeholder(s)",
                 "~".yellow(),
                 fixup_result.placeholders.len()
             );
@@ -154,6 +181,7 @@ pub fn handle_normalize_pasteboard(
     }
 
     parser::write_profile(&profile, output_path_ref)?;
+    restore_and_rewrite(output_path_ref, &placeholder_mapping, &extracted_comments)?;
 
     if output_mode == OutputMode::Human {
         println!(
@@ -362,11 +390,13 @@ fn normalize_single_file_internal(
 ) -> Result<Vec<String>> {
     let file = input.to_str().unwrap_or_default();
     let fixup_result = parser::parse_profile_lenient(file)?;
+    let placeholder_mapping = fixup_result.placeholder_mapping;
+    let extracted_comments = fixup_result.comments;
     let mut profile = fixup_result.profile;
     let mut fixups = fixup_result.fixups;
     if !fixup_result.placeholders.is_empty() {
         fixups.push(format!(
-            "substituted {} placeholder(s): {}",
+            "preserved {} placeholder(s): {}",
             fixup_result.placeholders.len(),
             fixup_result.placeholders.join(", ")
         ));
@@ -437,6 +467,7 @@ fn normalize_single_file_internal(
     }
 
     parser::write_profile(&profile, output)?;
+    restore_and_rewrite(output, &placeholder_mapping, &extracted_comments)?;
 
     Ok(fixups)
 }
@@ -460,6 +491,8 @@ fn handle_normalize_single(
     }
 
     let fixup_result = parser::parse_profile_lenient(file)?;
+    let placeholder_mapping = fixup_result.placeholder_mapping;
+    let extracted_comments = fixup_result.comments;
     let mut profile = fixup_result.profile;
 
     if output_mode == OutputMode::Human {
@@ -470,7 +503,7 @@ fn handle_normalize_single(
         }
         if !fixup_result.placeholders.is_empty() {
             println!(
-                "  {} Substituted {} placeholder(s)",
+                "  {} Preserved {} placeholder(s)",
                 "~".yellow(),
                 fixup_result.placeholders.len()
             );
@@ -580,6 +613,7 @@ fn handle_normalize_single(
     }
 
     parser::write_profile(&profile, output_path_ref)?;
+    restore_and_rewrite(output_path_ref, &placeholder_mapping, &extracted_comments)?;
 
     if output_mode == OutputMode::Human {
         println!(
@@ -635,7 +669,7 @@ fn generate_normalize_report(result: &BatchResult) -> String {
     writeln!(md, "| **PayloadIdentifier** required, reverse-DNS | Adds identifier from PayloadType when missing; normalizer prefixes with org domain | [CommonPayloadKeys]({COMMON_URL}) — `PayloadIdentifier: required, type: <string>` |").unwrap();
     writeln!(md, "| **PayloadUUID** required, valid RFC 4122 | Generates v4 UUID when missing | [CommonPayloadKeys]({COMMON_URL}) — `PayloadUUID: required, type: <string>` |").unwrap();
     writeln!(md, "| **PayloadScope** must be `User` or `System` | Fixes capitalization (`system` → `System`) | [TopLevel]({TOPLEVEL_URL}) — `PayloadScope: rangelist: [User, System]` |").unwrap();
-    writeln!(md, "| **MDM placeholders** must not break plist | Substitutes `$VAR`, `{{{{var}}}}`, `%Var%` with dummy values for parsing | N/A — MDM servers expand these at install time |").unwrap();
+    writeln!(md, "| **MDM placeholders** preserved | Keeps `$VAR`, `{{{{var}}}}`, `%Var%` intact through normalization | N/A — MDM servers expand these at install time |").unwrap();
     writeln!(md).unwrap();
 
     // Fixups section — what was automatically corrected
@@ -660,8 +694,8 @@ fn generate_normalize_report(result: &BatchResult) -> String {
                     "Added missing PayloadIdentifier"
                 } else if fixup.contains("added missing PayloadUUID") {
                     "Generated missing PayloadUUID"
-                } else if fixup.contains("substituted") && fixup.contains("placeholder") {
-                    "Substituted MDM placeholders"
+                } else if fixup.contains("preserved") && fixup.contains("placeholder") {
+                    "Preserved MDM placeholders"
                 } else if fixup.contains("wrapped bare payload") {
                     "Wrapped bare payload in Configuration envelope"
                 } else if fixup.contains("fixed PayloadScope") {

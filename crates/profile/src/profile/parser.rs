@@ -1,5 +1,6 @@
 use super::ConfigurationProfile;
 use anyhow::{Context, Result};
+use base64::Engine as _;
 use regex::Regex;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
@@ -20,10 +21,15 @@ pub struct PlaceholderResult {
     pub substituted: Vec<u8>,
     /// List of placeholder strings found.
     pub placeholders: Vec<String>,
+    /// Mapping of (sentinel, original) for restoring placeholders after round-trip.
+    pub mapping: Vec<(String, String)>,
 }
 
-/// Scan XML bytes for MDM placeholders and replace with dummy values.
-/// Placeholders inside `<data>` tags get valid base64, others get "PLACEHOLDER".
+/// Scan XML bytes for MDM placeholders and replace with unique sentinels.
+///
+/// Each unique placeholder gets a distinct sentinel (`CONTOUR_PH_0`, `CONTOUR_PH_1`, etc.)
+/// so that the originals can be restored after plist round-trip. Placeholders inside
+/// `<data>` tags get base64-encoded sentinels to keep the XML valid.
 pub fn substitute_placeholders(xml: &[u8]) -> PlaceholderResult {
     let text = String::from_utf8_lossy(xml);
     let re = placeholder_regex();
@@ -40,25 +46,142 @@ pub fn substitute_placeholders(xml: &[u8]) -> PlaceholderResult {
         return PlaceholderResult {
             substituted: xml.to_vec(),
             placeholders,
+            mapping: Vec::new(),
         };
     }
 
-    // Replace placeholders: inside <data> tags use valid base64, elsewhere use string
+    // Build unique sentinels per placeholder and record the mapping.
+    let mut mapping: Vec<(String, String)> = Vec::new();
     let mut result = text.to_string();
-    // First handle <data>PLACEHOLDER</data> — need valid base64
-    for p in &placeholders {
+
+    for (i, p) in placeholders.iter().enumerate() {
+        let sentinel = format!("CONTOUR_PH_{i}");
+        let data_sentinel = format!("CONTOUR_DATA_PH_{i}");
+        let data_b64 = base64::engine::general_purpose::STANDARD.encode(&data_sentinel);
+
+        // First handle <data>placeholder</data> — need valid base64
         let data_pattern = format!("<data>{p}</data>");
         if result.contains(&data_pattern) {
-            result = result.replace(&data_pattern, "<data>UExBQ0VIT0xERVI=</data>");
+            let data_replacement = format!("<data>{data_b64}</data>");
+            result = result.replace(&data_pattern, &data_replacement);
+            mapping.push((data_b64, p.clone()));
         }
-        // Replace remaining occurrences (in <string> etc.) with text
-        result = result.replace(p, "PLACEHOLDER");
+
+        // Replace remaining occurrences (in <string> etc.)
+        if result.contains(p.as_str()) {
+            result = result.replace(p.as_str(), &sentinel);
+            mapping.push((sentinel, p.clone()));
+        }
     }
 
     PlaceholderResult {
         substituted: result.into_bytes(),
         placeholders,
+        mapping,
     }
+}
+
+/// Restore placeholder sentinels back to their original strings in serialized XML bytes.
+pub fn restore_placeholders(xml: &[u8], mapping: &[(String, String)]) -> Vec<u8> {
+    let mut text = String::from_utf8_lossy(xml).into_owned();
+    for (sentinel, original) in mapping {
+        text = text.replace(sentinel.as_str(), original.as_str());
+    }
+    text.into_bytes()
+}
+
+/// An XML comment extracted from raw profile XML, anchored to the next line for re-insertion.
+#[derive(Debug, Clone)]
+pub struct XmlComment {
+    /// The full `<!-- ... -->` string (may span multiple lines).
+    pub text: String,
+    /// The trimmed content of the next non-empty line after the comment (used as anchor).
+    pub anchor_line: String,
+}
+
+/// Extract XML comments from raw XML, capturing each comment and the next non-empty line
+/// as an anchor for re-insertion after plist round-trip.
+pub fn extract_comments(xml: &str) -> Vec<XmlComment> {
+    let mut comments = Vec::new();
+    let mut search_from = 0;
+    let bytes = xml.as_bytes();
+    let len = bytes.len();
+
+    while search_from < len {
+        let Some(start) = xml[search_from..].find("<!--") else {
+            break;
+        };
+        let abs_start = search_from + start;
+
+        let Some(end_offset) = xml[abs_start..].find("-->") else {
+            break;
+        };
+        let abs_end = abs_start + end_offset + 3; // include "-->"
+
+        let comment_text = &xml[abs_start..abs_end];
+
+        // Find the next non-empty trimmed line after the comment.
+        let anchor = xml[abs_end..]
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("")
+            .to_string();
+
+        if !anchor.is_empty() {
+            comments.push(XmlComment {
+                text: comment_text.to_string(),
+                anchor_line: anchor,
+            });
+        }
+
+        search_from = abs_end;
+    }
+
+    comments
+}
+
+/// Restore previously extracted XML comments into normalised XML output.
+///
+/// For each comment, the first occurrence of its anchor line in the output is found
+/// and the comment is inserted on the line before it, matching the anchor's indentation.
+/// Each anchor is used at most once.
+pub fn restore_comments(xml: &str, comments: &[XmlComment]) -> String {
+    let lines: Vec<&str> = xml.lines().collect();
+    // Track which output lines have already been used as anchors so we don't double-insert.
+    let mut used: Vec<bool> = vec![false; lines.len()];
+    // Collect (insert_before_index, comment_text_with_indent) pairs.
+    let mut insertions: Vec<(usize, String)> = Vec::new();
+
+    for comment in comments {
+        // Find the first unused line whose trimmed content matches the anchor.
+        if let Some(idx) = lines.iter().enumerate().position(|(i, line)| {
+            !used[i] && line.trim() == comment.anchor_line
+        }) {
+            used[idx] = true;
+            // Derive indentation from the anchor line.
+            let indent: String = lines[idx]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
+            insertions.push((idx, format!("{indent}{}", comment.text)));
+        }
+    }
+
+    // Sort insertions by index descending so earlier indices stay stable.
+    insertions.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut result: Vec<String> = lines.iter().map(|l| (*l).to_string()).collect();
+    for (idx, text) in insertions {
+        result.insert(idx, text);
+    }
+
+    let mut out = result.join("\n");
+    // Preserve trailing newline if the original had one.
+    if xml.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 /// Plist format detection
@@ -209,6 +332,10 @@ pub struct FixupResult {
     pub fixups: Vec<String>,
     /// MDM placeholder strings that were substituted with dummy values.
     pub placeholders: Vec<String>,
+    /// Mapping of (sentinel, original) for restoring placeholders after serialisation.
+    pub placeholder_mapping: Vec<(String, String)>,
+    /// XML comments extracted before parsing, to be restored after serialisation.
+    pub comments: Vec<XmlComment>,
 }
 
 /// Fix common issues in a raw `plist::Value` profile tree before deserialization.
@@ -442,23 +569,32 @@ fn unsign_if_needed(path: &str, data: &[u8]) -> Result<Vec<u8>> {
 
 /// Parse a profile leniently from raw bytes — applies fixups and placeholder substitution.
 pub fn parse_profile_lenient_from_bytes(data: &[u8]) -> Result<FixupResult> {
+    // Step 0: Extract XML comments before parsing (plist crate drops them).
+    let raw_text = String::from_utf8_lossy(data);
+    let comments = extract_comments(&raw_text);
+
     // Step 1: Try parsing raw bytes as plist Value
-    let (mut value, placeholders) = match plist::from_bytes::<plist::Value>(data) {
-        Ok(v) => (v, vec![]),
-        Err(initial_err) => {
-            // Step 2: plist parse failed — try placeholder substitution and retry
-            let placeholder_result = substitute_placeholders(data);
-            if placeholder_result.placeholders.is_empty() {
-                // No placeholders found, the error is genuine
-                return Err(
-                    anyhow::anyhow!(initial_err).context("Failed to parse plist (XML or binary)")
-                );
+    let (mut value, placeholders, placeholder_mapping) =
+        match plist::from_bytes::<plist::Value>(data) {
+            Ok(v) => (v, vec![], vec![]),
+            Err(initial_err) => {
+                // Step 2: plist parse failed — try placeholder substitution and retry
+                let placeholder_result = substitute_placeholders(data);
+                if placeholder_result.placeholders.is_empty() {
+                    // No placeholders found, the error is genuine
+                    return Err(anyhow::anyhow!(initial_err)
+                        .context("Failed to parse plist (XML or binary)"));
+                }
+                let value =
+                    plist::from_bytes::<plist::Value>(&placeholder_result.substituted)
+                        .context("Failed to parse plist even after placeholder substitution")?;
+                (
+                    value,
+                    placeholder_result.placeholders,
+                    placeholder_result.mapping,
+                )
             }
-            let value = plist::from_bytes::<plist::Value>(&placeholder_result.substituted)
-                .context("Failed to parse plist even after placeholder substitution")?;
-            (value, placeholder_result.placeholders)
-        }
-    };
+        };
 
     // Step 3: Apply value-level fixups
     let fixups = fixup_profile_value(&mut value);
@@ -476,6 +612,8 @@ pub fn parse_profile_lenient_from_bytes(data: &[u8]) -> Result<FixupResult> {
         profile,
         fixups,
         placeholders,
+        placeholder_mapping,
+        comments,
     })
 }
 
@@ -1402,5 +1540,174 @@ mod tests {
         assert!(result.fixups.is_empty());
         assert!(result.placeholders.is_empty());
         assert_eq!(result.profile.payload_type, "Configuration");
+    }
+
+    // ========== Placeholder Sentinel Round-Trip Tests ==========
+
+    #[test]
+    fn test_placeholder_sentinel_round_trip() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadIdentifier</key>
+    <string>com.test.profile</string>
+    <key>PayloadUUID</key>
+    <string>12345678-1234-1234-1234-123456789012</string>
+    <key>PayloadDisplayName</key>
+    <string>Test Profile</string>
+    <key>WifiSSID</key>
+    <string>$FLEET_VAR_WIFI_SSID</string>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.wifi.managed</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>com.test.wifi</string>
+            <key>PayloadUUID</key>
+            <string>87654321-4321-4321-4321-210987654321</string>
+        </dict>
+    </array>
+</dict>
+</plist>"#;
+
+        let pr = substitute_placeholders(xml.as_bytes());
+        assert!(!pr.placeholders.is_empty());
+        assert!(!pr.mapping.is_empty());
+        // Sentinel should be present in substituted output
+        let substituted_text = String::from_utf8_lossy(&pr.substituted);
+        assert!(substituted_text.contains("CONTOUR_PH_"));
+        assert!(!substituted_text.contains("$FLEET_VAR_WIFI_SSID"));
+
+        // Restore should bring back the original
+        let restored = restore_placeholders(&pr.substituted, &pr.mapping);
+        let restored_text = String::from_utf8_lossy(&restored);
+        assert!(restored_text.contains("$FLEET_VAR_WIFI_SSID"));
+        assert!(!restored_text.contains("CONTOUR_PH_"));
+    }
+
+    #[test]
+    fn test_placeholder_multiple_unique() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>A</key>
+    <string>$FLEET_VAR_A</string>
+    <key>B</key>
+    <string>%HardwareUUID%</string>
+</dict>
+</plist>"#;
+
+        let pr = substitute_placeholders(xml.as_bytes());
+        assert_eq!(pr.placeholders.len(), 2);
+        // Each placeholder should get a different sentinel
+        let substituted_text = String::from_utf8_lossy(&pr.substituted);
+        assert!(substituted_text.contains("CONTOUR_PH_0"));
+        assert!(substituted_text.contains("CONTOUR_PH_1"));
+
+        let restored = restore_placeholders(&pr.substituted, &pr.mapping);
+        let restored_text = String::from_utf8_lossy(&restored);
+        assert!(restored_text.contains("$FLEET_VAR_A"));
+        assert!(restored_text.contains("%HardwareUUID%"));
+    }
+
+    #[test]
+    fn test_data_tag_placeholder() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>CertData</key>
+    <data>$FLEET_SECRET_CERT</data>
+</dict>
+</plist>"#;
+
+        let pr = substitute_placeholders(xml.as_bytes());
+        assert!(!pr.placeholders.is_empty());
+        // Should contain base64-encoded sentinel in <data> tag
+        let substituted_text = String::from_utf8_lossy(&pr.substituted);
+        assert!(substituted_text.contains("<data>"));
+        assert!(!substituted_text.contains("$FLEET_SECRET_CERT"));
+
+        // The data sentinel should be valid base64
+        let data_mapping = pr
+            .mapping
+            .iter()
+            .find(|(_, orig)| orig == "$FLEET_SECRET_CERT")
+            .expect("mapping for $FLEET_SECRET_CERT");
+        // Verify it decodes to something containing "CONTOUR_DATA_PH_"
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&data_mapping.0)
+            .expect("sentinel should be valid base64");
+        let decoded_str = String::from_utf8(decoded).expect("valid utf8");
+        assert!(decoded_str.starts_with("CONTOUR_DATA_PH_"));
+
+        // Restore brings back the original
+        let restored = restore_placeholders(&pr.substituted, &pr.mapping);
+        let restored_text = String::from_utf8_lossy(&restored);
+        assert!(restored_text.contains("<data>$FLEET_SECRET_CERT</data>"));
+    }
+
+    // ========== Comment Extraction / Restoration Tests ==========
+
+    #[test]
+    fn test_comment_extraction() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <!-- WiFi payload configuration -->
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <!-- Second comment -->
+    <key>PayloadVersion</key>
+</dict>
+</plist>"#;
+
+        let comments = extract_comments(xml);
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].text, "<!-- WiFi payload configuration -->");
+        assert_eq!(comments[0].anchor_line, "<key>PayloadType</key>");
+        assert_eq!(comments[1].text, "<!-- Second comment -->");
+        assert_eq!(comments[1].anchor_line, "<key>PayloadVersion</key>");
+    }
+
+    #[test]
+    fn test_comment_restoration() {
+        let comments = vec![
+            XmlComment {
+                text: "<!-- WiFi config -->".to_string(),
+                anchor_line: "<key>PayloadType</key>".to_string(),
+            },
+            XmlComment {
+                text: "<!-- Version info -->".to_string(),
+                anchor_line: "<key>PayloadVersion</key>".to_string(),
+            },
+        ];
+
+        let normalized_xml = "\
+<dict>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>";
+
+        let restored = restore_comments(normalized_xml, &comments);
+        assert!(restored.contains("<!-- WiFi config -->"));
+        assert!(restored.contains("<!-- Version info -->"));
+
+        // Comments should appear before their anchor lines
+        let type_pos = restored.find("<key>PayloadType</key>").unwrap();
+        let wifi_comment_pos = restored.find("<!-- WiFi config -->").unwrap();
+        assert!(wifi_comment_pos < type_pos);
+
+        let version_pos = restored.find("<key>PayloadVersion</key>").unwrap();
+        let version_comment_pos = restored.find("<!-- Version info -->").unwrap();
+        assert!(version_comment_pos < version_pos);
     }
 }
