@@ -712,6 +712,9 @@ pub enum CommandAction {
         /// Add a CommandUUID for tracking
         #[arg(long)]
         uuid: bool,
+        /// Output as base64-encoded string (ready for Fleet API)
+        #[arg(long)]
+        base64: bool,
         /// Interactive mode — search, select command, configure params
         #[arg(long)]
         interactive: bool,

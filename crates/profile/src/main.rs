@@ -476,6 +476,7 @@ fn main() -> Result<()> {
                 output,
                 params,
                 uuid,
+                base64,
                 interactive,
             } => {
                 if interactive {
@@ -491,6 +492,7 @@ fn main() -> Result<()> {
                         output.as_deref(),
                         &params,
                         uuid,
+                        base64,
                         output_mode,
                     )?;
                 }

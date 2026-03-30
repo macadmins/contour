@@ -196,6 +196,38 @@ contour profile generate <payload_type> --full --fragment -o fragment/
 - `--json` — structured output for programmatic consumption
 - `--fragment` — generate composable fragment for Fleet GitOps
 
+## Normalize existing profiles
+```
+contour profile normalize <file_or_dir> --org com.yourco -o output/
+contour profile normalize <dir> --recursive --org com.yourco --report report.md
+```
+
+What normalize does:
+- Rewrites PayloadIdentifier under --org namespace (top-level AND child payloads)
+- Regenerates UUIDs (deterministic from identifier)
+- Fixes PayloadVersion, PayloadScope, display names
+- Preserves MDM placeholders ($FLEET_VAR_*, %HardwareUUID%, {{var}})
+- Preserves XML comments (<!-- ... -->)
+
+What normalize does NOT do:
+- Does not fix typos in the name segment of identifiers
+  e.g., com.old.zscaler-cofing -> com.yourco.zscaler-cofing (prefix fixed, typo preserved)
+- To fix a name typo: use contour profile duplicate --name 'correct-name' --org com.yourco
+
+## Duplicate/re-identity a profile
+```
+contour profile duplicate <source> --name 'New Name' --org com.yourco -o fixed.mobileconfig
+```
+Creates a copy with new PayloadDisplayName, PayloadIdentifier, and UUIDs.
+Use this to fix identifier typos or create variants of an existing profile.
+
+## Synthesize mobileconfigs from managed preferences
+```
+1. contour profile synthesize /Library/Managed\ Preferences/ --dry-run --json  # preview
+2. contour profile synthesize /Library/Managed\ Preferences/ -o profiles/ --org com.yourco --validate
+3. contour profile validate profiles/ --recursive --json  # verify output
+```
+
 ## Generate MDM command payloads (.plist for Fleet/MDM)
 ```
 1. contour profile command list --json                  # list all 65 MDM commands
@@ -203,6 +235,8 @@ contour profile generate <payload_type> --full --fragment -o fragment/
 3. contour profile command generate <command> -o cmd.plist  # generate plist payload
    --set KEY=VALUE    # set command parameters
    --uuid             # add CommandUUID for tracking
+   --base64           # output as base64 string (ready for Fleet API)
+   --json             # JSON output includes base64 field automatically
 ```
 
 ### Common MDM commands
@@ -217,10 +251,25 @@ contour profile command generate EnableRemoteDesktop -o remote.plist
 contour profile command generate RotateFileVaultKey -o rotate-fvkey.plist
 ```
 
-### Send via Fleet
+### Send via Fleet CLI
 ```
 fleetctl mdm run-command --host <hostname> --payload cmd.plist
-fleetctl mdm run-command --host <hostname> --payload cmd.plist --json  # get CommandUUID
+```
+
+### Send via Fleet API (base64)
+```
+# Get base64 directly:
+contour profile command generate RestartDevice --uuid --base64
+
+# Or from JSON (base64 field included automatically):
+contour profile command generate RestartDevice --uuid --json
+# JSON output includes 'base64' field ready for Fleet API
+
+# Use base64 value in Fleet API POST to /api/v1/fleet/commands/run
+# Payload keys: command (base64 string), host_uuids (array of host UUIDs)
+
+# Verify result:
+# fleetctl get mdm-command-results --id=<CommandUUID>
 ```
 ";
 

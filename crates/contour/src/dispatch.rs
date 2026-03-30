@@ -639,6 +639,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 output,
                 params,
                 uuid,
+                base64,
                 interactive,
             } => {
                 if interactive {
@@ -654,6 +655,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                         output.as_deref(),
                         &params,
                         uuid,
+                        base64,
                         output_mode,
                     )?;
                 }
