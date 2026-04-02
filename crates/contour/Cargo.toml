@@ -24,6 +24,7 @@ support = { path = "../support" }
 santa = { path = "../santa" }
 mscp = { path = "../mscp" }
 contour-core.workspace = true
+osquery-schema.workspace = true
 
 # CLI
 clap.workspace = true

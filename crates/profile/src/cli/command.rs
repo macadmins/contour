@@ -327,7 +327,11 @@ pub fn handle_command_generate(
         } else if let Some(output_path) = output {
             std::fs::write(output_path, &encoded)
                 .with_context(|| format!("Failed to write base64 to {output_path}"))?;
-            println!("{} Base64 command written to {}", "OK".green(), output_path.cyan());
+            println!(
+                "{} Base64 command written to {}",
+                "OK".green(),
+                output_path.cyan()
+            );
         } else {
             println!("{encoded}");
         }

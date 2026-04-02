@@ -50,3 +50,4 @@ pkg/*/build/
 crates/mdm-schema/data/*.parquet
 crates/mdm-schema/data/*.toml
 crates/mscp-schema/data/*.parquet
+crates/osquery-schema/data/*.parquet

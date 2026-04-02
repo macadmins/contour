@@ -13,6 +13,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 mod dispatch;
 mod init;
+mod osquery;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -190,6 +191,12 @@ pub enum Commands {
         /// Preview without writing (one-shot mode)
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Query embedded osquery table/column schema
+    Osquery {
+        #[command(subcommand)]
+        action: osquery::OsqueryAction,
     },
 
     /// Initialize contour configuration for this repository

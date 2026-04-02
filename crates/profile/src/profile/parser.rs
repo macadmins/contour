@@ -155,9 +155,11 @@ pub fn restore_comments(xml: &str, comments: &[XmlComment]) -> String {
 
     for comment in comments {
         // Find the first unused line whose trimmed content matches the anchor.
-        if let Some(idx) = lines.iter().enumerate().position(|(i, line)| {
-            !used[i] && line.trim() == comment.anchor_line
-        }) {
+        if let Some(idx) = lines
+            .iter()
+            .enumerate()
+            .position(|(i, line)| !used[i] && line.trim() == comment.anchor_line)
+        {
             used[idx] = true;
             // Derive indentation from the anchor line.
             let indent: String = lines[idx]
@@ -585,9 +587,8 @@ pub fn parse_profile_lenient_from_bytes(data: &[u8]) -> Result<FixupResult> {
                     return Err(anyhow::anyhow!(initial_err)
                         .context("Failed to parse plist (XML or binary)"));
                 }
-                let value =
-                    plist::from_bytes::<plist::Value>(&placeholder_result.substituted)
-                        .context("Failed to parse plist even after placeholder substitution")?;
+                let value = plist::from_bytes::<plist::Value>(&placeholder_result.substituted)
+                    .context("Failed to parse plist even after placeholder substitution")?;
                 (
                     value,
                     placeholder_result.placeholders,

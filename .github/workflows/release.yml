@@ -33,6 +33,7 @@ jobs:
         env:
           CONTOUR_MDM_SCHEMA_URL: ${{ secrets.CONTOUR_MDM_SCHEMA_URL }}
           CONTOUR_MSCP_SCHEMA_URL: ${{ secrets.CONTOUR_MSCP_SCHEMA_URL }}
+          CONTOUR_OSQUERY_SCHEMA_URL: ${{ secrets.CONTOUR_OSQUERY_SCHEMA_URL }}
         run: cargo build --release --target x86_64-unknown-linux-gnu -p contour
 
       - name: Strip binary

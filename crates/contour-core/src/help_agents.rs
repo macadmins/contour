@@ -108,6 +108,10 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     writeln!(buf, "- `--sop support` — Root3 Support App profiles")?;
     writeln!(
         buf,
+        "- `--sop osquery` — search/inspect embedded osquery table and column schema"
+    )?;
+    writeln!(
+        buf,
         "- `--sop fleet-migrate` — migrate Fleet GitOps repo from legacy/v4.82 to v4.83 structure\n\
          - `--sop enrollment` — DEP/ADE enrollment profiles (Setup Assistant skip keys)\n\
          - `--sop schema-data` — embedded parquet data: verify, update, track schema versions"
@@ -145,8 +149,9 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "fleet-migrate" | "migrate" | "fleet" => SOP_FLEET_MIGRATE,
         "schema-data" | "schema" | "data" | "parquet" => SOP_SCHEMA_DATA,
         "enrollment" | "dep" | "ade" | "setup-assistant" => SOP_ENROLLMENT,
+        "osquery" => SOP_OSQUERY,
         _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support"
+            "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support, osquery"
         ),
     };
     writer.write_all(sop.as_bytes())?;
@@ -332,6 +337,12 @@ contour mscp schema compare <mscp_repo_path> --baseline <name> --json
 - `payload.mobileconfig_info` — JSON array of {payload_type, keys} for profile generation
 - `payload.check_script` — shell script to verify compliance
 - `payload.odv_options` — JSON with per-baseline recommended values
+
+## Validate osquery tables referenced by mSCP rules
+When a rule has `osquery_checkable: true`, validate the referenced table:
+```
+contour osquery table <osquery_table_from_rule> --json
+```
 "#;
 
 const SOP_DDM: &str = r#"# SOP: DDM Declaration Generation
@@ -742,19 +753,60 @@ software:
     # slugs here
 ```
 
-### 5. Validate
-```bash
-fleetctl gitops --dry-run -f default.yml
-fleetctl gitops --dry-run -f fleets/workstations.yml
+### 5. Set up CI/CD (.github/)
+
+The v4.83 CI/CD structure uses a composite action + shell script:
+```
+.github/
+├── fleet-gitops/
+│   ├── action.yml       # composite action: installs fleetctl, configures, runs gitops.sh
+│   └── gitops.sh        # iterates fleets/*.yml, validates unique names, runs dry-run + apply
+└── workflows/
+    └── workflow.yml      # triggers on push to main, PR (dry-run), nightly, manual
 ```
 
-### 6. Clean up
+Key CI/CD details:
+- gitops.sh iterates fleets/*.yml (glob, not hardcoded filenames)
+- Uses --delete-other-fleets to remove fleets not in YAML
+- fleetctl version auto-detected from Fleet server API
+- PR triggers dry-run only, push to main triggers real apply
+- Requires secrets: FLEET_URL, FLEET_API_TOKEN
+- Nightly run at 6AM UTC ensures drift detection
+
+### 5b. Verify CI/CD against v4.83 reference
+
+Generate a fresh reference and diff against your existing repo:
+```bash
+# Option A: use fleetctl new (requires fleetctl v4.83+, no network needed)
+fleetctl new /tmp/fleet-ref
+diff -r .github /tmp/fleet-ref/.github
+diff default.yml /tmp/fleet-ref/default.yml
+diff -r fleets /tmp/fleet-ref/fleets
+
+# Option B: fetch templates from GitHub (if fleetctl not installed)
+diff .github/fleet-gitops/gitops.sh <(curl -fsSL https://raw.githubusercontent.com/fleetdm/fleet/main/cmd/fleetctl/fleetctl/templates/new/.github/fleet-gitops/gitops.sh)
+```
+
+Key things to check in the diff:
+- gitops.sh references fleets/ (not teams/)
+- gitops.sh uses --delete-other-fleets (not --delete-other-teams)
+- action.yml has delete-other-fleets input
+- workflow.yml triggers on push to main + PR (dry-run) + nightly
+
+### 6. Validate
+```bash
+fleetctl gitops --dry-run -f default.yml -f fleets/workstations.yml
+```
+
+### 7. Clean up
 After migration, the old lib/ directory should be empty and can be removed.
 
-## Reference
-- `fleetctl new` generates this structure: github.com/fleetdm/fleet/tree/main/cmd/fleetctl/fleetctl/templates
+## Reference (canonical source of truth)
+- `fleetctl new` scaffolds a complete v4.83 repo with CI/CD, fleets, labels, and platforms
+- Templates: github.com/fleetdm/fleet/tree/main/cmd/fleetctl/fleetctl/templates/new
 - GitOps parser: github.com/fleetdm/fleet/blob/main/cmd/fleetctl/fleetctl/gitops.go
 - Generator: github.com/fleetdm/fleet/blob/main/cmd/fleetctl/fleetctl/new.go
+- CI action: github.com/fleetdm/fleet/tree/main/cmd/fleetctl/fleetctl/templates/new/.github
 
 ## Important Rules
 - DDM declaration .json files go in declaration-profiles/, NOT configuration-profiles/
@@ -764,6 +816,8 @@ After migration, the old lib/ directory should be empty and can be removed.
 - Labels are one .yml file per label in labels/ directory
 - Policies/reports/scripts are per-platform under platforms/<platform>/
 - The apple_settings key replaces macos_settings for profile references
+- Every fleet YAML must have a unique name: value (CI rejects duplicates)
+- CI uses --delete-other-fleets by default (fleets not in YAML get removed)
 "#;
 
 const SOP_ENROLLMENT: &str = r#"# SOP: DEP/ADE Enrollment Profiles (Setup Assistant)
@@ -959,6 +1013,153 @@ Use --exclude with posture validate if only checking core data stability.
 - posture validate — verify all hashes
 - posture compat-check — check schema compatibility
 - posture data-report — generate manifest.json
+"#;
+
+const SOP_OSQUERY: &str = r#"# SOP: osquery Schema Lookup + Fleet Policy Patterns
+
+## Search tables and columns
+```
+contour osquery search disk_encryption --json     # find tables/columns matching keyword
+contour osquery search filevault --platform darwin --json
+contour osquery search preferences --json
+contour osquery search firewall --platform darwin  # human-readable output
+```
+
+## Show full table schema
+```
+contour osquery table preferences --json          # all columns with types, descriptions
+contour osquery table alf --json                  # Application Layer Firewall
+contour osquery table disk_encryption --json
+contour osquery table apps --json                 # installed applications
+```
+
+## Statistics
+```
+contour osquery stats --json                      # 283 tables, 2581 columns, per-platform counts
+```
+
+## Idiomatic Fleet Policy Query Patterns
+
+These are production patterns from Fleet's own it-and-security repo.
+
+### Check if a setting is enabled (boolean check)
+```sql
+-- Disk encryption (macOS)
+SELECT 1 FROM filevault_status WHERE status LIKE '%on%';
+
+-- Disk encryption (Linux)
+SELECT 1 FROM mounts m, disk_encryption d WHERE m.device_alias = d.name AND d.encrypted = 1 AND m.path = '/';
+
+-- Disk encryption (Windows)
+SELECT 1 FROM bitlocker_info WHERE protection_status = 1;
+
+-- Firewall enabled (macOS)
+-- Use: contour osquery table alf --json to see available columns
+SELECT 1 FROM alf WHERE global_state >= 1;
+```
+
+### Check if an app is installed
+```sql
+-- By bundle identifier (preferred, stable across versions)
+SELECT 1 FROM apps WHERE bundle_identifier = 'com.1password.1password';
+
+-- By name (Windows)
+SELECT 1 FROM programs WHERE name = '1Password';
+```
+
+### Check app version (version_compare function)
+```sql
+-- Fail if outdated (NOT EXISTS pattern)
+SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM apps WHERE name = 'Slack.app' AND version_compare(bundle_short_version, '4.48.100') < 0);
+
+-- Multi-OS version check
+SELECT 1 FROM os_version WHERE version >= '26.4' OR version >= '15.7.5';
+```
+
+### Check available disk space
+```sql
+-- macOS/Linux (>10% free)
+SELECT 1 FROM mounts WHERE path = '/' AND CAST(blocks_available AS REAL) / blocks > 0.10;
+
+-- Windows
+SELECT 1 WHERE (SELECT CAST(SUM(free_space) AS REAL) / SUM(size) FROM logical_drives WHERE file_system = 'NTFS') > 0.10;
+```
+
+### Check software updates
+```sql
+SELECT 1 FROM software_update WHERE software_update_required = 0;
+```
+
+### Check MDM profile installed
+```sql
+SELECT 1 FROM macos_profiles WHERE identifier = 'com.fleetdm.nudge.managed';
+```
+
+### Report/collect data (snapshot queries)
+```sql
+-- Detect Apple Intelligence
+SELECT * FROM plist WHERE path LIKE '/Users/%/Library/Preferences/com.apple.CloudSubscriptionFeatures.optIn.plist';
+
+-- Collect XProtect reports
+SELECT * FROM xprotect_reports;
+```
+
+### Complex: multi-condition with EXISTS
+```sql
+-- App installed + profile present + package receipt
+SELECT 1 WHERE
+  EXISTS (SELECT 1 FROM macos_profiles WHERE identifier = 'com.fleetdm.nudge.managed')
+  AND EXISTS (SELECT 1 FROM apps WHERE bundle_identifier = 'com.github.macadmins.Nudge' AND bundle_short_version LIKE '2.%')
+  AND EXISTS (SELECT 1 FROM package_receipts WHERE package_id = 'com.fleetdm.Nudge.assets');
+```
+
+## Fleet Software Assignment Patterns
+
+### Custom package YAML (platforms/macos/software/1password.yml)
+```yaml
+url: https://downloads.1password.com/mac/1Password.pkg
+```
+
+### Policy with auto-install (install_software)
+```yaml
+- name: macOS - 1Password installed
+  query: SELECT 1 FROM apps WHERE bundle_identifier = 'com.1password.1password';
+  install_software:
+    package_path: ../software/1password.yml
+  platform: darwin
+```
+When the policy fails, Fleet auto-installs the package.
+
+### Software in fleet YAML (self-service + categories + labels)
+```yaml
+software:
+  packages:
+    - path: ../platforms/macos/software/1password.yml
+      self_service: true
+      setup_experience: true        # install during first-time setup
+      categories:
+        - Security
+    - path: ../platforms/macos/software/firefox.yml
+      self_service: true
+      labels_include_any:           # only install on matching hosts
+        - "Macs with Firefox needed"
+      categories:
+        - Browsers
+  fleet_maintained_apps:
+    - slug: slack/darwin
+      self_service: true
+      categories:
+        - Communication
+```
+
+## Agent decision guide
+1. Use `contour osquery search <keyword>` to find the right table
+2. Use `contour osquery table <name> --json` to see all columns + types
+3. Check platform support before writing the query
+4. Use the idiomatic patterns above — do NOT invent new query structures
+5. For version checks: always use `version_compare()` function, not string comparison
+6. For app checks: prefer `bundle_identifier` over `name` (stable across locales)
+7. For policy auto-install: reference software YAML via `install_software.package_path`
 "#;
 
 /// Write a top-level command group and its subcommands as an index.

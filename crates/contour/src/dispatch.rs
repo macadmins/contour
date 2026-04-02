@@ -103,6 +103,7 @@ pub fn run(cli: Cli) -> Result<()> {
             dry_run,
             cli.json,
         ),
+        Commands::Osquery { action } => crate::osquery::handle(action, cli.json),
         Commands::HelpAgents {
             command,
             section,
