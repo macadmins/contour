@@ -40,11 +40,13 @@ Cargo.lock
 pkg/*/payload/
 pkg/*/build/
 
-# Generated output
-output/
+# Generated output (root only, not crate src/output/ modules)
+/output/
 *.mobileconfig
 
 # Project config (user-specific)
 .contour/
-/crates/mscp-schema/data
-/crates/mdm-schema/data
+# Schema data (downloaded at build time)
+crates/mdm-schema/data/*.parquet
+crates/mdm-schema/data/*.toml
+crates/mscp-schema/data/*.parquet
