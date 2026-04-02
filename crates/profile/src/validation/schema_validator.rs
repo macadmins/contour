@@ -844,6 +844,7 @@ mod tests {
                     default: None,
                     allowed_values: Vec::new(),
                     depth: 0,
+                    parent_key: None,
                     platforms: Vec::new(),
                     min_version: None,
                 },

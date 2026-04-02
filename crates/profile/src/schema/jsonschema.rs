@@ -404,6 +404,7 @@ mod tests {
             default: Some("default".to_string()),
             allowed_values: vec![],
             depth: 0,
+            parent_key: None,
             platforms: vec![],
             min_version: None,
         };
@@ -421,6 +422,7 @@ mod tests {
             default: None,
             allowed_values: vec![],
             depth: 0,
+            parent_key: None,
             platforms: vec![],
             min_version: None,
         };
@@ -438,6 +440,7 @@ mod tests {
             default: None,
             allowed_values: vec![],
             depth: 0,
+            parent_key: None,
             platforms: vec![],
             min_version: None,
         };

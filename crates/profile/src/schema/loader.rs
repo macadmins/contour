@@ -65,6 +65,7 @@ pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
                             })
                             .unwrap_or_default(),
                         depth: f.depth,
+                        parent_key: None,
                         platforms: f
                             .platforms
                             .as_ref()
@@ -190,6 +191,7 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
                     default: None,
                     allowed_values: Vec::new(),
                     depth: 0,
+                    parent_key: None,
                     platforms: vec![Platform::MacOS],
                     min_version: None,
                 },
@@ -301,6 +303,7 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             default: key.default_value.as_ref().map(|v| v.to_string()),
             allowed_values: key.range_list.clone().unwrap_or_default(),
             depth: key.depth as u8,
+            parent_key: key.parent_key.clone(),
             platforms: Vec::new(),
             min_version: None,
         };
