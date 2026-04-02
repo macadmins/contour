@@ -108,7 +108,9 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     writeln!(buf, "- `--sop support` — Root3 Support App profiles")?;
     writeln!(
         buf,
-        "- `--sop fleet-migrate` — migrate Fleet GitOps repo from legacy/v4.82 to v4.83 structure"
+        "- `--sop fleet-migrate` — migrate Fleet GitOps repo from legacy/v4.82 to v4.83 structure\n\
+         - `--sop enrollment` — DEP/ADE enrollment profiles (Setup Assistant skip keys)\n\
+         - `--sop schema-data` — embedded parquet data: verify, update, track schema versions"
     )?;
     writeln!(buf)?;
 
@@ -141,6 +143,8 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "notifications" => SOP_NOTIFICATIONS,
         "support" => SOP_SUPPORT,
         "fleet-migrate" | "migrate" | "fleet" => SOP_FLEET_MIGRATE,
+        "schema-data" | "schema" | "data" | "parquet" => SOP_SCHEMA_DATA,
+        "enrollment" | "dep" | "ade" | "setup-assistant" => SOP_ENROLLMENT,
         _ => bail!(
             "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support"
         ),
@@ -760,6 +764,201 @@ After migration, the old lib/ directory should be empty and can be removed.
 - Labels are one .yml file per label in labels/ directory
 - Policies/reports/scripts are per-platform under platforms/<platform>/
 - The apple_settings key replaces macos_settings for profile references
+"#;
+
+const SOP_ENROLLMENT: &str = r#"# SOP: DEP/ADE Enrollment Profiles (Setup Assistant)
+
+Generate enrollment profiles that control the macOS/iOS Setup Assistant experience
+for devices enrolling via Apple Business Manager (ABM) / Apple Device Enrollment (ADE).
+
+## List available skip keys
+```
+contour profile enrollment list --platform macOS --json
+contour profile enrollment list --platform iOS --json
+contour profile enrollment list --platform macOS --os-version 26.0 --json
+```
+
+Each skip key controls one Setup Assistant screen (e.g., AppleID, Siri, Privacy).
+Keys have platform and OS version gating — some only exist on macOS 11+, some are iOS-only.
+
+## Generate enrollment profile
+
+### Interactive (recommended for first time)
+```
+contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
+```
+Shows a checklist of all skip keys with descriptions. Common enterprise defaults are pre-selected.
+Toggle items with Space, confirm with Enter.
+
+### Skip all available screens
+```
+contour profile enrollment generate --platform macOS --skip-all -o enrollment.dep.json
+```
+
+### Skip specific screens
+```
+contour profile enrollment generate --platform macOS \
+  --skip AppleID,TOS,Siri,Privacy,Diagnostics,ScreenTime,iCloudStorage \
+  -o enrollment.dep.json
+```
+
+## Output format
+The generated JSON matches what Fleet expects:
+```json
+{
+  "profile_name": "Automatic enrollment profile",
+  "allow_pairing": true,
+  "is_supervised": true,
+  "is_mdm_removable": false,
+  "language": "en",
+  "region": "US",
+  "skip_setup_items": ["AppleID", "TOS", "Siri", ...]
+}
+```
+
+## Use with Fleet GitOps (v4.83 structure)
+```
+# Place in the enrollment-profiles directory
+cp enrollment.dep.json platforms/macos/enrollment-profiles/automatic-enrollment.dep.json
+
+# Reference in fleet YAML (fleets/workstations.yml)
+controls:
+  setup_experience:
+    apple_setup_assistant: ../platforms/macos/enrollment-profiles/automatic-enrollment.dep.json
+```
+
+The filename is arbitrary — Fleet reads it by path reference, not by name convention.
+
+## Common skip key sets
+
+### Enterprise standard (skip most, keep FileVault + Biometric)
+```
+contour profile enrollment generate --platform macOS \
+  --skip AppleID,AppStore,Diagnostics,iCloudDiagnostics,iCloudStorage,Location,Payment,Privacy,ScreenTime,Siri,TermsOfAddress,TOS,UnlockWithWatch,Appearance,Welcome,Wallpaper \
+  -o enrollment.dep.json
+```
+
+### Maximum skip (skip everything available)
+```
+contour profile enrollment generate --platform macOS --skip-all -o enrollment.dep.json
+```
+Note: --skip-all includes FileVault and SoftwareUpdate. If you want users to see those
+screens during setup, use --interactive and deselect them, or use --skip with explicit keys.
+
+### Minimal (only skip legal/diagnostics)
+```
+contour profile enrollment generate --platform macOS \
+  --skip TOS,Diagnostics,iCloudDiagnostics,Privacy \
+  -o enrollment.dep.json
+```
+
+## Agent decision guide
+
+When an agent is asked to generate an enrollment profile:
+1. Ask: which platform? (macOS, iOS, iPadOS)
+2. Ask: target OS version? (affects available skip keys)
+3. Recommend: interactive mode for first-time setup
+4. ALWAYS keep FileVault and SoftwareUpdate enabled (do NOT skip them)
+   - FileVault: ensures disk encryption during setup
+   - SoftwareUpdate: ensures device gets latest OS before use
+5. Common items safe to skip: AppleID, TOS, Siri, Diagnostics, Privacy, ScreenTime, Payment
+6. Items to discuss with user before skipping: Biometric (Touch ID), Appearance, Location
+
+## Key facts
+- is_supervised: true enables full MDM control (required for most enterprise features)
+- is_mdm_removable: false prevents users from removing the MDM profile
+- Skipping FileVault only skips the Setup Assistant prompt — FileVault CAN still be enforced via MDM profile, but best practice is to let users set it up during onboarding
+- Skip keys are version-gated — use --os-version to see only keys valid for your target OS
+- The --interactive flag shows descriptions for each key to help make informed choices
+"#;
+
+const SOP_SCHEMA_DATA: &str = r#"# SOP: Embedded Schema Data Management
+
+Contour embeds parquet datasets from the posture pipeline at compile time.
+This SOP covers verifying, updating, and tracking that embedded data.
+
+## What's Embedded
+
+### mdm-schema crate (crates/mdm-schema/data/)
+- capabilities.parquet — Apple MDM profiles, DDM declarations, commands (13,500+ rows)
+- profilecreator.parquet — Community ProfileManifests (8,900+ rows)
+- skip_keys.parquet — Setup Assistant skip keys (71 rows)
+
+### mscp-schema crate (crates/mscp-schema/data/)
+- rules_versioned.parquet — mSCP security rules with enforcement metadata (540 rows)
+- rule_payloads.parquet — Check/fix scripts, mobileconfig_info, DDM details (463 rows)
+- baseline_edges.parquet — Rule-to-baseline membership (4,400+ rows)
+- baseline_meta.parquet — Baseline names, titles, authors (14 rows)
+- rule_meta.parquet — Rule title, discussion, severity (463 rows)
+- control_tiers.parquet — NIST 800-53 control tiers (728 rows)
+- sections.parquet — mSCP section definitions (11 rows)
+- envelope_patterns.parquet — XML nesting templates (4 rows)
+- envelope_meta_keys.parquet — Envelope metadata key definitions (20 rows)
+
+## Three-Layer Versioning (from posture)
+
+### Layer 1: Schema Version (CalVer)
+Each JSON Schema in posture's out/schemas/ has:
+  x-schema-version: "2026.04.02.1" (YYYY.MM.DD.MICRO)
+Only bumps when type structure changes (fields added/removed).
+Same version = safe to drop in new parquet files.
+
+### Layer 2: Data Hash (SHA-256)
+Each schema also has:
+  x-data-file: "skip_keys.parquet"
+  x-data-sha256: "7227c5b9a67c..."
+Verify after copying: shasum -a 256 data/file.parquet
+
+### Layer 3: Manifest (out/manifest.json)
+Complete inventory: filename, sha256, rows, bytes, columns per file.
+Diff old vs new manifest to see exactly what changed.
+
+## Update Workflow
+
+### 1. Check compatibility
+```
+posture compat-check --contour /path/to/contour/crates/
+```
+Reports: EXACT (safe), COMPATIBLE (new nullable columns), or BREAKING (needs code changes).
+
+### 2. Copy files
+```
+cp posture/out/capabilities.parquet crates/mdm-schema/data/
+cp posture/out/skip_keys.parquet crates/mdm-schema/data/
+cp posture/out/{baseline_meta,baseline_edges,control_tiers,rule_meta,sections}.parquet crates/mscp-schema/data/
+cp posture/out/{rules_versioned,rule_payloads,envelope_patterns,envelope_meta_keys}.parquet crates/mscp-schema/data/
+```
+
+### 3. Verify integrity
+```
+posture validate
+# Or manually:
+shasum -a 256 crates/mdm-schema/data/*.parquet
+shasum -a 256 crates/mscp-schema/data/*.parquet
+```
+
+### 4. Run tests
+```
+cargo test -p mdm-schema -p mscp-schema
+```
+Tests assert minimum row counts — if data is empty or schema changed, tests fail.
+
+### 5. If BREAKING changes
+- Compare Arrow schemas in reader modules (e.g., rule_meta.rs) against new parquet columns
+- Update col() calls for renamed/new columns
+- Add new fields to Rust types in types.rs
+- Re-run tests
+
+## Excluding Volatile Files
+source_versions.parquet and platform_validity.parquet change on every regeneration.
+Use --exclude with posture validate if only checking core data stability.
+
+## Reference
+- Posture consumer guide: CONSUMER_GUIDE.md in posture output
+- Posture CLI: github.com/headmin/posture
+- posture validate — verify all hashes
+- posture compat-check — check schema compatibility
+- posture data-report — generate manifest.json
 "#;
 
 /// Write a top-level command group and its subcommands as an index.
