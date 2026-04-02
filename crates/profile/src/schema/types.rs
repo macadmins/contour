@@ -92,6 +92,8 @@ pub struct FieldDefinition {
     pub allowed_values: Vec<String>,
     /// Nesting depth (0=top-level, 1=first nested, etc.)
     pub depth: u8,
+    /// Parent key name for nested fields (e.g. "CustomRegex" for a "Regex" child key)
+    pub parent_key: Option<String>,
     /// Platform-specific (empty = all platforms)
     pub platforms: Vec<Platform>,
     /// Minimum version requirement
@@ -467,6 +469,7 @@ mod tests {
                 default: None,
                 allowed_values: vec![],
                 depth: 0,
+                parent_key: None,
                 platforms: vec![],
                 min_version: None,
             },
@@ -489,6 +492,7 @@ mod tests {
                 default: None,
                 allowed_values: vec![],
                 depth: 0,
+                parent_key: None,
                 platforms: vec![],
                 min_version: None,
             },
@@ -507,6 +511,7 @@ mod tests {
                 default: None,
                 allowed_values: vec![],
                 depth: 1,
+                parent_key: None,
                 platforms: vec![],
                 min_version: None,
             },

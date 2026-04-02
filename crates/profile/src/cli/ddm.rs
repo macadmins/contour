@@ -173,6 +173,59 @@ struct DdmValidationResult {
     warnings: Vec<String>,
 }
 
+/// Resolve the ancestor path for a nested field by walking `parent_key` links.
+///
+/// Returns the chain from root to immediate parent, e.g. for `AddSquareRoot`
+/// (parent=`BasicMode`, whose parent=`Calculator`) returns `["Calculator", "BasicMode"]`.
+fn resolve_ancestor_path(
+    field_name: &str,
+    manifest: &crate::schema::types::PayloadManifest,
+) -> Vec<String> {
+    let mut path = Vec::new();
+    let mut current = field_name.to_string();
+
+    for _ in 0..32 {
+        let parent = manifest
+            .fields
+            .get(&current)
+            .and_then(|f| f.parent_key.as_ref());
+        match parent {
+            Some(p) => {
+                path.push(p.clone());
+                current = p.clone();
+            }
+            None => break,
+        }
+    }
+
+    path.reverse();
+    path
+}
+
+/// Walk into a payload along the given key path.
+///
+/// The root is a `HashMap` (DeclarationPayload), but nested levels are
+/// `serde_json::Map` inside `Value::Object`. Returns the innermost object
+/// if every key in the path resolves, or `None` if any key is absent or
+/// not an object.
+fn walk_payload_path<'a>(
+    root: &'a std::collections::HashMap<String, serde_json::Value>,
+    path: &[String],
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    let (first, rest) = path.split_first()?;
+    let serde_json::Value::Object(obj) = root.get(first)? else {
+        return None;
+    };
+    let mut current = obj;
+    for key in rest {
+        match current.get(key) {
+            Some(serde_json::Value::Object(nested)) => current = nested,
+            _ => return None,
+        }
+    }
+    Some(current)
+}
+
 /// Validate a single DDM declaration
 fn validate_single_ddm(path: &Path, registry: &SchemaRegistry) -> Result<DdmValidationResult> {
     let decl = parse_declaration_file(path)?;
@@ -184,8 +237,21 @@ fn validate_single_ddm(path: &Path, registry: &SchemaRegistry) -> Result<DdmVali
     if let Some(manifest) = registry.get(&decl.declaration_type) {
         // Check required fields
         for field in manifest.required_fields() {
-            if decl.payload.get(&field.name).is_none() {
-                errors.push(format!("Missing required field: {}", field.name));
+            if field.depth == 0 {
+                if decl.payload.get(&field.name).is_none() {
+                    errors.push(format!("Missing required field: {}", field.name));
+                }
+            } else if field.parent_key.is_some() {
+                let ancestors = resolve_ancestor_path(&field.name, manifest);
+                if let Some(parent_obj) = walk_payload_path(&decl.payload.0, &ancestors) {
+                    if !parent_obj.contains_key(&field.name) {
+                        let full_path = ancestors.join(".");
+                        errors.push(format!(
+                            "Missing required field: {full_path}.{}",
+                            field.name
+                        ));
+                    }
+                }
             }
         }
 

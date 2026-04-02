@@ -176,6 +176,7 @@ fn parse_ddm_key_line(line: &str) -> Result<FieldDefinition> {
         default: None,
         allowed_values: Vec::new(),
         depth: 0,
+        parent_key: None,
         platforms: Vec::new(),
         min_version: None,
     })
@@ -319,6 +320,7 @@ fn parse_key_line(line: &str) -> Result<FieldDefinition> {
         default,
         allowed_values,
         depth,
+        parent_key: None,
         platforms,
         min_version,
     })
