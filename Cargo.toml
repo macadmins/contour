@@ -87,11 +87,11 @@ dirs = "6.0"
 mimalloc = "0.1"
 
 # Internal crates
-contour-core = { path = "crates/contour-core", version = "0.1.5" }
-contour-profiles = { path = "crates/contour-profiles", version = "0.1.5" }
-mdm-schema = { path = "crates/mdm-schema", version = "0.1.5" }
-mscp-schema = { path = "crates/mscp-schema", version = "0.1.5" }
-osquery-schema = { path = "crates/osquery-schema", version = "0.1.5" }
+contour-core = { path = "crates/contour-core", version = "0.1.6" }
+contour-profiles = { path = "crates/contour-profiles", version = "0.1.6" }
+mdm-schema = { path = "crates/mdm-schema", version = "0.1.6" }
+mscp-schema = { path = "crates/mscp-schema", version = "0.1.6" }
+osquery-schema = { path = "crates/osquery-schema", version = "0.1.6" }
 
 [workspace.dependencies.tempfile]
 version = "3.24"

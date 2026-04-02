@@ -1,6 +1,6 @@
 [package]
 name = "contour-profiles"
-version = "0.1.5"
+version = "0.1.6"
 description = "Shared mobileconfig profile building utilities for Contour tools"
 edition.workspace = true
 authors.workspace = true

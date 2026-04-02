@@ -636,7 +636,7 @@ contour support generate --fragment -o fragment/
 ```
 ";
 
-const SOP_FLEET_MIGRATE: &str = r#"# SOP: Migrate Fleet GitOps Repo to v4.83 Structure
+const SOP_FLEET_MIGRATE: &str = r"# SOP: Migrate Fleet GitOps Repo to v4.83 Structure
 
 The v4.83 structure (from `fleetctl new`) is the definitive layout for Fleet GitOps.
 This SOP guides an LLM agent to restructure an existing repo without data loss.
@@ -873,7 +873,7 @@ After migration, the old lib/ directory should be empty and can be removed.
 - The apple_settings key replaces macos_settings for profile references
 - Every fleet YAML must have a unique name: value (CI rejects duplicates)
 - CI uses --delete-other-fleets by default (fleets not in YAML get removed)
-"#;
+";
 
 const SOP_ENROLLMENT: &str = r#"# SOP: DEP/ADE Enrollment Profiles (Setup Assistant)
 
