@@ -283,7 +283,11 @@ impl<'a> SchemaValidator<'a> {
         }
     }
 
-    /// Check that all required fields are present
+    /// Check that all required fields are present.
+    ///
+    /// For nested required fields (depth > 0), only validates when the parent
+    /// dictionary is actually present in the payload. This prevents false
+    /// positives for optional parent dicts containing required children.
     fn check_required_fields(
         &self,
         payload: &PayloadContent,
@@ -292,24 +296,40 @@ impl<'a> SchemaValidator<'a> {
         result: &mut SchemaValidationResult,
     ) {
         for field in manifest.required_fields() {
-            // Skip standard payload keys - these are in the PayloadContent struct, not content map
             if is_standard_payload_key(&field.name) {
                 continue;
             }
 
-            // Skip nested/child keys (depth > 0) - they're only required when parent is present
-            if field.depth > 0 {
-                continue;
-            }
-
-            if !payload.content.contains_key(&field.name) {
-                result.issues.push(ValidationIssue::error(
-                    &payload.payload_type,
-                    Some(index),
-                    Some(&field.name),
-                    format!("Required field '{}' is missing", field.name),
-                    "MISSING_REQUIRED",
-                ));
+            if field.depth == 0 {
+                // Top-level required field — must be present
+                if !payload.content.contains_key(&field.name) {
+                    result.issues.push(ValidationIssue::error(
+                        &payload.payload_type,
+                        Some(index),
+                        Some(&field.name),
+                        format!("Required field '{}' is missing", field.name),
+                        "MISSING_REQUIRED",
+                    ));
+                }
+            } else if field.parent_key.is_some() {
+                // Nested required field — only check if parent dict is present
+                let ancestors = resolve_ancestor_path(&field.name, manifest);
+                if let Some(parent_dict) = walk_plist_path(&payload.content, &ancestors) {
+                    if !parent_dict.contains_key(&field.name) {
+                        let full_path = ancestors.join(".");
+                        result.issues.push(ValidationIssue::error(
+                            &payload.payload_type,
+                            Some(index),
+                            Some(&field.name),
+                            format!(
+                                "Required field '{full_path}.{}' is missing (parent dict is present)",
+                                field.name
+                            ),
+                            "MISSING_NESTED_REQUIRED",
+                        ));
+                    }
+                }
+                // If parent dict is absent, the nested required field is not enforced
             }
         }
     }
@@ -582,6 +602,55 @@ fn reverse_dns_similarity(_unknown: &str, unknown_parts: &[&str], known: &str) -
 }
 
 use contour_core::levenshtein_distance;
+
+/// Resolve the ancestor path for a nested field by walking `parent_key` links.
+///
+/// Returns the chain from root to immediate parent. For example, for a field
+/// `Regex` with parent `CustomRegex`, returns `["CustomRegex"]`.
+fn resolve_ancestor_path(field_name: &str, manifest: &PayloadManifest) -> Vec<String> {
+    let mut path = Vec::new();
+    let mut current = field_name.to_string();
+
+    for _ in 0..32 {
+        let parent = manifest
+            .fields
+            .get(&current)
+            .and_then(|f| f.parent_key.as_ref());
+        match parent {
+            Some(p) => {
+                path.push(p.clone());
+                current = p.clone();
+            }
+            None => break,
+        }
+    }
+
+    path.reverse();
+    path
+}
+
+/// Walk into a plist payload along a key path.
+///
+/// The root is a `HashMap<String, plist::Value>` (PayloadContent.content).
+/// Nested levels are `plist::Value::Dictionary`. Returns the innermost
+/// dictionary if every key resolves, or `None` if any key is absent.
+fn walk_plist_path<'a>(
+    root: &'a std::collections::HashMap<String, plist::Value>,
+    path: &[String],
+) -> Option<&'a plist::Dictionary> {
+    let (first, rest) = path.split_first()?;
+    let plist::Value::Dictionary(dict) = root.get(first)? else {
+        return None;
+    };
+    let mut current = dict;
+    for key in rest {
+        match current.get(key) {
+            Some(plist::Value::Dictionary(nested)) => current = nested,
+            _ => return None,
+        }
+    }
+    Some(current)
+}
 
 /// Find a schema key similar to the given unknown key.
 ///
@@ -1022,5 +1091,246 @@ mod tests {
         assert_eq!(levenshtein_distance("allowmaildrop", "allowmaildrop"), 0);
         // Case differences counted as substitutions
         assert_eq!(levenshtein_distance("Tilesize", "tilesize"), 1);
+    }
+
+    // ========== Nested Required Field Tests ==========
+
+    /// Build a manifest with nested fields (simulates passcode.settings CustomRegex pattern).
+    fn test_manifest_with_nesting() -> PayloadManifest {
+        use crate::schema::types::{FieldDefinition, FieldFlags, Platforms};
+
+        let mut fields = HashMap::new();
+        let mut field_order = Vec::new();
+
+        // Top-level optional field
+        let add_field =
+            |fields: &mut HashMap<String, FieldDefinition>,
+             order: &mut Vec<String>,
+             name: &str,
+             required: bool,
+             depth: u8,
+             parent: Option<&str>| {
+                fields.insert(
+                    name.to_string(),
+                    FieldDefinition {
+                        name: name.to_string(),
+                        field_type: FieldType::String,
+                        flags: FieldFlags {
+                            required,
+                            supervised: false,
+                            sensitive: false,
+                        },
+                        title: String::new(),
+                        description: String::new(),
+                        default: None,
+                        allowed_values: Vec::new(),
+                        depth,
+                        parent_key: parent.map(String::from),
+                        platforms: Vec::new(),
+                        min_version: None,
+                    },
+                );
+                order.push(name.to_string());
+            };
+
+        // Top-level required
+        add_field(&mut fields, &mut field_order, "RequirePasscode", true, 0, None);
+        // Top-level optional dict
+        add_field(&mut fields, &mut field_order, "CustomRegex", false, 0, None);
+        // Nested required (only required when CustomRegex is present)
+        add_field(&mut fields, &mut field_order, "Regex", true, 1, Some("CustomRegex"));
+        // Nested optional
+        add_field(&mut fields, &mut field_order, "Description", false, 1, Some("CustomRegex"));
+
+        PayloadManifest {
+            payload_type: "com.apple.configuration.passcode.settings".to_string(),
+            title: "Passcode Settings".to_string(),
+            description: String::new(),
+            platforms: Platforms::default(),
+            min_versions: HashMap::new(),
+            category: "apple".to_string(),
+            fields,
+            field_order,
+            segments: Vec::new(),
+        }
+    }
+
+    fn make_profile(payload_type: &str, content: Vec<(&str, plist::Value)>) -> ConfigurationProfile {
+        ConfigurationProfile {
+            payload_type: "Configuration".to_string(),
+            payload_version: 1,
+            payload_identifier: "com.example.test".to_string(),
+            payload_uuid: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE".to_string(),
+            payload_display_name: "Test".to_string(),
+            payload_content: vec![PayloadContent {
+                payload_type: payload_type.to_string(),
+                payload_version: 1,
+                payload_identifier: "com.example.test.payload".to_string(),
+                payload_uuid: "11111111-2222-3333-4444-555555555555".to_string(),
+                content: content
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect(),
+            }],
+            additional_fields: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_nested_required_absent_parent_no_error() {
+        // CustomRegex is absent → Regex (nested required) should NOT be flagged
+        let manifest = test_manifest_with_nesting();
+        let registry = registry_from_manifest(manifest);
+
+        let profile = make_profile(
+            "com.apple.configuration.passcode.settings",
+            vec![("RequirePasscode", plist::Value::Boolean(true))],
+        );
+
+        let validator = SchemaValidator::new(&registry);
+        let result = validator.validate(&profile);
+
+        let missing: Vec<_> = result
+            .issues
+            .iter()
+            .filter(|i| i.code == "MISSING_REQUIRED" || i.code == "MISSING_NESTED_REQUIRED")
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "Should not flag nested Regex when CustomRegex is absent. Got: {:?}",
+            missing.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_nested_required_present_parent_missing_child() {
+        // CustomRegex IS present but Regex is missing → should flag
+        let manifest = test_manifest_with_nesting();
+        let registry = registry_from_manifest(manifest);
+
+        let mut custom_regex_dict = plist::Dictionary::new();
+        custom_regex_dict.insert(
+            "Description".to_string(),
+            plist::Value::String("some description".to_string()),
+        );
+
+        let profile = make_profile(
+            "com.apple.configuration.passcode.settings",
+            vec![
+                ("RequirePasscode", plist::Value::Boolean(true)),
+                ("CustomRegex", plist::Value::Dictionary(custom_regex_dict)),
+            ],
+        );
+
+        let validator = SchemaValidator::new(&registry);
+        let result = validator.validate(&profile);
+
+        let nested: Vec<_> = result
+            .issues
+            .iter()
+            .filter(|i| i.code == "MISSING_NESTED_REQUIRED")
+            .collect();
+
+        assert_eq!(
+            nested.len(),
+            1,
+            "Should flag missing Regex when CustomRegex is present. Got: {:?}",
+            nested.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert!(nested[0].message.contains("Regex"));
+    }
+
+    #[test]
+    fn test_nested_required_present_parent_with_child() {
+        // CustomRegex IS present AND Regex is present → no error
+        let manifest = test_manifest_with_nesting();
+        let registry = registry_from_manifest(manifest);
+
+        let mut custom_regex_dict = plist::Dictionary::new();
+        custom_regex_dict.insert(
+            "Regex".to_string(),
+            plist::Value::String("^[a-z]+$".to_string()),
+        );
+
+        let profile = make_profile(
+            "com.apple.configuration.passcode.settings",
+            vec![
+                ("RequirePasscode", plist::Value::Boolean(true)),
+                ("CustomRegex", plist::Value::Dictionary(custom_regex_dict)),
+            ],
+        );
+
+        let validator = SchemaValidator::new(&registry);
+        let result = validator.validate(&profile);
+
+        let missing: Vec<_> = result
+            .issues
+            .iter()
+            .filter(|i| i.code == "MISSING_REQUIRED" || i.code == "MISSING_NESTED_REQUIRED")
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "No errors when both parent and child are present. Got: {:?}",
+            missing.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_top_level_required_still_enforced() {
+        // RequirePasscode (top-level required) missing → should flag
+        let manifest = test_manifest_with_nesting();
+        let registry = registry_from_manifest(manifest);
+
+        let profile = make_profile(
+            "com.apple.configuration.passcode.settings",
+            vec![],
+        );
+
+        let validator = SchemaValidator::new(&registry);
+        let result = validator.validate(&profile);
+
+        let top: Vec<_> = result
+            .issues
+            .iter()
+            .filter(|i| i.code == "MISSING_REQUIRED" && i.message.contains("RequirePasscode"))
+            .collect();
+
+        assert_eq!(top.len(), 1, "Should flag missing top-level required field");
+    }
+
+    #[test]
+    fn test_resolve_ancestor_path() {
+        let manifest = test_manifest_with_nesting();
+        let path = resolve_ancestor_path("Regex", &manifest);
+        assert_eq!(path, vec!["CustomRegex"]);
+
+        // Top-level field has no ancestors
+        let path = resolve_ancestor_path("RequirePasscode", &manifest);
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn test_walk_plist_path_present() {
+        let mut inner = plist::Dictionary::new();
+        inner.insert("Regex".to_string(), plist::Value::String(".*".to_string()));
+
+        let mut content = HashMap::new();
+        content.insert(
+            "CustomRegex".to_string(),
+            plist::Value::Dictionary(inner),
+        );
+
+        let result = walk_plist_path(&content, &["CustomRegex".to_string()]);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains_key("Regex"));
+    }
+
+    #[test]
+    fn test_walk_plist_path_absent() {
+        let content: HashMap<String, plist::Value> = HashMap::new();
+        let result = walk_plist_path(&content, &["CustomRegex".to_string()]);
+        assert!(result.is_none());
     }
 }
