@@ -1,6 +1,6 @@
 [package]
 name = "notifications"
-version = "0.1.4"
+version = "0.1.5"
 description = "Notification settings profile toolkit for macOS"
 edition.workspace = true
 authors.workspace = true

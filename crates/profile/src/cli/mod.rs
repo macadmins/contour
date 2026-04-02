@@ -9,6 +9,7 @@ pub mod ddm;
 pub mod diff;
 pub mod docs;
 pub mod duplicate;
+pub mod enrollment;
 pub mod generate;
 pub mod glob_utils;
 pub mod import;
@@ -483,6 +484,12 @@ pub enum Commands {
         action: CommandAction,
     },
 
+    /// Work with enrollment profiles (DEP/ADE Setup Assistant)
+    Enrollment {
+        #[command(subcommand)]
+        action: EnrollmentAction,
+    },
+
     /// Synthesize mobileconfig profiles from managed preference plists
     Synthesize {
         #[arg(help = "Plist file(s) or directory of managed preferences", required = true, num_args = 1..)]
@@ -712,6 +719,9 @@ pub enum CommandAction {
         /// Add a CommandUUID for tracking
         #[arg(long)]
         uuid: bool,
+        /// Output as base64-encoded string (ready for Fleet API)
+        #[arg(long)]
+        base64: bool,
         /// Interactive mode — search, select command, configure params
         #[arg(long)]
         interactive: bool,
@@ -720,5 +730,42 @@ pub enum CommandAction {
     Info {
         /// Command type
         command_type: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EnrollmentAction {
+    /// List available skip keys for a platform and OS version
+    List {
+        /// Platform (macOS, iOS, iPadOS, tvOS, visionOS)
+        #[arg(long, default_value = "macOS")]
+        platform: String,
+        /// Filter by OS version (only show keys available for this version)
+        #[arg(long)]
+        os_version: Option<String>,
+    },
+    /// Generate a DEP enrollment profile JSON
+    Generate {
+        /// Platform
+        #[arg(long, default_value = "macOS")]
+        platform: String,
+        /// OS version to target
+        #[arg(long)]
+        os_version: Option<String>,
+        /// Skip ALL available setup items
+        #[arg(long)]
+        skip_all: bool,
+        /// Skip specific items (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        skip: Vec<String>,
+        /// Output file
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Profile name
+        #[arg(long, default_value = "Automatic enrollment profile")]
+        profile_name: String,
+        /// Interactive mode — select which items to skip
+        #[arg(long)]
+        interactive: bool,
     },
 }

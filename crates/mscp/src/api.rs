@@ -8,9 +8,8 @@
 )]
 
 use anyhow::Result;
-use mscp_schema::{
-    BaselineEdge, BaselineMeta, EnvelopePattern, RulePayload, RuleVersioned, SkipKey,
-};
+use mdm_schema::SkipKey;
+use mscp_schema::{BaselineEdge, BaselineMeta, EnvelopePattern, RulePayload, RuleVersioned};
 
 /// Counts for every embedded dataset.
 #[derive(Debug)]
@@ -77,7 +76,7 @@ pub fn list_envelope_patterns() -> Result<Vec<EnvelopePattern>> {
 /// - `introduced` is `None` **or** `introduced <= os_version`, **and**
 /// - `removed` is `None` **or** `removed > os_version`.
 pub fn list_skip_keys(platform: &str, os_version: Option<&str>) -> Result<Vec<SkipKey>> {
-    let all = mscp_schema::skip_keys::read(mscp_schema::embedded_skip_keys())?;
+    let all = mdm_schema::skip_keys::read(mdm_schema::embedded_skip_keys())?;
 
     let filtered = all
         .into_iter()
@@ -124,7 +123,7 @@ pub fn schema_stats() -> Result<SchemaStats> {
             mscp_schema::embedded_envelope_meta_keys(),
         )?
         .len(),
-        skip_keys: mscp_schema::skip_keys::read(mscp_schema::embedded_skip_keys())?.len(),
+        skip_keys: mdm_schema::skip_keys::read(mdm_schema::embedded_skip_keys())?.len(),
         rule_meta: rule_meta_count,
         sections: mscp_schema::sections::read(mscp_schema::embedded_sections())?.len(),
         control_tiers: mscp_schema::control_tiers::read(mscp_schema::embedded_control_tiers())?

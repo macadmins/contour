@@ -1,6 +1,6 @@
 [package]
 name = "mscp"
-version = "0.1.4"
+version = "0.1.5"
 description = "Post-process mSCP output into MDM-ready configurations"
 edition.workspace = true
 authors.workspace = true
@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 contour-core.workspace = true
+mdm-schema.workspace = true
 mscp-schema.workspace = true
 
 # CLI

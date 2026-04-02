@@ -257,6 +257,7 @@ pub fn handle_command_generate(
     output: Option<&str>,
     params: &[String],
     uuid: bool,
+    base64_output: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
     let commands = load_commands()?;
@@ -310,6 +311,29 @@ pub fn handle_command_generate(
     let plist_string =
         String::from_utf8(plist_bytes).context("Generated plist is not valid UTF-8")?;
 
+    // Base64 output for Fleet API
+    if base64_output {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(plist_string.as_bytes());
+        if output_mode == OutputMode::Json {
+            let result = serde_json::json!({
+                "command_type": cmd.payload_type,
+                "title": cmd.title,
+                "base64": encoded,
+                "params": params,
+                "uuid": uuid,
+            });
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else if let Some(output_path) = output {
+            std::fs::write(output_path, &encoded)
+                .with_context(|| format!("Failed to write base64 to {output_path}"))?;
+            println!("{} Base64 command written to {}", "OK".green(), output_path.cyan());
+        } else {
+            println!("{encoded}");
+        }
+        return Ok(());
+    }
+
     if let Some(output_path) = output {
         // Create parent directories if needed
         if let Some(parent) = std::path::Path::new(output_path).parent() {
@@ -322,11 +346,14 @@ pub fn handle_command_generate(
             .with_context(|| format!("Failed to write plist to {output_path}"))?;
 
         if output_mode == OutputMode::Json {
+            use base64::Engine;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(plist_string.as_bytes());
             let result = serde_json::json!({
                 "success": true,
                 "command_type": cmd.payload_type,
                 "title": cmd.title,
                 "output": output_path,
+                "base64": encoded,
                 "params": params,
                 "uuid": uuid,
             });

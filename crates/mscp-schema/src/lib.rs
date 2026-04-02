@@ -1,6 +1,6 @@
 //! Shared mSCP (macOS Security Compliance Project) metadata and embedded Parquet data.
 //!
-//! Ten datasets:
+//! Nine datasets:
 //! - `baseline_meta` — baseline names, titles, preambles, authors
 //! - `sections` — mSCP section names and descriptions
 //! - `control_tiers` — NIST 800-53 control → impact tier mappings
@@ -10,7 +10,6 @@
 //! - `rule_payloads` — rule enforcement payloads (scripts, mobileconfig, DDM)
 //! - `envelope_patterns` — XML envelope nesting patterns for mobileconfig
 //! - `envelope_meta_keys` — required metadata keys for envelope layers
-//! - `skip_keys` — Setup Assistant skip keys with platform gating
 
 pub mod baseline_edges;
 pub mod baseline_meta;
@@ -21,7 +20,6 @@ pub mod rule_meta;
 pub mod rule_payloads;
 pub mod rules_versioned;
 pub mod sections;
-pub mod skip_keys;
 pub mod types;
 
 pub use types::*;
@@ -69,11 +67,6 @@ pub fn embedded_envelope_patterns() -> &'static [u8] {
 /// Embedded envelope meta keys Parquet data.
 pub fn embedded_envelope_meta_keys() -> &'static [u8] {
     include_bytes!("../data/envelope_meta_keys.parquet")
-}
-
-/// Embedded skip keys Parquet data.
-pub fn embedded_skip_keys() -> &'static [u8] {
-    include_bytes!("../data/skip_keys.parquet")
 }
 
 #[cfg(test)]
@@ -180,17 +173,6 @@ mod tests {
         assert!(
             keys.len() >= 10,
             "Expected at least 10 envelope meta keys, got {}",
-            keys.len()
-        );
-    }
-
-    #[test]
-    fn test_read_embedded_skip_keys() {
-        let keys =
-            skip_keys::read(embedded_skip_keys()).expect("Failed to read embedded skip_keys");
-        assert!(
-            keys.len() >= 20,
-            "Expected at least 20 skip keys, got {}",
             keys.len()
         );
     }

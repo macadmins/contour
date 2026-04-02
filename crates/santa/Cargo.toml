@@ -1,6 +1,6 @@
 [package]
 name = "santa"
-version = "0.1.4"
+version = "0.1.5"
 description = "Santa mobileconfig profile toolkit for macOS application control"
 edition.workspace = true
 authors.workspace = true

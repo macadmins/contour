@@ -106,6 +106,12 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
         "- `--sop notifications` — Notification settings profiles"
     )?;
     writeln!(buf, "- `--sop support` — Root3 Support App profiles")?;
+    writeln!(
+        buf,
+        "- `--sop fleet-migrate` — migrate Fleet GitOps repo from legacy/v4.82 to v4.83 structure\n\
+         - `--sop enrollment` — DEP/ADE enrollment profiles (Setup Assistant skip keys)\n\
+         - `--sop schema-data` — embedded parquet data: verify, update, track schema versions"
+    )?;
     writeln!(buf)?;
 
     // Command index
@@ -136,6 +142,9 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "btm" => SOP_BTM,
         "notifications" => SOP_NOTIFICATIONS,
         "support" => SOP_SUPPORT,
+        "fleet-migrate" | "migrate" | "fleet" => SOP_FLEET_MIGRATE,
+        "schema-data" | "schema" | "data" | "parquet" => SOP_SCHEMA_DATA,
+        "enrollment" | "dep" | "ade" | "setup-assistant" => SOP_ENROLLMENT,
         _ => bail!(
             "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support"
         ),
@@ -196,6 +205,38 @@ contour profile generate <payload_type> --full --fragment -o fragment/
 - `--json` — structured output for programmatic consumption
 - `--fragment` — generate composable fragment for Fleet GitOps
 
+## Normalize existing profiles
+```
+contour profile normalize <file_or_dir> --org com.yourco -o output/
+contour profile normalize <dir> --recursive --org com.yourco --report report.md
+```
+
+What normalize does:
+- Rewrites PayloadIdentifier under --org namespace (top-level AND child payloads)
+- Regenerates UUIDs (deterministic from identifier)
+- Fixes PayloadVersion, PayloadScope, display names
+- Preserves MDM placeholders ($FLEET_VAR_*, %HardwareUUID%, {{var}})
+- Preserves XML comments (<!-- ... -->)
+
+What normalize does NOT do:
+- Does not fix typos in the name segment of identifiers
+  e.g., com.old.zscaler-cofing -> com.yourco.zscaler-cofing (prefix fixed, typo preserved)
+- To fix a name typo: use contour profile duplicate --name 'correct-name' --org com.yourco
+
+## Duplicate/re-identity a profile
+```
+contour profile duplicate <source> --name 'New Name' --org com.yourco -o fixed.mobileconfig
+```
+Creates a copy with new PayloadDisplayName, PayloadIdentifier, and UUIDs.
+Use this to fix identifier typos or create variants of an existing profile.
+
+## Synthesize mobileconfigs from managed preferences
+```
+1. contour profile synthesize /Library/Managed\ Preferences/ --dry-run --json  # preview
+2. contour profile synthesize /Library/Managed\ Preferences/ -o profiles/ --org com.yourco --validate
+3. contour profile validate profiles/ --recursive --json  # verify output
+```
+
 ## Generate MDM command payloads (.plist for Fleet/MDM)
 ```
 1. contour profile command list --json                  # list all 65 MDM commands
@@ -203,6 +244,8 @@ contour profile generate <payload_type> --full --fragment -o fragment/
 3. contour profile command generate <command> -o cmd.plist  # generate plist payload
    --set KEY=VALUE    # set command parameters
    --uuid             # add CommandUUID for tracking
+   --base64           # output as base64 string (ready for Fleet API)
+   --json             # JSON output includes base64 field automatically
 ```
 
 ### Common MDM commands
@@ -217,10 +260,32 @@ contour profile command generate EnableRemoteDesktop -o remote.plist
 contour profile command generate RotateFileVaultKey -o rotate-fvkey.plist
 ```
 
-### Send via Fleet
+### Send via Fleet CLI
 ```
 fleetctl mdm run-command --host <hostname> --payload cmd.plist
-fleetctl mdm run-command --host <hostname> --payload cmd.plist --json  # get CommandUUID
+```
+
+### Send via Fleet API (base64)
+```
+# Get base64 directly:
+contour profile command generate RestartDevice --uuid --base64
+
+# Or from JSON (base64 field included automatically):
+contour profile command generate RestartDevice --uuid --json
+# JSON output includes 'base64' field ready for Fleet API
+
+# Use base64 value in Fleet API POST to /api/v1/fleet/commands/run
+# Payload keys: command (base64 string), host_uuids (array of host UUIDs)
+
+# Verify result:
+# fleetctl get mdm-command-results --id=<CommandUUID>
+```
+
+## Generate DEP enrollment profiles
+```
+contour profile enrollment list --platform macOS --json           # list skip keys
+contour profile enrollment generate --platform macOS --skip-all -o enrollment.dep.json
+contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
 ```
 ";
 
@@ -504,6 +569,397 @@ contour support generate -o profiles/
 contour support generate --fragment -o fragment/
 ```
 ";
+
+const SOP_FLEET_MIGRATE: &str = r#"# SOP: Migrate Fleet GitOps Repo to v4.83 Structure
+
+The v4.83 structure (from `fleetctl new`) is the definitive layout for Fleet GitOps.
+This SOP guides an LLM agent to restructure an existing repo without data loss.
+
+## v4.83 Definitive Directory Structure
+
+```
+it-and-security/
+├── default.yml                                    # global: org_settings, controls, labels
+├── fleets/
+│   ├── workstations.yml                           # fleet: controls, profiles, software, policies
+│   └── personal-mobile-devices.yml
+├── labels/
+│   └── *.yml                                      # one label per .yml file
+└── platforms/
+    ├── all/
+    │   ├── icons/                                 # app icons for software
+    │   ├── policies/                              # cross-platform policies
+    │   └── reports/                               # cross-platform reports
+    ├── android/
+    │   ├── configuration-profiles/
+    │   └── managed-app-configurations/
+    ├── ios/
+    │   ├── configuration-profiles/                # .mobileconfig
+    │   └── declaration-profiles/                  # .json DDM
+    ├── ipados/
+    │   ├── configuration-profiles/
+    │   └── declaration-profiles/
+    ├── linux/
+    │   ├── policies/
+    │   ├── reports/
+    │   ├── scripts/                               # .sh
+    │   └── software/
+    ├── macos/
+    │   ├── commands/                              # MDM command .plist files
+    │   ├── configuration-profiles/                # .mobileconfig
+    │   ├── declaration-profiles/                  # .json DDM declarations
+    │   ├── enrollment-profiles/                   # DEP .json profiles
+    │   ├── policies/                              # .yml policy files
+    │   ├── reports/                               # .yml report files
+    │   ├── scripts/                               # .sh scripts
+    │   └── software/                              # .yml software packages
+    └── windows/
+        ├── configuration-profiles/                # .xml CSP profiles
+        ├── policies/
+        ├── reports/
+        ├── scripts/                               # .ps1 scripts
+        └── software/
+```
+
+## Key Changes from Legacy/v4.82
+
+### Path mapping: lib/ -> platforms/
+```
+lib/agent-options.yml           -> (removed or inline in fleet YAML)
+lib/macos/configuration-profiles/ -> platforms/macos/configuration-profiles/
+lib/macos/scripts/              -> platforms/macos/scripts/
+lib/all/labels/                 -> labels/
+```
+
+### Path mapping: v4.82 -> v4.83
+```
+platforms/macos/configuration-profiles/*.json  -> platforms/macos/declaration-profiles/*.json
+(DDM declarations were mixed with mobileconfigs in v4.82, now separated)
+```
+
+### YAML key changes
+```
+team_settings:    -> settings:          (v4.82 already did this)
+no-team.yml       -> unassigned.yml     (v4.82 already did this)
+macos_settings:   -> apple_settings:    (v4.83)
+  custom_settings:  -> configuration_profiles:
+- path: file.mobileconfig -> - paths: ../platforms/macos/configuration-profiles/*.mobileconfig
+                               (glob patterns instead of per-file references)
+```
+
+### Fleet YAML profile references (v4.83 uses globs)
+```yaml
+# v4.82 (per-file)
+controls:
+  macos_settings:
+    custom_settings:
+      - path: ../platforms/macos/configuration-profiles/wifi.mobileconfig
+      - path: ../platforms/macos/configuration-profiles/vpn.mobileconfig
+
+# v4.83 (glob)
+controls:
+  apple_settings:
+    configuration_profiles:
+      - paths: ../platforms/macos/declaration-profiles/*.json
+      - paths: ../platforms/macos/configuration-profiles/*.mobileconfig
+  windows_settings:
+    configuration_profiles:
+      - paths: ../platforms/windows/configuration-profiles/*.xml
+```
+
+### Labels (v4.83 uses glob in default.yml)
+```yaml
+# v4.82
+labels:
+  - path: ./labels/my-label.yml
+
+# v4.83
+labels:
+  - paths: ./labels/*.yml
+```
+
+## Step-by-Step Migration
+
+### 1. Create the new directory structure
+```bash
+mkdir -p platforms/{all/{icons,policies,reports},android/{configuration-profiles,managed-app-configurations}}
+mkdir -p platforms/{ios,ipados}/{configuration-profiles,declaration-profiles}
+mkdir -p platforms/macos/{commands,configuration-profiles,declaration-profiles,enrollment-profiles,policies,reports,scripts,software}
+mkdir -p platforms/{windows/{configuration-profiles,policies,reports,scripts,software}}
+mkdir -p platforms/linux/{policies,reports,scripts,software}
+mkdir -p labels fleets
+```
+
+### 2. Move files from old locations
+```bash
+# From lib/ (legacy)
+mv lib/macos/configuration-profiles/*.mobileconfig platforms/macos/configuration-profiles/
+mv lib/macos/configuration-profiles/*.json platforms/macos/declaration-profiles/
+mv lib/macos/scripts/* platforms/macos/scripts/
+mv lib/all/labels/*.yml labels/
+
+# From flat platforms/ (v4.82 — DDM mixed with mobileconfig)
+# Separate .json (DDM) from .mobileconfig
+mv platforms/macos/configuration-profiles/*.json platforms/macos/declaration-profiles/ 2>/dev/null
+```
+
+### 3. Update default.yml
+```yaml
+# Change labels from per-file to glob
+labels:
+  - paths: ./labels/*.yml
+```
+
+### 4. Update fleet YAML files
+```yaml
+# Change macos_settings -> apple_settings with glob paths
+controls:
+  apple_settings:
+    configuration_profiles:
+      - paths: ../platforms/macos/declaration-profiles/*.json
+      - paths: ../platforms/macos/configuration-profiles/*.mobileconfig
+  windows_settings:
+    configuration_profiles:
+      - paths: ../platforms/windows/configuration-profiles/*.xml
+  scripts:
+    - paths: ../platforms/macos/scripts/*.sh
+    - paths: ../platforms/windows/scripts/*.ps1
+    - paths: ../platforms/linux/scripts/*.sh
+
+policies:
+  - paths: ../platforms/macos/policies/*.yml
+  - paths: ../platforms/windows/policies/*.yml
+  - paths: ../platforms/linux/policies/*.yml
+
+reports:
+  - paths: ../platforms/all/reports/*.yml
+  - paths: ../platforms/macos/reports/*.yml
+
+software:
+  packages:
+    # per-platform packages here
+  fleet_maintained_apps:
+    # slugs here
+```
+
+### 5. Validate
+```bash
+fleetctl gitops --dry-run -f default.yml
+fleetctl gitops --dry-run -f fleets/workstations.yml
+```
+
+### 6. Clean up
+After migration, the old lib/ directory should be empty and can be removed.
+
+## Reference
+- `fleetctl new` generates this structure: github.com/fleetdm/fleet/tree/main/cmd/fleetctl/fleetctl/templates
+- GitOps parser: github.com/fleetdm/fleet/blob/main/cmd/fleetctl/fleetctl/gitops.go
+- Generator: github.com/fleetdm/fleet/blob/main/cmd/fleetctl/fleetctl/new.go
+
+## Important Rules
+- DDM declaration .json files go in declaration-profiles/, NOT configuration-profiles/
+- .mobileconfig files go in configuration-profiles/
+- .xml Windows profiles go in configuration-profiles/
+- Use glob paths (paths: *.mobileconfig) not per-file paths (path: file.mobileconfig)
+- Labels are one .yml file per label in labels/ directory
+- Policies/reports/scripts are per-platform under platforms/<platform>/
+- The apple_settings key replaces macos_settings for profile references
+"#;
+
+const SOP_ENROLLMENT: &str = r#"# SOP: DEP/ADE Enrollment Profiles (Setup Assistant)
+
+Generate enrollment profiles that control the macOS/iOS Setup Assistant experience
+for devices enrolling via Apple Business Manager (ABM) / Apple Device Enrollment (ADE).
+
+## List available skip keys
+```
+contour profile enrollment list --platform macOS --json
+contour profile enrollment list --platform iOS --json
+contour profile enrollment list --platform macOS --os-version 26.0 --json
+```
+
+Each skip key controls one Setup Assistant screen (e.g., AppleID, Siri, Privacy).
+Keys have platform and OS version gating — some only exist on macOS 11+, some are iOS-only.
+
+## Generate enrollment profile
+
+### Interactive (recommended for first time)
+```
+contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
+```
+Shows a checklist of all skip keys with descriptions. Common enterprise defaults are pre-selected.
+Toggle items with Space, confirm with Enter.
+
+### Skip all available screens
+```
+contour profile enrollment generate --platform macOS --skip-all -o enrollment.dep.json
+```
+
+### Skip specific screens
+```
+contour profile enrollment generate --platform macOS \
+  --skip AppleID,TOS,Siri,Privacy,Diagnostics,ScreenTime,iCloudStorage \
+  -o enrollment.dep.json
+```
+
+## Output format
+The generated JSON matches what Fleet expects:
+```json
+{
+  "profile_name": "Automatic enrollment profile",
+  "allow_pairing": true,
+  "is_supervised": true,
+  "is_mdm_removable": false,
+  "language": "en",
+  "region": "US",
+  "skip_setup_items": ["AppleID", "TOS", "Siri", ...]
+}
+```
+
+## Use with Fleet GitOps (v4.83 structure)
+```
+# Place in the enrollment-profiles directory
+cp enrollment.dep.json platforms/macos/enrollment-profiles/automatic-enrollment.dep.json
+
+# Reference in fleet YAML (fleets/workstations.yml)
+controls:
+  setup_experience:
+    apple_setup_assistant: ../platforms/macos/enrollment-profiles/automatic-enrollment.dep.json
+```
+
+The filename is arbitrary — Fleet reads it by path reference, not by name convention.
+
+## Common skip key sets
+
+### Enterprise standard (skip most, keep FileVault + Biometric)
+```
+contour profile enrollment generate --platform macOS \
+  --skip AppleID,AppStore,Diagnostics,iCloudDiagnostics,iCloudStorage,Location,Payment,Privacy,ScreenTime,Siri,TermsOfAddress,TOS,UnlockWithWatch,Appearance,Welcome,Wallpaper \
+  -o enrollment.dep.json
+```
+
+### Maximum skip (skip everything available)
+```
+contour profile enrollment generate --platform macOS --skip-all -o enrollment.dep.json
+```
+Note: --skip-all includes FileVault and SoftwareUpdate. If you want users to see those
+screens during setup, use --interactive and deselect them, or use --skip with explicit keys.
+
+### Minimal (only skip legal/diagnostics)
+```
+contour profile enrollment generate --platform macOS \
+  --skip TOS,Diagnostics,iCloudDiagnostics,Privacy \
+  -o enrollment.dep.json
+```
+
+## Agent decision guide
+
+When an agent is asked to generate an enrollment profile:
+1. Ask: which platform? (macOS, iOS, iPadOS)
+2. Ask: target OS version? (affects available skip keys)
+3. Recommend: interactive mode for first-time setup
+4. ALWAYS keep FileVault and SoftwareUpdate enabled (do NOT skip them)
+   - FileVault: ensures disk encryption during setup
+   - SoftwareUpdate: ensures device gets latest OS before use
+5. Common items safe to skip: AppleID, TOS, Siri, Diagnostics, Privacy, ScreenTime, Payment
+6. Items to discuss with user before skipping: Biometric (Touch ID), Appearance, Location
+
+## Key facts
+- is_supervised: true enables full MDM control (required for most enterprise features)
+- is_mdm_removable: false prevents users from removing the MDM profile
+- Skipping FileVault only skips the Setup Assistant prompt — FileVault CAN still be enforced via MDM profile, but best practice is to let users set it up during onboarding
+- Skip keys are version-gated — use --os-version to see only keys valid for your target OS
+- The --interactive flag shows descriptions for each key to help make informed choices
+"#;
+
+const SOP_SCHEMA_DATA: &str = r#"# SOP: Embedded Schema Data Management
+
+Contour embeds parquet datasets from the posture pipeline at compile time.
+This SOP covers verifying, updating, and tracking that embedded data.
+
+## What's Embedded
+
+### mdm-schema crate (crates/mdm-schema/data/)
+- capabilities.parquet — Apple MDM profiles, DDM declarations, commands (13,500+ rows)
+- profilecreator.parquet — Community ProfileManifests (8,900+ rows)
+- skip_keys.parquet — Setup Assistant skip keys (71 rows)
+
+### mscp-schema crate (crates/mscp-schema/data/)
+- rules_versioned.parquet — mSCP security rules with enforcement metadata (540 rows)
+- rule_payloads.parquet — Check/fix scripts, mobileconfig_info, DDM details (463 rows)
+- baseline_edges.parquet — Rule-to-baseline membership (4,400+ rows)
+- baseline_meta.parquet — Baseline names, titles, authors (14 rows)
+- rule_meta.parquet — Rule title, discussion, severity (463 rows)
+- control_tiers.parquet — NIST 800-53 control tiers (728 rows)
+- sections.parquet — mSCP section definitions (11 rows)
+- envelope_patterns.parquet — XML nesting templates (4 rows)
+- envelope_meta_keys.parquet — Envelope metadata key definitions (20 rows)
+
+## Three-Layer Versioning (from posture)
+
+### Layer 1: Schema Version (CalVer)
+Each JSON Schema in posture's out/schemas/ has:
+  x-schema-version: "2026.04.02.1" (YYYY.MM.DD.MICRO)
+Only bumps when type structure changes (fields added/removed).
+Same version = safe to drop in new parquet files.
+
+### Layer 2: Data Hash (SHA-256)
+Each schema also has:
+  x-data-file: "skip_keys.parquet"
+  x-data-sha256: "7227c5b9a67c..."
+Verify after copying: shasum -a 256 data/file.parquet
+
+### Layer 3: Manifest (out/manifest.json)
+Complete inventory: filename, sha256, rows, bytes, columns per file.
+Diff old vs new manifest to see exactly what changed.
+
+## Update Workflow
+
+### 1. Check compatibility
+```
+posture compat-check --contour /path/to/contour/crates/
+```
+Reports: EXACT (safe), COMPATIBLE (new nullable columns), or BREAKING (needs code changes).
+
+### 2. Copy files
+```
+cp posture/out/capabilities.parquet crates/mdm-schema/data/
+cp posture/out/skip_keys.parquet crates/mdm-schema/data/
+cp posture/out/{baseline_meta,baseline_edges,control_tiers,rule_meta,sections}.parquet crates/mscp-schema/data/
+cp posture/out/{rules_versioned,rule_payloads,envelope_patterns,envelope_meta_keys}.parquet crates/mscp-schema/data/
+```
+
+### 3. Verify integrity
+```
+posture validate
+# Or manually:
+shasum -a 256 crates/mdm-schema/data/*.parquet
+shasum -a 256 crates/mscp-schema/data/*.parquet
+```
+
+### 4. Run tests
+```
+cargo test -p mdm-schema -p mscp-schema
+```
+Tests assert minimum row counts — if data is empty or schema changed, tests fail.
+
+### 5. If BREAKING changes
+- Compare Arrow schemas in reader modules (e.g., rule_meta.rs) against new parquet columns
+- Update col() calls for renamed/new columns
+- Add new fields to Rust types in types.rs
+- Re-run tests
+
+## Excluding Volatile Files
+source_versions.parquet and platform_validity.parquet change on every regeneration.
+Use --exclude with posture validate if only checking core data stability.
+
+## Reference
+- Posture consumer guide: CONSUMER_GUIDE.md in posture output
+- Posture CLI: github.com/headmin/posture
+- posture validate — verify all hashes
+- posture compat-check — check schema compatibility
+- posture data-report — generate manifest.json
+"#;
 
 /// Write a top-level command group and its subcommands as an index.
 fn write_index_group(buf: &mut String, cmd: &clap::Command, root: &str) -> Result<()> {
