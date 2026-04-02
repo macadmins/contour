@@ -61,11 +61,15 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     writeln!(buf)?;
     writeln!(
         buf,
-        "**Command naming:** `{name} <tool> <action>` — e.g. `{name} santa add`, `{name} pppc scan`."
+        "**Command naming:** Commands use SPACES: `{name} profile ddm info`, `{name} santa cel check`"
     )?;
     writeln!(
         buf,
-        "Use dot notation with --command: `{name} help-ai --command santa.add`"
+        "IMPORTANT: The index below uses dots (ddm.info) for readability only. When RUNNING commands, always use spaces."
+    )?;
+    writeln!(
+        buf,
+        "Dots are ONLY for --command lookup: `{name} help-ai --command profile.ddm.info`"
     )?;
     writeln!(buf)?;
     writeln!(buf, "**Common patterns:**")?;
@@ -78,6 +82,47 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     writeln!(
         buf,
         "- `--org` sets the organization identifier (or use .contour/config.toml)"
+    )?;
+    writeln!(buf)?;
+    writeln!(
+        buf,
+        "**When to use which SOP (match user intent to the right SOP):**"
+    )?;
+    writeln!(
+        buf,
+        "- write/create/add a Fleet policy, osquery query, compliance check, detection → `--sop osquery`"
+    )?;
+    writeln!(
+        buf,
+        "- install software, auto-install, self-service, app deployment, package → `--sop osquery`"
+    )?;
+    writeln!(
+        buf,
+        "- generate/create/validate a mobileconfig, configuration profile, payload → `--sop profile`"
+    )?;
+    writeln!(
+        buf,
+        "- generate/send an MDM command (restart, lock, erase, remote desktop) → `--sop profile`"
+    )?;
+    writeln!(
+        buf,
+        "- mSCP, CIS, STIG, 800-53, compliance baseline, security rules → `--sop mscp`"
+    )?;
+    writeln!(
+        buf,
+        "- DEP, ADE, enrollment, Setup Assistant, skip keys, onboarding → `--sop enrollment`"
+    )?;
+    writeln!(
+        buf,
+        "- migrate, restructure, move from lib/ to platforms/, update GitOps → `--sop fleet-migrate`"
+    )?;
+    writeln!(
+        buf,
+        "- Santa, allowlist, blocklist, CEL, FAA, ring deployment → `--sop santa`"
+    )?;
+    writeln!(
+        buf,
+        "- DDM, declarative management, declaration, activation → `--sop ddm`"
     )?;
     writeln!(buf)?;
 
@@ -108,7 +153,7 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     writeln!(buf, "- `--sop support` — Root3 Support App profiles")?;
     writeln!(
         buf,
-        "- `--sop osquery` — search/inspect embedded osquery table and column schema"
+        "- `--sop osquery` — osquery schema lookup + Fleet policy query patterns + software assignment"
     )?;
     writeln!(
         buf,
@@ -347,12 +392,21 @@ contour osquery table <osquery_table_from_rule> --json
 
 const SOP_DDM: &str = r#"# SOP: DDM Declaration Generation
 
+## Before generating: ask for org domain
+ALWAYS ask the user for their organization reverse-domain (e.g., com.acme)
+before generating. The Identifier field in DDM declarations defaults to
+com.example which must be replaced.
+
 ## Generate a DDM declaration
 ```
 1. contour profile ddm list --json                  # list all 42+ DDM declaration types
 2. contour profile ddm info <type> --json           # show schema (keys, types, defaults)
 3. contour profile ddm generate <type> -o decl.json # generate JSON declaration
 ```
+
+After generating, update the Identifier field:
+  "Identifier": "com.yourorg.intelligence.settings"
+                  ^^^^^^^^^^^ use the org domain from the user
 
 ## Find DDM declarations by keyword
 ```
@@ -363,6 +417,7 @@ contour profile search <keyword> --json
 ## Common DDM types
 - com.apple.configuration.passcode.settings — Passcode requirements
 - com.apple.configuration.softwareupdate.settings — OS update enforcement
+- com.apple.configuration.intelligence.settings — Apple Intelligence settings
 - com.apple.configuration.screensaver.settings — Screen saver settings
 - com.apple.activation.simple — Simple activation predicate
 "#;
@@ -1637,6 +1692,81 @@ fn arg_to_json(arg: &clap::Arg) -> serde_json::Value {
     }
 
     obj
+}
+
+// ── Skill file installation ─────────────────────────────────────────
+
+/// Install a Claude Code / Kilo Code skill file for contour.
+///
+/// Creates `.claude/skills/contour.md` in the current working directory so
+/// AI agents automatically discover contour capabilities.
+/// Embedded skill file template.
+const SKILL_TEMPLATE: &str = include_str!("../skills/contour.md");
+
+/// Install a Claude Code / Kilo Code skill file for contour.
+///
+/// Creates `.claude/skills/contour.md` and ensures `CLAUDE.md` has a bootstrap hint.
+pub fn install_skill(version: &str) -> Result<()> {
+    use std::fs;
+    use std::path::Path;
+
+    // 1. Install skill file
+    let skills_dir = Path::new(".claude/skills");
+    fs::create_dir_all(skills_dir)?;
+
+    let skill_path = skills_dir.join("contour.md");
+    let content = SKILL_TEMPLATE.replace("{{VERSION}}", version);
+    fs::write(&skill_path, content)?;
+
+    eprintln!("\u{2713} Installed Claude Code skill: .claude/skills/contour.md");
+
+    // 2. Ensure agent instruction files have a contour bootstrap hint
+    let bootstrap_line = "## contour\n\n\
+        `contour` (macOS MDM toolkit) is available. \
+        Run `contour setup-agent` to install the AI agent skill, \
+        or `contour help-ai` for the command reference.\n";
+
+    for agent_file in &["CLAUDE.md", "AGENT.md"] {
+        let path = Path::new(agent_file);
+        if path.exists() {
+            let existing = fs::read_to_string(path)?;
+            if !existing.contains("contour setup-agent") && !existing.contains("contour help-ai") {
+                let mut updated = existing;
+                if !updated.ends_with('\n') {
+                    updated.push('\n');
+                }
+                updated.push('\n');
+                updated.push_str(bootstrap_line);
+                fs::write(path, updated)?;
+                eprintln!("\u{2713} Added contour bootstrap hint to {agent_file}");
+            } else {
+                eprintln!("  {agent_file} already references contour");
+            }
+        }
+    }
+
+    // Create files if neither exists
+    let claude_md = Path::new("CLAUDE.md");
+    let agent_md = Path::new("AGENT.md");
+    if !claude_md.exists() && !agent_md.exists() {
+        let content = format!("# Project Instructions\n\n{bootstrap_line}");
+        fs::write(claude_md, &content)?;
+        fs::write(agent_md, &content)?;
+        eprintln!("\u{2713} Created CLAUDE.md and AGENT.md with contour bootstrap hint");
+    } else if !claude_md.exists() {
+        let content = format!("# Project Instructions\n\n{bootstrap_line}");
+        fs::write(claude_md, content)?;
+        eprintln!("\u{2713} Created CLAUDE.md with contour bootstrap hint");
+    } else if !agent_md.exists() {
+        let content = format!("# Project Instructions\n\n{bootstrap_line}");
+        fs::write(agent_md, content)?;
+        eprintln!("\u{2713} Created AGENT.md with contour bootstrap hint");
+    }
+
+    eprintln!("  Agents will now discover contour automatically.");
+    eprintln!("  Regenerate anytime with: contour help-ai --install-skill");
+
+    Ok(())
 }
 
 #[cfg(test)]

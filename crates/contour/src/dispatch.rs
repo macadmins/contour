@@ -104,12 +104,22 @@ pub fn run(cli: Cli) -> Result<()> {
             cli.json,
         ),
         Commands::Osquery { action } => crate::osquery::handle(action, cli.json),
+        Commands::SetupAgent => {
+            contour_core::help_agents::install_skill(env!("CARGO_PKG_VERSION"))?;
+            Ok(())
+        }
         Commands::HelpAgents {
             command,
             section,
             sop,
             full,
+            install_skill,
         } => {
+            if install_skill {
+                contour_core::help_agents::install_skill(env!("CARGO_PKG_VERSION"))?;
+                return Ok(());
+            }
+
             use clap::CommandFactory;
             let cmd = Cli::command();
             let mut out = std::io::stdout();

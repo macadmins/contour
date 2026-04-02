@@ -252,7 +252,15 @@ pub enum Commands {
         /// Output the complete reference (all commands, all flags, all domain data)
         #[arg(long)]
         full: bool,
+
+        /// Install a Claude Code / Kilo Code skill file for contour
+        #[arg(long)]
+        install_skill: bool,
     },
+
+    /// Install AI agent skill file (.claude/skills/contour.md)
+    #[command(name = "setup-agent")]
+    SetupAgent,
 
     /// Output CLI schema as JSON for tooling integration
     #[command(name = "help-json", hide = true)]

@@ -154,12 +154,27 @@ pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
         }
     }
 
-    // DDM declarations (no overlap with ProfileCreator)
+    // DDM declarations — always add/override (ProfileCreator may have stale entries)
     for cap in capabilities
         .iter()
         .filter(|c| c.kind == mdm_schema::PayloadKind::DdmDeclaration)
     {
-        if !existing_types.contains(&cap.payload_type) {
+        if existing_types.contains(&cap.payload_type) {
+            // Override existing ProfileCreator entry with Apple's DDM schema
+            if let Some(existing) = manifests
+                .iter_mut()
+                .find(|m| m.payload_type == cap.payload_type)
+            {
+                let apple = capability_to_manifest(cap);
+                existing.fields = apple.fields;
+                existing.field_order = apple.field_order;
+                existing.platforms = apple.platforms;
+                existing.category = apple.category; // ensure ddm-* category
+                if !apple.description.is_empty() {
+                    existing.description = apple.description;
+                }
+            }
+        } else {
             existing_types.insert(cap.payload_type.clone());
             manifests.push(capability_to_manifest(cap));
         }
