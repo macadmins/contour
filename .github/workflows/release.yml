@@ -30,6 +30,9 @@ jobs:
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct ${{ github.ref_name }})" >> $GITHUB_ENV
 
       - name: Build release binary
+        env:
+          CONTOUR_MDM_SCHEMA_URL: ${{ secrets.CONTOUR_MDM_SCHEMA_URL }}
+          CONTOUR_MSCP_SCHEMA_URL: ${{ secrets.CONTOUR_MSCP_SCHEMA_URL }}
         run: cargo build --release --target x86_64-unknown-linux-gnu -p contour
 
       - name: Strip binary
