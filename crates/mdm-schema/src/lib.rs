@@ -1,11 +1,13 @@
 //! Shared MDM payload type schemas and embedded Parquet data.
 //!
-//! Two datasets:
+//! Three datasets:
 //! - `capabilities` — Apple device-management (MDM profiles + DDM declarations)
 //! - `profiles` — ProfileCreator/PayloadSchemas (community-maintained)
+//! - `skip_keys` — Setup Assistant skip keys with platform gating
 
 pub mod capabilities;
 pub mod profiles;
+pub mod skip_keys;
 pub mod types;
 
 pub use types::*;
@@ -18,6 +20,11 @@ pub fn embedded_capabilities() -> &'static [u8] {
 /// Embedded profile manifests Parquet data (ProfileCreator).
 pub fn embedded_profile_manifests() -> &'static [u8] {
     include_bytes!("../data/profilecreator.parquet")
+}
+
+/// Embedded skip keys Parquet data (Setup Assistant skip keys).
+pub fn embedded_skip_keys() -> &'static [u8] {
+    include_bytes!("../data/skip_keys.parquet")
 }
 
 /// Embedded schema version metadata (upstream SHAs, generation date).
@@ -94,6 +101,17 @@ mod tests {
         assert!(
             caps.iter()
                 .any(|c| c.payload_type == "com.apple.wifi.managed")
+        );
+    }
+
+    #[test]
+    fn test_read_embedded_skip_keys() {
+        let keys =
+            skip_keys::read(embedded_skip_keys()).expect("Failed to read embedded skip_keys");
+        assert!(
+            keys.len() >= 20,
+            "Expected at least 20 skip keys, got {}",
+            keys.len()
         );
     }
 

@@ -200,6 +200,19 @@ pub struct PayloadKey {
     pub format: Option<String>,
 }
 
+/// Setup Assistant skip key with platform and version gating.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SkipKey {
+    pub key: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub platform: String,
+    pub introduced: Option<String>,
+    pub deprecated: Option<String>,
+    pub removed: Option<String>,
+    pub always_skippable: Option<bool>,
+}
+
 /// A parsed capability (MDM profile or DDM declaration).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Capability {

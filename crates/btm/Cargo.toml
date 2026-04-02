@@ -1,6 +1,6 @@
 [package]
 name = "btm"
-version = "0.1.4"
+version = "0.1.5"
 description = "Background Task Management profile toolkit for macOS service management"
 edition.workspace = true
 authors.workspace = true

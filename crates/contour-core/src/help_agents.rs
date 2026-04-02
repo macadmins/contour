@@ -106,6 +106,10 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
         "- `--sop notifications` — Notification settings profiles"
     )?;
     writeln!(buf, "- `--sop support` — Root3 Support App profiles")?;
+    writeln!(
+        buf,
+        "- `--sop fleet-migrate` — migrate Fleet GitOps repo from legacy/v4.82 to v4.83 structure"
+    )?;
     writeln!(buf)?;
 
     // Command index
@@ -136,6 +140,7 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "btm" => SOP_BTM,
         "notifications" => SOP_NOTIFICATIONS,
         "support" => SOP_SUPPORT,
+        "fleet-migrate" | "migrate" | "fleet" => SOP_FLEET_MIGRATE,
         _ => bail!(
             "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support"
         ),
@@ -553,6 +558,202 @@ contour support generate -o profiles/
 contour support generate --fragment -o fragment/
 ```
 ";
+
+const SOP_FLEET_MIGRATE: &str = r#"# SOP: Migrate Fleet GitOps Repo to v4.83 Structure
+
+The v4.83 structure (from `fleetctl new`) is the definitive layout for Fleet GitOps.
+This SOP guides an LLM agent to restructure an existing repo without data loss.
+
+## v4.83 Definitive Directory Structure
+
+```
+it-and-security/
+├── default.yml                                    # global: org_settings, controls, labels
+├── fleets/
+│   ├── workstations.yml                           # fleet: controls, profiles, software, policies
+│   └── personal-mobile-devices.yml
+├── labels/
+│   └── *.yml                                      # one label per .yml file
+└── platforms/
+    ├── all/
+    │   ├── icons/                                 # app icons for software
+    │   ├── policies/                              # cross-platform policies
+    │   └── reports/                               # cross-platform reports
+    ├── android/
+    │   ├── configuration-profiles/
+    │   └── managed-app-configurations/
+    ├── ios/
+    │   ├── configuration-profiles/                # .mobileconfig
+    │   └── declaration-profiles/                  # .json DDM
+    ├── ipados/
+    │   ├── configuration-profiles/
+    │   └── declaration-profiles/
+    ├── linux/
+    │   ├── policies/
+    │   ├── reports/
+    │   ├── scripts/                               # .sh
+    │   └── software/
+    ├── macos/
+    │   ├── commands/                              # MDM command .plist files
+    │   ├── configuration-profiles/                # .mobileconfig
+    │   ├── declaration-profiles/                  # .json DDM declarations
+    │   ├── enrollment-profiles/                   # DEP .json profiles
+    │   ├── policies/                              # .yml policy files
+    │   ├── reports/                               # .yml report files
+    │   ├── scripts/                               # .sh scripts
+    │   └── software/                              # .yml software packages
+    └── windows/
+        ├── configuration-profiles/                # .xml CSP profiles
+        ├── policies/
+        ├── reports/
+        ├── scripts/                               # .ps1 scripts
+        └── software/
+```
+
+## Key Changes from Legacy/v4.82
+
+### Path mapping: lib/ -> platforms/
+```
+lib/agent-options.yml           -> (removed or inline in fleet YAML)
+lib/macos/configuration-profiles/ -> platforms/macos/configuration-profiles/
+lib/macos/scripts/              -> platforms/macos/scripts/
+lib/all/labels/                 -> labels/
+```
+
+### Path mapping: v4.82 -> v4.83
+```
+platforms/macos/configuration-profiles/*.json  -> platforms/macos/declaration-profiles/*.json
+(DDM declarations were mixed with mobileconfigs in v4.82, now separated)
+```
+
+### YAML key changes
+```
+team_settings:    -> settings:          (v4.82 already did this)
+no-team.yml       -> unassigned.yml     (v4.82 already did this)
+macos_settings:   -> apple_settings:    (v4.83)
+  custom_settings:  -> configuration_profiles:
+- path: file.mobileconfig -> - paths: ../platforms/macos/configuration-profiles/*.mobileconfig
+                               (glob patterns instead of per-file references)
+```
+
+### Fleet YAML profile references (v4.83 uses globs)
+```yaml
+# v4.82 (per-file)
+controls:
+  macos_settings:
+    custom_settings:
+      - path: ../platforms/macos/configuration-profiles/wifi.mobileconfig
+      - path: ../platforms/macos/configuration-profiles/vpn.mobileconfig
+
+# v4.83 (glob)
+controls:
+  apple_settings:
+    configuration_profiles:
+      - paths: ../platforms/macos/declaration-profiles/*.json
+      - paths: ../platforms/macos/configuration-profiles/*.mobileconfig
+  windows_settings:
+    configuration_profiles:
+      - paths: ../platforms/windows/configuration-profiles/*.xml
+```
+
+### Labels (v4.83 uses glob in default.yml)
+```yaml
+# v4.82
+labels:
+  - path: ./labels/my-label.yml
+
+# v4.83
+labels:
+  - paths: ./labels/*.yml
+```
+
+## Step-by-Step Migration
+
+### 1. Create the new directory structure
+```bash
+mkdir -p platforms/{all/{icons,policies,reports},android/{configuration-profiles,managed-app-configurations}}
+mkdir -p platforms/{ios,ipados}/{configuration-profiles,declaration-profiles}
+mkdir -p platforms/macos/{commands,configuration-profiles,declaration-profiles,enrollment-profiles,policies,reports,scripts,software}
+mkdir -p platforms/{windows/{configuration-profiles,policies,reports,scripts,software}}
+mkdir -p platforms/linux/{policies,reports,scripts,software}
+mkdir -p labels fleets
+```
+
+### 2. Move files from old locations
+```bash
+# From lib/ (legacy)
+mv lib/macos/configuration-profiles/*.mobileconfig platforms/macos/configuration-profiles/
+mv lib/macos/configuration-profiles/*.json platforms/macos/declaration-profiles/
+mv lib/macos/scripts/* platforms/macos/scripts/
+mv lib/all/labels/*.yml labels/
+
+# From flat platforms/ (v4.82 — DDM mixed with mobileconfig)
+# Separate .json (DDM) from .mobileconfig
+mv platforms/macos/configuration-profiles/*.json platforms/macos/declaration-profiles/ 2>/dev/null
+```
+
+### 3. Update default.yml
+```yaml
+# Change labels from per-file to glob
+labels:
+  - paths: ./labels/*.yml
+```
+
+### 4. Update fleet YAML files
+```yaml
+# Change macos_settings -> apple_settings with glob paths
+controls:
+  apple_settings:
+    configuration_profiles:
+      - paths: ../platforms/macos/declaration-profiles/*.json
+      - paths: ../platforms/macos/configuration-profiles/*.mobileconfig
+  windows_settings:
+    configuration_profiles:
+      - paths: ../platforms/windows/configuration-profiles/*.xml
+  scripts:
+    - paths: ../platforms/macos/scripts/*.sh
+    - paths: ../platforms/windows/scripts/*.ps1
+    - paths: ../platforms/linux/scripts/*.sh
+
+policies:
+  - paths: ../platforms/macos/policies/*.yml
+  - paths: ../platforms/windows/policies/*.yml
+  - paths: ../platforms/linux/policies/*.yml
+
+reports:
+  - paths: ../platforms/all/reports/*.yml
+  - paths: ../platforms/macos/reports/*.yml
+
+software:
+  packages:
+    # per-platform packages here
+  fleet_maintained_apps:
+    # slugs here
+```
+
+### 5. Validate
+```bash
+fleetctl gitops --dry-run -f default.yml
+fleetctl gitops --dry-run -f fleets/workstations.yml
+```
+
+### 6. Clean up
+After migration, the old lib/ directory should be empty and can be removed.
+
+## Reference
+- `fleetctl new` generates this structure: github.com/fleetdm/fleet/tree/main/cmd/fleetctl/fleetctl/templates
+- GitOps parser: github.com/fleetdm/fleet/blob/main/cmd/fleetctl/fleetctl/gitops.go
+- Generator: github.com/fleetdm/fleet/blob/main/cmd/fleetctl/fleetctl/new.go
+
+## Important Rules
+- DDM declaration .json files go in declaration-profiles/, NOT configuration-profiles/
+- .mobileconfig files go in configuration-profiles/
+- .xml Windows profiles go in configuration-profiles/
+- Use glob paths (paths: *.mobileconfig) not per-file paths (path: file.mobileconfig)
+- Labels are one .yml file per label in labels/ directory
+- Policies/reports/scripts are per-platform under platforms/<platform>/
+- The apple_settings key replaces macos_settings for profile references
+"#;
 
 /// Write a top-level command group and its subcommands as an index.
 fn write_index_group(buf: &mut String, cmd: &clap::Command, root: &str) -> Result<()> {
