@@ -320,6 +320,7 @@ fn parse_field(dict: &plist::Dictionary, depth: usize) -> Option<FieldDefinition
         default,
         allowed_values,
         depth: depth as u8,
+        parent_key: None,
         platforms: Vec::new(),
         min_version: None,
     })
