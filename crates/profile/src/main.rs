@@ -23,7 +23,7 @@ use colored::Colorize;
 use mimalloc::MiMalloc;
 use output::OutputMode;
 
-use cli::{Cli, CommandAction, Commands, DdmAction, DocsAction, PayloadAction};
+use cli::{Cli, CommandAction, Commands, DdmAction, DocsAction, EnrollmentAction, PayloadAction};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -571,6 +571,38 @@ fn main() -> Result<()> {
                     full,
                     schema_path.as_deref(),
                     config.as_ref(),
+                    output_mode,
+                )?;
+            }
+        },
+        Commands::Enrollment { action } => match action {
+            EnrollmentAction::List {
+                platform,
+                os_version,
+            } => {
+                cli::enrollment::handle_enrollment_list(
+                    &platform,
+                    os_version.as_deref(),
+                    output_mode,
+                )?;
+            }
+            EnrollmentAction::Generate {
+                platform,
+                os_version,
+                skip_all,
+                skip,
+                output,
+                profile_name,
+                interactive,
+            } => {
+                cli::enrollment::handle_enrollment_generate(
+                    &platform,
+                    os_version.as_deref(),
+                    skip_all,
+                    &skip,
+                    output.as_deref(),
+                    &profile_name,
+                    interactive,
                     output_mode,
                 )?;
             }

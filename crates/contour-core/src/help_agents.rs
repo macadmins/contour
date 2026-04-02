@@ -276,6 +276,13 @@ contour profile command generate RestartDevice --uuid --json
 # Verify result:
 # fleetctl get mdm-command-results --id=<CommandUUID>
 ```
+
+## Generate DEP enrollment profiles
+```
+contour profile enrollment list --platform macOS --json           # list skip keys
+contour profile enrollment generate --platform macOS --skip-all -o enrollment.dep.json
+contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
+```
 ";
 
 const SOP_MSCP: &str = r#"# SOP: mSCP Security Compliance

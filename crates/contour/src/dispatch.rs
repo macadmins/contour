@@ -198,7 +198,9 @@ fn dispatch_trainer(tool: &TrainerTool, cli: &Cli) -> Result<()> {
 /// Dispatch profile commands.
 fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) -> Result<()> {
     use colored::Colorize;
-    use profile::cli::{CommandAction, Commands, DdmAction, DocsAction, PayloadAction};
+    use profile::cli::{
+        CommandAction, Commands, DdmAction, DocsAction, EnrollmentAction, PayloadAction,
+    };
     use profile::output::OutputMode;
 
     let output_mode = if json {
@@ -740,6 +742,38 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     full,
                     schema_path.as_deref(),
                     config.as_ref(),
+                    output_mode,
+                )?;
+            }
+        },
+        Commands::Enrollment { action } => match action {
+            EnrollmentAction::List {
+                platform,
+                os_version,
+            } => {
+                profile::cli::enrollment::handle_enrollment_list(
+                    &platform,
+                    os_version.as_deref(),
+                    output_mode,
+                )?;
+            }
+            EnrollmentAction::Generate {
+                platform,
+                os_version,
+                skip_all,
+                skip,
+                output,
+                profile_name,
+                interactive,
+            } => {
+                profile::cli::enrollment::handle_enrollment_generate(
+                    &platform,
+                    os_version.as_deref(),
+                    skip_all,
+                    &skip,
+                    output.as_deref(),
+                    &profile_name,
+                    interactive,
                     output_mode,
                 )?;
             }
