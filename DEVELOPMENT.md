@@ -100,20 +100,54 @@ cargo clippy --workspace -- -D warnings
 
 ## Fleet GitOps Layout
 
-All Fleet output uses `FleetLayout` from `contour-core` for v4.82+ path conventions:
+All Fleet output uses `FleetLayout` from `contour-core`. Default is v4.83 (definitive structure from `fleetctl new`):
 
 ```
-platforms/                    # was lib/
-├── all/agent-options.yml
-└── macos/
-    ├── configuration-profiles/
-    ├── scripts/
-    └── policies/
-fleets/                       # fleet YAML files
-labels/                       # label definitions
+platforms/
+├── all/{icons,policies,reports}/
+├── macos/{configuration-profiles,declaration-profiles,commands,enrollment-profiles,policies,reports,scripts,software}/
+├── ios/{configuration-profiles,declaration-profiles}/
+├── ipados/{configuration-profiles,declaration-profiles}/
+├── windows/{configuration-profiles,policies,reports,scripts,software}/
+├── linux/{policies,reports,scripts,software}/
+└── android/{configuration-profiles,managed-app-configurations}/
+fleets/                       # fleet YAML files (glob paths: *.mobileconfig)
+labels/                       # one .yml per label
 ```
 
-To support legacy layout: `FleetLayout::legacy()` (uses `lib/`, `no-team.yml`, `team_settings`).
+Key v4.83 changes: `declaration-profiles/` separated from `configuration-profiles/`, glob `paths:` patterns, `apple_settings` key.
+
+Versions: `FleetLayout::v4_83()` (default), `FleetLayout::v4_82()`, `FleetLayout::legacy()`.
+
+## Jamf Import
+
+Import profiles from Jamf backup YAML ([jamf-cli](https://github.com/Jamf-Concepts/jamf-cli) export format):
+
+```bash
+# Step 1: Export profiles from Jamf Pro using jamf-cli
+jamf-cli pro backup --output ./jamf-backup --resources profiles
+
+# Step 2: Import, normalize, and validate with contour
+contour profile import --jamf ./jamf-backup/profiles/macos/ --all -o output/ --org com.yourco
+
+# Dry run (preview without writing)
+contour profile import --jamf ./jamf-backup/profiles/macos/ --all --dry-run
+```
+
+The Jamf YAML `payloads: |-` field contains minified mobileconfig XML. The import pipeline:
+1. Parses YAML, extracts `general.payloads` plist
+2. Writes as properly formatted `.mobileconfig`
+3. Normalizes identifiers under `--org` namespace
+4. Regenerates deterministic UUIDs
+5. Validates against embedded Apple schema
+
+## Managed Preferences Import
+
+Synthesize mobileconfigs from deployed managed preference plists:
+
+```bash
+contour profile synthesize /Library/Managed\ Preferences/ -o profiles/ --org com.yourco --validate
+```
 
 ## Adding Dependencies
 

@@ -721,6 +721,12 @@ pub fn handle_ddm_generate(
 
     std::fs::write(&output_path, &json)?;
 
+    // Auto-validate generated DDM declaration
+    let _ = super::post_generate::validate_generated_ddm(
+        std::path::Path::new(&output_path),
+        output_mode,
+    );
+
     if output_mode == OutputMode::Json {
         let result = serde_json::json!({
             "success": true,

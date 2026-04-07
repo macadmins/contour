@@ -331,6 +331,18 @@ contour profile command generate RestartDevice --uuid --json
 # fleetctl get mdm-command-results --id=<CommandUUID>
 ```
 
+## Import and normalize Jamf data
+```
+# Export profiles from Jamf Pro (requires jamf-cli)
+jamf-cli pro backup --output ./jamf-backup --resources profiles
+
+# Import, normalize, and validate (extract + format + validate in one step)
+contour profile import --jamf ./jamf-backup/profiles/macos/ --all -o normalized/ --org com.yourco
+```
+Single file: `contour profile import --jamf backup.yaml -o output/ --org com.yourco`
+Dry run: add `--dry-run` to preview without writing
+Output goes to the specified directory — copy to Fleet GitOps as needed.
+
 ## Generate DEP enrollment profiles
 ```
 contour profile enrollment list --platform macOS --json           # list skip keys
@@ -1700,71 +1712,67 @@ fn arg_to_json(arg: &clap::Arg) -> serde_json::Value {
 ///
 /// Creates `.claude/skills/contour.md` in the current working directory so
 /// AI agents automatically discover contour capabilities.
-/// Embedded skill file template.
-const SKILL_TEMPLATE: &str = include_str!("../skills/contour.md");
+/// Embedded skill file templates.
+const SKILL_TEMPLATE: &str = include_str!("../skills/contour/SKILL.md");
+const SOP_ROUTING_TEMPLATE: &str = include_str!("../skills/contour/references/sop-routing.md");
 
-/// Install a Claude Code / Kilo Code skill file for contour.
+/// Install contour skill files for AI agents.
 ///
-/// Creates `.claude/skills/contour.md` and ensures `CLAUDE.md` has a bootstrap hint.
+/// Creates:
+/// - `.claude/skills/contour.md` — skill file (for local Claude Code sessions)
+/// - Appends full contour instructions to `CLAUDE.md` (for CI/GitHub Actions)
+/// - Appends full contour instructions to `AGENT.md` (for Kilo Code and others)
+///
+/// The full content goes into CLAUDE.md/AGENT.md because CI agents read those
+/// but NOT `.claude/skills/`. A pointer isn't enough — the full instructions
+/// must be in the file the agent reads at session start.
 pub fn install_skill(version: &str) -> Result<()> {
     use std::fs;
     use std::path::Path;
 
-    // 1. Install skill file
-    let skills_dir = Path::new(".claude/skills");
-    fs::create_dir_all(skills_dir)?;
+    let skill_content = SKILL_TEMPLATE.replace("{{VERSION}}", version);
 
-    let skill_path = skills_dir.join("contour.md");
-    let content = SKILL_TEMPLATE.replace("{{VERSION}}", version);
-    fs::write(&skill_path, content)?;
+    // 1. Install .claude/skills/contour/ directory (for local sessions)
+    let skill_dir = Path::new(".claude/skills/contour");
+    let refs_dir = skill_dir.join("references");
+    fs::create_dir_all(&refs_dir)?;
+    fs::write(skill_dir.join("SKILL.md"), &skill_content)?;
+    fs::write(refs_dir.join("sop-routing.md"), SOP_ROUTING_TEMPLATE)?;
+    eprintln!("\u{2713} Installed .claude/skills/contour/SKILL.md");
 
-    eprintln!("\u{2713} Installed Claude Code skill: .claude/skills/contour.md");
-
-    // 2. Ensure agent instruction files have a contour bootstrap hint
-    let bootstrap_line = "## contour\n\n\
-        `contour` (macOS MDM toolkit) is available. \
-        Run `contour setup-agent` to install the AI agent skill, \
-        or `contour help-ai` for the command reference.\n";
-
+    // 2. Write full content into CLAUDE.md and AGENT.md (for CI)
     for agent_file in &["CLAUDE.md", "AGENT.md"] {
         let path = Path::new(agent_file);
         if path.exists() {
             let existing = fs::read_to_string(path)?;
-            if !existing.contains("contour setup-agent") && !existing.contains("contour help-ai") {
+            if existing.contains("contour — macOS MDM Configuration Toolkit") {
+                // Already has full content — replace the contour section
+                eprintln!("  {agent_file} already has contour instructions (use --force to replace)");
+            } else {
+                // Append full skill content
                 let mut updated = existing;
                 if !updated.ends_with('\n') {
                     updated.push('\n');
                 }
                 updated.push('\n');
-                updated.push_str(bootstrap_line);
+                updated.push_str(&skill_content);
                 fs::write(path, updated)?;
-                eprintln!("\u{2713} Added contour bootstrap hint to {agent_file}");
-            } else {
-                eprintln!("  {agent_file} already references contour");
+                eprintln!("\u{2713} Added contour instructions to {agent_file}");
             }
+        } else {
+            // Create with full content
+            fs::write(path, &skill_content)?;
+            eprintln!("\u{2713} Created {agent_file} with contour instructions");
         }
     }
 
-    // Create files if neither exists
-    let claude_md = Path::new("CLAUDE.md");
-    let agent_md = Path::new("AGENT.md");
-    if !claude_md.exists() && !agent_md.exists() {
-        let content = format!("# Project Instructions\n\n{bootstrap_line}");
-        fs::write(claude_md, &content)?;
-        fs::write(agent_md, &content)?;
-        eprintln!("\u{2713} Created CLAUDE.md and AGENT.md with contour bootstrap hint");
-    } else if !claude_md.exists() {
-        let content = format!("# Project Instructions\n\n{bootstrap_line}");
-        fs::write(claude_md, content)?;
-        eprintln!("\u{2713} Created CLAUDE.md with contour bootstrap hint");
-    } else if !agent_md.exists() {
-        let content = format!("# Project Instructions\n\n{bootstrap_line}");
-        fs::write(agent_md, content)?;
-        eprintln!("\u{2713} Created AGENT.md with contour bootstrap hint");
-    }
-
-    eprintln!("  Agents will now discover contour automatically.");
-    eprintln!("  Regenerate anytime with: contour help-ai --install-skill");
+    eprintln!();
+    eprintln!("  Agents will now discover contour in both local and CI environments.");
+    eprintln!("  Regenerate with: contour help-ai --install-skill");
+    eprintln!();
+    eprintln!("  TIP: Set your org domain in CLAUDE.md to avoid com.example defaults:");
+    eprintln!("    ## Organization");
+    eprintln!("    Default org domain: com.yourcompany");
 
     Ok(())
 }

@@ -300,6 +300,18 @@ impl<'a> SchemaValidator<'a> {
                 continue;
             }
 
+            // Skip schema placeholders — Apple's schema uses these as structural
+            // templates, not literal required key names:
+            // - "ANY" = wildcard for any key (com.apple.ManagedClient.preferences)
+            // - "*Item" / "*-item" = array element structure (AllowListItem, launchd-item)
+            if field.name == "ANY"
+                || field.name == "Item"
+                || field.name.ends_with("Item")
+                || field.name.ends_with("-item")
+            {
+                continue;
+            }
+
             if field.depth == 0 {
                 // Top-level required field — must be present
                 if !payload.content.contains_key(&field.name) {
@@ -1103,44 +1115,64 @@ mod tests {
         let mut field_order = Vec::new();
 
         // Top-level optional field
-        let add_field =
-            |fields: &mut HashMap<String, FieldDefinition>,
-             order: &mut Vec<String>,
-             name: &str,
-             required: bool,
-             depth: u8,
-             parent: Option<&str>| {
-                fields.insert(
-                    name.to_string(),
-                    FieldDefinition {
-                        name: name.to_string(),
-                        field_type: FieldType::String,
-                        flags: FieldFlags {
-                            required,
-                            supervised: false,
-                            sensitive: false,
-                        },
-                        title: String::new(),
-                        description: String::new(),
-                        default: None,
-                        allowed_values: Vec::new(),
-                        depth,
-                        parent_key: parent.map(String::from),
-                        platforms: Vec::new(),
-                        min_version: None,
+        let add_field = |fields: &mut HashMap<String, FieldDefinition>,
+                         order: &mut Vec<String>,
+                         name: &str,
+                         required: bool,
+                         depth: u8,
+                         parent: Option<&str>| {
+            fields.insert(
+                name.to_string(),
+                FieldDefinition {
+                    name: name.to_string(),
+                    field_type: FieldType::String,
+                    flags: FieldFlags {
+                        required,
+                        supervised: false,
+                        sensitive: false,
                     },
-                );
-                order.push(name.to_string());
-            };
+                    title: String::new(),
+                    description: String::new(),
+                    default: None,
+                    allowed_values: Vec::new(),
+                    depth,
+                    parent_key: parent.map(String::from),
+                    platforms: Vec::new(),
+                    min_version: None,
+                },
+            );
+            order.push(name.to_string());
+        };
 
         // Top-level required
-        add_field(&mut fields, &mut field_order, "RequirePasscode", true, 0, None);
+        add_field(
+            &mut fields,
+            &mut field_order,
+            "RequirePasscode",
+            true,
+            0,
+            None,
+        );
         // Top-level optional dict
         add_field(&mut fields, &mut field_order, "CustomRegex", false, 0, None);
         // Nested required (only required when CustomRegex is present)
-        add_field(&mut fields, &mut field_order, "Regex", true, 1, Some("CustomRegex"));
+        add_field(
+            &mut fields,
+            &mut field_order,
+            "Regex",
+            true,
+            1,
+            Some("CustomRegex"),
+        );
         // Nested optional
-        add_field(&mut fields, &mut field_order, "Description", false, 1, Some("CustomRegex"));
+        add_field(
+            &mut fields,
+            &mut field_order,
+            "Description",
+            false,
+            1,
+            Some("CustomRegex"),
+        );
 
         PayloadManifest {
             payload_type: "com.apple.configuration.passcode.settings".to_string(),
@@ -1155,7 +1187,10 @@ mod tests {
         }
     }
 
-    fn make_profile(payload_type: &str, content: Vec<(&str, plist::Value)>) -> ConfigurationProfile {
+    fn make_profile(
+        payload_type: &str,
+        content: Vec<(&str, plist::Value)>,
+    ) -> ConfigurationProfile {
         ConfigurationProfile {
             payload_type: "Configuration".to_string(),
             payload_version: 1,
@@ -1283,10 +1318,7 @@ mod tests {
         let manifest = test_manifest_with_nesting();
         let registry = registry_from_manifest(manifest);
 
-        let profile = make_profile(
-            "com.apple.configuration.passcode.settings",
-            vec![],
-        );
+        let profile = make_profile("com.apple.configuration.passcode.settings", vec![]);
 
         let validator = SchemaValidator::new(&registry);
         let result = validator.validate(&profile);
@@ -1317,10 +1349,7 @@ mod tests {
         inner.insert("Regex".to_string(), plist::Value::String(".*".to_string()));
 
         let mut content = HashMap::new();
-        content.insert(
-            "CustomRegex".to_string(),
-            plist::Value::Dictionary(inner),
-        );
+        content.insert("CustomRegex".to_string(), plist::Value::Dictionary(inner));
 
         let result = walk_plist_path(&content, &["CustomRegex".to_string()]);
         assert!(result.is_some());

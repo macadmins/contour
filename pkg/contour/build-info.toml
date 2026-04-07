@@ -1,6 +1,6 @@
-name = "contour-0.1.6.pkg"
+name = "contour-0.1.7.pkg"
 identifier = "io.declarative.contour.pkg"
-version = "0.1.6"
+version = "0.1.7"
 install_location = "/"
 
 [signing_info]

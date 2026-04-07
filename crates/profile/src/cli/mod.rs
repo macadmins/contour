@@ -15,9 +15,11 @@ pub mod glob_utils;
 pub mod import;
 pub mod info;
 pub mod init;
+pub mod jamf_import;
 pub mod link;
 pub mod normalize;
 pub mod payload;
+pub mod post_generate;
 pub mod scan;
 pub mod search;
 pub mod sign;
@@ -99,6 +101,10 @@ pub enum Commands {
 
         #[arg(long, help = "Import all profiles without interactive selection")]
         all: bool,
+
+        /// Import from Jamf backup YAML files (jamf-cli export format)
+        #[arg(long)]
+        jamf: bool,
     },
 
     #[command(about = "Normalize a configuration profile (standardize identifiers)")]

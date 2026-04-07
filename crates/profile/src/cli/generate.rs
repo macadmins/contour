@@ -356,6 +356,12 @@ pub fn handle_generate(
 
     std::fs::write(&output_path, &output_bytes)?;
 
+    // Auto-validate generated output (mobileconfig only, not raw plist)
+    if !is_plist {
+        let _ =
+            super::post_generate::validate_generated_profile(Path::new(&output_path), output_mode);
+    }
+
     if output_mode == OutputMode::Json {
         let result = serde_json::json!({
             "success": true,
@@ -497,6 +503,14 @@ pub fn handle_generate_recipe(
         // Apply --set variable substitution before writing
         let final_bytes = substitute_placeholders(&profile_bytes, &var_map);
         std::fs::write(&output_path, &final_bytes)?;
+
+        // Auto-validate generated output
+        if !is_plist {
+            let _ = super::post_generate::validate_generated_profile(
+                Path::new(&output_path),
+                output_mode,
+            );
+        }
 
         // Check for remaining placeholders
         let xml = String::from_utf8_lossy(&final_bytes);

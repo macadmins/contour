@@ -12,19 +12,27 @@ One binary, multiple tools. A Mac admin's special tooling to slice and dice conf
 
 | Tool | Description |
 |------|-------------|
-| [`contour profile`](docs/contour-profile.md) | Normalize, validate, sign, diff, and inspect Apple configuration profiles. 180+ payload schemas embedded. |
+| [`contour profile`](docs/contour-profile.md) | Normalize, validate, sign, generate, search, and import Apple configuration profiles. 500+ payload schemas embedded. |
+| `contour profile synthesize` | Reverse-engineer managed preference plists (from `/Library/Managed Preferences/`) into validated mobileconfigs. Matches keys against Apple schema. |
+| `contour profile import --jamf` | Import from [Jamf Pro backup](https://github.com/Jamf-Concepts/jamf-cli) YAML — extract, normalize, validate in one step. |
+| `contour profile command` | Generate 65 MDM command plist payloads (RestartDevice, DeviceLock, EraseDevice, etc.) with `--base64` for Fleet API. |
+| `contour profile enrollment` | Generate DEP/ADE enrollment profiles from embedded Setup Assistant skip keys (71 keys, platform/version gated). |
+| `contour osquery` | Search and inspect 283 embedded osquery tables (2,581 columns) for writing Fleet policies. |
 | [`contour pppc`](docs/contour-pppc.md) | Generate TCC/Privacy Preferences profiles from app bundles. Scan → configure → generate workflow. |
-| [`contour santa`](docs/contour-santa.md) | Build Santa allowlists and mobileconfig profiles. Scan, merge, fetch from Installomator/Fleet/osquery. |
-| [`contour mscp`](docs/contour-mscp.md) | Transform macOS Security Compliance Project baselines into MDM-ready profiles and scripts. |
+| [`contour santa`](docs/contour-santa.md) | Santa allowlists + CEL toolkit (compile, eval, validate, dry-run, classify) + FAA plist generation. |
+| [`contour mscp`](docs/contour-mscp.md) | mSCP baseline transformer with embedded schema query API (540 rules, 14 baselines, ODV support). |
 | [`contour btm`](docs/contour-btm.md) | Generate Background Task Management (service management) profiles for managed login items. |
 | [`contour notifications`](docs/contour-notifications.md) | Generate notification settings profiles with per-app control. |
 
 ## Highlights
 
 - **GitOps-ready** — Every tool follows `init → scan → generate`. Version-control configs, generate/validate profiles in CI pipelines.
-- **Fragment output** — `--fragment` prepares artifacts for Fleet GitOps directory structures.
-- **LLM-friendly** — `contour help-ai` provides progressive config/schema discovery for AI-agent-assisted workflows.
-- **One binary** — All tools ship as a single `contour` binary (23 MB, native signed  + notarized for Apple Silicorn, Linux for CI/CD).
+- **Fragment output** — `--fragment` prepares artifacts for Fleet GitOps v4.83 directory structures.
+- **Auto-validation** — Every generated profile is validated against the Apple schema before writing.
+- **Jamf import** — `--jamf` extracts, normalizes, and validates profiles from Jamf backup YAML.
+- **MDM commands** — Generate 65 MDM command plist payloads with `--base64` for Fleet API.
+- **LLM-friendly** — `contour help-ai` + `contour setup-agent` for AI-agent-assisted workflows.
+- **One binary** — All tools ship as a single `contour` binary (signed + notarized for Apple Silicon, Linux for CI/CD).
 
 ## Install
 
@@ -41,23 +49,52 @@ sudo installer -pkg contour-*.pkg -target /
 # Normalize and validate profiles for GitOps
 contour profile normalize ./profiles -r --org com.acme --name "Acme Corp"
 
+# Import from Jamf backup (extract, normalize, validate in one step)
+contour profile import --jamf /path/to/jamf-backup/profiles/macos/ --all -o profiles/ --org com.acme
+
+# Synthesize mobileconfigs from managed preference plists
+contour profile synthesize /Library/Managed\ Preferences/ -o profiles/ --org com.acme --validate
+
+# Search payload types and generate profiles
+contour profile search passcode --json
+contour profile generate com.apple.mobiledevice.passwordpolicy --full --org com.acme
+
+# Generate MDM command payloads
+contour profile command generate RestartDevice --uuid -o restart.plist
+contour profile command generate DeviceLock --set PIN=123456 --uuid --base64  # for Fleet API
+
+# Generate DEP enrollment profile
+contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
+
+# Query embedded osquery schema
+contour osquery search disk_encryption --json
+contour osquery table alf --json
+
+# Query mSCP compliance rules
+contour mscp schema baselines --json
+contour mscp schema rules --baseline cis_lvl1 --json
+
 # Generate a PPPC profile granting Full Disk Access
-contour pppc -p /Applications --service fda -o pppc.mobileconfig --org com.acme
+contour pppc scan -p /Applications -o pppc.toml --org com.acme
+contour pppc generate pppc.toml -o pppc.mobileconfig
 
-# Scan local apps and generate a Santa allowlist
-contour santa scan --output-format mobileconfig --org com.acme -o santa-rules.mobileconfig
+# Santa: scan, CEL check, generate
+contour santa scan -f csv -o apps.csv
+contour santa cel check 'has(app.team_id) && app.team_id == "EQHXZ8M8AV"' --json
+contour santa allow -i apps.csv --org com.acme -o santa.mobileconfig
+```
 
-# Transform mSCP baselines for Fleet
-contour mscp init --org com.acme --fleet --sync --baselines cis_lvl1
-contour mscp generate-all -c mscp.toml
+## AI Agent Setup
 
-# Generate managed login items profile from installed launch daemons
-contour btm scan --mode launch-items --org com.acme -o btm.toml
-contour btm generate btm.toml -o btm.mobileconfig
+```bash
+# Install agent skill files (Claude Code, Kilo Code, etc.)
+contour setup-agent
 
-# Configure notification settings
-contour notifications scan -p /Applications -o notifications.toml --org com.acme
-contour notifications generate notifications.toml --combined -o notifications.mobileconfig
+# Progressive help for agents
+contour help-ai                     # command index + SOP routing
+contour help-ai --sop profile      # profile generation workflow
+contour help-ai --sop osquery      # Fleet policy query patterns
+contour help-ai --sop fleet-migrate # GitOps repo migration guide
 ```
 
 ## Usage

@@ -254,22 +254,38 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             max_depth,
             dry_run,
             all,
+            jamf,
         } => {
             let validate = !no_validate;
             let regen_uuid = !no_uuid;
-            profile::cli::import::handle_import(
-                &source,
-                output.as_deref(),
-                org.as_deref(),
-                name.as_deref(),
-                config.as_ref(),
-                validate,
-                regen_uuid,
-                max_depth,
-                dry_run,
-                all,
-                output_mode,
-            )?;
+            if jamf {
+                profile::cli::jamf_import::handle_jamf_import(
+                    &source,
+                    output.as_deref(),
+                    org.as_deref(),
+                    name.as_deref(),
+                    config.as_ref(),
+                    validate,
+                    regen_uuid,
+                    dry_run,
+                    all,
+                    output_mode,
+                )?;
+            } else {
+                profile::cli::import::handle_import(
+                    &source,
+                    output.as_deref(),
+                    org.as_deref(),
+                    name.as_deref(),
+                    config.as_ref(),
+                    validate,
+                    regen_uuid,
+                    max_depth,
+                    dry_run,
+                    all,
+                    output_mode,
+                )?;
+            }
         }
         Commands::Normalize {
             paths,
