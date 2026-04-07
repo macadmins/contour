@@ -5,9 +5,10 @@ Detailed intent-to-SOP mapping for contour. Use this when the compact table in S
 ## CRITICAL: Organization domain required
 
 Before ANY profile generation, you MUST have the user's org domain.
-Check CLAUDE.md for a configured default. If none exists, ASK the user.
+Resolution order: `--org` flag → `CONTOUR_ORG` env var → `.contour/config.toml` → error.
+In CI/GitHub Actions: set `CONTOUR_ORG` as a repository secret or env var.
+Interactive: ask the user if not configured.
 NEVER default to `com.example` — this produces invalid output that must be redone.
-Pass `--org <domain>` on every generate, normalize, synthesize, and import command.
 
 ## Fleet Policy & osquery → `--sop osquery`
 
@@ -119,6 +120,19 @@ Use when: converting deployed managed preference plists into proper mobileconfig
 contour profile synthesize /Library/Managed\ Preferences/ -o profiles/ --org <ORG_DOMAIN> --validate
 ```
 
+## GitHub Actions & CI → `--sop ci`
+
+Use when: setting up contour in GitHub Actions, configuring env vars, or CI workflows.
+
+```bash
+# Set org domain as repository variable
+gh variable set CONTOUR_ORG --repo yourorg/fleet-gitops --body 'com.yourcompany'
+gh variable set CONTOUR_NAME --repo yourorg/fleet-gitops --body 'Your Company'
+```
+
+Key: `CONTOUR_ORG` and `CONTOUR_NAME` as repository variables (not secrets).
+contour reads these automatically — no `--org` flag needed in CI when env vars are set.
+
 ## Other SOPs
 
 | SOP | Use when |
@@ -127,4 +141,5 @@ contour profile synthesize /Library/Managed\ Preferences/ -o profiles/ --org <OR
 | `--sop btm` | Background Task Management profiles |
 | `--sop notifications` | Notification settings profiles |
 | `--sop support` | Root3 Support App profiles |
+| `--sop ci` | GitHub Actions setup, env vars, workflow config |
 | `--sop schema-data` | Embedded parquet data management |

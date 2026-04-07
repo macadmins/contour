@@ -124,6 +124,10 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
         buf,
         "- DDM, declarative management, declaration, activation → `--sop ddm`"
     )?;
+    writeln!(
+        buf,
+        "- GitHub Actions, CI, env vars, CONTOUR_ORG, workflow setup → `--sop ci`"
+    )?;
     writeln!(buf)?;
 
     // SOP pointer (keep index compact)
@@ -159,6 +163,7 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
         buf,
         "- `--sop fleet-migrate` — migrate Fleet GitOps repo from legacy/v4.82 to v4.83 structure\n\
          - `--sop enrollment` — DEP/ADE enrollment profiles (Setup Assistant skip keys)\n\
+         - `--sop ci` — GitHub Actions setup, env vars (CONTOUR_ORG, CONTOUR_NAME), workflow config\n\
          - `--sop schema-data` — embedded parquet data: verify, update, track schema versions"
     )?;
     writeln!(buf)?;
@@ -192,6 +197,7 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "notifications" => SOP_NOTIFICATIONS,
         "support" => SOP_SUPPORT,
         "fleet-migrate" | "migrate" | "fleet" => SOP_FLEET_MIGRATE,
+        "ci" | "github-actions" | "actions" | "env" | "workflow" => SOP_CI,
         "schema-data" | "schema" | "data" | "parquet" => SOP_SCHEMA_DATA,
         "enrollment" | "dep" | "ade" | "setup-assistant" => SOP_ENROLLMENT,
         "osquery" => SOP_OSQUERY,
@@ -992,6 +998,99 @@ When an agent is asked to generate an enrollment profile:
 - Skip keys are version-gated — use --os-version to see only keys valid for your target OS
 - The --interactive flag shows descriptions for each key to help make informed choices
 "#;
+
+const SOP_CI: &str = r"# SOP: GitHub Actions & CI Setup for contour
+
+## Environment Variables
+
+contour reads these env vars as fallbacks when CLI flags are not provided:
+
+| Variable | Purpose | Required |
+|----------|---------|----------|
+| `CONTOUR_ORG` | Organization reverse-domain (e.g., com.fleetdm) | Yes for any profile generation |
+| `CONTOUR_NAME` | Organization display name (e.g., Fleet Device Management) | Optional (sets PayloadOrganization) |
+
+Resolution order for both: CLI flag → env var → .contour/config.toml → error (org) or empty (name).
+
+## Setup: Repository Variables
+
+Use GitHub repository variables (not secrets — these are not sensitive):
+
+```bash
+gh variable set CONTOUR_ORG --repo yourorg/fleet-gitops --body 'com.yourcompany'
+gh variable set CONTOUR_NAME --repo yourorg/fleet-gitops --body 'Your Company Inc.'
+```
+
+## Workflow Configuration
+
+### Install contour in GitHub Actions
+```yaml
+- name: Install contour
+  run: |
+    curl -fsSL -o contour.pkg https://github.com/headmin/contour/releases/latest/download/contour-*.pkg
+    sudo installer -pkg contour.pkg -target /
+```
+
+### Use contour with env vars
+```yaml
+- name: Generate profiles
+  env:
+    CONTOUR_ORG: ${{ vars.CONTOUR_ORG }}
+    CONTOUR_NAME: ${{ vars.CONTOUR_NAME }}
+  run: |
+    contour profile generate com.apple.mobiledevice.passwordpolicy --full -o profiles/passcode.mobileconfig
+    contour profile import --jamf ./jamf-backup/profiles/macos/ --all -o profiles/
+    contour profile validate profiles/ --recursive --json
+```
+
+### Use contour with Claude Code in GitHub Actions
+```yaml
+- name: Install contour and setup agent
+  env:
+    CONTOUR_ORG: ${{ vars.CONTOUR_ORG }}
+    CONTOUR_NAME: ${{ vars.CONTOUR_NAME }}
+  run: |
+    sudo installer -pkg contour.pkg -target /
+    contour setup-agent
+```
+
+This creates CLAUDE.md + .claude/skills/ so Claude Code knows how to use contour.
+
+### Fleet GitOps + contour workflow
+```yaml
+env:
+  CONTOUR_ORG: ${{ vars.CONTOUR_ORG }}
+  CONTOUR_NAME: ${{ vars.CONTOUR_NAME }}
+  FLEET_URL: ${{ secrets.FLEET_URL }}
+  FLEET_API_TOKEN: ${{ secrets.FLEET_API_TOKEN }}
+
+steps:
+  - uses: actions/checkout@v4
+  - name: Install contour
+    run: sudo installer -pkg contour.pkg -target /
+  - name: Validate all profiles
+    run: contour profile validate platforms/macos/configuration-profiles/ --recursive --json
+  - name: Apply GitOps
+    run: ./.github/fleet-gitops/gitops.sh
+```
+
+## Key Patterns for CI
+
+- CONTOUR_ORG/CONTOUR_NAME as repository variables (vars), not secrets
+- FLEET_URL/FLEET_API_TOKEN as repository secrets
+- contour auto-validates on generate — no separate validate step needed
+- --all flag skips interactive prompts (required in CI)
+- --json for machine-readable output in logs
+- contour setup-agent writes CLAUDE.md for Claude Code CI integration
+
+## Allowed Tools for claude.yml
+
+If using Claude Code with contour in CI, add to your claude.yml:
+```yaml
+allowed_tools:
+  - Bash(contour *)
+```
+";
 
 const SOP_SCHEMA_DATA: &str = r#"# SOP: Embedded Schema Data Management
 

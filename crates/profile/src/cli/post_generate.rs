@@ -38,31 +38,31 @@ pub fn validate_generated_profile(path: &Path, mode: OutputMode) -> Result<()> {
         .filter(|i| i.severity == crate::validation::schema_validator::Severity::Warning)
         .collect();
 
+    if mode != OutputMode::Human {
+        return Ok(());
+    }
+
     if errors.is_empty() && warnings.is_empty() {
-        if mode == OutputMode::Human {
-            println!("  {} Schema validation passed", "✓".green());
-        }
+        println!("  {} Schema validation passed", "✓".green());
     } else {
-        if mode == OutputMode::Human {
-            if !errors.is_empty() {
-                println!(
-                    "  {} Schema validation: {} error(s)",
-                    "✗".red(),
-                    errors.len()
-                );
-                for e in &errors {
-                    println!("    {} {}", "·".red(), e.message);
-                }
+        if !errors.is_empty() {
+            println!(
+                "  {} Schema validation: {} error(s)",
+                "✗".red(),
+                errors.len()
+            );
+            for e in &errors {
+                println!("    {} {}", "·".red(), e.message);
             }
-            if !warnings.is_empty() {
-                println!(
-                    "  {} Schema validation: {} warning(s)",
-                    "⚠".yellow(),
-                    warnings.len()
-                );
-                for w in &warnings {
-                    println!("    {} {}", "·".yellow(), w.message);
-                }
+        }
+        if !warnings.is_empty() {
+            println!(
+                "  {} Schema validation: {} warning(s)",
+                "⚠".yellow(),
+                warnings.len()
+            );
+            for w in &warnings {
+                println!("    {} {}", "·".yellow(), w.message);
             }
         }
     }

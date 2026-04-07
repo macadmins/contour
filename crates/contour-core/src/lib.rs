@@ -29,7 +29,7 @@ pub mod yaml_edit;
 pub use app_discovery::{extract_team_id, find_apps_recursive};
 pub use codesign::{find_main_executable, get_app_name, get_bundle_id, get_code_requirement};
 pub use completions::generate_completions;
-pub use config::{ConfigSettings, ContourConfig, resolve_org};
+pub use config::{ConfigSettings, ContourConfig, resolve_name, resolve_org};
 pub use errors::{ContourError, ContourResult};
 pub use fleet_layout::{FleetLayout, FleetLayoutVersion};
 pub use logging::init_logging;

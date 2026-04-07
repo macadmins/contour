@@ -29,9 +29,10 @@ Activate when the user mentions:
 
 ## Organization domain
 
-Check the project CLAUDE.md for a default org domain (e.g., `com.fleetdm`).
-If none is set: ask the user in interactive mode, or fail in CI — never fall back to `com.example`.
-Pass `--org <domain>` on every generate command.
+Resolution order: `--org` flag → `CONTOUR_ORG` env var → `.contour/config.toml` → error.
+In CI: set `CONTOUR_ORG` as a repository secret/variable.
+Interactive: ask the user if not configured.
+NEVER fall back to `com.example`.
 
 ## Auto-validation
 

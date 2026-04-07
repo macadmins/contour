@@ -88,13 +88,48 @@ impl ContourConfig {
 /// 2. `.contour/config.toml` found by walking up the directory tree
 /// 3. Error with guidance to use `contour init`
 pub fn resolve_org(org: Option<String>) -> anyhow::Result<String> {
+    // 1. Explicit --org flag
     if let Some(o) = org {
         return Ok(o);
     }
+    // 2. CONTOUR_ORG environment variable (useful for CI/GitHub Actions)
+    if let Ok(env_org) = std::env::var("CONTOUR_ORG") {
+        if !env_org.is_empty() {
+            return Ok(env_org);
+        }
+    }
+    // 3. .contour/config.toml
     if let Some(cfg) = ContourConfig::load_nearest() {
         return Ok(cfg.organization.domain);
     }
-    anyhow::bail!("--org is required (or run 'contour init' to set a default)")
+    anyhow::bail!(
+        "--org is required. Set it via:\n  \
+         • --org com.yourcompany (CLI flag)\n  \
+         • CONTOUR_ORG=com.yourcompany (env var, ideal for CI)\n  \
+         • contour init (creates .contour/config.toml)"
+    )
+}
+
+/// Resolve the organization display name from multiple sources.
+///
+/// Resolution order:
+/// 1. Explicit `--name` flag
+/// 2. `CONTOUR_NAME` environment variable
+/// 3. `.contour/config.toml` `organization.name`
+/// 4. `None` (name is optional — profiles work without it)
+pub fn resolve_name(name: Option<String>) -> Option<String> {
+    if let Some(n) = name {
+        return Some(n);
+    }
+    if let Ok(env_name) = std::env::var("CONTOUR_NAME") {
+        if !env_name.is_empty() {
+            return Some(env_name);
+        }
+    }
+    if let Some(cfg) = ContourConfig::load_nearest() {
+        return Some(cfg.organization.name);
+    }
+    None
 }
 
 /// Shared `[settings]` section for domain config files (btm.toml, notifications.toml).
