@@ -8,6 +8,7 @@ use anyhow::Context;
 use colored::Colorize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Output mode for CLI commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -233,6 +234,25 @@ pub fn print_json<T: Serialize>(data: &T) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ── Timing helpers ──────────────────────────────────────────────
+
+/// Format a duration as a human-readable elapsed time string.
+///
+/// Returns compact output: "1.23s", "456ms", or "1m 23s" for longer durations.
+#[must_use]
+pub fn format_elapsed(duration: Duration) -> String {
+    let secs = duration.as_secs_f64();
+    if secs < 1.0 {
+        format!("{}ms", duration.as_millis())
+    } else if secs < 60.0 {
+        format!("{secs:.2}s")
+    } else {
+        let mins = duration.as_secs() / 60;
+        let remaining = duration.as_secs() % 60;
+        format!("{mins}m {remaining}s")
+    }
+}
+
 // ── File-system helpers ─────────────────────────────────────────
 
 /// Sanitize an app name for use in a filename.
@@ -324,6 +344,24 @@ mod tests {
         assert_eq!(sanitize_filename("Zoom Workplace"), "zoom-workplace");
         assert_eq!(sanitize_filename("1Password 8"), "1password-8");
         assert_eq!(sanitize_filename("my_app-v2"), "my_app-v2");
+    }
+
+    #[test]
+    fn test_format_elapsed_millis() {
+        let d = Duration::from_millis(456);
+        assert_eq!(format_elapsed(d), "456ms");
+    }
+
+    #[test]
+    fn test_format_elapsed_seconds() {
+        let d = Duration::from_secs_f64(2.5);
+        assert_eq!(format_elapsed(d), "2.50s");
+    }
+
+    #[test]
+    fn test_format_elapsed_minutes() {
+        let d = Duration::from_secs(125);
+        assert_eq!(format_elapsed(d), "2m 5s");
     }
 
     #[test]
