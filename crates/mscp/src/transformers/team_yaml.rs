@@ -104,14 +104,14 @@ impl TeamYamlGenerator {
         Ok(config)
     }
 
-    /// Write the baseline component to lib/mscp/{baseline}/baseline.toml
+    /// Write the baseline component to mscp/{baseline}/baseline.toml (Fleet v4.83+ top-level)
     pub fn write_baseline_component(
         &self,
         config: &FleetTeamConfig,
         baseline_name: &str,
         platform: Platform,
     ) -> Result<PathBuf> {
-        let baseline_dir = self.output_base.join("lib/mscp").join(baseline_name);
+        let baseline_dir = self.output_base.join("mscp").join(baseline_name);
         std::fs::create_dir_all(&baseline_dir)?;
 
         let file_path = baseline_dir.join("baseline.toml");
@@ -296,19 +296,19 @@ controls:
         self.write_team_yml(baseline_name)
     }
 
-    /// Generate relative path from lib/mscp/{baseline}/ directory
+    /// Generate relative path from mscp/{baseline}/baseline.toml to an artifact
+    /// under output_base. baseline.toml is two directories deep (mscp/{baseline}/),
+    /// so we prepend `../../` to the output-base-relative path.
     fn get_relative_path_from_lib(
         &self,
         absolute_path: &Path,
-        baseline_name: &str,
+        _baseline_name: &str,
     ) -> Result<String> {
-        let baseline_dir = self.output_base.join("lib/mscp").join(baseline_name);
-
         let relative = absolute_path
-            .strip_prefix(&baseline_dir)
+            .strip_prefix(&self.output_base)
             .unwrap_or(absolute_path);
 
-        Ok(format!("./{}", relative.display()))
+        Ok(format!("../../{}", relative.display()))
     }
 
     /// Generate relative path from output base (for backward compatibility)

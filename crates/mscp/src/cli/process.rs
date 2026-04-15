@@ -6,10 +6,10 @@ use crate::managers::{ConstraintType, Constraints, build_exclusion_plan, discove
 use crate::models::Platform;
 use crate::output::{CommandResult, OutputMode, print_bar_chart};
 use crate::transformers::{
-    DdmTransformer, FleetPolicyGenerator, FleetScriptGenerator, FleetScriptOptions, JamfOptions,
-    JamfPostprocessor, LabelGenerator, MunkiComplianceGenerator, MunkiComplianceOptions,
-    MunkiScriptGenerator, MunkiScriptOptions, ProfileOptions, ProfilePostprocessor,
-    ProfileTransformer, ScriptMode, ScriptTransformer, TeamYamlGenerator,
+    DdmTransformer, FleetPolicyGenerator, JamfOptions, JamfPostprocessor, LabelGenerator,
+    MunkiComplianceGenerator, MunkiComplianceOptions, MunkiScriptGenerator, MunkiScriptOptions,
+    ProfileOptions, ProfilePostprocessor, ProfileTransformer, RuleScriptGenerator,
+    RuleScriptOptions, ScriptMode, ScriptTransformer, TeamYamlGenerator,
 };
 use crate::validators::ConflictDetector;
 use crate::versioning::{GitInfoExtractor, ManifestStore, ProfileInfo};
@@ -456,11 +456,10 @@ pub fn process_baseline(
     let mut script_paths = Vec::new();
 
     // Combined compliance script (traditional approach)
-    // Skip wrapper generation in Fleet mode with bundled/granular scripts — the wrappers
-    // reference a sibling compliance script via relative path, but Fleet uploads scripts
-    // individually (no directory structure), so the wrappers would fail at runtime.
-    // The bundled/granular scripts are self-contained and replace this functionality.
-    let skip_combined_wrappers = is_fleet_output && script_mode != ScriptMode::Combined;
+    // Skip wrapper generation when using bundled/granular scripts — the wrappers reference
+    // a sibling compliance script via relative path, which doesn't exist when the script
+    // generator writes self-contained categorized scripts. Applies to Fleet and Jamf alike.
+    let skip_combined_wrappers = script_mode != ScriptMode::Combined;
 
     if let Some(ref compliance_script) = baseline.compliance_script {
         if !dry_run && !skip_combined_wrappers {
@@ -476,10 +475,10 @@ pub fn process_baseline(
         }
     }
 
-    // Individual per-rule scripts (granular/bundled mode)
-    // Generate when script_mode is not Combined and we're in Fleet output mode
-    // (per-rule scripts are Fleet-specific)
-    let should_generate_individual_scripts = is_fleet_output && script_mode != ScriptMode::Combined;
+    // Categorized per-rule scripts (granular/bundled mode) — platform-agnostic, works for
+    // both Fleet and Jamf. Emits self-contained bash scripts grouped by rule category
+    // (audit/os/system_settings).
+    let should_generate_individual_scripts = script_mode != ScriptMode::Combined;
 
     if should_generate_individual_scripts {
         let rules = if let Some(ref repo_path) = mscp_repo_path {
@@ -496,22 +495,23 @@ pub fn process_baseline(
         } else {
             tracing::info!("Generating scripts in {:?} mode...", script_mode);
 
-            let fleet_script_generator = FleetScriptGenerator::new(FleetScriptOptions {
+            let rule_script_generator = RuleScriptGenerator::new(RuleScriptOptions {
                 mode: script_mode,
-                ..FleetScriptOptions::default()
+                ..RuleScriptOptions::default()
             });
 
             // Use different output directory for Jamf vs Fleet
             let scripts_dir = if is_jamf_mode {
                 output_path.join(&baseline.name).join("scripts")
             } else {
+                // Fleet v4.83+ GitOps: platforms/macos/scripts/{baseline}/
+                let layout = contour_core::fleet_layout::FleetLayout::default();
                 output_path
-                    .join("lib/mscp")
+                    .join(layout.macos_scripts_subdir)
                     .join(&baseline.name)
-                    .join("scripts")
             };
 
-            let generated = fleet_script_generator.generate_for_baseline(
+            let generated = rule_script_generator.generate_for_baseline(
                 &rules,
                 &baseline.name,
                 &scripts_dir,
@@ -542,10 +542,11 @@ pub fn process_baseline(
         };
 
         let policy_generator = FleetPolicyGenerator::new(&baseline.name);
+        // Fleet v4.83+ GitOps: platforms/macos/policies/{baseline}/
+        let layout = contour_core::fleet_layout::FleetLayout::default();
         let policies_dir = output_path
-            .join("lib/mscp")
-            .join(&baseline.name)
-            .join("policies");
+            .join(layout.macos_policies_subdir)
+            .join(&baseline.name);
 
         let (policies, p_path) = policy_generator.generate_for_baseline(
             &rules,
@@ -576,7 +577,7 @@ pub fn process_baseline(
             // Fragment mode: generate minimal structure for merge
             tracing::info!("Fragment mode: generating Fleet fragment...");
 
-            // Generate baseline component (lib/mscp/{baseline}/baseline.toml)
+            // Generate baseline component (mscp/{baseline}/baseline.toml)
             let team_generator = TeamYamlGenerator::new(&output_path);
             let baseline_config = team_generator.generate_baseline_component(
                 &baseline,
@@ -603,6 +604,7 @@ pub fn process_baseline(
             tracing::info!("Team YAML written to: {}", team_yml_path.display());
 
             // Generate labels (needed for fragment default.yml)
+            let layout = contour_core::fleet_layout::FleetLayout::default();
             let mut label_paths = Vec::new();
             if !no_labels {
                 let label_generator = LabelGenerator::new(&output_path);
@@ -611,8 +613,8 @@ pub fn process_baseline(
                 let label_path = label_generator.write_labels(&baseline.name, &labels)?;
                 tracing::info!("Label definitions written to: {}", label_path.display());
                 label_paths.push(format!(
-                    "./lib/all/labels/mscp-{}.labels.yml",
-                    baseline.name
+                    "./{}/mscp-{}.labels.yml",
+                    layout.labels_dir, baseline.name
                 ));
             }
 
@@ -626,7 +628,10 @@ pub fn process_baseline(
                     let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or_default();
                     let label_name = format!("mscp-{}", baseline.name);
                     contour_core::fragment::ProfileEntry {
-                        path: format!("../lib/mscp/{}/profiles/{filename}", baseline.name),
+                        path: format!(
+                            "../{}/{}/{filename}",
+                            layout.macos_profiles_subdir, baseline.name
+                        ),
                         labels_include_all: Some(vec![label_name]),
                         labels_include_any: None,
                         labels_exclude_any: None,
@@ -639,29 +644,41 @@ pub fn process_baseline(
             {
                 let policy_filename = p.file_name().and_then(|s| s.to_str()).unwrap_or_default();
                 vec![contour_core::fragment::SimpleEntry {
-                    path: format!("../lib/mscp/{}/policies/{policy_filename}", baseline.name),
+                    path: format!(
+                        "../{}/{}/{policy_filename}",
+                        layout.macos_policies_subdir, baseline.name
+                    ),
                 }]
             } else {
                 Vec::new()
             };
 
-            // Collect lib files (all files under lib/)
-            let lib_dir = output_path.join("lib");
-            let lib_files: Vec<String> = if lib_dir.exists() {
-                walkdir::WalkDir::new(&lib_dir)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                    .filter_map(|e| {
-                        e.path()
-                            .strip_prefix(&output_path)
-                            .ok()
-                            .map(|p| p.to_string_lossy().to_string())
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            // Collect all fragment artifact files (platforms/, mscp/, labels/)
+            let fragment_roots = [
+                layout.platforms_dir.to_string(),
+                "mscp".to_string(),
+                layout.labels_dir.to_string(),
+            ];
+            let lib_files: Vec<String> = fragment_roots
+                .iter()
+                .flat_map(|root| {
+                    let root_dir = output_path.join(root);
+                    if !root_dir.exists() {
+                        return Vec::new();
+                    }
+                    walkdir::WalkDir::new(&root_dir)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().is_file())
+                        .filter_map(|e| {
+                            e.path()
+                                .strip_prefix(&output_path)
+                                .ok()
+                                .map(|p| p.to_string_lossy().to_string())
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
 
             // Generate fragment.toml
             gitops_generator.generate_fragment_toml(
@@ -680,10 +697,12 @@ pub fn process_baseline(
             } else {
                 tracing::info!("Generating Fleet GitOps global structure...");
                 gitops_generator.generate_structure()?;
-                tracing::info!("Generated default.yml, lib/agent-options.yml, fleets/no-team.yml");
+                tracing::info!(
+                    "Generated default.yml, platforms/all/agent-options.yml, fleets/unassigned.yml"
+                );
             }
 
-            // Generate baseline component (lib/mscp/{baseline}/baseline.toml)
+            // Generate baseline component (mscp/{baseline}/baseline.toml)
             tracing::info!("Generating baseline component...");
             let team_generator = TeamYamlGenerator::new(&output_path);
             let baseline_config = team_generator.generate_baseline_component(
@@ -721,8 +740,9 @@ pub fn process_baseline(
                 tracing::info!("Label definitions written to: {}", label_path.display());
 
                 // Add label reference to default.yml
+                let layout = contour_core::fleet_layout::FleetLayout::default();
                 let relative_label_path =
-                    format!("./lib/all/labels/mscp-{}.labels.yml", baseline.name);
+                    format!("./{}/mscp-{}.labels.yml", layout.labels_dir, baseline.name);
                 if let Err(e) = gitops_generator.add_label_to_default_yml(&relative_label_path) {
                     tracing::warn!(
                         "Could not add labels to default.yml: {}. Add manually if needed.",

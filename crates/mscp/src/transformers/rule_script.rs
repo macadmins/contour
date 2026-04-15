@@ -22,9 +22,9 @@ pub enum ScriptMode {
     Both,
 }
 
-/// Options for Fleet script generation
+/// Options for rule-based script generation (platform-agnostic)
 #[derive(Debug, Clone)]
-pub struct FleetScriptOptions {
+pub struct RuleScriptOptions {
     /// Script generation mode
     pub mode: ScriptMode,
 
@@ -33,7 +33,7 @@ pub struct FleetScriptOptions {
     pub script_prefix: String,
 }
 
-impl Default for FleetScriptOptions {
+impl Default for RuleScriptOptions {
     fn default() -> Self {
         Self {
             mode: ScriptMode::Bundled,
@@ -42,14 +42,15 @@ impl Default for FleetScriptOptions {
     }
 }
 
-/// Generator for individual Fleet scripts from mSCP script rules
+/// Generator for self-contained bash scripts from mSCP rules, grouped by category.
+/// Platform-agnostic — output works for Fleet, Jamf, Munki, or any MDM that runs bash.
 #[derive(Debug)]
-pub struct FleetScriptGenerator {
-    options: FleetScriptOptions,
+pub struct RuleScriptGenerator {
+    options: RuleScriptOptions,
 }
 
-impl FleetScriptGenerator {
-    pub fn new(options: FleetScriptOptions) -> Self {
+impl RuleScriptGenerator {
+    pub fn new(options: RuleScriptOptions) -> Self {
         Self { options }
     }
 
@@ -240,7 +241,7 @@ impl FleetScriptGenerator {
 
             ScriptMode::Granular => {
                 tracing::info!(
-                    "Generating {} individual Fleet scripts for baseline '{}'",
+                    "Generating {} individual scripts for baseline '{}'",
                     script_rules.len(),
                     baseline_name
                 );
@@ -281,7 +282,7 @@ impl FleetScriptGenerator {
                 }
 
                 tracing::info!(
-                    "Generating {} bundled Fleet script categories for baseline '{}'",
+                    "Generating {} bundled script categories for baseline '{}'",
                     categories.len(),
                     baseline_name
                 );
@@ -313,12 +314,12 @@ impl FleetScriptGenerator {
             ScriptMode::Both => {
                 // Generate both bundled and granular
                 tracing::info!(
-                    "Generating both bundled and granular Fleet scripts for baseline '{}'",
+                    "Generating both bundled and granular scripts for baseline '{}'",
                     baseline_name
                 );
 
                 // First generate bundled
-                let bundled_generator = FleetScriptGenerator::new(FleetScriptOptions {
+                let bundled_generator = RuleScriptGenerator::new(RuleScriptOptions {
                     mode: ScriptMode::Bundled,
                     ..self.options.clone()
                 });
@@ -327,7 +328,7 @@ impl FleetScriptGenerator {
                 generated.extend(bundled);
 
                 // Then generate granular
-                let granular_generator = FleetScriptGenerator::new(FleetScriptOptions {
+                let granular_generator = RuleScriptGenerator::new(RuleScriptOptions {
                     mode: ScriptMode::Granular,
                     ..self.options.clone()
                 });
@@ -354,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_generate_audit_script() {
-        let generator = FleetScriptGenerator::new(FleetScriptOptions::default());
+        let generator = RuleScriptGenerator::new(RuleScriptOptions::default());
         let rule = create_test_rule();
 
         let script = generator.generate_audit_script(&rule).unwrap();
@@ -367,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_generate_remediate_script() {
-        let generator = FleetScriptGenerator::new(FleetScriptOptions::default());
+        let generator = RuleScriptGenerator::new(RuleScriptOptions::default());
         let rule = create_test_rule();
 
         let script = generator.generate_remediate_script(&rule).unwrap();
