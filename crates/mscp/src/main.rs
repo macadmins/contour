@@ -191,6 +191,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Generate {
+            config: config_path,
             mscp_repo,
             branch,
             baseline,
@@ -226,10 +227,6 @@ fn main() -> Result<()> {
             script_mode,
             fragment,
         } => {
-            // Resolve org from CLI flags, falling back to .contour/config.toml
-            let org = resolve_org(org);
-            let org_name = resolve_org_name(org_name);
-
             let python_method = if use_container {
                 Some(cli::generate::PythonMethod::Container)
             } else if use_uv {
@@ -239,6 +236,78 @@ fn main() -> Result<()> {
             } else {
                 None // Auto-detect
             };
+
+            // Determine output mode
+            let output_mode = if cli.json {
+                output::OutputMode::Json
+            } else {
+                output::OutputMode::Human
+            };
+
+            // Config-driven generation: load mscp.toml, derive options for this baseline.
+            if let Some(config_file) = config_path {
+                let loaded_config = config::load_config(&config_file)?;
+
+                // Find the requested baseline in the config (CLI --baseline selects which one)
+                let baseline_config = loaded_config
+                    .baselines
+                    .iter()
+                    .find(|b| b.name == baseline)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "baseline '{}' not found in {}; enabled baselines: {}",
+                            baseline,
+                            config_file.display(),
+                            loaded_config
+                                .baselines
+                                .iter()
+                                .map(|b| b.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })?;
+
+                let opts = cli::config_generate::build_options_from_config(
+                    &loaded_config,
+                    baseline_config,
+                );
+
+                // Switch branch if specified in config for this baseline
+                if let Some(ref target_branch) = baseline_config.branch {
+                    cli::generate::switch_branch(&mscp_repo, target_branch)?;
+                } else if let Some(ref target_branch) = branch {
+                    cli::generate::switch_branch(&mscp_repo, target_branch)?;
+                }
+
+                cli::generate_baseline(
+                    mscp_repo,
+                    baseline,
+                    output,
+                    python_method,
+                    opts.profile_options,
+                    opts.jamf_options,
+                    opts.munki_compliance_options,
+                    opts.munki_script_options,
+                    opts.no_labels,
+                    opts.team_names,
+                    opts.fleet_mode,
+                    opts.jamf_exclude_conflicts,
+                    opts.generate_ddm,
+                    dry_run,
+                    output_mode,
+                    false, // batch_mode = false for single baseline
+                    script_mode.into(),
+                    exclude,
+                    fragment,
+                    opts.structure,
+                )?;
+                return Ok(());
+            }
+
+            // CLI-flag-driven generation (existing behavior when no --config)
+            // Resolve org from CLI flags, falling back to .contour/config.toml
+            let org = resolve_org(org);
+            let org_name = resolve_org_name(org_name);
             let deterministic_uuids = resolve_deterministic_uuids(deterministic_uuids);
 
             // Build ProfileOptions when any general profile option is set
@@ -299,13 +368,6 @@ fn main() -> Result<()> {
             if let Some(target_branch) = branch {
                 cli::generate::switch_branch(&mscp_repo, &target_branch)?;
             }
-
-            // Determine output mode
-            let output_mode = if cli.json {
-                output::OutputMode::Json
-            } else {
-                output::OutputMode::Human
-            };
 
             cli::generate_baseline(
                 mscp_repo,

@@ -1762,6 +1762,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
         }
 
         Commands::Generate {
+            config: config_path,
             mscp_repo,
             branch,
             baseline,
@@ -1797,10 +1798,6 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             script_mode,
             fragment,
         } => {
-            // Resolve org from CLI flags, falling back to .contour/config.toml
-            let org = resolve_mscp_org(org);
-            let org_name = resolve_mscp_org_name(org_name);
-
             let python_method = if use_container {
                 Some(mscp::cli::generate::PythonMethod::Container)
             } else if use_uv {
@@ -1810,6 +1807,69 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             } else {
                 None // Auto-detect
             };
+
+            // Config-driven generation: load mscp.toml, derive options for this baseline.
+            if let Some(config_file) = config_path {
+                let loaded_config = mscp::config::load_config(&config_file)?;
+
+                let baseline_config = loaded_config
+                    .baselines
+                    .iter()
+                    .find(|b| b.name == baseline)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "baseline '{}' not found in {}; available baselines: {}",
+                            baseline,
+                            config_file.display(),
+                            loaded_config
+                                .baselines
+                                .iter()
+                                .map(|b| b.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })?;
+
+                let opts = mscp::cli::config_generate::build_options_from_config(
+                    &loaded_config,
+                    baseline_config,
+                );
+
+                if let Some(ref target_branch) = baseline_config.branch {
+                    mscp::cli::generate::switch_branch(&mscp_repo, target_branch)?;
+                } else if let Some(ref target_branch) = branch {
+                    mscp::cli::generate::switch_branch(&mscp_repo, target_branch)?;
+                }
+
+                mscp::cli::generate_baseline(
+                    mscp_repo,
+                    baseline,
+                    output,
+                    python_method,
+                    opts.profile_options,
+                    opts.jamf_options,
+                    opts.munki_compliance_options,
+                    opts.munki_script_options,
+                    opts.no_labels,
+                    opts.team_names,
+                    opts.fleet_mode,
+                    opts.jamf_exclude_conflicts,
+                    opts.generate_ddm,
+                    dry_run,
+                    output_mode,
+                    false, // batch_mode = false for single baseline
+                    script_mode.into(),
+                    exclude,
+                    fragment,
+                    opts.structure,
+                )?;
+                return Ok(());
+            }
+
+            // CLI-flag-driven generation (existing behavior when no --config)
+            // Resolve org from CLI flags, falling back to .contour/config.toml
+            let org = resolve_mscp_org(org);
+            let org_name = resolve_mscp_org_name(org_name);
             let deterministic_uuids = resolve_mscp_deterministic_uuids(deterministic_uuids);
 
             // Build ProfileOptions when any general profile option is set

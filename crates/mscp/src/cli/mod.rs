@@ -254,6 +254,12 @@ pub enum Commands {
     /// Runs the mSCP Python generation script, then transforms the output
     /// into MDM-ready configurations. This is the standard workflow.
     Generate {
+        /// Path to mscp.toml configuration file. When set, `[settings.munki]`,
+        /// `[settings.jamf]`, `[settings.fleet]`, and `[output].structure` are
+        /// read from config instead of requiring CLI flags.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+
         /// Path to mSCP repository
         #[arg(short, long)]
         mscp_repo: PathBuf,

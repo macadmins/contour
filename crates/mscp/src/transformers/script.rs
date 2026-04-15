@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use contour_core::fleet_layout::FleetLayout;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,7 @@ pub struct ScriptTransformer {
     output_base: PathBuf,
     jamf_mode: bool,
     fleet_output: bool,
+    layout: FleetLayout,
 }
 
 impl ScriptTransformer {
@@ -16,6 +18,7 @@ impl ScriptTransformer {
             output_base: output_base.as_ref().to_path_buf(),
             jamf_mode,
             fleet_output,
+            layout: FleetLayout::default(),
         }
     }
 
@@ -31,12 +34,10 @@ impl ScriptTransformer {
             // Jamf mode: Direct structure {output}/{baseline_name}/scripts/
             self.output_base.join(baseline_name).join("scripts")
         } else if self.fleet_output {
-            // Fleet mode: GitOps structure lib/mscp/{baseline_name}/scripts/
+            // Fleet v4.83+ GitOps: platforms/macos/scripts/{baseline}/
             self.output_base
-                .join("lib")
-                .join("mscp")
+                .join(self.layout.macos_scripts_subdir)
                 .join(baseline_name)
-                .join("scripts")
         } else {
             // Plain mode: mscp/{baseline_name}/scripts/
             self.output_base

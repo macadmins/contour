@@ -406,19 +406,12 @@ pub fn init_project<P: AsRef<Path>>(
                 .map(|s| s.as_str())
                 .unwrap_or("cis_lvl1");
             println!("  1. Review and edit mscp.toml");
-            if final_jamf {
-                println!(
-                    "  2. Run: {} generate --mscp-repo ./macos_security --baseline {} --output ./output --jamf-mode",
-                    "contour mscp".cyan(),
-                    example_baseline
-                );
-            } else {
-                println!(
-                    "  2. Run: {} generate --mscp-repo ./macos_security --baseline {} --output ./output",
-                    "contour mscp".cyan(),
-                    example_baseline
-                );
-            }
+            println!(
+                "  2. Run: {} generate --config ./mscp.toml --mscp-repo ./macos_security --baseline {} --output ./output",
+                "contour mscp".cyan(),
+                example_baseline
+            );
+            println!("     (--config picks up [settings.munki]/[settings.jamf]/[settings.fleet])");
         } else {
             println!("  1. Clone mSCP: git clone https://github.com/usnistgov/macos_security.git");
             println!("  2. Or re-run with: contour mscp init --sync --branch {branch}");

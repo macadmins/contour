@@ -25,6 +25,7 @@ use colored::Colorize;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use walkdir::WalkDir;
 
 // ── Jamf YAML structures ────────────────────────────────────────────
@@ -86,6 +87,7 @@ pub fn handle_jamf_import(
     import_all: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
+    let start = Instant::now();
     let source_path = Path::new(source);
 
     // Discover YAML files
@@ -188,6 +190,14 @@ pub fn handle_jamf_import(
         None
     };
 
+    // Org is required for Jamf imports (via --org, profile.toml, or .contour/config.toml)
+    let effective_org = effective_org.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--org is required for Jamf imports (e.g., --org com.yourorg)\n\
+             Alternatively, set organization.domain in profile.toml or .contour/config.toml"
+        )
+    })?;
+
     // Resolve org name
     let effective_org_name = org_name
         .map(String::from)
@@ -205,9 +215,7 @@ pub fn handle_jamf_import(
             extracted.len().to_string().green()
         );
         println!("  Output directory:    {}", effective_output);
-        if let Some(org) = effective_org {
-            println!("  Organization:        {}", org);
-        }
+        println!("  Organization:        {}", effective_org);
         if let Some(ref name) = effective_org_name {
             println!("  Organization name:   {}", name);
         }
@@ -215,9 +223,7 @@ pub fn handle_jamf_import(
         println!("  Pipeline (per profile):");
         println!("    1. Extract plist from Jamf YAML");
         println!("    2. Write as formatted .mobileconfig");
-        if effective_org.is_some() {
-            println!("    3. Normalize identifiers");
-        }
+        println!("    3. Normalize identifiers");
         if regen_uuid {
             println!("    4. Regenerate UUIDs");
         }
@@ -300,7 +306,7 @@ pub fn handle_jamf_import(
         match process_extracted_profile(
             ep,
             &output_path,
-            effective_org,
+            Some(effective_org),
             effective_org_name.as_deref(),
             config,
             validate,
@@ -327,8 +333,11 @@ pub fn handle_jamf_import(
     }
 
     // Summary
+    let elapsed = start.elapsed();
+    let elapsed_display = contour_core::format_elapsed(elapsed);
     if output_mode == OutputMode::Human {
         print_batch_summary(&batch, "Jamf Import");
+        println!("  Completed in {elapsed_display}");
     } else {
         output_batch_json(&batch, "jamf_import")?;
     }
@@ -643,6 +652,45 @@ general:
         assert!(
             content.contains('\n'),
             "Should be multi-line (not minified)"
+        );
+    }
+
+    #[test]
+    fn test_jamf_import_requires_org() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml_path = dir.path().join("test-profile.yaml");
+
+        let yaml_content = r#"_meta:
+    schema_version: 1
+    cli_version: 1.4.0
+    resource_type: profiles
+general:
+    name: Dock Settings
+    payloads: |-
+        <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>PayloadContent</key><array><dict><key>PayloadDisplayName</key><string>Dock</string><key>PayloadIdentifier</key><string>com.test.dock</string><key>PayloadType</key><string>com.apple.dock</string><key>PayloadUUID</key><string>A1B2C3D4-E5F6-7890-ABCD-EF1234567890</string><key>PayloadVersion</key><integer>1</integer></dict></array><key>PayloadDisplayName</key><string>Dock Settings</string><key>PayloadIdentifier</key><string>com.test.dock-profile</string><key>PayloadType</key><string>Configuration</string><key>PayloadUUID</key><string>12345678-1234-1234-1234-123456789012</string><key>PayloadVersion</key><integer>1</integer></dict></plist>
+"#;
+        fs::write(&yaml_path, yaml_content).unwrap();
+
+        let output_dir = dir.path().join("output");
+
+        let result = handle_jamf_import(
+            dir.path().to_str().unwrap(),
+            Some(output_dir.to_str().unwrap()),
+            None, // no org
+            None,
+            None,
+            true,
+            true,
+            false,
+            true,
+            OutputMode::Json,
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("--org is required"),
+            "Error should mention --org requirement, got: {err}"
         );
     }
 }

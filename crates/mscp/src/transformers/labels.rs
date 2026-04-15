@@ -1,5 +1,6 @@
 use crate::models::Platform;
 use anyhow::Result;
+use contour_core::fleet_layout::FleetLayout;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -36,12 +37,14 @@ pub struct LabelSpec {
 #[derive(Debug)]
 pub struct LabelGenerator {
     output_base: PathBuf,
+    layout: FleetLayout,
 }
 
 impl LabelGenerator {
     pub fn new<P: AsRef<Path>>(output_base: P) -> Self {
         Self {
             output_base: output_base.as_ref().to_path_buf(),
+            layout: FleetLayout::default(),
         }
     }
 
@@ -90,9 +93,9 @@ impl LabelGenerator {
         Ok(labels)
     }
 
-    /// Write labels to lib/all/labels/mscp-{baseline}.labels.yml
+    /// Write labels to {layout.labels_dir}/mscp-{baseline}.labels.yml
     pub fn write_labels(&self, baseline_name: &str, labels: &[FleetLabel]) -> Result<PathBuf> {
-        let labels_dir = self.output_base.join("lib/all/labels");
+        let labels_dir = self.output_base.join(self.layout.labels_dir);
         std::fs::create_dir_all(&labels_dir)?;
 
         let filename = format!("mscp-{baseline_name}.labels.yml");

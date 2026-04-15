@@ -1,5 +1,6 @@
 use crate::models::MscpBaseline;
 use anyhow::Result;
+use contour_core::fleet_layout::FleetLayout;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,6 +10,7 @@ pub struct ProfileTransformer {
     output_base: PathBuf,
     jamf_mode: bool,
     fleet_output: bool,
+    layout: FleetLayout,
 }
 
 impl ProfileTransformer {
@@ -17,6 +19,7 @@ impl ProfileTransformer {
             output_base: output_base.as_ref().to_path_buf(),
             jamf_mode,
             fleet_output,
+            layout: FleetLayout::default(),
         }
     }
 
@@ -30,12 +33,10 @@ impl ProfileTransformer {
             // Jamf mode: Direct structure {output}/{baseline_name}/
             self.output_base.join(&baseline.name)
         } else if self.fleet_output {
-            // Fleet mode: GitOps structure lib/mscp/{baseline_name}/profiles/
+            // Fleet v4.83+ GitOps: platforms/macos/configuration-profiles/{baseline}/
             self.output_base
-                .join("lib")
-                .join("mscp")
+                .join(self.layout.macos_profiles_subdir)
                 .join(&baseline.name)
-                .join("profiles")
         } else {
             // Plain mode: mscp/{baseline_name}/profiles/
             self.output_base

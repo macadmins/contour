@@ -49,10 +49,9 @@ impl ManifestStore {
         Ok(manifest_path)
     }
 
-    /// Get the manifest file path
+    /// Get the manifest file path (mscp/versions/manifest.json, Fleet v4.83+ top-level)
     fn get_manifest_path(&self) -> PathBuf {
         self.output_base
-            .join("lib")
             .join("mscp")
             .join("versions")
             .join("manifest.json")

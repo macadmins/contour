@@ -34,8 +34,8 @@ pub use errors::{ContourError, ContourResult};
 pub use fleet_layout::{FleetLayout, FleetLayoutVersion};
 pub use logging::init_logging;
 pub use output::{
-    CommandResult, OutputMode, print_error, print_info, print_json, print_kv, print_success,
-    print_warning, resolve_output_dir, sanitize_filename,
+    CommandResult, OutputMode, format_elapsed, print_error, print_info, print_json, print_kv,
+    print_success, print_warning, resolve_output_dir, sanitize_filename,
 };
 pub use scan::{AppInfo, discover_apps, multi_select, select_apps};
 pub use string_utils::levenshtein_distance;

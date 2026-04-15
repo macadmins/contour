@@ -1846,7 +1846,9 @@ pub fn install_skill(version: &str) -> Result<()> {
             let existing = fs::read_to_string(path)?;
             if existing.contains("contour — macOS MDM Configuration Toolkit") {
                 // Already has full content — replace the contour section
-                eprintln!("  {agent_file} already has contour instructions (use --force to replace)");
+                eprintln!(
+                    "  {agent_file} already has contour instructions (use --force to replace)"
+                );
             } else {
                 // Append full skill content
                 let mut updated = existing;
