@@ -51,3 +51,6 @@ crates/mdm-schema/data/*.parquet
 crates/mdm-schema/data/*.toml
 crates/mscp-schema/data/*.parquet
 crates/osquery-schema/data/*.parquet
+
+# Local mSCP source clone (used by `contour mscp generate` / `list-baselines`)
+/macos_security/
