@@ -4,7 +4,7 @@
 
 # Contour
 
-**The Swiss Army Knife for Apple Device Management Profiles**
+**The Swiss Army Knife for Apple Device Management tasks**
 
 > **Status: Preview** — almost feature-complete for core workflows, APIs and flags may still change before 1.0.
 
