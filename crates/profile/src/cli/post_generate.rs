@@ -1,8 +1,9 @@
-//! Post-generation validation for all profile/DDM generators.
+//! Post-generation validation for profile generators.
 //!
-//! Every generator should call `validate_generated_profile` or
-//! `validate_generated_ddm` after writing output. This ensures
-//! invalid output is caught immediately, not after deployment.
+//! Every `.mobileconfig` generator calls `validate_generated_profile`
+//! after writing output so invalid output is caught immediately rather
+//! than after deployment. DDM generation does its own stricter check
+//! inline (see `crate::cli::ddm::handle_ddm_generate`).
 
 use crate::output::OutputMode;
 use anyhow::Result;
@@ -63,42 +64,6 @@ pub fn validate_generated_profile(path: &Path, mode: OutputMode) -> Result<()> {
             );
             for w in &warnings {
                 println!("    {} {}", "·".yellow(), w.message);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Validate a generated DDM declaration against the embedded schema.
-pub fn validate_generated_ddm(path: &Path, mode: OutputMode) -> Result<()> {
-    let registry = crate::schema::SchemaRegistry::embedded()?;
-
-    // Use the DDM validator
-    let decl = crate::ddm::parser::parse_declaration_file(path)?;
-
-    if let Some(manifest) = registry.get(&decl.declaration_type) {
-        let mut issues = Vec::new();
-
-        // Check required fields (with nesting awareness)
-        for field in manifest.required_fields() {
-            if field.depth == 0 && decl.payload.get(&field.name).is_none() {
-                issues.push(format!("Missing required field: {}", field.name));
-            }
-        }
-
-        if issues.is_empty() {
-            if mode == OutputMode::Human {
-                println!("  {} DDM schema validation passed", "✓".green());
-            }
-        } else if mode == OutputMode::Human {
-            println!(
-                "  {} DDM validation: {} issue(s)",
-                "⚠".yellow(),
-                issues.len()
-            );
-            for issue in &issues {
-                println!("    {} {}", "·".yellow(), issue);
             }
         }
     }

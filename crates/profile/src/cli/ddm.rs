@@ -612,6 +612,65 @@ pub fn handle_ddm_info(
     Ok(())
 }
 
+/// Generate a default JSON value for a field, recursively populating Dictionary children.
+///
+/// Required children are always emitted so that optional parents remain valid when
+/// included (matches the validator's rule: "if parent is present, required children
+/// must be present"). When `full` is true, optional children are included as well.
+fn generate_field_value(
+    field_name: &str,
+    field: &crate::schema::FieldDefinition,
+    manifest: &crate::schema::PayloadManifest,
+    full: bool,
+) -> serde_json::Value {
+    use crate::schema::FieldType;
+
+    // Honor explicit defaults for scalar types.
+    if let Some(default) = &field.default {
+        return match field.field_type {
+            FieldType::Boolean => serde_json::Value::Bool(default.parse().unwrap_or(false)),
+            FieldType::Integer => {
+                serde_json::Value::Number(default.parse::<i64>().unwrap_or(0).into())
+            }
+            FieldType::Real => default
+                .parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map_or(serde_json::Value::Null, serde_json::Value::Number),
+            _ => serde_json::Value::String(default.clone()),
+        };
+    }
+
+    match field.field_type {
+        FieldType::Boolean => serde_json::Value::Bool(false),
+        FieldType::Integer => serde_json::Value::Number(0.into()),
+        FieldType::Real => serde_json::Number::from_f64(0.0)
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
+        FieldType::Array => serde_json::Value::Array(vec![]),
+        FieldType::Dictionary => {
+            // Walk field_order (not fields map) to preserve declaration order.
+            let mut obj = serde_json::Map::new();
+            for child_name in &manifest.field_order {
+                let Some(child) = manifest.fields.get(child_name) else {
+                    continue;
+                };
+                if child.parent_key.as_deref() != Some(field_name) {
+                    continue;
+                }
+                if !child.flags.required && !full {
+                    continue;
+                }
+                obj.insert(
+                    child_name.clone(),
+                    generate_field_value(child_name, child, manifest, full),
+                );
+            }
+            serde_json::Value::Object(obj)
+        }
+        _ => serde_json::Value::String(String::new()),
+    }
+}
+
 /// Generate a DDM declaration JSON from schema
 pub fn handle_ddm_generate(
     name: &str,
@@ -639,42 +698,19 @@ pub fn handle_ddm_generate(
     // Build the declaration
     let mut payload = DeclarationPayload::new();
 
+    // Top-level fields only — nested children are emitted by the Dictionary arm of
+    // `generate_field_value`, driven by each field's `parent_key`. Emitting nested
+    // fields at the top level would flatten the structure and (for required children
+    // of optional parents) create invalid docs that fail `ddm validate`.
     for field_name in &manifest.field_order {
         if let Some(field) = manifest.fields.get(field_name) {
-            // Skip optional fields unless --full
+            if field.parent_key.is_some() {
+                continue;
+            }
             if !field.flags.required && !full {
                 continue;
             }
-
-            let value = if let Some(default) = &field.default {
-                match field.field_type.as_str() {
-                    "Boolean" => serde_json::Value::Bool(default.parse().unwrap_or(false)),
-                    "Integer" => {
-                        serde_json::Value::Number(default.parse::<i64>().unwrap_or(0).into())
-                    }
-                    "Real" => {
-                        if let Ok(f) = default.parse::<f64>() {
-                            serde_json::Number::from_f64(f)
-                                .map_or(serde_json::Value::Null, serde_json::Value::Number)
-                        } else {
-                            serde_json::Value::Null
-                        }
-                    }
-                    _ => serde_json::Value::String(default.clone()),
-                }
-            } else {
-                // Generate placeholder based on type
-                match field.field_type.as_str() {
-                    "Boolean" => serde_json::Value::Bool(false),
-                    "Integer" => serde_json::Value::Number(0.into()),
-                    "Real" => serde_json::Number::from_f64(0.0)
-                        .map_or(serde_json::Value::Null, serde_json::Value::Number),
-                    "Array" => serde_json::Value::Array(vec![]),
-                    "Dictionary" => serde_json::Value::Object(serde_json::Map::new()),
-                    _ => serde_json::Value::String(String::new()),
-                }
-            };
-
+            let value = generate_field_value(field_name, field, manifest, full);
             payload.insert(field_name.clone(), value);
         }
     }
@@ -721,11 +757,37 @@ pub fn handle_ddm_generate(
 
     std::fs::write(&output_path, &json)?;
 
-    // Auto-validate generated DDM declaration
-    let _ = super::post_generate::validate_generated_ddm(
-        std::path::Path::new(&output_path),
-        output_mode,
-    );
+    // Double-validate the generated file using the SAME validator that
+    // `profile ddm validate` uses. This catches nested-required-field bugs
+    // that the shallow post-generate check would miss, and turns round-trip
+    // failures into a hard error at generate time rather than leaving the
+    // user holding an invalid file.
+    let result = validate_single_ddm(std::path::Path::new(&output_path), &registry)?;
+    if !result.valid {
+        if output_mode == OutputMode::Human {
+            eprintln!(
+                "\n{} Generated declaration failed schema validation:",
+                "✗".red().bold()
+            );
+            for err in &result.errors {
+                eprintln!("  {} {err}", "·".red());
+            }
+            eprintln!(
+                "\n{}",
+                "This is a generator bug — please report with the `--full` flag and type name."
+                    .dimmed()
+            );
+        }
+        anyhow::bail!(
+            "generated DDM declaration failed validation: {}",
+            result.errors.join("; ")
+        );
+    }
+    for warn in &result.warnings {
+        if output_mode == OutputMode::Human {
+            eprintln!("  {} {warn}", "⚠".yellow());
+        }
+    }
 
     if output_mode == OutputMode::Json {
         let result = serde_json::json!({
@@ -756,4 +818,145 @@ pub fn handle_ddm_generate(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Generate the payload for a DDM type via the same code path as
+    /// `handle_ddm_generate`, without touching the filesystem.
+    fn build_payload(type_name: &str, full: bool) -> DeclarationPayload {
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+        let manifest = registry
+            .get_by_name(type_name)
+            .unwrap_or_else(|| panic!("manifest not found: {type_name}"));
+
+        let mut payload = DeclarationPayload::new();
+        for field_name in &manifest.field_order {
+            if let Some(field) = manifest.fields.get(field_name) {
+                if field.parent_key.is_some() {
+                    continue;
+                }
+                if !field.flags.required && !full {
+                    continue;
+                }
+                payload.insert(
+                    field_name.clone(),
+                    generate_field_value(field_name, field, manifest, full),
+                );
+            }
+        }
+        payload
+    }
+
+    /// Run the same required-field validation as `validate_single_ddm` for a
+    /// payload generated in-process. Returns the list of `errors`.
+    fn validate_payload(type_name: &str, payload: &DeclarationPayload) -> Vec<String> {
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+        let manifest = registry
+            .get_by_name(type_name)
+            .unwrap_or_else(|| panic!("manifest not found: {type_name}"));
+        let mut errors = Vec::new();
+        for field in manifest.required_fields() {
+            if field.depth == 0 {
+                if payload.get(&field.name).is_none() {
+                    errors.push(format!("Missing required field: {}", field.name));
+                }
+            } else if field.parent_key.is_some() {
+                let ancestors = resolve_ancestor_path(&field.name, manifest);
+                if let Some(parent_obj) = walk_payload_path(&payload.0, &ancestors)
+                    && !parent_obj.contains_key(&field.name)
+                {
+                    let full_path = ancestors.join(".");
+                    errors.push(format!(
+                        "Missing required field: {full_path}.{}",
+                        field.name
+                    ));
+                }
+            }
+        }
+        errors
+    }
+
+    /// Regression test for https://github.com/headmin/contour/pull/5 follow-up:
+    /// `ddm generate --full` must produce a doc that passes `ddm validate`.
+    /// Prior to this test, `CustomRegex` was emitted as `{}` and its required
+    /// nested `Regex` child was emitted at the top level, yielding a doc that
+    /// the (correctly nesting-aware) validator rejected.
+    #[test]
+    fn passcode_settings_full_round_trip_is_valid() {
+        let payload = build_payload("com.apple.configuration.passcode.settings", true);
+
+        // Nested children must NOT leak to the top level.
+        assert!(
+            payload.get("Regex").is_none(),
+            "nested `Regex` must not be emitted at top level; payload keys: {:?}",
+            payload.keys().collect::<Vec<_>>()
+        );
+
+        // If the optional parent is present, the required child must be present too.
+        if let Some(serde_json::Value::Object(cr)) = payload.get("CustomRegex") {
+            assert!(
+                cr.contains_key("Regex"),
+                "CustomRegex is present but required child `Regex` is missing"
+            );
+        }
+
+        let errors = validate_payload("com.apple.configuration.passcode.settings", &payload);
+        assert!(
+            errors.is_empty(),
+            "generated --full doc failed validation: {errors:?}"
+        );
+    }
+
+    /// Required-only (no --full) must also validate. This is the default path
+    /// and the one used in CI pipelines.
+    #[test]
+    fn passcode_settings_required_only_round_trip_is_valid() {
+        let payload = build_payload("com.apple.configuration.passcode.settings", false);
+        let errors = validate_payload("com.apple.configuration.passcode.settings", &payload);
+        assert!(
+            errors.is_empty(),
+            "generated required-only doc failed validation: {errors:?}"
+        );
+    }
+
+    /// Exhaustive round-trip: every DDM type in the embedded registry must
+    /// produce a valid doc in both `--full` and required-only modes. Protects
+    /// the entire DDM surface from nested-required-field regressions.
+    #[test]
+    fn every_ddm_type_round_trips_cleanly() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+        let mut ddm_types: Vec<String> = Vec::new();
+        for cat in [
+            "ddm-configuration",
+            "ddm-activation",
+            "ddm-asset",
+            "ddm-management",
+        ] {
+            for m in registry.by_category(cat) {
+                ddm_types.push(m.payload_type.clone());
+            }
+        }
+
+        assert!(!ddm_types.is_empty(), "no DDM types found in registry");
+
+        let mut failures: Vec<String> = Vec::new();
+        for type_name in &ddm_types {
+            for full in [false, true] {
+                let payload = build_payload(type_name, full);
+                let errors = validate_payload(type_name, &payload);
+                if !errors.is_empty() {
+                    failures.push(format!("{type_name} (full={full}): {}", errors.join(", ")));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} DDM types produced invalid docs:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
 }

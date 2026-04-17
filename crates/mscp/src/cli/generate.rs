@@ -1173,9 +1173,18 @@ pub fn generate_all_baselines(
 }
 
 /// List all available baselines from mSCP repository
-pub fn list_available_baselines(mscp_repo_path: PathBuf) -> Result<()> {
+pub fn list_available_baselines(mscp_repo_path: PathBuf, output_mode: OutputMode) -> Result<()> {
     // Check if mSCP repo exists
     if !mscp_repo_path.exists() {
+        // In JSON mode (or any non-interactive context), fail fast rather than prompting —
+        // a blocking stdin read would hang CI and produce garbled JSON output.
+        if output_mode == OutputMode::Json {
+            anyhow::bail!(
+                "mSCP repository not found at: {}. Run `contour mscp init` to clone.",
+                mscp_repo_path.display()
+            );
+        }
+
         eprintln!(
             "\n⚠️  mSCP repository not found at: {}",
             mscp_repo_path.display()
@@ -1231,6 +1240,27 @@ pub fn list_available_baselines(mscp_repo_path: PathBuf) -> Result<()> {
                 baselines.push((basename.to_string(), path, description, platform));
             }
         }
+    }
+
+    if output_mode == OutputMode::Json {
+        #[derive(serde::Serialize)]
+        struct AvailableBaseline<'a> {
+            name: &'a str,
+            platform: &'a str,
+            description: Option<&'a str>,
+            path: &'a std::path::Path,
+        }
+        let json: Vec<AvailableBaseline<'_>> = baselines
+            .iter()
+            .map(|(name, path, desc, platform)| AvailableBaseline {
+                name: name.as_str(),
+                platform: platform.as_str(),
+                description: desc.as_deref(),
+                path: path.as_path(),
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
     }
 
     if baselines.is_empty() {
@@ -1565,9 +1595,14 @@ fn read_baseline_description(path: &PathBuf) -> Option<String> {
 }
 
 /// List all generated baselines in the output directory
-pub fn list_baselines(output: PathBuf) -> Result<()> {
+pub fn list_baselines(output: PathBuf, output_mode: OutputMode) -> Result<()> {
     let manager = BaselineIndex::new(output.clone());
     let baselines = manager.list_baselines()?;
+
+    if output_mode == OutputMode::Json {
+        println!("{}", serde_json::to_string_pretty(&baselines)?);
+        return Ok(());
+    }
 
     if baselines.is_empty() {
         println!("{} {}", "No baselines found in".yellow(), output.display());

@@ -568,11 +568,21 @@ fn main() -> Result<()> {
         }
 
         Commands::List { output } => {
-            cli::list_baselines(output)?;
+            let output_mode = if cli.json {
+                output::OutputMode::Json
+            } else {
+                output::OutputMode::Human
+            };
+            cli::list_baselines(output, output_mode)?;
         }
 
         Commands::ListBaselines { mscp_repo } => {
-            cli::list_available_baselines(mscp_repo)?;
+            let output_mode = if cli.json {
+                output::OutputMode::Json
+            } else {
+                output::OutputMode::Human
+            };
+            cli::list_available_baselines(mscp_repo, output_mode)?;
         }
 
         Commands::ExtractScripts {

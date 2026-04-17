@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use crate::models::baseline_reference::BaselineReference;
 
 /// Information about a baseline discovered in the output directory
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BaselineInfo {
     pub name: String,
     pub platform: String,

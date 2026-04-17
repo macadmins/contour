@@ -2107,11 +2107,11 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
         }
 
         Commands::List { output } => {
-            mscp::cli::list_baselines(output)?;
+            mscp::cli::list_baselines(output, output_mode)?;
         }
 
         Commands::ListBaselines { mscp_repo } => {
-            mscp::cli::list_available_baselines(mscp_repo)?;
+            mscp::cli::list_available_baselines(mscp_repo, output_mode)?;
         }
 
         Commands::Schema { action } => match action {
