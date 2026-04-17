@@ -8,7 +8,7 @@
 
 > **Status: Preview** — almost feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-One binary, multiple tools for Apple device config — profiles, DDM, Santa, PPPC, mSCP, osquery, BTM, notifications. Prepare them for MDM migration and GitOps work from the terminal, from CI, or via an AI agent. Either way, every artifact is validated against the embedded Apple schema before it lands.
+One signed binary that makes modern device management simpler: it normalizes configs consistently and surfaces errors clearly so outcomes diff cleanly. Whether you, your mdm vendor, or an agent wrote them, Contour supports profiles, DDM, Santa, PPPC, mSCP, osquery, BTM, and notification payloads. Prepare artifacts for MDM migration and GitOps workflows from the Terminal, in CI, or via an AI agent. Two modes, same core — every artifact is validated against the embedded Apple schema
 
 ## Why
 
