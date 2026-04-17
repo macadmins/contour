@@ -1,6 +1,6 @@
 [package]
 name = "pppc"
-version = "0.1.8"
+version = "0.1.9"
 description = "PPPC/TCC mobileconfig profile toolkit for macOS privacy permissions"
 edition.workspace = true
 authors.workspace = true

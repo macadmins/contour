@@ -1,6 +1,6 @@
 [package]
 name = "mdm-schema"
-version = "0.1.8"
+version = "0.1.9"
 description = "MDM payload schema definitions"
 edition.workspace = true
 authors.workspace = true

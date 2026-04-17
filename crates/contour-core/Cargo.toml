@@ -1,6 +1,6 @@
 [package]
 name = "contour-core"
-version = "0.1.8"
+version = "0.1.9"
 description = "Shared library for Contour CLI tools (profile, mscp, santa)"
 edition.workspace = true
 authors.workspace = true
