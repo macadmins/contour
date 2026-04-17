@@ -1,5 +1,7 @@
 # contour mscp -- mSCP Baseline Transformation Toolkit
 
+> **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
+
 `contour mscp` transforms [macOS Security Compliance Project (mSCP)](https://github.com/usnistgov/macos_security) baselines into MDM-ready configurations for Fleet, Jamf Pro, and Munki. It handles generation, post-processing, deduplication, constraints, ODV customization, versioning, and GitOps repository management.
 
 Aimed at Mac admins deploying security compliance baselines across Apple platforms (macOS, iOS, visionOS).
@@ -702,6 +704,92 @@ Test the container by running a simple command.
 
 ```
 contour mscp container test [--image <IMAGE>]
+```
+
+---
+
+### Schema Query (Embedded Dataset)
+
+Query the embedded mSCP dataset (baselines, rules, statistics) directly — no mSCP repo clone required. All commands support `--json` for programmatic consumption.
+
+#### `mscp schema baselines`
+
+List every baseline in the embedded dataset.
+
+```
+contour mscp schema baselines [--json]
+```
+
+```bash
+contour mscp schema baselines --json
+```
+
+#### `mscp schema rules`
+
+List rules in a specific baseline (and optional platform).
+
+```
+contour mscp schema rules --baseline <NAME> [--platform <PLATFORM>]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-b, --baseline <NAME>` | Baseline name (e.g., `cis_lvl1`, `800-53r5_high`) | **required** |
+| `-p, --platform <PLATFORM>` | Platform: `macOS`, `iOS`, `visionOS` | `macOS` |
+
+```bash
+contour mscp schema rules --baseline cis_lvl1 --json
+```
+
+#### `mscp schema stats`
+
+Show dataset statistics (rule counts per baseline, platform coverage, ODV rules, etc.).
+
+```
+contour mscp schema stats [--json]
+```
+
+#### `mscp schema compare`
+
+Compare the embedded parquet data against a local mSCP repo's YAML files. Useful when refreshing the embedded dataset.
+
+```
+contour mscp schema compare <MSCP_REPO> <BASELINE> [--platform <PLATFORM>]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<MSCP_REPO>` | Path to local mSCP repo | **required** |
+| `<BASELINE>` | Baseline to compare | **required** |
+| `--platform <PLATFORM>` | Platform filter | `macOS` |
+
+#### `mscp schema search`
+
+Search rules by keyword (matches against `rule_id`, title, and tags).
+
+```
+contour mscp schema search <QUERY> [--platform <PLATFORM>]
+```
+
+```bash
+contour mscp schema search airdrop --json
+contour mscp schema search filevault --platform macOS --json
+```
+
+#### `mscp schema rule`
+
+Show full detail for a specific rule — including `has_odv`, `odv_options`, `mobileconfig_info`, `check_script`, and `enforcement_type`.
+
+```
+contour mscp schema rule <RULE_ID> [--json]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<RULE_ID>` | Rule ID (e.g., `os_airdrop_disable`) | **required** |
+
+```bash
+contour mscp schema rule os_airdrop_disable --json
 ```
 
 ---

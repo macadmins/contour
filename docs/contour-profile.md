@@ -1,5 +1,7 @@
 # contour profile -- Configuration Profile Toolkit
 
+> **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
+
 `contour profile` is a CLI toolkit for managing Apple configuration profiles (`.mobileconfig`). It handles normalization, validation, signing, UUID management, payload inspection, and documentation generation for Apple device management.
 
 Aimed at Mac admins who manage profiles across MDM solutions, GitOps repositories, or local development workflows.
@@ -592,6 +594,204 @@ contour profile ddm generate <NAME> [flags]
 
 ```bash
 contour profile ddm generate passcode.settings -o passcode.json --full
+```
+
+---
+
+### Search & Generate
+
+#### `profile search`
+
+Search the embedded payload schemas by keyword. Matches against payload type, title, description, and key names.
+
+```
+contour profile search <QUERY> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<QUERY>` | Search term (e.g., `passcode`, `wifi`, `vpn`, `filevault`) | **required** |
+| `--schema-path <DIR>` | External schema directory | embedded schemas |
+
+```bash
+contour profile search passcode --json
+contour profile search wifi --json
+```
+
+#### `profile generate`
+
+Generate a `.mobileconfig` from an embedded payload schema, a recipe, or interactively. Supports plist output for Workspace ONE.
+
+```
+contour profile generate <PAYLOAD_TYPE>... [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<PAYLOAD_TYPE>...` | Payload type(s); multiple only with `--create-recipe` | required unless `--list-recipes` / `--recipe` |
+| `-o, --output <PATH>` | Output file or directory | stdout |
+| `--org <DOMAIN>` | Organization reverse domain | from `profile.toml` |
+| `--full` | Include all fields, not just required | `false` |
+| `--schema-path <DIR>` | External schema directory | embedded schemas |
+| `--recipe <NAME>` | Generate from a named recipe (produces a multi-profile bundle) | none |
+| `--recipe-path <DIR>` | Path to a recipe file or directory | built-in recipes |
+| `--list-recipes` | List available recipes | `false` |
+| `--set KEY=VALUE` | Set a placeholder value (repeat for multiple). Secrets: `op://`, `env:VAR`, `file:/path` | none |
+| `--create-recipe <NAME>` | Scaffold a recipe TOML from the given payload types | none |
+| `--interactive` | Pick payload segments and set field values interactively | `false` |
+| `--format <FMT>` | Output format: `mobileconfig` (default) or `plist` (raw payload dict, for WS1) | `mobileconfig` |
+
+```bash
+# Single payload, all fields included
+contour profile generate com.apple.mobiledevice.passwordpolicy --full --org com.acme
+
+# From a recipe with placeholder values
+contour profile generate --recipe okta-sso --set OKTA_DOMAIN=acme.okta.com -o profiles/
+
+# Scaffold a custom recipe from multiple payload types
+contour profile generate --create-recipe m365 com.microsoft.Edge com.microsoft.Outlook
+
+# Interactive segment picker
+contour profile generate com.apple.mobiledevice.passwordpolicy --interactive --org com.acme
+
+# Raw payload dict for Workspace ONE
+contour profile generate com.apple.wifi.managed --format plist --full -o wifi-payload.plist
+```
+
+---
+
+### MDM Commands
+
+Generate Apple MDM command payloads (`.plist`) from 65 embedded command schemas — ready to send via `fleetctl mdm run-command` or the Fleet API (with `--base64`).
+
+#### `profile command list`
+
+List all available MDM command types.
+
+```
+contour profile command list [--json]
+```
+
+#### `profile command info`
+
+Show the schema (keys, types, descriptions) for a specific command.
+
+```
+contour profile command info <COMMAND_TYPE>
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<COMMAND_TYPE>` | Command name (e.g., `DeviceLock`, `RestartDevice`) | **required** |
+
+#### `profile command generate`
+
+Generate an MDM command `.plist` payload.
+
+```
+contour profile command generate [<COMMAND_TYPE>] [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<COMMAND_TYPE>` | Command name (required unless `--interactive`) | none |
+| `-o, --output <PATH>` | Output file path | stdout |
+| `--set KEY=VALUE` | Command parameter (repeat for multiple) | none |
+| `--uuid` | Add a `CommandUUID` for tracking | `false` |
+| `--base64` | Output as a base64-encoded string (ready for Fleet API) | `false` |
+| `--interactive` | Search, select command, and configure params interactively | `false` |
+
+```bash
+# Simple command
+contour profile command generate RestartDevice --uuid -o restart.plist
+
+# Command with parameters
+contour profile command generate DeviceLock --set PIN=123456 --set Message='Locked by IT' --uuid -o lock.plist
+
+# Base64 for Fleet API
+contour profile command generate DeviceLock --set PIN=123456 --uuid --base64
+
+# Interactive (search + select)
+contour profile command generate --interactive
+```
+
+---
+
+### DEP/ADE Enrollment
+
+Generate Setup Assistant enrollment profiles from 71 embedded skip-key definitions (platform- and OS-version-gated).
+
+#### `profile enrollment list`
+
+List available skip keys for a platform and optional OS version.
+
+```
+contour profile enrollment list [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--platform <PLATFORM>` | `macOS`, `iOS`, `iPadOS`, `tvOS`, `visionOS` | `macOS` |
+| `--os-version <VERSION>` | Only show keys available for this OS version | all versions |
+
+```bash
+contour profile enrollment list --platform macOS --json
+contour profile enrollment list --platform iOS --os-version 17 --json
+```
+
+#### `profile enrollment generate`
+
+Generate a DEP/ADE enrollment profile JSON.
+
+```
+contour profile enrollment generate [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--platform <PLATFORM>` | Target platform | `macOS` |
+| `--os-version <VERSION>` | Target OS version | all |
+| `--skip-all` | Skip every available setup item | `false` |
+| `--skip <LIST>` | Comma-separated list of skip keys | none |
+| `--profile-name <NAME>` | Profile display name | `Automatic enrollment profile` |
+| `-o, --output <PATH>` | Output file path | stdout |
+| `--interactive` | Pick skip items interactively | `false` |
+
+```bash
+contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
+contour profile enrollment generate --platform iOS --skip TOS,Siri,Privacy -o ios-enrollment.dep.json
+```
+
+> **Security note**: always keep FileVault and SoftwareUpdate enabled (do **not** skip them).
+
+---
+
+### Synthesize
+
+#### `profile synthesize`
+
+Reverse-engineer managed preference plists (typically from `/Library/Managed Preferences/`) into validated `.mobileconfig` profiles. Matches keys against the Apple schema.
+
+```
+contour profile synthesize <PATHS>... [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<PATHS>...` | Plist file(s) or a directory of managed preferences | **required** |
+| `-o, --output <DIR>` | Output directory for generated mobileconfigs | current directory |
+| `--org <DOMAIN>` | Organization reverse domain | from `profile.toml` |
+| `--validate` | Validate keys against the Apple schema | `false` |
+| `--interactive` | Select which plists to synthesize | `false` |
+| `--dry-run` | Preview without writing files | `false` |
+
+```bash
+# Preview
+contour profile synthesize /Library/Managed\ Preferences/ --dry-run --json
+
+# Synthesize and validate
+contour profile synthesize /Library/Managed\ Preferences/ \
+  -o profiles/ --org com.acme --validate
 ```
 
 ---

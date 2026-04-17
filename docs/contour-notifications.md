@@ -1,5 +1,7 @@
 # contour notifications -- Notification Settings Toolkit
 
+> **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
+
 `contour notifications` generates notification settings mobileconfig profiles for macOS MDM deployment. It scans installed applications, produces a human-editable `notifications.toml` policy file, and generates `.mobileconfig` profiles that control per-app notification behavior (alerts, badges, sounds, lock screen, critical alerts).
 
 Aimed at Mac admins who need to manage notification settings across managed applications — suppressing noisy alerts, enabling critical notifications, or standardizing notification behavior fleet-wide.
@@ -187,6 +189,7 @@ contour notifications generate <INPUT> [flags]
 | `<INPUT>` | Input `notifications.toml` | **required** |
 | `-o, --output <PATH>` | Output directory or file path | same dir as input |
 | `--combined` | Merge all apps into a single profile | `false` |
+| `--fragment` | Generate a Fleet GitOps fragment directory (per-app profiles, `fleets/reference-team.yml`, `fragment.toml` manifest) | `false` |
 | `--dry-run` | Preview profiles without writing | `false` |
 
 ```bash
@@ -196,6 +199,9 @@ contour notifications generate notifications.toml -o ./profiles
 # Generate a single combined profile
 contour notifications generate notifications.toml --combined -o notifications.mobileconfig
 
+# Generate a Fleet GitOps fragment for merge into an existing repo
+contour notifications generate notifications.toml --fragment -o notifications-fragment/
+
 # Preview what would be generated
 contour notifications generate notifications.toml --dry-run
 ```
@@ -203,6 +209,19 @@ contour notifications generate notifications.toml --dry-run
 **Per-app mode** (default): Creates one `{app-name}-notifications.mobileconfig` per app. Profile identifier: `{org}.notifications.{bundle-id}`.
 
 **Combined mode** (`--combined`): Merges all notification settings into a single profile.
+
+**Fragment mode** (`--fragment`): Produces a composable Fleet GitOps fragment. Layout:
+
+```
+notifications-fragment/
+├── platforms/macos/configuration-profiles/
+│   └── <app-name>-notifications.mobileconfig   (one per app)
+├── fleets/
+│   └── reference-team.yml                      (profile references)
+└── fragment.toml                               (merge manifest)
+```
+
+The fragment is designed to be merged into an existing Fleet GitOps repository. `--fragment` and `--combined` are mutually exclusive in practice (fragment mode always produces per-app profiles).
 
 ### `notifications validate`
 

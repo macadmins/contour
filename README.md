@@ -6,6 +6,8 @@
 
 **The Swiss Army Knife for Apple Device Management Profiles**
 
+> **Status: Preview** — almost feature-complete for core workflows, APIs and flags may still change before 1.0.
+
 One binary, multiple tools. A Mac admin's special tooling to slice and dice configuration profiles, validate, unsign/sign, and prepare them for MDM migration and GitOps work — start transforming existing profiles and create new ones.
 
 ## Tools
@@ -17,7 +19,7 @@ One binary, multiple tools. A Mac admin's special tooling to slice and dice conf
 | `contour profile import --jamf` | Import from [Jamf Pro backup](https://github.com/Jamf-Concepts/jamf-cli) YAML — extract, normalize, validate in one step. |
 | `contour profile command` | Generate 65 MDM command plist payloads (RestartDevice, DeviceLock, EraseDevice, etc.) with `--base64` for Fleet API. |
 | `contour profile enrollment` | Generate DEP/ADE enrollment profiles from embedded Setup Assistant skip keys (71 keys, platform/version gated). |
-| `contour osquery` | Search and inspect 283 embedded osquery tables (2,581 columns) for writing Fleet policies. |
+| `contour osquery` | Search and inspect 283 embedded osquery tables (2,581 columns) for writing queries and policies. |
 | [`contour pppc`](docs/contour-pppc.md) | Generate TCC/Privacy Preferences profiles from app bundles. Scan → configure → generate workflow. |
 | [`contour santa`](docs/contour-santa.md) | Santa allowlists + CEL toolkit (compile, eval, validate, dry-run, classify) + FAA plist generation. |
 | [`contour mscp`](docs/contour-mscp.md) | mSCP baseline transformer with embedded schema query API (540 rules, 14 baselines, ODV support). |
@@ -27,11 +29,11 @@ One binary, multiple tools. A Mac admin's special tooling to slice and dice conf
 ## Highlights
 
 - **GitOps-ready** — Every tool follows `init → scan → generate`. Version-control configs, generate/validate profiles in CI pipelines.
-- **Fragment output** — `--fragment` prepares artifacts for Fleet GitOps v4.83 directory structures.
 - **Auto-validation** — Every generated profile is validated against the Apple schema before writing.
-- **Jamf import** — `--jamf` extracts, normalizes, and validates profiles from Jamf backup YAML.
-- **MDM commands** — Generate 65 MDM command plist payloads with `--base64` for Fleet API.
-- **LLM-friendly** — `contour help-ai` + `contour setup-agent` for AI-agent-assisted workflows.
+- **Jamf import** — `--jamf` extracts, normalizes, and validates profiles from Jamf backup YAML to convert for GitOps.
+- **Fragment output** — `--fragment` prepares artifacts for Fleet GitOps v4.83 directory structures.
+- **MDM commands** — Generate MDM command plist payloads to use with NanoMDM or Fleet API.
+- **LLM-friendly** — `contour help-ai` + `contour setup-agent` provide local lookup and schema info for AI-agent-assisted workflows.
 - **One binary** — All tools ship as a single `contour` binary (signed + notarized for Apple Silicon, Linux for CI/CD).
 
 ## Install

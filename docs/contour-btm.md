@@ -1,5 +1,7 @@
 # contour btm -- Background Task Management Toolkit
 
+> **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
+
 `contour btm` generates Service Management mobileconfig profiles and DDM declarations from macOS launch items. It scans LaunchDaemons, LaunchAgents, and app bundles for background tasks, produces a human-editable `btm.toml` policy file, and generates `.mobileconfig` or DDM JSON declarations ready for MDM deployment.
 
 Aimed at Mac admins who need to pre-approve managed login items and background tasks (macOS 13+ Service Management framework) for managed applications.
@@ -300,7 +302,7 @@ contour btm [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--mode <MODE>` | Scan mode: `launch-items` or `apps` | `launch-items` |
-| `-p, --path <PATH>` | Directories to scan (repeatable) | `/Applications` |
+| `-p, --path <PATH>` | Directories to scan (repeatable) | `/Applications` (see note) |
 | `-o, --output <PATH>` | Output directory | current directory |
 | `--org <ORG>` | Organization identifier | `.contour/config.toml` |
 | `-I, --interactive` | Interactive launch-item selection | `false` |
@@ -308,15 +310,18 @@ contour btm [flags]
 | `--dry-run` | Preview without writing | `false` |
 
 ```bash
-# Scan and generate in one step
-contour btm --org com.acme --mode launch-items -o ./profiles
+# Scan /Library/LaunchDaemons + /Library/LaunchAgents and generate in one step
+contour btm --org com.acme --mode launch-items \
+  -p /Library/LaunchDaemons -p /Library/LaunchAgents -o ./profiles
 
-# Interactive one-shot
-contour btm --org com.acme --mode apps --path /Applications -I
+# Interactive one-shot over /Applications (apps mode matches the default --path)
+contour btm --org com.acme --mode apps -I
 
 # DDM one-shot
 contour btm --org com.acme --ddm -o ./ddm
 ```
+
+> **Note on `--path`**: the clap default is `/Applications`, which is the natural match for `--mode apps`. For `--mode launch-items` (the default), pass `-p /Library/LaunchDaemons -p /Library/LaunchAgents` explicitly — the one-shot entry point does not re-default to the system LaunchDaemon/Agent directories the way the `btm scan` subcommand does when no paths are given.
 
 Produces profiles directly without creating an intermediate `.toml` file.
 

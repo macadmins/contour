@@ -1,5 +1,7 @@
 # contour pppc -- Privacy Preferences Policy Control Toolkit
 
+> **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
+
 `contour pppc` generates TCC (Transparency, Consent, and Control) mobileconfig profiles from app bundles. It scans applications for code signing requirements, produces a human-editable `pppc.toml` policy file, and generates `.mobileconfig` profiles ready for MDM deployment via Fleet, Jamf Pro, or any MDM that supports custom configuration profiles.
 
 Aimed at Mac admins who need to pre-approve Privacy Preferences (Full Disk Access, Screen Capture, Accessibility, etc.) for managed applications.

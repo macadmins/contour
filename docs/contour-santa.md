@@ -1,5 +1,7 @@
 # contour santa -- Santa Binary Authorization Toolkit
 
+> **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
+
 `contour santa` manages [Google Santa](https://santa.dev) rules and generates `.mobileconfig` profiles for MDM deployment. It handles rule ingestion from multiple sources (Fleet CSV exports, `santactl`, osquery, Installomator, existing mobileconfigs), rule management (add, remove, filter, merge, snip), profile generation in multiple formats (mobileconfig, plist, WS1), and prerequisite profile generation.
 
 Aimed at Mac admins deploying Santa for binary authorization — building allowlists, managing rules across environments, and generating MDM-ready profiles.
@@ -533,6 +535,41 @@ contour santa fetch osquery santa-rules.json -o rules.yaml
 contour santa fetch mobileconfig existing-santa.mobileconfig -o rules.yaml
 contour santa fetch installomator Installomator.sh -o installomator-rules.yaml
 contour santa fetch fleet-csv fleet-software.csv -o fleet-rules.yaml
+```
+
+---
+
+### Pipeline
+
+#### `santa pipeline` (alias: `pipe`)
+
+Run the full Fleet CSV → bundles → profiles pipeline in one deterministic step. Combines discovery, classification, and rule generation.
+
+```
+contour santa pipeline --input <CSV> --bundles <TOML> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-i, --input <CSV>` | Input Fleet software CSV | **required** |
+| `-b, --bundles <TOML>` | Bundle definitions file | **required** |
+| `-o, --output-dir <DIR>` | Output directory for generated profiles | `./profiles` |
+| `--org <DOMAIN>` | Organization identifier prefix | `com.example` |
+| `--dedup-level <LEVEL>` | Deduplication across devices | `signing-id` |
+| `--rule-type <STRATEGY>` | `team-id`, `prefer-signing-id`, `signing-id`, `bundle`, `binary-only` | `prefer-signing-id` |
+| `--orphan-policy <POLICY>` | Apps that match no bundle: `catch-all`, `warn`, `error`, `skip` | `catch-all` |
+| `--conflict-policy <POLICY>` | Apps that match multiple bundles: `first-match`, `most-specific`, `priority`, `error` | `most-specific` |
+| `--deterministic` | Sort rules and reproduce UUIDs | `true` |
+| `--layer-stage` | Emit a Layer × Stage matrix of profiles | `false` |
+| `--stages <N>` | With `--layer-stage`: `2`, `3`, or `5` | `3` |
+| `--dry-run` | Preview without writing files | `false` |
+
+```bash
+# Basic pipeline
+contour santa pipeline -i fleet.csv -b bundles.toml --org com.acme -o profiles/
+
+# Layer × Stage matrix (staged rollout)
+contour santa pipeline -i fleet.csv -b bundles.toml --org com.acme --layer-stage --stages 3
 ```
 
 ---
