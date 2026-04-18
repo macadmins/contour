@@ -84,7 +84,7 @@ Because validation is baked into every generator, Contour is also safe to hand t
 contour setup-agent
 ```
 
-The agent gets the Apple schema, routed SOPs for each task, and a generator that refuses to write a broken file. You ask in plain English; the agent picks the right command and the tool keeps it honest.
+The agent gets the Apple schema, routed SOPs for each task, and a generator that refuses to write a broken file. You ask in plain English; the agent picks the right command and the tool keeps it straight.
 
 ```bash
 contour help-ai                     # what the agent sees: command index + SOP routing
