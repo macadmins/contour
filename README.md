@@ -25,7 +25,7 @@ Two modes, same core — every artifact is validated against the embedded Apple 
 
 ### As a CLI toolkit
 
-Every tool is a first-class CLI. Use it in CI, makefiles, or at the terminal.
+Every tool can be used in CI, GitHooks, Scripts or the Terminal.
 
 | Tool | Description |
 |------|-------------|
