@@ -26,7 +26,7 @@ Profiles, DDM declarations, Santa rules, osquery policies — some of this confi
 
 ## How it's used
 
-Two modes — CLI on macOS or Linux. Same core: every artifact is processed with built-in tools and validated against the embedded Apple schema before it lands.
+Two modes — CLI on macOS or Linux. Same core: every artifact is processed with built-in tools and validated against the embedded schemas. For details on each tool, see the docs.
 
 ### As a CLI toolkit
 
