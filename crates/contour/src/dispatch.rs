@@ -1758,6 +1758,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 exclude,
                 fragment,
                 mscp::config::OutputStructure::default(),
+                None,
             )?;
         }
 
@@ -1797,6 +1798,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             dry_run,
             script_mode,
             fragment,
+            interactive,
         } => {
             let python_method = if use_container {
                 Some(mscp::cli::generate::PythonMethod::Container)
@@ -1810,7 +1812,15 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 
             // Config-driven generation: load mscp.toml, derive options for this baseline.
             if let Some(config_file) = config_path {
-                let loaded_config = mscp::config::load_config(&config_file)?;
+                let mut loaded_config = mscp::config::load_config(&config_file)?;
+
+                if interactive {
+                    mscp::cli::glob_interactive::run_glob_interactive(
+                        &mut loaded_config,
+                        &mscp_repo,
+                    )?;
+                    mscp::config::save_config(&loaded_config, &config_file)?;
+                }
 
                 let baseline_config = loaded_config
                     .baselines
@@ -1829,6 +1839,8 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                                 .join(", ")
                         )
                     })?;
+
+                let glob_config = Some(baseline_config.gitops_glob.clone());
 
                 let opts = mscp::cli::config_generate::build_options_from_config(
                     &loaded_config,
@@ -1862,8 +1874,16 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                     exclude,
                     fragment,
                     opts.structure,
+                    glob_config,
                 )?;
                 return Ok(());
+            }
+
+            if interactive {
+                anyhow::bail!(
+                    "--interactive requires --config <mscp.toml>; \
+                     the interactive glob builder persists choices back to the config"
+                );
             }
 
             // CLI-flag-driven generation (existing behavior when no --config)
@@ -1952,6 +1972,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 exclude,
                 fragment,
                 mscp::config::OutputStructure::default(),
+                None,
             )?;
         }
 
