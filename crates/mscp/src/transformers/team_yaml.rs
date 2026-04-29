@@ -34,7 +34,8 @@ impl TeamYamlGenerator {
         for profile_path in profile_paths {
             let relative_path = self.get_relative_path_from_lib(profile_path, &baseline.name)?;
             custom_settings.push(CustomSetting {
-                path: relative_path,
+                path: Some(relative_path),
+                paths: None,
                 labels_include_all: Some(vec![format!("mscp-{}", baseline.name)]),
                 labels_include_any: None,
                 labels_exclude_any: None,
@@ -47,14 +48,16 @@ impl TeamYamlGenerator {
         for (audit_path, remediate_path) in script_paths {
             let audit_relative = self.get_relative_path_from_lib(audit_path, &baseline.name)?;
             scripts.push(Script {
-                path: audit_relative,
+                path: Some(audit_relative),
+                paths: None,
             });
 
             if let Some(remediate) = remediate_path {
                 let remediate_relative =
                     self.get_relative_path_from_lib(remediate, &baseline.name)?;
                 scripts.push(Script {
-                    path: remediate_relative,
+                    path: Some(remediate_relative),
+                    paths: None,
                 });
             }
         }
@@ -141,15 +144,18 @@ impl TeamYamlGenerator {
 
         // Extract profiles from controls
         if let Some(ref controls) = config.controls {
-            // macOS profiles
+            // macOS profiles — skip `paths:` glob entries since the
+            // TOML baseline manifest tracks individual files, not patterns.
             if let Some(ref macos_settings) = controls.macos_settings
                 && let Some(ref custom_settings) = macos_settings.custom_settings
             {
                 for setting in custom_settings {
-                    baseline_ref.add_profile(
-                        setting.path.clone(),
-                        setting.labels_include_all.clone().unwrap_or_default(),
-                    );
+                    if let Some(ref path) = setting.path {
+                        baseline_ref.add_profile(
+                            path.clone(),
+                            setting.labels_include_all.clone().unwrap_or_default(),
+                        );
+                    }
                 }
             }
 
@@ -158,32 +164,36 @@ impl TeamYamlGenerator {
                 && let Some(ref custom_settings) = ios_settings.custom_settings
             {
                 for setting in custom_settings {
-                    baseline_ref.add_profile(
-                        setting.path.clone(),
-                        setting.labels_include_all.clone().unwrap_or_default(),
-                    );
+                    if let Some(ref path) = setting.path {
+                        baseline_ref.add_profile(
+                            path.clone(),
+                            setting.labels_include_all.clone().unwrap_or_default(),
+                        );
+                    }
                 }
             }
 
             // Scripts
-            // NOTE: Fleet scripts don't support labels, so we infer type from filename
+            // NOTE: Fleet scripts don't support labels, so we infer type from filename.
+            // Glob (`paths:`) entries have no single filename to classify, so they're skipped.
             if let Some(ref scripts) = controls.scripts {
                 for script in scripts {
-                    // Determine script type from path/filename
-                    let script_type = if script.path.contains("remediate") {
+                    let Some(path) = script.path.as_ref() else {
+                        continue;
+                    };
+                    let script_type = if path.contains("remediate") {
                         Some("remediate".to_string())
                     } else {
                         Some("audit".to_string())
                     };
 
-                    // For TOML manifest, we still track the label for documentation
-                    let labels = if script.path.contains("remediate") {
+                    let labels = if path.contains("remediate") {
                         vec![format!("mscp-{}-remediate", baseline_name)]
                     } else {
                         vec![format!("mscp-{}", baseline_name)]
                     };
 
-                    baseline_ref.add_script(script.path.clone(), labels, script_type);
+                    baseline_ref.add_script(path.clone(), labels, script_type);
                 }
             }
         }

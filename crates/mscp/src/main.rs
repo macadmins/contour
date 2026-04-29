@@ -28,6 +28,7 @@ mod versioning;
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands, ConstraintsAction, OdvAction, SchemaAction};
+use colored::Colorize;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -187,6 +188,7 @@ fn main() -> Result<()> {
                 exclude,
                 fragment,
                 crate::config::OutputStructure::default(),
+                None, // glob_config - process has no mscp.toml in scope; use `generate --config` for glob support
             )?;
         }
 
@@ -226,6 +228,7 @@ fn main() -> Result<()> {
             dry_run,
             script_mode,
             fragment,
+            interactive,
         } => {
             let python_method = if use_container {
                 Some(cli::generate::PythonMethod::Container)
@@ -246,7 +249,24 @@ fn main() -> Result<()> {
 
             // Config-driven generation: load mscp.toml, derive options for this baseline.
             if let Some(config_file) = config_path {
-                let loaded_config = config::load_config(&config_file)?;
+                let mut loaded_config = config::load_config(&config_file)?;
+
+                // `--interactive` rebuilds the `[gitops_glob]` section via
+                // prompts and persists the updated TOML back to disk *before*
+                // generation so subsequent runs reproduce the same YAML.
+                if interactive {
+                    let mscp_repo_for_discovery = loaded_config.settings.mscp_repo.clone();
+                    cli::glob_interactive::run_glob_interactive(
+                        &mut loaded_config,
+                        &mscp_repo_for_discovery,
+                    )?;
+                    config::save_config(&loaded_config, &config_file)?;
+                    eprintln!(
+                        "{} {}",
+                        "✓".green(),
+                        format!("Saved glob choices to {}", config_file.display()).dimmed()
+                    );
+                }
 
                 // Find the requested baseline in the config (CLI --baseline selects which one)
                 let baseline_config = loaded_config
@@ -300,8 +320,17 @@ fn main() -> Result<()> {
                     exclude,
                     fragment,
                     opts.structure,
+                    Some(baseline_config.gitops_glob.clone()),
                 )?;
                 return Ok(());
+            }
+
+            if interactive {
+                anyhow::bail!(
+                    "--interactive requires --config <mscp.toml>; interactive glob \
+                     choices need somewhere to persist. Run `mscp init` first, then \
+                     re-run with `--config mscp.toml --interactive`."
+                );
             }
 
             // CLI-flag-driven generation (existing behavior when no --config)
@@ -390,6 +419,7 @@ fn main() -> Result<()> {
                 exclude,
                 fragment,
                 crate::config::OutputStructure::default(),
+                None, // glob_config - CLI-flag mode does not carry mscp.toml
             )?;
         }
 

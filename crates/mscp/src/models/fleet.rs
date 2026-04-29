@@ -33,10 +33,19 @@ pub struct FleetGlobalConfig {
     pub labels: Option<Vec<LabelPathRef>>,
 }
 
-/// Label path reference for default.yml
+/// Label path reference for default.yml.
+///
+/// Exactly one of `path` (single literal file) or `paths` (glob pattern
+/// matching many files, e.g. `./lib/labels/mscp-*.labels.yml`) must be set.
+/// Fleet disallows labels on entries that use `paths`, but label-path-refs
+/// themselves carry no labels, so that constraint does not apply here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LabelPathRef {
-    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub path: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub paths: Option<String>,
 }
 
 /// Agent options path reference
@@ -214,10 +223,21 @@ pub struct PlatformSettings {
     pub custom_settings: Option<Vec<CustomSetting>>,
 }
 
+/// Configuration profile entry (`configuration_profiles` or `controls.*_settings.custom_settings`).
+///
+/// Exactly one of `path` or `paths` must be set. Fleet disallows labels on
+/// entries that use `paths`, so `labels_*` fields must remain `None` whenever
+/// `paths` is set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomSetting {
-    /// Relative path to the mobileconfig file
-    pub path: String,
+    /// Relative path to a single mobileconfig file
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub path: Option<String>,
+
+    /// Glob pattern matching multiple mobileconfig files (e.g. `../profiles/*.mobileconfig`).
+    /// Cannot be combined with any `labels_*` field.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub paths: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels_include_all: Option<Vec<String>>,
@@ -229,24 +249,100 @@ pub struct CustomSetting {
     pub labels_exclude_any: Option<Vec<String>>,
 }
 
-/// Script reference - Fleet `GitOps` only supports path (`BaseItem` struct)
-/// NOTE: Fleet does NOT support label targeting for scripts (only for profiles)
+/// Script reference - Fleet `GitOps` only supports path (`BaseItem` struct).
+/// NOTE: Fleet does NOT support label targeting for scripts (only for profiles),
+/// so label conflicts with `paths` cannot arise here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Script {
-    /// Relative path to the script file
-    pub path: String,
+    /// Relative path to a single script file
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub path: Option<String>,
+
+    /// Glob pattern matching multiple script files (e.g. `../scripts/*.sh`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub paths: Option<String>,
 }
 
-/// Policy entry — either a path reference to a separate file or an inline value.
+/// Policy entry — either a `path:` reference, a `paths:` glob, or an inline value.
 ///
-/// Fleet GitOps supports both inline policies and path references.
+/// Fleet GitOps supports all three shapes; the generator picks between them
+/// based on the baseline's `gitops_glob.policies` configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PolicyEntry {
     /// Reference to a separate YAML file containing policies
     PathRef { path: String },
+    /// Glob pattern matching multiple policy YAML files
+    PathsRef { paths: String },
     /// Inline policy value (passthrough)
     Inline(yaml_serde::Value),
+}
+
+/// Characters forbidden in a literal `path:` field by Fleet GitOps
+/// (any one of these makes the path a glob pattern, which must use `paths:`).
+pub const PATH_GLOB_METACHARS: &[char] = &['*', '?', '[', '{'];
+
+/// Validate that exactly one of `path` / `paths` is set on an entry,
+/// and that literal `path:` values contain no glob metacharacters.
+///
+/// Used by the generator before serialization to fail fast on invalid output.
+pub fn validate_path_xor_paths(
+    kind: &str,
+    path: Option<&str>,
+    paths: Option<&str>,
+) -> anyhow::Result<()> {
+    match (path, paths) {
+        (Some(_), Some(_)) => anyhow::bail!(
+            "{kind} entry has both `path` and `paths` set — exactly one is allowed"
+        ),
+        (None, None) => anyhow::bail!(
+            "{kind} entry has neither `path` nor `paths` set — exactly one is required"
+        ),
+        (Some(p), None) if p.contains(PATH_GLOB_METACHARS) => anyhow::bail!(
+            "{kind} `path` contains a glob metacharacter ({}) — use `paths` instead: {p}",
+            PATH_GLOB_METACHARS
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        _ => Ok(()),
+    }
+}
+
+impl CustomSetting {
+    /// Validate `path`/`paths` invariants plus the Fleet rule that `paths:`
+    /// entries cannot carry labels.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        validate_path_xor_paths(
+            "configuration_profiles",
+            self.path.as_deref(),
+            self.paths.as_deref(),
+        )?;
+        if self.paths.is_some()
+            && (self.labels_include_all.is_some()
+                || self.labels_include_any.is_some()
+                || self.labels_exclude_any.is_some())
+        {
+            anyhow::bail!(
+                "configuration_profiles entry uses `paths:` but also sets labels_* — \
+                 Fleet GitOps does not allow labels on glob entries"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Script {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        validate_path_xor_paths("scripts", self.path.as_deref(), self.paths.as_deref())
+    }
+}
+
+impl LabelPathRef {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        validate_path_xor_paths("labels", self.path.as_deref(), self.paths.as_deref())
+    }
 }
 
 /// Output structure that will be generated
@@ -260,4 +356,95 @@ pub struct FleetGitOpsOutput {
 
     /// Files to be copied (source, destination)
     pub files_to_copy: Vec<(std::path::PathBuf, std::path::PathBuf)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_path_xor_paths_rejects_both_set() {
+        let err = validate_path_xor_paths("scripts", Some("a.sh"), Some("*.sh")).unwrap_err();
+        assert!(err.to_string().contains("both"));
+    }
+
+    #[test]
+    fn validate_path_xor_paths_rejects_neither_set() {
+        let err = validate_path_xor_paths("scripts", None, None).unwrap_err();
+        assert!(err.to_string().contains("neither"));
+    }
+
+    #[test]
+    fn validate_path_xor_paths_rejects_glob_metachars_in_path() {
+        for bad in ["a*.sh", "a?.sh", "a[1].sh", "a{x}.sh"] {
+            let err = validate_path_xor_paths("scripts", Some(bad), None).unwrap_err();
+            assert!(
+                err.to_string().contains("glob metacharacter"),
+                "expected rejection for {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_path_xor_paths_accepts_valid_literal() {
+        validate_path_xor_paths("scripts", Some("foo/bar.sh"), None).unwrap();
+    }
+
+    #[test]
+    fn validate_path_xor_paths_accepts_valid_glob() {
+        validate_path_xor_paths("scripts", None, Some("foo/*.sh")).unwrap();
+    }
+
+    #[test]
+    fn custom_setting_rejects_labels_with_paths() {
+        let cs = CustomSetting {
+            path: None,
+            paths: Some("../profiles/*.mobileconfig".to_string()),
+            labels_include_all: Some(vec!["mscp-cis_lvl1".to_string()]),
+            labels_include_any: None,
+            labels_exclude_any: None,
+        };
+        let err = cs.validate().unwrap_err();
+        assert!(err.to_string().contains("does not allow labels"));
+    }
+
+    #[test]
+    fn custom_setting_accepts_path_with_labels() {
+        let cs = CustomSetting {
+            path: Some("../profiles/a.mobileconfig".to_string()),
+            paths: None,
+            labels_include_all: Some(vec!["mscp-cis_lvl1".to_string()]),
+            labels_include_any: None,
+            labels_exclude_any: None,
+        };
+        cs.validate().unwrap();
+    }
+
+    #[test]
+    fn custom_setting_accepts_paths_without_labels() {
+        let cs = CustomSetting {
+            path: None,
+            paths: Some("../profiles/*.mobileconfig".to_string()),
+            labels_include_all: None,
+            labels_include_any: None,
+            labels_exclude_any: None,
+        };
+        cs.validate().unwrap();
+    }
+
+    #[test]
+    fn script_accepts_path_or_paths() {
+        Script {
+            path: Some("../scripts/a.sh".to_string()),
+            paths: None,
+        }
+        .validate()
+        .unwrap();
+        Script {
+            path: None,
+            paths: Some("../scripts/*.sh".to_string()),
+        }
+        .validate()
+        .unwrap();
+    }
 }

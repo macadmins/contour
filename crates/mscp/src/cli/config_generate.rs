@@ -174,6 +174,7 @@ pub fn generate_from_config(config: Config) -> Result<()> {
             None,  // exclude_categories - not supported in config-based generation
             false, // fragment - not supported in config-based generation
             opts.structure,
+            Some(baseline_config.gitops_glob.clone()),
         )?;
     }
 

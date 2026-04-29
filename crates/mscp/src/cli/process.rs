@@ -1,7 +1,7 @@
-use crate::config::OutputStructure;
+use crate::config::{GitopsGlobConfig, GlobSection, OutputStructure};
 use crate::extractors::{MscpOutputExtractor, RuleExtractor};
 use crate::filters::{FleetConflictFilter, JamfConflictFilter};
-use crate::generators::FleetGitOpsGenerator;
+use crate::generators::{FleetGitOpsGenerator, GlobPlan};
 use crate::managers::{ConstraintType, Constraints, build_exclusion_plan, discover_categories};
 use crate::models::Platform;
 use crate::output::{CommandResult, OutputMode, print_bar_chart};
@@ -19,6 +19,15 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Process command - standalone mode
+///
+/// `glob_config` is the per-baseline Fleet GitOps glob configuration (usually
+/// read from `mscp.toml` via `BaselineConfig::gitops_glob`). When `None` or
+/// when every section is disabled, output is byte-identical to the legacy
+/// per-item `path:` emission.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "legacy signature shaped by CLI flags; refactoring is out of scope for the glob feature"
+)]
 pub fn process_baseline(
     input_path: PathBuf,
     output_path: PathBuf,
@@ -37,6 +46,7 @@ pub fn process_baseline(
     exclude_categories: Option<Vec<String>>,
     fragment: bool,
     output_structure: OutputStructure,
+    glob_config: Option<GitopsGlobConfig>,
 ) -> Result<()> {
     tracing::info!(
         "Processing baseline '{}' from: {}",
@@ -264,10 +274,19 @@ pub fn process_baseline(
     // Transform profiles
     tracing::info!("Transforming mobileconfig profiles...");
     let profile_transformer = ProfileTransformer::new(&output_path, is_jamf_mode, is_fleet_output);
-    let profile_mappings = profile_transformer.transform(&baseline)?;
+    let mut profile_mappings = profile_transformer.transform(&baseline)?;
 
     if !dry_run {
         profile_transformer.copy_files(&profile_mappings)?;
+
+        // For glob-enabled sections, physically move exception files into
+        // their configured subfolders. This is what prevents the flat
+        // `*.mobileconfig` glob from matching them on disk.
+        if let Some(ref cfg) = glob_config
+            && let Some(ref section) = cfg.profiles
+        {
+            apply_subfolder_placement(&mut profile_mappings, Some(section))?;
+        }
     }
 
     result.profiles_generated = profile_mappings.len();
@@ -522,6 +541,14 @@ pub fn process_baseline(
                 script_paths.push((audit_path, Some(remediate_path)));
             }
 
+            // Move exception script files into subfolders when the scripts
+            // glob is enabled so the flat glob can't match them.
+            if let Some(ref cfg) = glob_config
+                && let Some(ref section) = cfg.scripts
+            {
+                apply_script_subfolder_placement(&mut script_paths, Some(section))?;
+            }
+
             tracing::info!(
                 "Generated {} individual script pairs in {:?} mode",
                 script_paths.len() - usize::from(baseline.compliance_script.is_some()),
@@ -573,6 +600,13 @@ pub fn process_baseline(
             .map(|(_, dest)| dest.clone())
             .collect();
 
+        // Build the glob plan once for both fragment and standard modes so
+        // team-YAML emission stays consistent with file placement.
+        let glob_plan = GlobPlan {
+            profiles: glob_config.as_ref().and_then(|c| c.profiles.as_ref()),
+            scripts: glob_config.as_ref().and_then(|c| c.scripts.as_ref()),
+        };
+
         if fragment {
             // Fragment mode: generate minimal structure for merge
             tracing::info!("Fragment mode: generating Fleet fragment...");
@@ -595,11 +629,12 @@ pub fn process_baseline(
             );
 
             // Generate team YAML with profile/script content (+ policy reference)
-            let team_yml_path = gitops_generator.generate_team_yml_with_policies(
+            let team_yml_path = gitops_generator.generate_team_yml_with_glob_plan(
                 &baseline.name,
                 &profile_dest_paths,
                 &script_paths,
                 policy_path.as_deref(),
+                &glob_plan,
             )?;
             tracing::info!("Team YAML written to: {}", team_yml_path.display());
 
@@ -722,11 +757,12 @@ pub fn process_baseline(
             );
 
             // Generate team YAML with actual profile/script content (+ policy reference)
-            let team_yml_path = gitops_generator.generate_team_yml_with_policies(
+            let team_yml_path = gitops_generator.generate_team_yml_with_glob_plan(
                 &baseline.name,
                 &profile_dest_paths,
                 &script_paths,
                 policy_path.as_deref(),
+                &glob_plan,
             )?;
             tracing::info!("Team YAML written to: {}", team_yml_path.display());
 
@@ -863,5 +899,100 @@ pub fn process_baseline(
         }
     }
 
+    Ok(())
+}
+
+/// Move profile exception files into their configured subfolders and rewrite
+/// the destination entries in `mappings` so downstream team-YAML emission
+/// references the new locations.
+///
+/// The subfolder is what physically hides an exception from a flat glob
+/// pattern like `../profiles/*.mobileconfig`: the glob matches at one
+/// directory depth only, so moving `screensaver.mobileconfig` into
+/// `profiles/screensaver/` keeps it off the glob's match list.
+fn apply_subfolder_placement(
+    mappings: &mut [(PathBuf, PathBuf)],
+    section: Option<&GlobSection>,
+) -> Result<()> {
+    let Some(section) = section.filter(|s| s.enabled) else {
+        return Ok(());
+    };
+    for exc in &section.exceptions {
+        let Some(ref subfolder) = exc.subfolder else {
+            continue;
+        };
+        let Some(mapping) = mappings.iter_mut().find(|(_, dest)| {
+            dest.file_name().and_then(|s| s.to_str()) == Some(exc.filename.as_str())
+        }) else {
+            tracing::warn!(
+                "glob exception `{}` not found among copied profiles — skipping subfolder move",
+                exc.filename
+            );
+            continue;
+        };
+        let (_, dest) = mapping;
+        let parent = dest
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("profile dest has no parent: {}", dest.display()))?;
+        let new_parent = parent.join(subfolder);
+        std::fs::create_dir_all(&new_parent)?;
+        let new_dest = new_parent.join(&exc.filename);
+        std::fs::rename(&dest, &new_dest)?;
+        tracing::info!(
+            "moved glob exception into subfolder: {} -> {}",
+            dest.display(),
+            new_dest.display()
+        );
+        *dest = new_dest;
+    }
+    Ok(())
+}
+
+/// Script variant of `apply_subfolder_placement`.
+///
+/// Scripts are stored as `(audit, Option<remediate>)` pairs, and filename
+/// matching happens on whichever element carries the exception's basename.
+fn apply_script_subfolder_placement(
+    pairs: &mut [(PathBuf, Option<PathBuf>)],
+    section: Option<&GlobSection>,
+) -> Result<()> {
+    let Some(section) = section.filter(|s| s.enabled) else {
+        return Ok(());
+    };
+    let move_into_subfolder = |p: &PathBuf, subfolder: &str| -> Result<PathBuf> {
+        let parent = p
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("script dest has no parent: {}", p.display()))?;
+        let new_parent = parent.join(subfolder);
+        std::fs::create_dir_all(&new_parent)?;
+        let new_dest = new_parent.join(p.file_name().unwrap_or_default());
+        std::fs::rename(p, &new_dest)?;
+        Ok(new_dest)
+    };
+
+    for exc in &section.exceptions {
+        let Some(ref subfolder) = exc.subfolder else {
+            continue;
+        };
+        let mut matched = false;
+        for (audit, remediate) in pairs.iter_mut() {
+            if audit.file_name().and_then(|s| s.to_str()) == Some(exc.filename.as_str()) {
+                *audit = move_into_subfolder(audit, subfolder)?;
+                matched = true;
+            }
+            if let Some(r) = remediate.as_mut()
+                && r.file_name().and_then(|s| s.to_str()) == Some(exc.filename.as_str())
+            {
+                *r = move_into_subfolder(r, subfolder)?;
+                matched = true;
+            }
+        }
+        if !matched {
+            tracing::warn!(
+                "glob exception `{}` not found among generated scripts — skipping subfolder move",
+                exc.filename
+            );
+        }
+    }
     Ok(())
 }

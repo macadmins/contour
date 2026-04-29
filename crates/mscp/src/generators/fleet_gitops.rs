@@ -5,6 +5,7 @@
 //!
 //! Uses `FleetLayout` for all path conventions (Fleet v4.82+).
 
+use crate::config::GlobSection;
 use crate::models::{
     AgentConfig, AgentConfigOptions, AgentOptions, AgentOptionsRef, Controls, CustomSetting,
     Decorators, EnrollSecret, Features, FleetGlobalConfig, FleetTeamConfig, OrgInfo, OrgSettings,
@@ -13,6 +14,18 @@ use crate::models::{
 use anyhow::Result;
 use contour_core::fleet_layout::FleetLayout;
 use std::path::{Path, PathBuf};
+
+/// Per-team glob decisions threaded from `mscp.toml` into team YAML emission.
+///
+/// `None` for a section means "no glob — emit one literal `path:` per item,
+/// same as before the feature existed". `Some` means "emit a single `paths:`
+/// entry plus one literal `path:` per exception".
+#[derive(Debug, Clone, Default)]
+pub struct GlobPlan<'a> {
+    pub profiles: Option<&'a GlobSection>,
+    pub scripts: Option<&'a GlobSection>,
+}
+
 
 /// Generator for complete Fleet `GitOps` directory structure
 #[derive(Debug)]
@@ -216,6 +229,28 @@ software:
         script_paths: &[(PathBuf, Option<PathBuf>)],
         policy_path: Option<&Path>,
     ) -> Result<PathBuf> {
+        self.generate_team_yml_with_glob_plan(
+            baseline_name,
+            profile_paths,
+            script_paths,
+            policy_path,
+            &GlobPlan::default(),
+        )
+    }
+
+    /// Glob-aware variant: collapses items into a single `paths:` glob where
+    /// the plan enables it, and emits literal `path:` entries for exceptions.
+    ///
+    /// When no plan is provided (`GlobPlan::default()`), behaviour is identical
+    /// to the legacy per-item emission.
+    pub fn generate_team_yml_with_glob_plan(
+        &self,
+        baseline_name: &str,
+        profile_paths: &[PathBuf],
+        script_paths: &[(PathBuf, Option<PathBuf>)],
+        policy_path: Option<&Path>,
+        glob_plan: &GlobPlan<'_>,
+    ) -> Result<PathBuf> {
         let fleets_dir = self.output_base.join(self.layout.fleets_dir);
         std::fs::create_dir_all(&fleets_dir)?;
 
@@ -226,55 +261,9 @@ software:
             baseline_name.to_uppercase().replace('-', "_")
         );
 
-        // Build custom settings with proper relative paths from fleets/
-        let mut custom_settings = Vec::new();
-        for profile_path in profile_paths {
-            let filename = profile_path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default();
-
-            // Path from fleets/{fleet}.yml to platforms/mscp/{baseline}/profiles/
-            let relative_path = format!(
-                "../{}/mscp/{baseline_name}/profiles/{filename}",
-                self.layout.platforms_dir
-            );
-
-            custom_settings.push(CustomSetting {
-                path: relative_path,
-                labels_include_all: Some(vec![label_name.clone()]),
-                labels_include_any: None,
-                labels_exclude_any: None,
-            });
-        }
-
-        // Build scripts with proper relative paths
-        let mut scripts = Vec::new();
-        for (audit_path, remediate_path) in script_paths {
-            let audit_filename = audit_path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default();
-            scripts.push(Script {
-                path: format!(
-                    "../{}/mscp/{baseline_name}/scripts/{audit_filename}",
-                    self.layout.platforms_dir
-                ),
-            });
-
-            if let Some(remediate) = remediate_path {
-                let remediate_filename = remediate
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default();
-                scripts.push(Script {
-                    path: format!(
-                        "../{}/mscp/{baseline_name}/scripts/{remediate_filename}",
-                        self.layout.platforms_dir
-                    ),
-                });
-            }
-        }
+        let custom_settings =
+            self.emit_profiles_section(baseline_name, &label_name, profile_paths, glob_plan.profiles)?;
+        let scripts = self.emit_scripts_section(baseline_name, script_paths, glob_plan.scripts)?;
 
         // Build fleet settings as yaml_serde::Value
         let team_settings = TeamSettings {
@@ -353,6 +342,161 @@ software:
 
         tracing::info!("Generated fleet YAML: {}", file_path.display());
         Ok(file_path)
+    }
+
+    /// Emit the `configuration_profiles` entries for a team YAML.
+    ///
+    /// - If `section` is `None` or `section.enabled == false`, emits one literal
+    ///   `path:` entry per profile with the baseline label (legacy behaviour).
+    /// - If `section.enabled == true`, emits one `paths:` glob (no labels —
+    ///   Fleet forbids labels on glob entries, which is why the interactive
+    ///   flow requires `drop_labels = true` to reach this state) plus one
+    ///   literal `path:` entry per exception. Exceptions carry the exception's
+    ///   own subfolder + labels.
+    ///
+    /// Invariant: every returned `CustomSetting` has exactly one of
+    /// `path`/`paths` set and labels only on `path:` entries.
+    fn emit_profiles_section(
+        &self,
+        baseline_name: &str,
+        label_name: &str,
+        profile_paths: &[PathBuf],
+        section: Option<&GlobSection>,
+    ) -> Result<Vec<CustomSetting>> {
+        let base_dir = format!(
+            "../{}/mscp/{baseline_name}/profiles",
+            self.layout.platforms_dir
+        );
+
+        let Some(section) = section.filter(|s| s.enabled) else {
+            // Legacy path: one literal per profile, all sharing the baseline label.
+            return profile_paths
+                .iter()
+                .map(|p| {
+                    let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+                    let cs = CustomSetting {
+                        path: Some(format!("{base_dir}/{filename}")),
+                        paths: None,
+                        labels_include_all: Some(vec![label_name.to_string()]),
+                        labels_include_any: None,
+                        labels_exclude_any: None,
+                    };
+                    cs.validate()?;
+                    Ok(cs)
+                })
+                .collect();
+        };
+
+        if !section.drop_labels {
+            anyhow::bail!(
+                "configuration_profiles glob enabled for baseline '{baseline_name}' without \
+                 drop_labels=true — Fleet does not allow labels on `paths:` entries. \
+                 Re-run with --interactive to accept the label-drop, or disable the glob."
+            );
+        }
+
+        let mut out = Vec::with_capacity(section.exceptions.len() + 1);
+
+        // One `paths:` entry for the flat directory.
+        let glob_entry = CustomSetting {
+            path: None,
+            paths: Some(format!("{base_dir}/*.mobileconfig")),
+            labels_include_all: None,
+            labels_include_any: None,
+            labels_exclude_any: None,
+        };
+        glob_entry.validate()?;
+        out.push(glob_entry);
+
+        // One literal `path:` entry per exception.
+        for exc in &section.exceptions {
+            let subfolder = exc
+                .subfolder
+                .as_deref()
+                .map(|s| format!("/{s}"))
+                .unwrap_or_default();
+            let entry = CustomSetting {
+                path: Some(format!("{base_dir}{subfolder}/{}", exc.filename)),
+                paths: None,
+                labels_include_all: non_empty_vec(&exc.labels_include_all),
+                labels_include_any: non_empty_vec(&exc.labels_include_any),
+                labels_exclude_any: non_empty_vec(&exc.labels_exclude_any),
+            };
+            entry.validate()?;
+            out.push(entry);
+        }
+
+        Ok(out)
+    }
+
+    /// Emit the `controls.scripts` entries for a team YAML.
+    ///
+    /// Scripts have no labels in Fleet, so globbing is unconditionally safe —
+    /// no `drop_labels` check required.
+    fn emit_scripts_section(
+        &self,
+        baseline_name: &str,
+        script_paths: &[(PathBuf, Option<PathBuf>)],
+        section: Option<&GlobSection>,
+    ) -> Result<Vec<Script>> {
+        let base_dir = format!(
+            "../{}/mscp/{baseline_name}/scripts",
+            self.layout.platforms_dir
+        );
+
+        let flatten = |pairs: &[(PathBuf, Option<PathBuf>)]| -> Vec<String> {
+            let mut names = Vec::with_capacity(pairs.len() * 2);
+            for (audit, remediate) in pairs {
+                if let Some(n) = audit.file_name().and_then(|s| s.to_str()) {
+                    names.push(n.to_string());
+                }
+                if let Some(r) = remediate.as_ref()
+                    && let Some(n) = r.file_name().and_then(|s| s.to_str())
+                {
+                    names.push(n.to_string());
+                }
+            }
+            names
+        };
+
+        let Some(section) = section.filter(|s| s.enabled) else {
+            return flatten(script_paths)
+                .into_iter()
+                .map(|n| {
+                    let s = Script {
+                        path: Some(format!("{base_dir}/{n}")),
+                        paths: None,
+                    };
+                    s.validate()?;
+                    Ok(s)
+                })
+                .collect();
+        };
+
+        let mut out = Vec::with_capacity(section.exceptions.len() + 1);
+
+        let glob_entry = Script {
+            path: None,
+            paths: Some(format!("{base_dir}/*.sh")),
+        };
+        glob_entry.validate()?;
+        out.push(glob_entry);
+
+        for exc in &section.exceptions {
+            let subfolder = exc
+                .subfolder
+                .as_deref()
+                .map(|s| format!("/{s}"))
+                .unwrap_or_default();
+            let entry = Script {
+                path: Some(format!("{base_dir}{subfolder}/{}", exc.filename)),
+                paths: None,
+            };
+            entry.validate()?;
+            out.push(entry);
+        }
+
+        Ok(out)
     }
 
     /// Add a label path reference to default.yml using line-based insertion.
@@ -487,6 +631,16 @@ software:
             .join(self.layout.fleets_dir)
             .join(self.layout.unassigned_filename)
             .exists()
+    }
+}
+
+/// Wrap a `Vec<String>` in `Some` only if it has elements, so empty label
+/// lists serialize as "field absent" instead of as an empty YAML sequence.
+fn non_empty_vec(v: &[String]) -> Option<Vec<String>> {
+    if v.is_empty() {
+        None
+    } else {
+        Some(v.to_vec())
     }
 }
 
@@ -634,6 +788,144 @@ mod tests {
                 .join(layout.fleets_dir)
                 .join(layout.unassigned_filename)
                 .exists()
+        );
+    }
+
+    #[test]
+    fn emit_profiles_section_glob_off_matches_legacy() {
+        let temp_dir = TempDir::new().unwrap();
+        let generator = FleetGitOpsGenerator::new_default(temp_dir.path());
+        let profiles = vec![
+            PathBuf::from("a.mobileconfig"),
+            PathBuf::from("b.mobileconfig"),
+        ];
+
+        let out = generator
+            .emit_profiles_section("cis_lvl1", "mscp-cis_lvl1", &profiles, None)
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        for cs in &out {
+            assert!(cs.path.is_some());
+            assert!(cs.paths.is_none());
+            assert_eq!(
+                cs.labels_include_all.as_deref(),
+                Some(&["mscp-cis_lvl1".to_string()][..])
+            );
+        }
+    }
+
+    #[test]
+    fn emit_profiles_section_glob_on_emits_single_paths_plus_exceptions() {
+        let temp_dir = TempDir::new().unwrap();
+        let generator = FleetGitOpsGenerator::new_default(temp_dir.path());
+        let profiles = vec![
+            PathBuf::from("com.apple.finder.mobileconfig"),
+            PathBuf::from("com.apple.screensaver.mobileconfig"),
+        ];
+        let section = GlobSection {
+            enabled: true,
+            drop_labels: true,
+            exceptions: vec![crate::config::GlobException {
+                filename: "com.apple.screensaver.mobileconfig".to_string(),
+                subfolder: Some("screensaver".to_string()),
+                labels_include_all: vec!["custom-screensaver".to_string()],
+                labels_include_any: vec![],
+                labels_exclude_any: vec![],
+            }],
+        };
+
+        let out = generator
+            .emit_profiles_section("cis_lvl1", "mscp-cis_lvl1", &profiles, Some(&section))
+            .unwrap();
+        assert_eq!(out.len(), 2);
+
+        // First entry: glob with no labels.
+        assert!(out[0].path.is_none());
+        assert_eq!(
+            out[0].paths.as_deref(),
+            Some(
+                format!(
+                    "../{}/mscp/cis_lvl1/profiles/*.mobileconfig",
+                    FleetLayout::default().platforms_dir
+                )
+                .as_str()
+            )
+        );
+        assert!(out[0].labels_include_all.is_none());
+
+        // Second entry: literal path in subfolder, carries the custom label.
+        assert!(out[1].paths.is_none());
+        assert_eq!(
+            out[1].path.as_deref(),
+            Some(
+                format!(
+                    "../{}/mscp/cis_lvl1/profiles/screensaver/com.apple.screensaver.mobileconfig",
+                    FleetLayout::default().platforms_dir
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            out[1].labels_include_all.as_deref(),
+            Some(&["custom-screensaver".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn emit_profiles_section_refuses_glob_without_drop_labels() {
+        let temp_dir = TempDir::new().unwrap();
+        let generator = FleetGitOpsGenerator::new_default(temp_dir.path());
+        let profiles = vec![
+            PathBuf::from("a.mobileconfig"),
+            PathBuf::from("b.mobileconfig"),
+        ];
+        let section = GlobSection {
+            enabled: true,
+            drop_labels: false,
+            exceptions: vec![],
+        };
+
+        let err = generator
+            .emit_profiles_section("cis_lvl1", "mscp-cis_lvl1", &profiles, Some(&section))
+            .unwrap_err();
+        assert!(err.to_string().contains("drop_labels"));
+    }
+
+    #[test]
+    fn emit_scripts_section_glob_on_emits_single_paths_plus_exceptions() {
+        let temp_dir = TempDir::new().unwrap();
+        let generator = FleetGitOpsGenerator::new_default(temp_dir.path());
+        let scripts = vec![
+            (PathBuf::from("audit.sh"), Some(PathBuf::from("remediate.sh"))),
+            (PathBuf::from("special_audit.sh"), None),
+        ];
+        let section = GlobSection {
+            enabled: true,
+            drop_labels: false,
+            exceptions: vec![crate::config::GlobException {
+                filename: "special_audit.sh".to_string(),
+                subfolder: Some("special".to_string()),
+                labels_include_all: vec![],
+                labels_include_any: vec![],
+                labels_exclude_any: vec![],
+            }],
+        };
+
+        let out = generator
+            .emit_scripts_section("cis_lvl1", &scripts, Some(&section))
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        assert!(out[0].paths.is_some());
+        assert!(out[0].path.is_none());
+        assert_eq!(
+            out[1].path.as_deref(),
+            Some(
+                format!(
+                    "../{}/mscp/cis_lvl1/scripts/special/special_audit.sh",
+                    FleetLayout::default().platforms_dir
+                )
+                .as_str()
+            )
         );
     }
 

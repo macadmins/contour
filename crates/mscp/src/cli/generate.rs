@@ -1,5 +1,5 @@
 use crate::cli::process_baseline;
-use crate::config::OutputStructure;
+use crate::config::{GitopsGlobConfig, OutputStructure};
 use crate::managers::BaselineIndex;
 use crate::output::{CommandResult, OutputMode, print_bar_chart};
 use crate::transformers::{
@@ -36,6 +36,10 @@ pub enum ContainerRuntime {
 pub const DEFAULT_MSCP_CONTAINER_IMAGE: &str = "ghcr.io/brodjieski/mscp_2.0:latest";
 
 /// Generate command - wrapper mode (calls mSCP then processes)
+#[allow(
+    clippy::too_many_arguments,
+    reason = "legacy signature shaped by CLI flags; refactoring is out of scope for the glob feature"
+)]
 pub fn generate_baseline(
     mscp_repo_path: PathBuf,
     baseline_name: String,
@@ -57,6 +61,7 @@ pub fn generate_baseline(
     exclude_categories: Option<Vec<String>>,
     fragment: bool,
     output_structure: OutputStructure,
+    glob_config: Option<GitopsGlobConfig>,
 ) -> Result<()> {
     tracing::info!(
         "Starting generate workflow for baseline '{}'",
@@ -193,6 +198,7 @@ pub fn generate_baseline(
             exclude_categories,
             fragment,
             output_structure,
+            glob_config,
         )?;
 
         // Count what was generated (recursive walk — files are in nested subdirs)
@@ -1072,6 +1078,7 @@ pub fn generate_all_baselines(
                     None, // exclude_categories - not supported in generate-all mode
                     fragment,
                     output_structure.clone(),
+                    None, // glob_config - not yet plumbed per-baseline in generate-all
                 );
 
                 (i, baseline_name.clone(), result)
@@ -1124,6 +1131,7 @@ pub fn generate_all_baselines(
                 None, // exclude_categories - not supported in generate-all mode
                 fragment,
                 output_structure.clone(),
+                None, // glob_config - not yet plumbed per-baseline in generate-all
             ) {
                 Ok(()) => {
                     all_result.processed += 1;

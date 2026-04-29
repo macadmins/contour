@@ -9,6 +9,7 @@ pub mod deduplicate;
 pub mod diff;
 pub mod extract_scripts;
 pub mod generate;
+pub mod glob_interactive;
 pub mod info;
 pub mod init;
 pub mod odv;
@@ -421,6 +422,17 @@ pub enum Commands {
         /// [FLEET] Generate a Fleet fragment directory instead of full GitOps structure
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         fragment: bool,
+
+        /// [FLEET] Run the interactive GitOps glob builder before generation.
+        ///
+        /// Requires `--config <mscp.toml>`. For each baseline, asks which
+        /// profiles / scripts to collapse into a single `paths:` glob and
+        /// which to keep as literal `path:` exceptions (with optional
+        /// subfolder placement + Fleet labels). Choices are persisted back
+        /// to `mscp.toml` so subsequent non-interactive runs reproduce the
+        /// same YAML.
+        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        interactive: bool,
     },
 
     /// Generate multiple baselines

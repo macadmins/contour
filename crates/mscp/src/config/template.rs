@@ -2,8 +2,9 @@
 
 use crate::cli::init::InitOptions;
 use crate::config::{
-    BaselineConfig, Config, FleetSettings, JamfSettings, LabelConfig, MunkiSettings,
-    OrganizationSettings, OutputConfig, OutputStructure, Settings, ValidationConfig,
+    BaselineConfig, Config, FleetSettings, GitopsGlobConfig, JamfSettings, LabelConfig,
+    MunkiSettings, OrganizationSettings, OutputConfig, OutputStructure, Settings,
+    ValidationConfig,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -78,6 +79,7 @@ fn create_template_config(options: &InitOptions) -> Config {
                 },
                 excluded_rules: vec![],
                 metadata: HashMap::new(),
+                gitops_glob: GitopsGlobConfig::default(),
             })
             .collect()
     } else {
@@ -102,6 +104,7 @@ fn create_template_config(options: &InitOptions) -> Config {
                     );
                     map
                 },
+                gitops_glob: GitopsGlobConfig::default(),
             },
             BaselineConfig {
                 name: "800-53r5_moderate".to_string(),
@@ -115,6 +118,7 @@ fn create_template_config(options: &InitOptions) -> Config {
                 },
                 excluded_rules: vec!["os_sshd_permit_root_login".to_string()],
                 metadata: HashMap::new(),
+                gitops_glob: GitopsGlobConfig::default(),
             },
         ]
     };

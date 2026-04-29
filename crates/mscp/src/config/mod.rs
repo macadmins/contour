@@ -256,6 +256,16 @@ pub struct BaselineConfig {
     /// Custom metadata
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+
+    /// Fleet GitOps glob configuration.
+    ///
+    /// Captures per-section decisions made via `mscp process --interactive`:
+    /// which sections collapse into a single `paths:` glob and which individual
+    /// items are kept as literal `path:` exceptions (optionally moved into a
+    /// subfolder so the flat glob doesn't match them). Defaults to "no glob"
+    /// for every section, preserving legacy per-item `path:` emission.
+    #[serde(default)]
+    pub gitops_glob: GitopsGlobConfig,
 }
 
 fn default_true() -> bool {
@@ -276,6 +286,68 @@ pub struct LabelConfig {
     /// Labels that must not be present
     #[serde(default)]
     pub exclude_any: Vec<String>,
+}
+
+/// Per-baseline Fleet GitOps glob configuration.
+///
+/// Each section (profiles, scripts, labels, policies, reports) is independently
+/// globbable. Sections missing from the TOML default to "no glob" and fall
+/// through to the legacy per-item `path:` emission.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitopsGlobConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profiles: Option<GlobSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scripts: Option<GlobSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<GlobSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policies: Option<GlobSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reports: Option<GlobSection>,
+}
+
+/// Per-section glob settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GlobSection {
+    /// When true, emit a single `paths:` entry covering everything in the
+    /// section except items listed in `exceptions`.
+    pub enabled: bool,
+
+    /// Required when globbing profiles: baseline-level `mscp-{baseline}`
+    /// labels cannot ride on a `paths:` entry, so the interactive flow asks
+    /// the user to confirm dropping them for the globbed subset.
+    #[serde(default)]
+    pub drop_labels: bool,
+
+    /// Items excluded from the glob. Each becomes a literal `path:` entry,
+    /// typically placed in a subfolder so the flat glob pattern doesn't
+    /// match it on the filesystem.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exceptions: Vec<GlobException>,
+}
+
+/// One literal-path exception inside a globbed section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobException {
+    /// Filename (basename, no directory component) the exception applies to.
+    /// Matched against discovered items by exact string equality.
+    pub filename: String,
+
+    /// Subfolder (relative to the section's root directory) to move this
+    /// item into. `None` leaves it at the flat location — use only when the
+    /// glob pattern would not match it for some other reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subfolder: Option<String>,
+
+    /// Fleet labels for this exception entry (profiles only; ignored for
+    /// scripts since Fleet does not support script labels).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels_include_all: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels_include_any: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels_exclude_any: Vec<String>,
 }
 
 /// Output configuration
