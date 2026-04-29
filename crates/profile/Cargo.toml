@@ -1,6 +1,6 @@
 [package]
 name = "profile"
-version = "0.1.9"
+version = "0.2.0"
 description = "Apple configuration profile toolkit for MDM deployments"
 edition.workspace = true
 authors.workspace = true
