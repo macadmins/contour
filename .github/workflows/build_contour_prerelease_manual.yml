@@ -1,0 +1,88 @@
+name: Build Contour pre-release (Manual)
+
+env:
+  NOTARIZATION_APPLE_ID: opensource@macadmins.io
+  NOTARIZATION_TEAM_ID: T4SK8ZXCXG
+  NOTARIZATION_PASSWORD: ${{ secrets.NOTARY_APP_PASSWORD_MAOS }}
+  CONTOUR_MDM_SCHEMA_URL: ${{ secrets.CONTOUR_MDM_SCHEMA_URL }}
+  CONTOUR_MSCP_SCHEMA_URL: ${{ secrets.CONTOUR_MSCP_SCHEMA_URL }}
+  CONTOUR_OSQUERY_SCHEMA_URL: ${{ secrets.CONTOUR_OSQUERY_SCHEMA_URL }}
+
+on: [workflow_dispatch]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+
+    steps:
+    - name: Checkout contour repo
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Setup Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        target: aarch64-apple-darwin
+
+    - name: Install Apple Xcode certificates
+      uses: apple-actions/import-codesign-certs@v6
+      with:
+        keychain-password: ${{ github.run_id }}
+        p12-file-base64: ${{ secrets.APP_CERTIFICATES_P12_MAOS }}
+        p12-password: ${{ secrets.APP_CERTIFICATES_P12_PASSWORD_MAOS }}
+
+    - name: Install Apple Installer certificates
+      uses: apple-actions/import-codesign-certs@v6
+      with:
+        create-keychain: false # do not create a new keychain for this value
+        keychain-password: ${{ github.run_id }}
+        p12-file-base64: ${{ secrets.PKG_CERTIFICATES_P12_MAOS }}
+        p12-password: ${{ secrets.PKG_CERTIFICATES_P12_PASSWORD_MAOS }}
+
+    - name: Set SOURCE_DATE_EPOCH
+      run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> $GITHUB_ENV
+
+    - name: Run build, sign, notarize
+      run: ./scripts/build-release.sh
+
+    - name: Get build version
+      run: |
+        VERSION=$(grep '^version = ' crates/contour/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+        echo "CONTOUR_VERSION=${VERSION}" >> $GITHUB_ENV
+
+    - name: Generate changelog
+      id: changelog
+      uses: metcalfc/changelog-generator@v4
+      with:
+        myToken: ${{ secrets.GITHUB_TOKEN }}
+        reverse: 'true'
+
+    - name: Create draft pre-release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Contour ${{ env.CONTOUR_VERSION }}
+        tag_name: v${{ env.CONTOUR_VERSION }}
+        draft: true
+        prerelease: true
+        token: ${{ secrets.GITHUB_TOKEN }}
+        body: |
+            # Notes
+            This is a version of Contour created by GitHub Actions.
+            The contour binary has been signed and notarized. The package has been signed, notarized and stapled.
+
+            # Changelog
+            ${{ steps.changelog.outputs.changelog }}
+        files: |
+          ${{ github.workspace }}/dist/*.pkg
+          ${{ github.workspace }}/dist/*.zip
+          ${{ github.workspace }}/dist/checksums.txt
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: contour-macos-arm64
+        path: dist/

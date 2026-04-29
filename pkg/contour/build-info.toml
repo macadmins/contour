@@ -1,7 +1,0 @@
-name = "contour-0.1.9.pkg"
-identifier = "io.declarative.contour.pkg"
-version = "0.1.9"
-install_location = "/"
-
-[signing_info]
-identity = "Developer ID Installer: Declarative IT GmbH (D6G4X4D7C9)"

@@ -7,8 +7,7 @@ set -euo pipefail
 # Prerequisites:
 #   - Developer ID Application + Installer certificates in keychain
 #   - 1Password CLI (op) for --op mode
-#   - munkipkg installed (unless --skip-pkg)
-#   - Xcode command line tools
+#   - Xcode command line tools (codesign, pkgbuild, xcrun)
 #
 # Usage:
 #   ./scripts/build-release.sh --op
@@ -19,8 +18,8 @@ SCRIPT_DIR="${0:A:h}"
 PROJECT_ROOT="${SCRIPT_DIR:h}"
 DIST_DIR="$PROJECT_ROOT/dist"
 ENV_FILE="$SCRIPT_DIR/.env"
-MUNKIPKG="${MUNKIPKG:-$(command -v munkipkg 2>/dev/null || echo "/usr/local/bin/munkipkg")}"
 BINARY="contour"
+PKG_IDENTIFIER="io.declarative.contour.pkg"
 
 # 1Password default references
 OP_APPLE_ID="${OP_APPLE_ID:-op://dev-credentials/NOTARIZATION_APPLE_ID/credential}"
@@ -202,7 +201,20 @@ load_credentials() {
         exit 1
     fi
 
-    log_info "Signing: $CODESIGN_IDENTITY"
+    if [[ -z "${INSTALLER_IDENTITY:-}" ]]; then
+        INSTALLER_IDENTITY=$(select_signing_identity "Installer") || true
+    fi
+
+    if [[ "$SKIP_PKG" != true && -z "${INSTALLER_IDENTITY:-}" ]]; then
+        log_error "No Developer ID Installer certificate found"
+        security find-identity -v
+        exit 1
+    fi
+
+    log_info "Signing (app):  $CODESIGN_IDENTITY"
+    if [[ -n "${INSTALLER_IDENTITY:-}" ]]; then
+        log_info "Signing (pkg):  $INSTALLER_IDENTITY"
+    fi
 }
 
 check_prerequisites() {
@@ -210,15 +222,7 @@ check_prerequisites() {
 
     command -v codesign >/dev/null 2>&1 || { log_error "codesign not found"; exit 1; }
     command -v xcrun    >/dev/null 2>&1 || { log_error "xcrun not found"; exit 1; }
-
-    if [[ "$SKIP_PKG" != true ]]; then
-        if [[ ! -x "$MUNKIPKG" ]]; then
-            log_error "munkipkg not found at $MUNKIPKG"
-            log_info "Install munkipkg or use --skip-pkg to skip package creation"
-            exit 1
-        fi
-        log_info "munkipkg found at $MUNKIPKG"
-    fi
+    command -v pkgbuild >/dev/null 2>&1 || { log_error "pkgbuild not found"; exit 1; }
 
     log_info "Prerequisites OK"
 }
@@ -299,34 +303,38 @@ notarize_zip() {
 }
 
 build_pkg() {
-    log_step "Building PKG installer with munkipkg"
+    log_step "Building PKG installer with pkgbuild"
 
     cd "$PROJECT_ROOT"
 
-    # Clean stale builds
-    rm -rf "pkg/$BINARY/build"
+    # Stage payload tree in a fresh temp dir so the source tree stays clean.
+    local pkg_stage
+    pkg_stage=$(mktemp -d)
+    trap 'rm -rf "$pkg_stage"' EXIT
 
-    # Ensure payload directory with signed binary
-    mkdir -p "pkg/$BINARY/payload/usr/local/bin"
-    cp "$DIST_DIR/$BINARY" "pkg/$BINARY/payload/usr/local/bin/"
-    chmod 755 "pkg/$BINARY/payload/usr/local/bin/$BINARY"
+    mkdir -p "$pkg_stage/payload/usr/local/bin"
+    cp "$DIST_DIR/$BINARY" "$pkg_stage/payload/usr/local/bin/"
+    chmod 755 "$pkg_stage/payload/usr/local/bin/$BINARY"
 
     # Verify payload binary is signed before packaging
     log_info "Verifying payload binary..."
-    codesign --verify --strict "pkg/$BINARY/payload/usr/local/bin/$BINARY" \
+    codesign --verify --strict "$pkg_stage/payload/usr/local/bin/$BINARY" \
         || { log_error "Payload binary is not properly signed"; exit 1; }
 
-    # Update version in build-info.toml
-    local version=$(get_version)
-    sed -i '' "s/^name = \".*\"/name = \"${BINARY}-${version}.pkg\"/" "pkg/$BINARY/build-info.toml"
-    sed -i '' "s/^version = \".*\"/version = \"$version\"/" "pkg/$BINARY/build-info.toml"
+    local version
+    version=$(get_version)
+    local pkg_path="$DIST_DIR/${BINARY}-${version}.pkg"
 
-    # Build pkg (munkipkg signs with Developer ID Installer)
-    $MUNKIPKG build --skip-notarization "pkg/$BINARY"
+    pkgbuild \
+        --root "$pkg_stage/payload" \
+        --identifier "$PKG_IDENTIFIER" \
+        --version "$version" \
+        --install-location / \
+        --sign "$INSTALLER_IDENTITY" \
+        --timestamp \
+        "$pkg_path"
 
-    # Copy resulting pkg to dist
-    cp "pkg/$BINARY/build/"*.pkg "$DIST_DIR/"
-    log_info "PKG built"
+    log_info "PKG built: $(basename "$pkg_path")"
 }
 
 notarize_pkg() {

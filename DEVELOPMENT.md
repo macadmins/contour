@@ -25,12 +25,12 @@ contour/
 │   ├── support/            # Root3 Support App profiles
 │   ├── santa/              # Santa allowlist/blocklist toolkit (CEL, FAA, rings)
 │   └── mscp/               # mSCP baseline transformer (Fleet, Jamf, Munki)
-├── pkg/contour/            # munkipkg project for signed .pkg installer
 ├── scripts/
-│   ├── build-release.sh    # Build, sign, notarize, pkg (--op for 1Password)
+│   ├── build-release.sh    # Build, sign (codesign + pkgbuild), notarize (--op for 1Password)
 └── .github/workflows/
     ├── ci.yml              # PR checks: fmt, clippy, test, audit
-    └── release.yml         # Tag-triggered builds (v* tags)
+    ├── release.yml         # Tag-triggered linux build (v* tags)
+    └── build_contour_{pre,}release_manual.yml  # Manual macOS draft releases (workflow_dispatch)
 ```
 
 ## Building
