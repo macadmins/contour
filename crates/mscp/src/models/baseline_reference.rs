@@ -158,7 +158,7 @@ impl BaselineReference {
 #   3. Fleet does not support including TOML manifests
 #
 # For more information:
-#   https://github.com/headmin/contour
+#   https://github.com/macadmins/contour
 
 ",
             self.baseline.name, self.baseline.name

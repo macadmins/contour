@@ -19,7 +19,7 @@ PROJECT_ROOT="${SCRIPT_DIR:h}"
 DIST_DIR="$PROJECT_ROOT/dist"
 ENV_FILE="$SCRIPT_DIR/.env"
 BINARY="contour"
-PKG_IDENTIFIER="io.declarative.contour.pkg"
+PKG_IDENTIFIER="io.macadmins.contour.pkg"
 
 # 1Password default references
 OP_APPLE_ID="${OP_APPLE_ID:-op://dev-credentials/NOTARIZATION_APPLE_ID/credential}"

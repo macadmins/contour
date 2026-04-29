@@ -99,7 +99,7 @@ contour help-ai --sop fleet-migrate # GitOps repo migration SOP
 
 ## Install
 
-Download the latest `.pkg` from [Releases](https://github.com/headmin/contour/releases):
+Download the latest `.pkg` from [Releases](https://github.com/macadmins/contour/releases):
 
 ```bash
 contour --help          # Overview of all tools

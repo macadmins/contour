@@ -1027,7 +1027,7 @@ gh variable set CONTOUR_NAME --repo yourorg/fleet-gitops --body 'Your Company In
 ```yaml
 - name: Install contour
   run: |
-    curl -fsSL -o contour.pkg https://github.com/headmin/contour/releases/latest/download/contour-*.pkg
+    curl -fsSL -o contour.pkg https://github.com/macadmins/contour/releases/latest/download/contour-*.pkg
     sudo installer -pkg contour.pkg -target /
 ```
 

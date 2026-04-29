@@ -157,7 +157,7 @@ fn gather_project_info(config_path: &Path, config_dir: &Path) -> Result<ProjectI
     let cli_info = MscpCliInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         build_timestamp: env!("BUILD_TIMESTAMP").to_string(),
-        copyright: "Created by Declarative IT GmbH".to_string(),
+        copyright: "Created by Mac Admins Open Source".to_string(),
     };
 
     // Try to load config

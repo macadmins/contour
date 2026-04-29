@@ -5,11 +5,11 @@ exclude = ["crates/fleet"]
 default-members = ["crates/contour"]
 
 [workspace.package]
-authors = ["Declarative IT GmbH"]
+authors = ["Mac Admins Open Source"]
 license = "Apache-2.0"
 edition = "2024"
 rust-version = "1.85"
-repository = "https://github.com/declarativeit/contour"
+repository = "https://github.com/macadmins/contour"
 readme = "README.md"
 keywords = ["macos", "mdm", "mobileconfig", "configuration"]
 categories = ["command-line-utilities", "config"]

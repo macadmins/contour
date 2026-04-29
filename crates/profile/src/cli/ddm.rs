@@ -879,7 +879,7 @@ mod tests {
         errors
     }
 
-    /// Regression test for https://github.com/headmin/contour/pull/5 follow-up:
+    /// Regression test for https://github.com/macadmins/contour/pull/5 follow-up:
     /// `ddm generate --full` must produce a doc that passes `ddm validate`.
     /// Prior to this test, `CustomRegex` was emitted as `{}` and its required
     /// nested `Regex` child was emitted at the top level, yielding a doc that

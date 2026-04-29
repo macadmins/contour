@@ -35,7 +35,7 @@ const ABOUT: &str = "Profile - Apple configuration profile toolkit (Community Ed
 #[derive(Debug, Parser)]
 #[command(name = "profile")]
 #[command(author = env!("CARGO_PKG_AUTHORS"))]
-#[command(version = concat!(env!("CARGO_PKG_VERSION"), "+", env!("BUILD_TIMESTAMP"), "\nCopyright (c) 2025 Declarative IT GmbH\nLicense: Apache-2.0"))]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), "+", env!("BUILD_TIMESTAMP"), "\nCopyright (c) 2025 Mac Admins Open Source\nLicense: Apache-2.0"))]
 #[command(about = ABOUT, long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
