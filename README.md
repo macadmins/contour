@@ -8,24 +8,29 @@
 
 > **Status: Preview** — almost feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-One signed binary that makes modern device management simpler: it normalizes configs consistently and surfaces errors clearly so outcomes diff cleanly. Whether you, your mdm vendor, or an agent wrote them, Contour supports profiles, DDM, Santa, PPPC, mSCP, osquery, BTM, and notification payloads. Prepare artifacts for MDM migration and GitOps workflows from the Terminal, in CI, or via an AI agent. Two modes, same core — every artifact is validated against the embedded Apple schema
+One signed binary that makes common device management tasks simpler. It normalizes device management configs consistently and surfaces errors clearly — so output diffs cleanly every time.
+
+Contour works with profiles and DDM config payloads — whether you, your MDM vendor, or an AI agent wrote them.
+
+Use it to prepare and process configuration files for migration, GitOps workflows, or day-to-day config work. Run it from the terminal, in CI, or let an AI agent call it directly. Two modes, same core — every artifact is validated against the embedded Apple schema.
+
 
 ## Why
 
 **Device config deserves the same rigor as the code you ship to production.**
 
-Profiles, DDM declarations, Santa rules, osquery policies — it's all code, but the tooling around it has lived in GUIs and copy-paste. Drift becomes normal. Typos ship. And AI agents are now writing the same config with no guardrails.
+Profiles, DDM declarations, Santa rules, osquery policies — some of this config already runs in your device management solution. But the tooling around it has lived in GUIs and copy-paste for years. Drift happens over time. Typos slip through. And AI agents are now generating config without validation. Contour adds a validation step you can apply when useful.
 
-- **How.** The Apple schema for MDM/profiles, declarative management, and osquery is embedded. Processors and the generator validate against it before writing. Identifiers and UUIDs are handled deterministically.
-- **What.** One signed binary. Tools that diff cleanly, normalize consistently, and fail loud when something's wrong — whether you or an agent wrote it.
+- **How.** The Apple schema for MDM/profiles, declarative management, and osquery is embedded. Processors and the generator validate against it before writing normalized config out. Identifiers and UUIDs are handled deterministically.
+- **What.** One signed binary. Output is normalized to diff cleanly, work consistently, and fail loud when something's wrong — whether you or an agent wrote it.
 
 ## How it's used
 
-Two modes, same core — every artifact is validated against the embedded Apple schema before it lands.
+Two modes — CLI on macOS or Linux. Same core: every artifact is processed with built-in tools and validated against the embedded Apple schema before it lands.
 
 ### As a CLI toolkit
 
-Every tool can be used in CI, GitHooks, Scripts or the Terminal.
+Each tool can be used in CI, GitHooks, Scripts or the Terminal.
 
 | Tool | Description |
 |------|-------------|
