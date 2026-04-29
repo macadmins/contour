@@ -308,9 +308,9 @@ build_pkg() {
     cd "$PROJECT_ROOT"
 
     # Stage payload tree in a fresh temp dir so the source tree stays clean.
+    # No EXIT trap — `pkg_stage` is function-local, and the OS cleans /var/folders.
     local pkg_stage
     pkg_stage=$(mktemp -d)
-    trap 'rm -rf "$pkg_stage"' EXIT
 
     mkdir -p "$pkg_stage/payload/usr/local/bin"
     cp "$DIST_DIR/$BINARY" "$pkg_stage/payload/usr/local/bin/"
@@ -334,6 +334,7 @@ build_pkg() {
         --timestamp \
         "$pkg_path"
 
+    rm -rf "$pkg_stage"
     log_info "PKG built: $(basename "$pkg_path")"
 }
 
