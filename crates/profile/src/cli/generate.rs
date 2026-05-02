@@ -315,11 +315,22 @@ pub fn handle_generate(
         plist::to_writer_xml(&mut buf, &Value::Dictionary(payload_content))?;
         (buf, "plist")
     } else {
-        // Full mobileconfig envelope
+        // Full mobileconfig envelope.
+        // Resolve org domain: CLI --org → profile.toml → .contour/config.toml → error.
+        // We refuse to default to "com.example" because the resulting PayloadIdentifier
+        // is not deployable and silently produces invalid output (caught only at validation).
         let domain = org
             .map(ToString::to_string)
             .or_else(|| config.map(|c| c.organization.domain.clone()))
-            .unwrap_or_else(|| "com.example".to_string());
+            .or_else(|| {
+                contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--org is required (e.g., --org com.yourorg)\n\
+                     Alternatively, set organization.domain in profile.toml or .contour/config.toml"
+                )
+            })?;
 
         let short = manifest
             .payload_type
@@ -426,11 +437,21 @@ pub fn handle_generate_recipe(
     // Resolve op://, env:, file: references in recipe field values
     resolve_recipe_secrets(&mut r.profiles)?;
 
-    // Resolve org domain
+    // Resolve org domain: CLI --org → profile.toml → .contour/config.toml → error.
+    // We refuse to default to "com.example" because the resulting PayloadIdentifier
+    // is not deployable and silently produces invalid output.
     let domain = org
         .map(ToString::to_string)
         .or_else(|| config.map(|c| c.organization.domain.clone()))
-        .unwrap_or_else(|| "com.example".to_string());
+        .or_else(|| {
+            contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--org is required (e.g., --org com.yourorg)\n\
+                 Alternatively, set organization.domain in profile.toml or .contour/config.toml"
+            )
+        })?;
 
     // Output directory
     let out_dir = output_dir.unwrap_or(&r.recipe.name);
@@ -1419,5 +1440,31 @@ mod tests {
         let vars = vec!["DOMAIN=acme.okta.com".to_string()];
         let map = parse_vars(&vars).unwrap();
         assert_eq!(map.get("DOMAIN").unwrap(), "acme.okta.com");
+    }
+
+    #[test]
+    fn test_handle_generate_requires_org() {
+        // Reject silent `com.example` defaulting — generated profiles without --org
+        // produce non-deployable PayloadIdentifiers and waste downstream review cycles.
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.mobileconfig");
+
+        let result = handle_generate(
+            "com.apple.mobiledevice.passwordpolicy",
+            Some(out.to_str().unwrap()),
+            None, // no --org
+            true,
+            None,
+            None, // no profile.toml
+            OutputMode::Json,
+            "mobileconfig",
+        );
+
+        assert!(result.is_err(), "expected error when --org is missing");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("--org is required"),
+            "error should mention --org requirement, got: {err}"
+        );
     }
 }

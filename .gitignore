@@ -39,6 +39,8 @@ Cargo.lock
 # Package build artifacts
 pkg/*/payload/
 pkg/*/build/
+# Local munkipkg manifests (main release uses pkgbuild; build-info.toml is for local munkipkg dev only)
+pkg/*/build-info.toml
 
 # Generated output (root only, not crate src/output/ modules)
 /output/
