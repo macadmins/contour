@@ -715,17 +715,26 @@ pub fn handle_ddm_generate(
         }
     }
 
-    // Build identifier
+    // Build identifier.
+    // Resolve domain: profile.toml → .contour/config.toml → error.
+    // Refuse silent "com.example" defaulting — DDM declarations are deployable
+    // and an example-domain identifier collides across orgs.
     let short_name = manifest
         .payload_type
         .split('.')
         .next_back()
         .unwrap_or("declaration");
-    let identifier = if let Some(cfg) = config {
-        format!("{}.{}", cfg.organization.domain, short_name)
+    let domain = if let Some(cfg) = config {
+        cfg.organization.domain.clone()
+    } else if let Some(c) = contour_core::config::ContourConfig::load_nearest() {
+        c.organization.domain
     } else {
-        format!("com.example.{short_name}")
+        anyhow::bail!(
+            "organization domain is required for DDM generation\n\
+             Set organization.domain in profile.toml or .contour/config.toml"
+        );
     };
+    let identifier = format!("{domain}.{short_name}");
 
     let decl = Declaration {
         declaration_type: manifest.payload_type.clone(),

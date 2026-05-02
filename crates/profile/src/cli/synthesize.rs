@@ -187,7 +187,21 @@ pub fn handle_synthesize(
         return Ok(());
     }
 
-    let effective_org = org.unwrap_or("com.example");
+    // Resolve org: CLI --org → .contour/config.toml → error.
+    // Refuse silent "com.example" defaulting — synthesize emits deployable
+    // mobileconfigs and an example-domain identifier is non-deployable.
+    let contour_org;
+    let effective_org = if let Some(o) = org {
+        o
+    } else if let Some(cfg) = contour_core::config::ContourConfig::load_nearest() {
+        contour_org = cfg.organization.domain;
+        contour_org.as_str()
+    } else {
+        anyhow::bail!(
+            "--org is required (e.g., --org com.yourorg)\n\
+             Alternatively, set organization.domain in .contour/config.toml"
+        );
+    };
 
     // Phase 4: Validate + Build
     let mut results = Vec::new();

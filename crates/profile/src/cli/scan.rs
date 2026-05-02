@@ -62,14 +62,26 @@ pub fn handle_scan(
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
 ) -> Result<()> {
-    // Determine simulation domain: CLI → profile.toml → .contour/config.toml → "com.example"
-    let sim_domain = domain
+    // Resolve simulation domain: CLI → profile.toml → .contour/config.toml.
+    // Only required when --simulate is set (otherwise sim_domain is unused;
+    // see line ~150 where the simulation block is gated on `simulate`).
+    let resolved_domain = domain
         .map(std::string::ToString::to_string)
         .or_else(|| config.map(|c| c.organization.domain.clone()))
         .or_else(|| {
             contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
-        })
-        .unwrap_or_else(|| "com.example".to_string());
+        });
+    let sim_domain = if simulate {
+        resolved_domain.ok_or_else(|| {
+            anyhow::anyhow!(
+                "--org is required with --simulate (e.g., --org com.yourorg)\n\
+                 Alternatively, set organization.domain in profile.toml or .contour/config.toml"
+            )
+        })?
+    } else {
+        // Read-only scan — domain is unused; placeholder is fine.
+        resolved_domain.unwrap_or_default()
+    };
 
     // Check if we should use batch processing
     if should_batch_process_multi(paths) {
