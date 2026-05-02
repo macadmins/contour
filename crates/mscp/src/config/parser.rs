@@ -31,8 +31,7 @@ pub fn save_config<P: AsRef<Path>>(config: &Config, path: P) -> Result<()> {
     let path = path.as_ref();
     let content = toml::to_string_pretty(config)
         .context(format!("Failed to serialize config for {}", path.display()))?;
-    fs::write(path, content)
-        .context(format!("Failed to write config to {}", path.display()))?;
+    fs::write(path, content).context(format!("Failed to write config to {}", path.display()))?;
     tracing::info!("Saved configuration to: {}", path.display());
     Ok(())
 }

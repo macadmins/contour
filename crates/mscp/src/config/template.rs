@@ -3,8 +3,7 @@
 use crate::cli::init::InitOptions;
 use crate::config::{
     BaselineConfig, Config, FleetSettings, GitopsGlobConfig, JamfSettings, LabelConfig,
-    MunkiSettings, OrganizationSettings, OutputConfig, OutputStructure, Settings,
-    ValidationConfig,
+    MunkiSettings, OrganizationSettings, OutputConfig, OutputStructure, Settings, ValidationConfig,
 };
 use anyhow::Result;
 use std::collections::HashMap;

@@ -188,6 +188,27 @@ pub fn handle_normalize_pasteboard(
             "{}",
             format!("✓ Profile normalized successfully: {output_path}").green()
         );
+    } else if output_mode == OutputMode::Json {
+        // Mirror handle_normalize_single's JSON contract for the pasteboard
+        // input path. `input` is a sentinel since pasteboard has no source path.
+        let json_result = serde_json::json!({
+            "operation": "normalize",
+            "success": true,
+            "total": 1,
+            "succeeded": 1,
+            "failed": 0,
+            "skipped": 0,
+            "with_warnings": 0,
+            "failure_categories": [],
+            "warnings": [],
+            "files": [{
+                "input": "<pasteboard>",
+                "output": output_path,
+                "identifier": profile.payload_identifier,
+                "uuid": profile.payload_uuid,
+            }],
+        });
+        println!("{}", serde_json::to_string_pretty(&json_result)?);
     }
 
     Ok(())
@@ -620,6 +641,30 @@ fn handle_normalize_single(
             "{}",
             format!("✓ Profile normalized successfully: {output_path}").green()
         );
+    } else if output_mode == OutputMode::Json {
+        // Emit a BatchResult-shaped JSON object so single-file mode produces the
+        // same agent-parseable contract as batch mode (Phase B1 of the SOP feature).
+        // The `files` array carries per-file metadata (input/output paths,
+        // normalized identifier + uuid) — agents can read these without re-parsing
+        // the .mobileconfig.
+        let json_result = serde_json::json!({
+            "operation": "normalize",
+            "success": true,
+            "total": 1,
+            "succeeded": 1,
+            "failed": 0,
+            "skipped": 0,
+            "with_warnings": 0,
+            "failure_categories": [],
+            "warnings": [],
+            "files": [{
+                "input": file,
+                "output": output_path,
+                "identifier": profile.payload_identifier,
+                "uuid": profile.payload_uuid,
+            }],
+        });
+        println!("{}", serde_json::to_string_pretty(&json_result)?);
     }
 
     Ok(())

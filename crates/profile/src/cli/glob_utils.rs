@@ -413,6 +413,58 @@ struct FailureCategory<'a> {
     files: Vec<&'a (PathBuf, String)>,
 }
 
+/// Map an individual error message to a stable typed error code.
+///
+/// Used by [`output_batch_json`] to emit `error_code` alongside the prose
+/// `error` field, so agents (and the pseudocode SOPs) can SWITCH on a stable
+/// enum instead of substring-matching humans-readable text. See the SOP
+/// pseudocode pilot's `normalize_profile` and `import_jamf_backup` procedures
+/// for how agents consume these codes.
+///
+/// **Stability contract:** never rename existing variants. If a new failure
+/// kind appears, prefer adding a new variant over reclassifying an existing
+/// error to a different code — agents may already be branching on the old code.
+fn error_code_for(error: &str) -> &'static str {
+    // Identifier syntax issues — checked first because "contains spaces"
+    // can appear inside larger validation messages.
+    if error.contains("contains spaces") || error.contains("invalid identifier") {
+        return "INVALID_IDENTIFIER";
+    }
+    // Plist/file-format problems.
+    if error.contains("ExpectedEndOfEventStream")
+        || error.contains("InvalidXmlSyntax")
+        || error.contains("after placeholder substitution")
+        || error.contains("InvalidDataString")
+        || error.contains("not a dictionary")
+        || error.contains("expected struct ConfigurationProfile")
+        || error.contains("Serde(")
+        || error.contains("Failed to parse plist")
+        || error.contains("UnexpectedEof")
+    {
+        return "INVALID_FORMAT";
+    }
+    // Missing required structural fields.
+    if error.contains("Profile structure errors") || error.contains("PayloadType") {
+        return "MISSING_PAYLOAD_TYPE";
+    }
+    // Schema/policy validation failures.
+    if error.contains("Validation failed") || error.contains("schema validation") {
+        return "SCHEMA_VIOLATION";
+    }
+    // I/O — file not found, permission denied, etc.
+    if error.contains("No such file")
+        || error.contains("Permission denied")
+        || error.contains("Failed to read")
+    {
+        return "IO_ERROR";
+    }
+    // Org-domain shape problems (e.g. malformed --org).
+    if error.contains("--org is required") || error.contains("organization domain is required") {
+        return "INVALID_ORG";
+    }
+    "UNKNOWN"
+}
+
 /// Classify failures into actionable categories.
 fn categorize_failures(failures: &[(PathBuf, String)]) -> Vec<FailureCategory<'_>> {
     let mut plist_invalid = Vec::new();
@@ -489,6 +541,7 @@ pub fn output_batch_json(result: &BatchResult, operation_name: &str) -> Result<(
                     serde_json::json!({
                         "file": p.to_string_lossy(),
                         "error": e,
+                        "error_code": error_code_for(e),
                     })
                 }).collect::<Vec<_>>(),
             })
@@ -928,5 +981,54 @@ mod tests {
         result.add_skipped();
         assert_eq!(result.total, 3);
         assert_eq!(result.skipped, 1);
+    }
+
+    #[test]
+    fn test_error_code_for_known_categories() {
+        // INVALID_IDENTIFIER — identifier syntax problems
+        assert_eq!(
+            error_code_for("PayloadIdentifier: 'foo bar' contains spaces"),
+            "INVALID_IDENTIFIER"
+        );
+        // INVALID_FORMAT — plist parse failures and structural issues
+        assert_eq!(error_code_for("ExpectedEndOfEventStream"), "INVALID_FORMAT");
+        assert_eq!(
+            error_code_for("Profile is not a dictionary: Serde(\"...\")"),
+            "INVALID_FORMAT"
+        );
+        assert_eq!(
+            error_code_for("Failed to parse plist (XML or binary): Io(...)"),
+            "INVALID_FORMAT"
+        );
+        assert_eq!(
+            error_code_for("UnexpectedEof: failed to fill whole buffer"),
+            "INVALID_FORMAT"
+        );
+        // MISSING_PAYLOAD_TYPE
+        assert_eq!(
+            error_code_for("Profile structure errors: missing PayloadType"),
+            "MISSING_PAYLOAD_TYPE"
+        );
+        // SCHEMA_VIOLATION
+        assert_eq!(
+            error_code_for("Validation failed after normalization: ..."),
+            "SCHEMA_VIOLATION"
+        );
+        // IO_ERROR
+        assert_eq!(error_code_for("No such file or directory"), "IO_ERROR");
+        assert_eq!(
+            error_code_for("Failed to read file: /tmp/missing"),
+            "IO_ERROR"
+        );
+        // INVALID_ORG
+        assert_eq!(
+            error_code_for("--org is required (e.g., --org com.yourorg)"),
+            "INVALID_ORG"
+        );
+        // UNKNOWN — fallback for anything unmatched
+        assert_eq!(
+            error_code_for("Some completely unexpected error string"),
+            "UNKNOWN"
+        );
     }
 }

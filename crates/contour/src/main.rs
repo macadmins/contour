@@ -15,7 +15,6 @@ mod dispatch;
 mod init;
 mod osquery;
 
-use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 const ABOUT: &str = "Contour - macOS MDM configuration toolkit";
@@ -306,7 +305,21 @@ pub enum TrainerTool {
     Profile,
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
-    dispatch::run(cli)
+    let json_mode = cli.json;
+
+    if let Err(e) = dispatch::run(cli) {
+        if json_mode {
+            // Phase B3: emit a parseable JSON error envelope on stderr so agents
+            // and CI receive a structured failure shape, matching the BatchResult
+            // error_code enum documented in the SOP pseudocode pilot.
+            let msg = format!("{e:#}");
+            let code = contour_core::classify_error(&msg);
+            contour_core::print_error_json(&msg, Some(code));
+        } else {
+            eprintln!("Error: {e:#}");
+        }
+        std::process::exit(1);
+    }
 }

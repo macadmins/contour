@@ -28,10 +28,27 @@ use cli::{Cli, CommandAction, Commands, DdmAction, DocsAction, EnrollmentAction,
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-fn main() -> Result<()> {
-    // Parse CLI first to get global flags
+fn main() {
+    // Parse CLI first so we know whether to render errors as JSON.
     let cli = Cli::parse();
+    let json_mode = cli.json;
 
+    if let Err(e) = run(cli) {
+        if json_mode {
+            // Phase B3: emit a parseable JSON error envelope on stderr so agents
+            // and CI receive a structured failure shape, matching the BatchResult
+            // error_code enum documented in the SOP pseudocode pilot.
+            let msg = format!("{e:#}");
+            let code = contour_core::classify_error(&msg);
+            contour_core::print_error_json(&msg, Some(code));
+        } else {
+            eprintln!("Error: {e:#}");
+        }
+        std::process::exit(1);
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
     // Determine output mode
     let output_mode = if cli.json {
         OutputMode::Json

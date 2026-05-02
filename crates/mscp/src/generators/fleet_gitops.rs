@@ -26,7 +26,6 @@ pub struct GlobPlan<'a> {
     pub scripts: Option<&'a GlobSection>,
 }
 
-
 /// Generator for complete Fleet `GitOps` directory structure
 #[derive(Debug)]
 pub struct FleetGitOpsGenerator {
@@ -261,8 +260,12 @@ software:
             baseline_name.to_uppercase().replace('-', "_")
         );
 
-        let custom_settings =
-            self.emit_profiles_section(baseline_name, &label_name, profile_paths, glob_plan.profiles)?;
+        let custom_settings = self.emit_profiles_section(
+            baseline_name,
+            &label_name,
+            profile_paths,
+            glob_plan.profiles,
+        )?;
         let scripts = self.emit_scripts_section(baseline_name, script_paths, glob_plan.scripts)?;
 
         // Build fleet settings as yaml_serde::Value
@@ -637,11 +640,7 @@ software:
 /// Wrap a `Vec<String>` in `Some` only if it has elements, so empty label
 /// lists serialize as "field absent" instead of as an empty YAML sequence.
 fn non_empty_vec(v: &[String]) -> Option<Vec<String>> {
-    if v.is_empty() {
-        None
-    } else {
-        Some(v.to_vec())
-    }
+    if v.is_empty() { None } else { Some(v.to_vec()) }
 }
 
 /// Insert a label entry line into existing YAML content.
@@ -896,7 +895,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let generator = FleetGitOpsGenerator::new_default(temp_dir.path());
         let scripts = vec![
-            (PathBuf::from("audit.sh"), Some(PathBuf::from("remediate.sh"))),
+            (
+                PathBuf::from("audit.sh"),
+                Some(PathBuf::from("remediate.sh")),
+            ),
             (PathBuf::from("special_audit.sh"), None),
         ];
         let section = GlobSection {

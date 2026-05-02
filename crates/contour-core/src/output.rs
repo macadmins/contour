@@ -213,6 +213,70 @@ pub fn print_error(msg: &str) {
     eprintln!("{} {}", "✗".red(), msg);
 }
 
+/// Print an error as a JSON object on stderr.
+///
+/// Used when `--json` is set so agents/CI receive a parseable failure shape
+/// instead of plain `Error: ...` text. Mirrors the BatchResult error_code
+/// enum from `profile/cli/glob_utils.rs::error_code_for` (INVALID_IDENTIFIER,
+/// INVALID_FORMAT, MISSING_PAYLOAD_TYPE, SCHEMA_VIOLATION, IO_ERROR,
+/// INVALID_ORG, UNKNOWN). When `error_code` is `None`, emits `"UNKNOWN"`.
+///
+/// **Stability:** the JSON shape is part of the agent contract documented in
+/// the SOP pseudocode pilot. Don't rename fields without updating the pilot.
+pub fn print_error_json(msg: &str, error_code: Option<&str>) {
+    let json = serde_json::json!({
+        "success": false,
+        "error": msg,
+        "error_code": error_code.unwrap_or("UNKNOWN"),
+    });
+    // Pretty-printed for human-debuggable CI logs; agents parse either way.
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string())
+    );
+}
+
+/// Classify a freeform error message into one of the typed codes used by
+/// [`print_error_json`] and the BatchResult JSON contract.
+///
+/// Substring-based; should stay in sync with `profile::cli::glob_utils::error_code_for`.
+/// We duplicate the mapping here (rather than depend on the profile crate) because
+/// `contour-core` is upstream of `profile` in the dependency graph.
+#[must_use]
+pub fn classify_error(error: &str) -> &'static str {
+    if error.contains("contains spaces") || error.contains("invalid identifier") {
+        return "INVALID_IDENTIFIER";
+    }
+    if error.contains("ExpectedEndOfEventStream")
+        || error.contains("InvalidXmlSyntax")
+        || error.contains("after placeholder substitution")
+        || error.contains("InvalidDataString")
+        || error.contains("not a dictionary")
+        || error.contains("expected struct ConfigurationProfile")
+        || error.contains("Serde(")
+        || error.contains("Failed to parse plist")
+        || error.contains("UnexpectedEof")
+    {
+        return "INVALID_FORMAT";
+    }
+    if error.contains("Profile structure errors") || error.contains("PayloadType") {
+        return "MISSING_PAYLOAD_TYPE";
+    }
+    if error.contains("Validation failed") || error.contains("schema validation") {
+        return "SCHEMA_VIOLATION";
+    }
+    if error.contains("No such file")
+        || error.contains("Permission denied")
+        || error.contains("Failed to read")
+    {
+        return "IO_ERROR";
+    }
+    if error.contains("--org is required") || error.contains("organization domain is required") {
+        return "INVALID_ORG";
+    }
+    "UNKNOWN"
+}
+
 /// Print a warning message with a yellow exclamation mark.
 pub fn print_warning(msg: &str) {
     println!("{} {}", "!".yellow(), msg);

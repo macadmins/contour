@@ -292,9 +292,9 @@ pub fn validate_path_xor_paths(
     paths: Option<&str>,
 ) -> anyhow::Result<()> {
     match (path, paths) {
-        (Some(_), Some(_)) => anyhow::bail!(
-            "{kind} entry has both `path` and `paths` set — exactly one is allowed"
-        ),
+        (Some(_), Some(_)) => {
+            anyhow::bail!("{kind} entry has both `path` and `paths` set — exactly one is allowed")
+        }
         (None, None) => anyhow::bail!(
             "{kind} entry has neither `path` nor `paths` set — exactly one is required"
         ),

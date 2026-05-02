@@ -62,8 +62,7 @@ fn configure_baseline(baseline: &mut BaselineConfig, mscp_repo: &Path) -> Result
         .into_iter()
         .map(|p| p.filename)
         .collect::<Vec<_>>();
-    baseline.gitops_glob.profiles =
-        configure_profiles_section(&baseline.name, &profiles)?;
+    baseline.gitops_glob.profiles = configure_profiles_section(&baseline.name, &profiles)?;
 
     // --- Scripts section ---
     // `discover_scripts` returns rule IDs; audit/remediate filenames are
@@ -139,10 +138,7 @@ fn configure_profiles_section(
     Ok(Some(section))
 }
 
-fn configure_scripts_section(
-    baseline_name: &str,
-    items: &[String],
-) -> Result<Option<GlobSection>> {
+fn configure_scripts_section(baseline_name: &str, items: &[String]) -> Result<Option<GlobSection>> {
     if items.len() < 2 {
         println!(
             "  {} {}",
@@ -158,13 +154,11 @@ fn configure_scripts_section(
         items.len()
     );
 
-    let enable = Confirm::new(&format!(
-        "Enable scripts glob for `{baseline_name}`?"
-    ))
-    .with_default(true)
-    .prompt_skippable()
-    .unwrap_or(Some(false))
-    .unwrap_or(false);
+    let enable = Confirm::new(&format!("Enable scripts glob for `{baseline_name}`?"))
+        .with_default(true)
+        .prompt_skippable()
+        .unwrap_or(Some(false))
+        .unwrap_or(false);
 
     if !enable {
         return Ok(None);
@@ -267,9 +261,7 @@ fn read_csv_labels(prompt: &str) -> Result<Vec<String>> {
 
 fn print_preview_profiles(baseline_name: &str, section: &GlobSection) {
     println!("\n  {} preview:", "Profiles".bold());
-    println!(
-        "    - paths: ../platforms/mscp/{baseline_name}/profiles/*.mobileconfig"
-    );
+    println!("    - paths: ../platforms/mscp/{baseline_name}/profiles/*.mobileconfig");
     for exc in &section.exceptions {
         let sub = exc
             .subfolder
@@ -304,9 +296,7 @@ fn print_preview_profiles(baseline_name: &str, section: &GlobSection) {
 
 fn print_preview_scripts(baseline_name: &str, section: &GlobSection) {
     println!("\n  {} preview:", "Scripts".bold());
-    println!(
-        "    - paths: ../platforms/mscp/{baseline_name}/scripts/*.sh"
-    );
+    println!("    - paths: ../platforms/mscp/{baseline_name}/scripts/*.sh");
     for exc in &section.exceptions {
         let sub = exc
             .subfolder
