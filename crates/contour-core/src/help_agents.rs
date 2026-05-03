@@ -379,68 +379,23 @@ Operators: has(), startsWith(), endsWith(), contains(), matches(), size(),
 - To sign: `contour profile sign <file> --identity "Developer ID Application: ..."`
 "#;
 
-const SOP_PPPC: &str = r"# SOP: PPPC/TCC Profile Generation
+/// SOP_PPPC — sixth SOP migrated to the procedural format. Same external-
+/// markdown pattern as SOP_PROFILE / SOP_DDM / SOP_MSCP / SOP_OSQUERY /
+/// SOP_ENROLLMENT.
+const SOP_PPPC: &str = include_str!("../skills/contour/references/sop-pppc.md");
 
-## Generate PPPC profiles
-```
-1. contour pppc init                                # create pppc.toml
-2. contour pppc scan <app_paths> --json             # scan apps for TCC requirements
-3. contour pppc configure pppc.toml                 # interactive service configuration
-4. contour pppc generate pppc.toml -o profiles/     # generate mobileconfig
-```
+/// SOP_BTM — seventh SOP migrated to the procedural format. The killer
+/// decision pinned by the procedure is mobileconfig-vs-DDM target
+/// selection on macOS 15+.
+const SOP_BTM: &str = include_str!("../skills/contour/references/sop-btm.md");
 
-## Generate for Fleet (recommended for agents)
-```
-contour pppc generate pppc.toml --fragment -o fragment/
-# Creates fragment.toml + platforms/ directory for merging into Fleet GitOps
-```
+/// SOP_NOTIFICATIONS — eighth SOP migrated to the procedural format.
+const SOP_NOTIFICATIONS: &str = include_str!("../skills/contour/references/sop-notifications.md");
 
-## Validate existing PPPC config
-```
-contour pppc validate pppc.toml --json
-```
-";
-
-const SOP_BTM: &str = r"# SOP: Background Task Management Profiles
-
-## Generate BTM profiles
-```
-contour btm generate btm.toml -o profiles/
-contour btm generate btm.toml --ddm -o ddm/          # DDM declarations (macOS 15+)
-```
-
-## Generate for Fleet (fragment mode)
-```
-contour btm generate btm.toml --fragment -o fragment/
-contour btm generate btm.toml --ddm --fragment -o fragment/  # DDM + fragment
-```
-";
-
-const SOP_NOTIFICATIONS: &str = r"# SOP: Notification Settings Profiles
-
-## Generate notification profiles
-```
-contour notifications generate notifications.toml -o profiles/
-```
-
-## Generate for Fleet (fragment mode)
-```
-contour notifications generate notifications.toml --fragment -o fragment/
-```
-";
-
-const SOP_SUPPORT: &str = r"# SOP: Root3 Support App Profiles
-
-## Generate Root3 Support App profiles
-```
-contour support generate -o profiles/
-```
-
-## Generate for Fleet (fragment mode)
-```
-contour support generate --fragment -o fragment/
-```
-";
+/// SOP_SUPPORT — ninth SOP migrated to the procedural format. Includes
+/// an INVARIANT that pins the `nl.root3.support` PayloadType so a CLI
+/// regression cannot silently emit profiles the Support app won't read.
+const SOP_SUPPORT: &str = include_str!("../skills/contour/references/sop-support.md");
 
 const SOP_FLEET_MIGRATE: &str = r"# SOP: Migrate Fleet GitOps Repo to v4.83 Structure
 
