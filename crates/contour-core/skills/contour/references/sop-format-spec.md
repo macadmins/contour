@@ -133,10 +133,10 @@ without re-parsing potentially-empty `failure_categories[]`.
 | `SOP_MSCP` | ✅ Migrated | `sop-mscp.md`. `generate_baseline_compliance` + `resolve_odv` procedures. ODV-resolution is the killer trap prose SOPs only mention weakly |
 | `SOP_OSQUERY` | ✅ Migrated | `sop-osquery.md`. `find_query_table` + `write_policy_query` procedures. Cookbook of idiomatic Fleet policy patterns kept as prose |
 | `SOP_ENROLLMENT` | ✅ Migrated | `sop-enrollment.md`. `generate_enrollment_profile` enforces a NEVER_SKIP invariant (FileVault, SoftwareUpdate) that prose SOP only mentioned weakly |
-| `SOP_PPPC` | ⏳ Pending | Good fit; linear init→scan→configure→generate |
-| `SOP_BTM` | ⏳ Pending | Good fit; trivial init→generate |
-| `SOP_NOTIFICATIONS` | ⏳ Pending | Good fit; trivial generate-only |
-| `SOP_SUPPORT` | ⏳ Pending | Good fit; trivial generate-only |
+| `SOP_PPPC` | ✅ Migrated | `sop-pppc.md`. `generate_pppc_profile` PROCEDURE; per_app vs combined modes; org-suffix INVARIANT on PayloadIdentifier |
+| `SOP_BTM` | ✅ Migrated | `sop-btm.md`. `generate_btm_profile` pins the mobileconfig-vs-DDM target choice (macOS 15+ guidance) |
+| `SOP_NOTIFICATIONS` | ✅ Migrated | `sop-notifications.md`. `generate_notifications_profile`; documents the user-prior-choice deployment-order constraint |
+| `SOP_SUPPORT` | ✅ Migrated | `sop-support.md`. `generate_support_profile` pins `nl.root3.support` PayloadType as an INVARIANT |
 | `SOP_SANTA` | ❌ Different format | Cookbook of 6 divergent recipes — needs decision tree at top |
 | `SOP_FLEET_MIGRATE` | ❌ Different format | One-time migration playbook with manual diff checks |
 | `SOP_CI` | ⚠️ Hybrid | Configuration setup + thin `configure-ci` procedure |
