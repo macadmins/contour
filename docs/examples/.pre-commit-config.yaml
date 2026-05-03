@@ -1,0 +1,67 @@
+# pre-commit framework config for contour validation.
+#
+# Install via uvx (no global Python required):
+#
+#   uvx pre-commit install                              # registers .git/hooks/pre-commit
+#   uvx pre-commit run --all-files                      # one-shot validate everything
+#   uvx pre-commit run contour-profile-validate         # run a single hook
+#   uvx pre-commit run --from-ref origin/main --to-ref HEAD   # CI usage
+#
+# Override the contour binary (e.g. for testing pre-release builds) by
+# setting CONTOUR in the parent shell — it propagates into the hook
+# subprocess via the `bash -c '"${CONTOUR:-contour}" ...'` indirection:
+#
+#   CONTOUR=/path/to/dist/contour uvx pre-commit run --all-files
+#   export CONTOUR=…/dist/contour     # persistent in your shell
+#
+repos:
+  - repo: local
+    hooks:
+      - id: contour-profile-validate
+        name: contour — validate macOS configuration profiles
+        entry: bash -c '"${CONTOUR:-contour}" profile validate "$@" --json' --
+        language: system
+        files: \.mobileconfig$
+        pass_filenames: true
+
+      - id: contour-ddm-validate
+        name: contour — validate DDM declarations
+        entry: bash -c '"${CONTOUR:-contour}" profile ddm validate "$@" --json' --
+        language: system
+        files: declaration-profiles/.*\.json$
+        pass_filenames: true
+
+      - id: contour-ddm-verify
+        name: contour — verify DDM cross-references (asset/config/predicate)
+        entry: bash -c '"${CONTOUR:-contour}" profile ddm verify platforms/macos/declaration-profiles --json' --
+        language: system
+        files: declaration-profiles/
+        pass_filenames: false
+
+      - id: contour-pppc-validate
+        name: contour — validate pppc.toml
+        entry: bash -c '"${CONTOUR:-contour}" pppc validate "$@" --json' --
+        language: system
+        files: pppc\.toml$
+        pass_filenames: true
+
+      - id: contour-btm-validate
+        name: contour — validate btm.toml
+        entry: bash -c '"${CONTOUR:-contour}" btm validate "$@" --json' --
+        language: system
+        files: btm\.toml$
+        pass_filenames: true
+
+      - id: contour-notifications-validate
+        name: contour — validate notifications.toml
+        entry: bash -c '"${CONTOUR:-contour}" notifications validate "$@" --json' --
+        language: system
+        files: notifications\.toml$
+        pass_filenames: true
+
+      - id: contour-support-validate
+        name: contour — validate support.toml
+        entry: bash -c '"${CONTOUR:-contour}" support validate "$@" --json' --
+        language: system
+        files: support\.toml$
+        pass_filenames: true
