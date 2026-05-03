@@ -17,11 +17,15 @@ this spec and the CLI is detected by the `sop_traps` integration suite
 | Primitive | Semantics |
 |---|---|
 | `PROCEDURE name(args)` | Reusable sub-routine; agents call by name |
+| `SCHEMA_SOURCE: ...` / `SCHEMA_TOOL: ...` | Top-of-PROCEDURE pointer to where authoritative schema/data lives (e.g. an Apple repo + the CLI lookup that surfaces it) |
 | `INPUT:` | Required arguments and their contracts |
 | `PRECONDITIONS:` | Invariants checked **before** any side effect; fail fast |
+| `BUILD ORDER:` | Per-step sequencing requirement: the listed steps MUST execute in the given order, because each step's output is referenced by the next |
 | `EXECUTION:` | The CLI call(s) and the documented JSON response shape |
 | `POSTCONDITIONS:` | Success-path checks AND every known error branch |
-| `INVARIANTS:` | Properties that must hold for ALL inputs (e.g. determinism) |
+| `INVARIANTS:` | Properties that must hold for ALL inputs of this PROCEDURE (e.g. determinism) |
+| `CROSS-FILE INVARIANT` | Relational ASSERT spanning multiple emitted files (e.g. `activation.references.contains(configuration.identifier)`); checked after all files are written |
+| `DEPRECATED_LIST` | Named constant of inputs being phased out; `WARN if input in DEPRECATED_LIST` redirects agents to the supported replacement before generation runs |
 | `ASSERT condition` | Invariant check; HALT if false |
 | `HALT message` | Stop work, return error to caller, do NOT continue |
 | `WARN message` | Surface to human; continue execution |
@@ -35,13 +39,30 @@ this spec and the CLI is detected by the `sop_traps` integration suite
 ## Structural rules for PROCEDUREs
 
 - **Self-contained**: no shared state assumed between PROCEDURE blocks.
+- **SCHEMA_SOURCE / SCHEMA_TOOL** at the top of a PROCEDURE tell agents where
+  the authoritative schema lives (often Apple's `device-management` repo or
+  contour's embedded data) and the exact CLI lookup to query it. Agents should
+  prefer the live tool over training-data assumptions.
 - **INPUT** declares the contract; the agent must populate every input before
   calling. Document non-obvious shape constraints (e.g. "file path, not directory").
 - **PRECONDITIONS** run first, fail fast. Agents should never have to handle
   invalid inputs inside `EXECUTION` — that's what preconditions are for.
+  This is also where `DEPRECATED_LIST` checks fire, so deprecated inputs get
+  redirected before any side effects run.
+- **BUILD ORDER** is for PROCEDUREs that emit multiple files where one file
+  references another. List the steps in dependency order (bottom-up): the
+  thing that gets referenced is created first, then the referrer. Out-of-order
+  execution produces dangling references that fail at deploy time, not at
+  authoring time — exactly the kind of failure mode the format is designed
+  to prevent.
 - **POSTCONDITIONS** cover the success path AND all known error branches.
   Use `SWITCH entry.error_code` over the typed enum below; never substring-match
   `entry.error` (the prose field) inside a SWITCH.
+- **CROSS-FILE INVARIANT** runs after all files are written. Use this for
+  relational checks the per-file PRECONDITIONS can't see (e.g. "every
+  activation references an existing configuration"). If a CROSS-FILE
+  INVARIANT fails, treat it as a structural bug — HALT, surface details, do
+  not auto-fix.
 - **AUTO_FIX is bounded** — exactly **one** retry, never more. Recurring
   failures are structural and must HALT, not loop.
 - **INVARIANTS** document properties that hold for ALL inputs (e.g. determinism:
@@ -108,9 +129,9 @@ without re-parsing potentially-empty `failure_categories[]`.
 | SOP | Status | Notes |
 |-----|--------|-------|
 | `SOP_PROFILE` | ✅ Migrated | First, in `sop-profile.md`. 3 procedures + prose for non-piloted ops |
+| `SOP_DDM` | ✅ Migrated | `sop-ddm.md`. `create_ddm_config` PROCEDURE introduces BUILD ORDER, CROSS-FILE INVARIANT, DEPRECATED_LIST, SCHEMA_SOURCE primitives |
 | `SOP_MSCP` | ⏳ Pending | Good fit; per-task workflow |
 | `SOP_OSQUERY` | ⏳ Pending | Good fit; search/lookup + 6 query patterns |
-| `SOP_DDM` | ⏳ Pending | Good fit; same shape as profile generation |
 | `SOP_ENROLLMENT` | ⏳ Pending | Good fit; built-in decision guide for skip keys |
 | `SOP_PPPC` | ⏳ Pending | Good fit; linear init→scan→configure→generate |
 | `SOP_BTM` | ⏳ Pending | Good fit; trivial init→generate |
