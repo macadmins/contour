@@ -268,37 +268,12 @@ contour osquery table <osquery_table_from_rule> --json
 ```
 "#;
 
-const SOP_DDM: &str = r#"# SOP: DDM Declaration Generation
-
-## Before generating: ask for org domain
-ALWAYS ask the user for their organization reverse-domain (e.g., com.acme)
-before generating. The Identifier field in DDM declarations defaults to
-com.example which must be replaced.
-
-## Generate a DDM declaration
-```
-1. contour profile ddm list --json                  # list all 42+ DDM declaration types
-2. contour profile ddm info <type> --json           # show schema (keys, types, defaults)
-3. contour profile ddm generate <type> -o decl.json # generate JSON declaration
-```
-
-After generating, update the Identifier field:
-  "Identifier": "com.yourorg.intelligence.settings"
-                  ^^^^^^^^^^^ use the org domain from the user
-
-## Find DDM declarations by keyword
-```
-contour profile search <keyword> --json
-# Filter results where kind == "DdmDeclaration"
-```
-
-## Common DDM types
-- com.apple.configuration.passcode.settings — Passcode requirements
-- com.apple.configuration.softwareupdate.settings — OS update enforcement
-- com.apple.configuration.intelligence.settings — Apple Intelligence settings
-- com.apple.configuration.screensaver.settings — Screen saver settings
-- com.apple.activation.simple — Simple activation predicate
-"#;
+/// SOP_DDM — second SOP migrated to procedural pseudocode.
+///
+/// Sourced from the markdown file via include_str! (same pattern as
+/// SOP_PROFILE and SOP_ROUTING_TEMPLATE) so the pseudocode (which contains
+/// nested backticks and quotes) is easier to author and review.
+const SOP_DDM: &str = include_str!("../skills/contour/references/sop-ddm.md");
 
 const SOP_SANTA: &str = r#"# SOP: Santa Allowlist Generation
 

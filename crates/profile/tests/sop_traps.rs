@@ -417,3 +417,170 @@ fn trap_08_jamf_import_silently_filters_bad_yaml() {
         "good Jamf YAML imports successfully"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 13: deprecated payload `com.apple.SoftwareUpdate` has DDM-native
+//          replacements registered in the embedded schema.
+// Pilot procedure: create_ddm_config / DEPRECATED_LIST + PRECONDITIONS
+// Catches: agents that keep generating the legacy profile payload — broken
+// on macOS Tahoe (26/27) where the legacy SoftwareUpdate payload is removed.
+// The pseudocode redirects to the DDM replacements, but only if those types
+// exist in the registered DDM schema. This trap pins their existence.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_13_ddm_softwareupdate_replacements_exist() {
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "ddm list must succeed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value =
+        serde_json::from_str(stdout.trim()).expect("ddm list --json must emit a JSON array");
+    let entries = parsed.as_array().expect("ddm list returns an array");
+
+    let has_type = |needle: &str| -> bool {
+        entries
+            .iter()
+            .any(|e| e.get("type").and_then(|t| t.as_str()) == Some(needle))
+    };
+
+    assert!(
+        has_type("com.apple.configuration.softwareupdate.settings"),
+        "DDM softwareupdate.settings must be registered (replacement for legacy com.apple.SoftwareUpdate payload)"
+    );
+    assert!(
+        has_type("com.apple.configuration.softwareupdate.enforcement.specific"),
+        "DDM softwareupdate.enforcement.specific must be registered (companion to .settings)"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 14: `ddm generate` writes ServerToken-free declarations.
+// Pilot procedure: create_ddm_config / INVARIANTS
+// Catches: regressions that start authoring ServerToken — that field is
+// server-managed and writing it locally causes deploy collisions.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_14_ddm_generate_omits_server_token() {
+    let dir = tempfile::tempdir().unwrap();
+    // ddm generate requires org via .contour/config.toml
+    let contour_dir = dir.path().join(".contour");
+    fs::create_dir_all(&contour_dir).unwrap();
+    fs::write(
+        contour_dir.join("config.toml"),
+        "[organization]\ndomain = \"com.acme\"\nname = \"Acme\"\n",
+    )
+    .unwrap();
+
+    let out = dir.path().join("decl.json");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "ddm",
+            "generate",
+            "com.apple.configuration.passcode.settings",
+            "-o",
+            out.to_str().unwrap(),
+            "--full",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "ddm generate must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let body = fs::read_to_string(&out).unwrap();
+    let parsed: Value = serde_json::from_str(&body).expect("declaration must be valid JSON");
+
+    assert!(
+        parsed.get("ServerToken").is_none(),
+        "authored declaration must NOT contain ServerToken; it is added by the MDM server. \
+         Found: {:?}",
+        parsed.get("ServerToken")
+    );
+    // Sanity check: the keys we DO expect are present.
+    assert!(parsed.get("Type").is_some(), "Type field is present");
+    assert!(parsed.get("Identifier").is_some(), "Identifier is present");
+    assert!(parsed.get("Payload").is_some(), "Payload is present");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 15: `ddm generate` builds Identifier as `{org}.{type-tail}`, which
+//          collides for any two types ending in the same segment
+//          (e.g. *.settings, *.simple). Agents must rename emitted
+//          identifiers before assembling a multi-component DDM set.
+// Pilot procedure: create_ddm_config / STEP 2 (identifier choice)
+// Catches: regressions that change the identifier-building scheme silently.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_15_ddm_generate_identifier_uses_type_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let contour_dir = dir.path().join(".contour");
+    fs::create_dir_all(&contour_dir).unwrap();
+    fs::write(
+        contour_dir.join("config.toml"),
+        "[organization]\ndomain = \"com.acme\"\nname = \"Acme\"\n",
+    )
+    .unwrap();
+
+    // Generate two configurations whose types both end in `.settings`.
+    let cases = [
+        (
+            "com.apple.configuration.passcode.settings",
+            dir.path().join("passcode.json"),
+        ),
+        (
+            "com.apple.configuration.softwareupdate.settings",
+            dir.path().join("softwareupdate.json"),
+        ),
+    ];
+    for (type_name, out) in &cases {
+        let result = Command::cargo_bin("profile")
+            .unwrap()
+            .current_dir(dir.path())
+            .args([
+                "ddm",
+                "generate",
+                type_name,
+                "-o",
+                out.to_str().unwrap(),
+                "--full",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "ddm generate {type_name} must succeed; stderr: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    let id_for = |path: &std::path::Path| -> String {
+        let body = fs::read_to_string(path).unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        parsed["Identifier"].as_str().unwrap().to_string()
+    };
+    let passcode_id = id_for(&cases[0].1);
+    let softwareupdate_id = id_for(&cases[1].1);
+
+    // Both end in `.settings`, so type-tail-based identifier generation
+    // produces collision: passcode_id == softwareupdate_id == "com.acme.settings".
+    // The pseudocode pilot's STEP 2 mandates agents override this default.
+    assert_eq!(
+        passcode_id, "com.acme.settings",
+        "passcode identifier follows {{org}}.{{type-tail}} pattern"
+    );
+    assert_eq!(
+        softwareupdate_id, "com.acme.settings",
+        "softwareupdate identifier follows {{org}}.{{type-tail}} pattern \
+         — collides with passcode (this is the trap; SOP requires agents override)"
+    );
+}
