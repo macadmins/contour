@@ -772,6 +772,21 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output_mode,
                 )?;
             }
+            DdmAction::Compose {
+                bundle,
+                output,
+                schema_path,
+                allow_orphans,
+            } => {
+                profile::cli::ddm::handle_ddm_compose(
+                    &bundle,
+                    &output,
+                    schema_path.as_deref(),
+                    allow_orphans,
+                    config.as_ref(),
+                    output_mode,
+                )?;
+            }
         },
         Commands::Enrollment { action } => match action {
             EnrollmentAction::List {

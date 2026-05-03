@@ -6,6 +6,7 @@
 //! Note: This module is reserved for future DDM declaration support.
 #![allow(dead_code, reason = "module under development")]
 
+pub mod compose;
 pub mod parser;
 pub mod schema;
 pub mod types;

@@ -4,6 +4,7 @@
 //! Uses embedded DDM schemas (42 declaration types) by default.
 
 use crate::config::ProfileConfig;
+use crate::ddm::compose::{Bundle, ComposeOptions, ComposedBundle, compose};
 use crate::ddm::{
     Declaration, DeclarationPayload, is_ddm_file, parse_declaration_file, write_declaration,
 };
@@ -827,6 +828,182 @@ pub fn handle_ddm_generate(
     }
 
     Ok(())
+}
+
+/// Compose a DDM bundle into asset / configuration / activation declarations
+/// in one shot. Mirror of `handle_ddm_generate` but driven by a TOML bundle
+/// describing the full intent rather than a single declaration type.
+///
+/// The org domain is resolved from `profile.toml` or `.contour/config.toml`
+/// (same fallback chain `handle_ddm_generate` uses) and threaded into
+/// [`compose`]. Failures emit the standard `{success:false, error, error_code}`
+/// envelope on stderr when `--json` is set.
+pub fn handle_ddm_compose(
+    bundle_path: &str,
+    output_dir: &str,
+    schema_path: Option<&str>,
+    allow_orphans: bool,
+    config: Option<&ProfileConfig>,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let registry = load_registry(schema_path)?;
+
+    // 1. Read + parse the bundle TOML.
+    let bundle_text = match std::fs::read_to_string(bundle_path) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("Failed to read {bundle_path}: {e}");
+            if output_mode == OutputMode::Json {
+                contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
+            }
+            anyhow::bail!(msg);
+        }
+    };
+    let bundle: Bundle = match toml::from_str(&bundle_text) {
+        Ok(b) => b,
+        Err(e) => {
+            let msg = format!("Failed to parse bundle TOML from {bundle_path}: {e}");
+            if output_mode == OutputMode::Json {
+                contour_core::output::print_error_json(&msg, Some("INVALID_FORMAT"));
+            }
+            anyhow::bail!(msg);
+        }
+    };
+
+    // 2. Resolve org domain (same path handle_ddm_generate uses).
+    let domain = if let Some(cfg) = config {
+        cfg.organization.domain.clone()
+    } else if let Some(c) = contour_core::config::ContourConfig::load_nearest() {
+        c.organization.domain
+    } else {
+        let msg = "organization domain is required for DDM compose\n\
+                   Set organization.domain in profile.toml or .contour/config.toml"
+            .to_string();
+        if output_mode == OutputMode::Json {
+            contour_core::output::print_error_json(&msg, Some("INVALID_ORG"));
+        }
+        anyhow::bail!(msg);
+    };
+
+    // 3. Compose.
+    let opts = ComposeOptions { allow_orphans };
+    let composed = match compose(&bundle, &domain, &registry, &opts) {
+        Ok(c) => c,
+        Err(e) => {
+            if output_mode == OutputMode::Json {
+                contour_core::output::print_error_json(&e.to_string(), Some(e.error_code()));
+            }
+            anyhow::bail!(e.to_string());
+        }
+    };
+
+    // 4. Ensure output directory exists, then write declarations in BUILD ORDER.
+    let out = Path::new(output_dir);
+    if !out.exists() {
+        std::fs::create_dir_all(out)?;
+    } else if !out.is_dir() {
+        anyhow::bail!("--output {output_dir} is not a directory");
+    }
+
+    let mut written: Vec<(String, PathBuf, Declaration)> = Vec::new();
+
+    if let Some(asset) = &composed.asset {
+        let path = out.join("asset.json");
+        std::fs::write(&path, write_declaration(asset)?)?;
+        written.push(("asset".to_string(), path, asset.clone()));
+    }
+    let config_path = out.join("configuration.json");
+    std::fs::write(&config_path, write_declaration(&composed.configuration)?)?;
+    written.push((
+        "configuration".to_string(),
+        config_path,
+        composed.configuration.clone(),
+    ));
+    if let Some(activation) = &composed.activation {
+        let path = out.join("activation.json");
+        std::fs::write(&path, write_declaration(activation)?)?;
+        written.push(("activation".to_string(), path, activation.clone()));
+    }
+
+    // 5. Emit human or JSON report.
+    match output_mode {
+        OutputMode::Json => emit_compose_json(&bundle, &composed, &written),
+        OutputMode::Human => emit_compose_human(&bundle, &composed, &written),
+    }
+
+    Ok(())
+}
+
+fn emit_compose_json(
+    bundle: &Bundle,
+    composed: &ComposedBundle,
+    written: &[(String, PathBuf, Declaration)],
+) {
+    let files: Vec<_> = written
+        .iter()
+        .map(|(kind, path, decl)| {
+            let mut entry = serde_json::json!({
+                "kind": kind,
+                "identifier": decl.identifier,
+                "type": decl.declaration_type,
+                "path": path.display().to_string(),
+            });
+            if kind == "configuration"
+                && let Some(field) = &composed.asset_ref_field_used
+                && let Some(asset) = &composed.asset
+            {
+                entry["asset_ref_field"] = serde_json::Value::String(field.clone());
+                entry["asset_ref"] = serde_json::Value::String(asset.identifier.clone());
+            }
+            if kind == "activation"
+                && let Some(refs) = decl.payload.get("StandardConfigurations")
+            {
+                entry["configuration_refs"] = refs.clone();
+            }
+            entry
+        })
+        .collect();
+
+    let report = serde_json::json!({
+        "success":     true,
+        "intent_name": bundle.intent_name,
+        "files":       files,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).unwrap_or_else(|_| report.to_string())
+    );
+}
+
+fn emit_compose_human(
+    bundle: &Bundle,
+    composed: &ComposedBundle,
+    written: &[(String, PathBuf, Declaration)],
+) {
+    println!(
+        "{} {}",
+        "✓".green().bold(),
+        format!("Composed bundle '{}'", bundle.intent_name).bold()
+    );
+    if let Some(field) = &composed.asset_ref_field_used
+        && let Some(asset) = &composed.asset
+    {
+        println!(
+            "  asset reference: {} = \"{}\"",
+            field.cyan(),
+            asset.identifier.dimmed()
+        );
+    }
+    println!();
+    println!("Files (deploy in this order):");
+    for (kind, path, decl) in written {
+        println!(
+            "  {} {} → {}",
+            format!("[{kind}]").green(),
+            decl.identifier.bold(),
+            path.display()
+        );
+    }
 }
 
 #[cfg(test)]

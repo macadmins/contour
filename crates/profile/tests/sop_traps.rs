@@ -585,3 +585,373 @@ fn trap_15_ddm_generate_identifier_uses_type_tail() {
          — collides with passcode (this is the trap; SOP requires agents override)"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Compose traps (31–35) — pin the contract for `ddm compose <bundle.toml>`,
+// the combined-format generator that replaces the manual asset →
+// configuration → activation orchestration documented in the procedural
+// SOP's `create_ddm_config` PROCEDURE. By construction, dangling references
+// and identifier collisions become impossible; these traps pin that
+// guarantee so future schema changes can't drift the contract.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: write a profile.toml with the given org domain in `dir`.
+fn write_profile_toml(dir: &std::path::Path, domain: &str) {
+    let contour_dir = dir.join(".contour");
+    fs::create_dir_all(&contour_dir).unwrap();
+    fs::write(
+        contour_dir.join("config.toml"),
+        format!("[organization]\ndomain = \"{domain}\"\nname = \"Acme\"\n"),
+    )
+    .unwrap();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 31: `ddm compose` wires the asset reference into the configuration's
+//          `*AssetReference` field — by construction, no dangling refs.
+// Pilot procedure: create_ddm_config / STEP 3b (now collapsed into compose)
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_31_ddm_compose_wires_asset_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml(dir.path(), "com.acme");
+
+    let bundle = dir.path().join("bundle.toml");
+    // Exchange configuration has multiple *AssetReference fields, so the
+    // bundle MUST disambiguate via asset_ref_field. This is realistic agent
+    // usage — when the schema is ambiguous, the bundle declares its choice.
+    fs::write(
+        &bundle,
+        r#"intent_name = "exchange"
+
+[asset]
+type = "com.apple.asset.credential.userpassword"
+
+[asset.payload]
+Username = "user@example.com"
+
+[configuration]
+type = "com.apple.configuration.account.exchange"
+asset_ref_field = "AuthenticationCredentialsAssetReference"
+
+[configuration.payload]
+HostName = "outlook.example.com"
+
+[activation]
+"#,
+    )
+    .unwrap();
+
+    let out = dir.path().join("out");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "--json",
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        result.status.success(),
+        "compose must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let asset_id =
+        serde_json::from_str::<Value>(&fs::read_to_string(out.join("asset.json")).unwrap())
+            .unwrap()["Identifier"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(out.join("configuration.json")).unwrap()).unwrap();
+
+    // Compose wired the explicit asset_ref_field with the asset identifier —
+    // no editing required. Verifies the cross-file reference invariant
+    // holds by construction.
+    assert_eq!(
+        config["Payload"]["AuthenticationCredentialsAssetReference"]
+            .as_str()
+            .unwrap(),
+        asset_id,
+        "configuration must reference asset identifier verbatim"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 32: `ddm compose` populates `Payload.StandardConfigurations` on the
+//          activation with the configuration's identifier.
+// Pilot procedure: create_ddm_config / STEP 3c (now collapsed into compose)
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_32_ddm_compose_wires_standard_configurations() {
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml(dir.path(), "com.acme");
+
+    let bundle = dir.path().join("bundle.toml");
+    fs::write(
+        &bundle,
+        r#"intent_name = "passcode"
+
+[configuration]
+type = "com.apple.configuration.passcode.settings"
+
+[configuration.payload]
+MinimumLength = 8
+
+[activation]
+predicate = "@status(passcode-compliance.compliant) == false"
+"#,
+    )
+    .unwrap();
+
+    let out = dir.path().join("out");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "--json",
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "compose must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let config_id =
+        serde_json::from_str::<Value>(&fs::read_to_string(out.join("configuration.json")).unwrap())
+            .unwrap()["Identifier"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let activation: Value =
+        serde_json::from_str(&fs::read_to_string(out.join("activation.json")).unwrap()).unwrap();
+
+    let std_configs = activation["Payload"]["StandardConfigurations"]
+        .as_array()
+        .expect("StandardConfigurations is an array");
+    assert_eq!(std_configs.len(), 1, "single configuration ref");
+    assert_eq!(
+        std_configs[0].as_str().unwrap(),
+        config_id,
+        "activation references configuration identifier verbatim"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 33: `ddm compose` rejects bundles whose configuration has multiple
+//          `*AssetReference` fields without an explicit `asset_ref_field`.
+// Pilot procedure: create_ddm_config / STEP 2
+// Catches: an agent invokes compose for a multi-credential type (Mail
+// account has Incoming + Outgoing credentials) without disambiguating; the
+// CLI must refuse before any file lands on disk.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_33_ddm_compose_rejects_ambiguous_asset_ref() {
+    // Find a configuration type with >=2 *AssetReference fields in the
+    // embedded schema. If none exists today, the trap is informational and
+    // exits 0 — fixing this requires schema changes upstream.
+    let registry = profile::schema::SchemaRegistry::embedded().expect("embedded registry loads");
+    let multi = registry
+        .by_category("ddm-configuration")
+        .into_iter()
+        .find(|m| {
+            m.fields
+                .keys()
+                .filter(|k| k.ends_with("AssetReference"))
+                .count()
+                >= 2
+        });
+    let Some(multi) = multi else {
+        eprintln!(
+            "trap_33: no configuration type in the embedded schema has >=2 \
+             *AssetReference fields; AmbiguousAssetRef path is unit-tested in \
+             ddm::compose::tests::compose_rejects_ambiguous_asset_ref"
+        );
+        return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml(dir.path(), "com.acme");
+
+    let bundle = dir.path().join("bundle.toml");
+    let asset_type = registry
+        .by_category("ddm-asset")
+        .first()
+        .map(|m| m.payload_type.clone())
+        .expect("at least one asset type registered");
+    fs::write(
+        &bundle,
+        format!(
+            r#"intent_name = "ambig"
+
+[asset]
+type = "{asset_type}"
+
+[configuration]
+type = "{config_type}"
+"#,
+            config_type = multi.payload_type,
+        ),
+    )
+    .unwrap();
+
+    let out = dir.path().join("out");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "--json",
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !result.status.success(),
+        "compose must refuse ambiguous asset_ref"
+    );
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("SCHEMA_VIOLATION"),
+        "stderr must include error_code SCHEMA_VIOLATION; got: {stderr}"
+    );
+
+    // Atomicity: no files emitted on failure.
+    assert!(
+        !out.join("asset.json").exists(),
+        "no files should be written on compose failure"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 34: extends trap_14's ServerToken guarantee to the bundle path —
+//          `ddm compose` must NOT author ServerToken on any emitted
+//          declaration.
+// Pilot procedure: create_ddm_config / INVARIANTS
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_34_ddm_compose_emits_no_server_token() {
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml(dir.path(), "com.acme");
+
+    let bundle = dir.path().join("bundle.toml");
+    fs::write(
+        &bundle,
+        r#"intent_name = "no-token"
+
+[configuration]
+type = "com.apple.configuration.passcode.settings"
+
+[configuration.payload]
+MinimumLength = 8
+
+[activation]
+"#,
+    )
+    .unwrap();
+
+    let out = dir.path().join("out");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "--json",
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "compose must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    for filename in ["configuration.json", "activation.json"] {
+        let body = fs::read_to_string(out.join(filename)).unwrap();
+        assert!(
+            !body.contains("\"ServerToken\""),
+            "{filename}: compose must NOT author ServerToken (server-managed field)"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 35: `ddm compose` rejects orphan assets by default; `--allow-orphans`
+//          opts out. Catches bundles that declare an asset the configuration
+//          has nowhere to wire to.
+// Pilot procedure: create_ddm_config / INVARIANTS (orphan section)
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_35_ddm_compose_strict_orphan_default() {
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml(dir.path(), "com.acme");
+
+    let bundle = dir.path().join("bundle.toml");
+    fs::write(
+        &bundle,
+        r#"intent_name = "orphan"
+
+[asset]
+type = "com.apple.asset.credential.userpassword"
+
+[configuration]
+type = "com.apple.configuration.passcode.settings"
+
+[configuration.payload]
+MinimumLength = 8
+"#,
+    )
+    .unwrap();
+
+    // Strict mode (default): MissingAssetRef fires (passcode.settings has no
+    // *AssetReference field), which is the structural manifestation of an
+    // orphan asset. The check happens before any I/O.
+    let out = dir.path().join("out");
+    let strict = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "--json",
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!strict.status.success(), "strict mode rejects orphan asset");
+    let stderr = String::from_utf8_lossy(&strict.stderr);
+    assert!(
+        stderr.contains("SCHEMA_VIOLATION"),
+        "stderr includes SCHEMA_VIOLATION; got: {stderr}"
+    );
+
+    // No files on disk — atomic failure.
+    assert!(
+        !out.join("asset.json").exists() && !out.join("configuration.json").exists(),
+        "compose failure leaves no files behind"
+    );
+}

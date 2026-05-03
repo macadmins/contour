@@ -117,80 +117,85 @@ STEP 1 — Schema lookup (always live, never speculate):
     # has a documented reason for a different one.
     activation_type = "com.apple.activation.simple"
 
-STEP 2 — Choose identifiers (everything else references these):
-  # NB: `contour profile ddm generate` builds Identifier as
-  # `{org_prefix}.{last_segment_of_type}`. For types ending in a generic
-  # tail (".settings", ".simple"), this produces collisions across
-  # configurations — TWO `*.settings` types generate the same Identifier.
-  # Agents MUST rename emitted identifiers to type-unique values.
-  ids = {
-    asset:         "{org_prefix}.asset.{intent_name}"        if classified.has_asset
-    configuration: "{org_prefix}.config.{intent_name}"
-    activation:    "{org_prefix}.activation.{intent_name}"   if classified.needs_activation
-  }
-  ASSERT every id matches /^[a-z0-9.-]+$/
-    HALT "computed identifier {id} contains invalid characters"
+STEP 2 — Author the bundle TOML, then compose:
+  # `contour profile ddm compose` takes a single TOML input describing the
+  # full DDM intent and emits asset.json + configuration.json + activation.json
+  # with identifiers and cross-references already wired by construction.
+  # Replaces the multi-step generate-and-edit-by-hand orchestration that
+  # earlier revisions of this SOP documented (asset → configuration →
+  # activation, with manual identifier overrides and asset-reference edits).
 
-BUILD ORDER (each step's output is referenced by the next; do NOT reorder):
-  STEP 3a — Emit asset (if present):
-    if classified.has_asset:
-      contour profile ddm generate {classified.asset_type} \
-        -o {output_dir}/asset.json --full --json
-      EDIT {output_dir}/asset.json: set "Identifier" to ids.asset
+  bundle = author bundle.toml describing the intent (see DDM_BUNDLE_FORMAT
+                                                       below)
 
-  STEP 3b — Emit configuration:
-    contour profile ddm generate {classified.config_type} \
-      -o {output_dir}/configuration.json --full --json
-    EDIT {output_dir}/configuration.json:
-      set "Identifier" to ids.configuration
-      if classified.has_asset:
-        set Payload's asset reference to ids.asset
-        ASSERT exact-match: the reference string == ids.asset
+  result = contour profile ddm compose {bundle.toml} \
+                -o {output_dir} \
+                [--allow-orphans]      # only when intentionally authoring
+                                       # a partial set
+                --json
 
-  STEP 3c — Emit activation (if requested):
-    if classified.needs_activation:
-      contour profile ddm generate {activation_type} \
-        -o {output_dir}/activation.json --full --json
-      EDIT {output_dir}/activation.json:
-        set "Identifier" to ids.activation
-        set Payload.StandardConfigurations to [ids.configuration]
-        if classified.predicate:
-          ASSERT predicate uses @status() or @property() syntax
-          ASSERT a status-subscription declaration covers any @status() keys
-          set Payload.Predicate to classified.predicate
+  if result.exit_code != 0:
+    HALT "{result.error_code}: {result.error}"
 
-STEP 4 — Validate the full set:
-  for each declaration_file in {asset, configuration, activation}:
-    contour profile ddm validate {declaration_file} --json
-    if exit != 0:
-      HALT "{file}: failed schema validation; see stderr for error_code"
-
-CROSS-FILE INVARIANT (after STEP 4):
-  if classified.has_asset:
-    ASSERT configuration.Payload references ids.asset (exact string match)
-      HALT "configuration's asset reference does not match emitted asset.Identifier"
-  if classified.needs_activation:
-    ASSERT activation.Payload.StandardConfigurations contains ids.configuration
-      HALT "activation does not reference the emitted configuration"
-
-INVARIANTS:
-  # ServerToken is a server-managed field. Agents MUST NOT populate it; the
-  # MDM server adds it deterministically at push time. Authoring it manually
-  # causes collision on re-deploy.
-  for each declaration_file:
-    ASSERT "ServerToken" key absent from declaration JSON
-      HALT "{file}: ServerToken must be added by the MDM server, not authored"
-
-POSTCONDITIONS:
   RETURN {
-    files: [asset?, configuration, activation?],
-    identifiers: ids,
-    deploy_order: same as BUILD ORDER above
+    files: result.files.map(f -> f.path),
+    identifiers: { kind -> result.files[kind].identifier },
+    deploy_order: [asset?, configuration, activation?]
       # The MDM server applies declarations in this order; out-of-order push
       # produces transient unresolved-reference errors that resolve once all
       # are applied. Pushing in build order avoids that flap.
   }
+
+CROSS-FILE INVARIANT:
+  Compose enforces this by construction — it builds the dependency DAG
+  in memory, writes files atomically (no files on disk on error), and
+  refuses to emit dangling references or orphan assets in strict mode.
+  No post-hoc verification step required.
+
+INVARIANTS:
+  Compose never authors `ServerToken` (the MDM server adds it at push
+  time). Pinned by trap_34. Direct hand-edits afterwards must preserve
+  this.
 ```
+
+### DDM_BUNDLE_FORMAT (the input to `compose`)
+
+```toml
+intent_name = "exchange-account"           # used in computed identifiers
+                                            # → {org}.{kind}.{intent_name}
+
+[asset]                                     # OPTIONAL section
+type = "com.apple.asset.credential.userpassword"
+# identifier = "{override}"                 # OPTIONAL — defaults to {org}.asset.{intent_name}
+[asset.payload]
+Username = "user@example.com"
+Password = "..."
+
+[configuration]                             # REQUIRED section
+type = "com.apple.configuration.account.exchange"
+# identifier = "{override}"
+asset_ref_field = "AuthenticationCredentialsAssetReference"
+                                            # REQUIRED only when the schema
+                                            # has multiple *AssetReference
+                                            # fields (Mail, Exchange, etc.).
+                                            # Single-field schemas auto-resolve.
+[configuration.payload]
+HostName = "outlook.example.com"
+EmailAddress = "user@example.com"
+
+[activation]                                # OPTIONAL section
+# type = "com.apple.activation.simple"      # default when omitted
+# identifier = "{override}"
+predicate = "@status(passcode-compliance.compliant) == true"
+# references = [ "...override..." ]         # default = [{configuration.identifier}]
+```
+
+Override hatches (rare; defaults are correct for most intents):
+- `asset.identifier`, `configuration.identifier`, `activation.identifier`
+  — explicit identifier; bypasses the `{org}.{kind}.{intent_name}` default.
+- `configuration.asset_ref_field` — disambiguate when a configuration's
+  schema has multiple `*AssetReference` fields.
+- `activation.references` — explicit `StandardConfigurations[]` array.
 
 ---
 
@@ -222,9 +227,22 @@ contour profile ddm generate <type> -o <file>.json --full --json
 ```
 
 Note: this emits ONE declaration in isolation. For multi-component setups
-(asset + configuration + activation with cross-references), use the
-`create_ddm_config` PROCEDURE above — it orchestrates the full DAG and
-enforces the invariants the CLI alone can't.
+(asset + configuration + activation with cross-references), use
+`compose` (above) — it enforces the cross-file invariants the per-file
+generate cannot.
+
+### Compose a bundle (asset + configuration + activation in one shot)
+
+```
+contour profile ddm compose <bundle.toml> -o <output_dir> --json
+contour profile ddm compose <bundle.toml> -o <output_dir> --allow-orphans --json
+```
+
+The canonical multi-component path. See DDM_BUNDLE_FORMAT above for the
+TOML schema and `docs/examples/ddm-exchange-bundle.toml` for a worked
+example. Strict by default — declared assets that aren't wired into the
+configuration trigger `SCHEMA_VIOLATION`. Pass `--allow-orphans` for
+incremental authoring.
 
 ### Parse + validate existing declarations
 

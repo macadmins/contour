@@ -705,6 +705,43 @@ pub enum DdmAction {
         )]
         schema_path: Option<String>,
     },
+
+    #[command(
+        about = "Compose a DDM bundle (asset + configuration + activation) from one TOML input",
+        long_about = "Compose a DDM bundle from a single TOML input describing one DDM intent.\n\
+                      \n\
+                      Reads the bundle, computes identifiers from the org domain + intent_name,\n\
+                      auto-wires the asset reference into the configuration's *AssetReference\n\
+                      field, and writes asset.json / configuration.json / activation.json into\n\
+                      the output directory in BUILD ORDER. By construction, dangling references\n\
+                      and identifier collisions become impossible.\n\
+                      \n\
+                      Bundle format documented in sop-ddm.md."
+    )]
+    Compose {
+        #[arg(help = "Bundle TOML file describing a DDM intent")]
+        bundle: String,
+
+        #[arg(
+            short,
+            long,
+            help = "Output directory for the emitted .json declarations"
+        )]
+        output: String,
+
+        #[arg(
+            short = 'p',
+            long,
+            help = "Path to external Apple device-management repo (overrides embedded schema)"
+        )]
+        schema_path: Option<String>,
+
+        #[arg(
+            long,
+            help = "Allow assets that are declared but not referenced by the configuration"
+        )]
+        allow_orphans: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
