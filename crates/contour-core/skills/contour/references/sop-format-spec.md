@@ -132,7 +132,7 @@ without re-parsing potentially-empty `failure_categories[]`.
 | `SOP_DDM` | ✅ Migrated | `sop-ddm.md`. `create_ddm_config` PROCEDURE introduces BUILD ORDER, CROSS-FILE INVARIANT, DEPRECATED_LIST, SCHEMA_SOURCE primitives |
 | `SOP_MSCP` | ✅ Migrated | `sop-mscp.md`. `generate_baseline_compliance` + `resolve_odv` procedures. ODV-resolution is the killer trap prose SOPs only mention weakly |
 | `SOP_OSQUERY` | ✅ Migrated | `sop-osquery.md`. `find_query_table` + `write_policy_query` procedures. Cookbook of idiomatic Fleet policy patterns kept as prose |
-| `SOP_ENROLLMENT` | ⏳ Pending | Good fit; built-in decision guide for skip keys |
+| `SOP_ENROLLMENT` | ✅ Migrated | `sop-enrollment.md`. `generate_enrollment_profile` enforces a NEVER_SKIP invariant (FileVault, SoftwareUpdate) that prose SOP only mentioned weakly |
 | `SOP_PPPC` | ⏳ Pending | Good fit; linear init→scan→configure→generate |
 | `SOP_BTM` | ⏳ Pending | Good fit; trivial init→generate |
 | `SOP_NOTIFICATIONS` | ⏳ Pending | Good fit; trivial generate-only |
