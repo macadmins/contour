@@ -663,7 +663,7 @@ santa-fragment/
       configuration-profiles/
         santa-rules.mobileconfig
   fleets/
-    reference-team.yml
+    reference-fleet.yml
   fragment.toml
 ```
 

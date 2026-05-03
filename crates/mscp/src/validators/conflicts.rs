@@ -139,7 +139,7 @@ impl ConflictDetector {
         }
 
         output.push_str(
-            "\nRecommendation: Use separate team configurations for conflicting baselines.\n",
+            "\nRecommendation: Use separate fleet configurations for conflicting baselines.\n",
         );
         output
     }

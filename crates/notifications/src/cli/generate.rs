@@ -202,7 +202,7 @@ fn print_dry_run(config: &NotificationConfig, combined: bool, output_mode: Outpu
 ///
 /// Produces:
 /// - `platforms/macos/configuration-profiles/` with mobileconfig files
-/// - `fleets/reference-team.yml` with profile entries
+/// - `fleets/reference-fleet.yml` with profile entries
 /// - `fragment.toml` manifest for merge
 fn run_fragment(
     input: &Path,
@@ -302,10 +302,10 @@ fn run_fragment(
         }
     }
 
-    // Generate fleets/reference-team.yml
+    // Generate fleets/reference-fleet.yml
     {
         let mut content = String::from(
-            "# Fleet GitOps - Team Configuration: Notifications\n\
+            "# Fleet GitOps - Fleet Configuration: Notifications\n\
              #\n\
              # Notification settings profiles for MDM deployment.\n\
              #\n\
@@ -322,7 +322,7 @@ fn run_fragment(
             let _ = writeln!(content, "      - path: {}", entry.path);
         }
 
-        std::fs::write(fleets_dir.join("reference-team.yml"), &content)?
+        std::fs::write(fleets_dir.join("reference-fleet.yml"), &content)?
     };
 
     // Generate fragment.toml

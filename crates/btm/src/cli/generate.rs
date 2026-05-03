@@ -341,9 +341,9 @@ fn run_generate_fragment(
     let layout = FleetLayout::default();
 
     let profiles_dir = output_dir.join(layout.macos_profiles_subdir);
-    let teams_dir = output_dir.join(layout.fleets_dir);
+    let fleets_dir = output_dir.join(layout.fleets_dir);
     std::fs::create_dir_all(&profiles_dir)?;
-    std::fs::create_dir_all(&teams_dir)?;
+    std::fs::create_dir_all(&fleets_dir)?;
 
     let mut profile_entries: Vec<ProfileEntry> = Vec::new();
     let mut lib_files: Vec<String> = Vec::new();
@@ -420,10 +420,10 @@ fn run_generate_fragment(
         }
     }
 
-    // Generate fleets/reference-team.yml
+    // Generate fleets/reference-fleet.yml
     {
         let mut content = String::from(
-            "# Fleet GitOps - Team Configuration: BTM/Service Management\n\
+            "# Fleet GitOps - Fleet Configuration: BTM/Service Management\n\
              #\n\
              # Background task management profiles for MDM deployment.\n\
              #\n\
@@ -440,7 +440,7 @@ fn run_generate_fragment(
             let _ = writeln!(content, "      - path: {}", entry.path);
         }
 
-        std::fs::write(teams_dir.join("reference-team.yml"), &content)?
+        std::fs::write(fleets_dir.join("reference-fleet.yml"), &content)?
     };
 
     // Generate fragment.toml

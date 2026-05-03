@@ -207,9 +207,9 @@ fn run_generate_fragment(
 
     let layout = contour_core::fleet_layout::FleetLayout::default();
     let profiles_dir = output_dir.join(layout.macos_profiles_subdir);
-    let teams_dir = output_dir.join(layout.fleets_dir);
+    let fleets_dir = output_dir.join(layout.fleets_dir);
     std::fs::create_dir_all(&profiles_dir)?;
-    std::fs::create_dir_all(&teams_dir)?;
+    std::fs::create_dir_all(&fleets_dir)?;
 
     let filename = format!("santa-rules.{default_ext}");
     let output_path = profiles_dir.join(&filename);
@@ -226,11 +226,11 @@ fn run_generate_fragment(
         labels_exclude_any: None,
     };
 
-    // Generate fleets/reference-team.yml
+    // Generate fleets/reference-fleet.yml
     {
         use std::fmt::Write;
         let mut content = String::from(
-            "# Fleet GitOps - Team Configuration: Santa Rules\n\
+            "# Fleet GitOps - Fleet Configuration: Santa Rules\n\
              #\n\
              # Santa allowlist/blocklist rules for MDM deployment.\n\
              #\n\
@@ -242,7 +242,7 @@ fn run_generate_fragment(
              \x20   custom_settings:\n",
         );
         let _ = writeln!(content, "      - path: {}", team_relative_path);
-        std::fs::write(teams_dir.join("reference-team.yml"), &content)?
+        std::fs::write(fleets_dir.join("reference-fleet.yml"), &content)?
     };
 
     // Generate fragment.toml
