@@ -209,70 +209,23 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
-/// SOP_PROFILE — first SOP migrated to procedural pseudocode for piloted ops
+/// SOP_PROFILE — first SOP migrated to the procedural format for piloted ops
 /// (generate, normalize, jamf import). Other ops remain prose pending trace.
 ///
 /// Sourced from the markdown file rather than embedded as a raw string so the
-/// pseudocode (which contains nested backticks and quotes) is easier to author
-/// and review. Same pattern as `SOP_ROUTING_TEMPLATE` below.
+/// procedure blocks (which contain nested backticks and quotes) are easier to
+/// author and review. Same pattern as `SOP_ROUTING_TEMPLATE` below.
 const SOP_PROFILE: &str = include_str!("../skills/contour/references/sop-profile.md");
 
-const SOP_MSCP: &str = r#"# SOP: mSCP Security Compliance
+/// SOP_MSCP — third SOP migrated to the procedural format. Same external-
+/// markdown pattern as SOP_PROFILE and SOP_DDM.
+const SOP_MSCP: &str = include_str!("../skills/contour/references/sop-mscp.md");
 
-## List baselines and rules
-```
-1. contour mscp schema baselines --json                        # list all baselines (14+)
-2. contour mscp schema rules --baseline <name> --json          # list rules in baseline
-3. contour mscp schema search <keyword> --json                 # search rules by keyword
-4. contour mscp schema rule <rule_id> --json                   # full rule detail + payload
-```
-
-## Handle ODV (Organization Defined Values)
-```
-When a rule has "has_odv": true in JSON output:
-1. contour mscp schema rule <rule_id> --json
-2. Read payload.odv_options — per-baseline recommendations:
-   {"cis_lvl1": 1200, "stig": 900, "recommended": 1200, "hint": "seconds"}
-3. Ask user: "This rule requires an organization-defined value.
-   Default: <odv_default>. Baseline options: <from odv_options>. Which value?"
-4. Use the chosen value when generating artifacts
-```
-
-## Generate compliance artifacts (requires mSCP repo)
-```
-1. contour mscp generate --baseline <name> --output <dir> --mscp-repo <path>
-   # Generates mobileconfigs via NIST's Python pipeline
-2. contour mscp generate --baseline <name> --output <dir> --fleet-mode
-   # Fleet GitOps output with policies, scripts, labels
-```
-
-## Compare embedded data vs mSCP repo
-```
-contour mscp schema compare <mscp_repo_path> --baseline <name> --json
-```
-
-## Key JSON fields for agents
-- `has_odv` — true if rule needs an organization-defined value (MUST ask user)
-- `odv_default` — default value if user doesn't specify
-- `mobileconfig` — true if enforceable via MDM profile
-- `has_ddm_info` — true if enforceable via DDM declaration
-- `enforcement_type` — how the rule is enforced
-- `payload.mobileconfig_info` — JSON array of {payload_type, keys} for profile generation
-- `payload.check_script` — shell script to verify compliance
-- `payload.odv_options` — JSON with per-baseline recommended values
-
-## Validate osquery tables referenced by mSCP rules
-When a rule has `osquery_checkable: true`, validate the referenced table:
-```
-contour osquery table <osquery_table_from_rule> --json
-```
-"#;
-
-/// SOP_DDM — second SOP migrated to procedural pseudocode.
+/// SOP_DDM — second SOP migrated to the procedural format.
 ///
 /// Sourced from the markdown file via include_str! (same pattern as
-/// SOP_PROFILE and SOP_ROUTING_TEMPLATE) so the pseudocode (which contains
-/// nested backticks and quotes) is easier to author and review.
+/// SOP_PROFILE and SOP_ROUTING_TEMPLATE) so the procedure blocks (which
+/// contain nested backticks and quotes) are easier to author and review.
 const SOP_DDM: &str = include_str!("../skills/contour/references/sop-ddm.md");
 
 const SOP_SANTA: &str = r#"# SOP: Santa Allowlist Generation

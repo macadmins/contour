@@ -1,7 +1,7 @@
-# Pseudocode SOP — Format Specification
+# Procedural SOP — Format Specification
 
-This document defines the **procedural pseudocode format** used by SOPs that
-have been migrated from prose to explicit control flow. It is the format spec,
+This document defines the **procedural SOP format** used by SOPs that have
+been migrated from prose to explicit control flow. It is the format spec,
 not an SOP itself. For a working example, see `sop-profile.md` and the three
 PROCEDURE blocks it contains.
 
@@ -130,7 +130,7 @@ without re-parsing potentially-empty `failure_categories[]`.
 |-----|--------|-------|
 | `SOP_PROFILE` | ✅ Migrated | First, in `sop-profile.md`. 3 procedures + prose for non-piloted ops |
 | `SOP_DDM` | ✅ Migrated | `sop-ddm.md`. `create_ddm_config` PROCEDURE introduces BUILD ORDER, CROSS-FILE INVARIANT, DEPRECATED_LIST, SCHEMA_SOURCE primitives |
-| `SOP_MSCP` | ⏳ Pending | Good fit; per-task workflow |
+| `SOP_MSCP` | ✅ Migrated | `sop-mscp.md`. `generate_baseline_compliance` + `resolve_odv` procedures. ODV-resolution is the killer trap prose SOPs only mention weakly |
 | `SOP_OSQUERY` | ⏳ Pending | Good fit; search/lookup + 6 query patterns |
 | `SOP_ENROLLMENT` | ⏳ Pending | Good fit; built-in decision guide for skip keys |
 | `SOP_PPPC` | ⏳ Pending | Good fit; linear init→scan→configure→generate |

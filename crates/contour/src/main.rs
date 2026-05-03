@@ -313,7 +313,7 @@ fn main() {
         if json_mode {
             // Phase B3: emit a parseable JSON error envelope on stderr so agents
             // and CI receive a structured failure shape, matching the BatchResult
-            // error_code enum documented in the SOP pseudocode pilot.
+            // error_code enum documented in the procedural SOP format spec.
             let msg = format!("{e:#}");
             let code = contour_core::classify_error(&msg);
             contour_core::print_error_json(&msg, Some(code));

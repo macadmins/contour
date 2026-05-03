@@ -192,3 +192,118 @@ fn trap_12_mscp_clean_works_on_v4_83() {
         "label file should be removed (v4.83 path)"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 16: `mscp schema rules --baseline <unknown>` returns `[]` with exit 0.
+// SOP procedure: generate_baseline_compliance / PRECONDITIONS
+// Catches: agents that branch on exit code would assume "rules listed
+// successfully" for a misspelled baseline name. The procedural SOP requires
+// checking array length, not exit code (same shape as profile search trap 4).
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_16_mscp_schema_rules_unknown_baseline_returns_empty_array() {
+    let output = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "schema",
+            "rules",
+            "--baseline",
+            "this_baseline_does_not_exist_xyz",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "schema rules exits 0 even for unknown baseline — agents MUST check JSON length"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value =
+        serde_json::from_str(stdout.trim()).expect("schema rules --json must emit a JSON array");
+    assert!(parsed.is_array(), "schema rules returns a JSON array");
+    assert_eq!(
+        parsed.as_array().unwrap().len(),
+        0,
+        "unknown baseline → empty array"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 17: `mscp schema rule <unknown_id>` returns the JSON literal `null`
+//          on stdout with exit 0. Agents MUST check `result is not null`,
+//          not `result.exit_code == 0`.
+// SOP procedure: resolve_odv / EXECUTION
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_17_mscp_schema_rule_unknown_id_returns_null() {
+    let output = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "schema",
+            "rule",
+            "this_rule_id_does_not_exist_xyz",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "schema rule exits 0 even for unknown rule_id"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value = serde_json::from_str(stdout.trim())
+        .expect("schema rule --json must emit valid JSON for unknown rules too");
+    assert!(
+        parsed.is_null(),
+        "unknown rule_id → JSON literal `null`, got: {parsed}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 18: `mscp schema rules --json` entries expose the `has_odv` field.
+// SOP procedure: generate_baseline_compliance / STEP 1 + resolve_odv
+// Catches: regressions that drop or rename has_odv. The procedural SOP's
+// ODV-resolution step keys off this field; renaming it silently breaks the
+// flow that surfaces ODV choices to the user.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_18_mscp_schema_rules_expose_has_odv_field() {
+    let output = Command::cargo_bin("mscp")
+        .unwrap()
+        .args(["schema", "rules", "--baseline", "cis_lvl1", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "schema rules cis_lvl1 must succeed"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value =
+        serde_json::from_str(stdout.trim()).expect("schema rules --json must emit a JSON array");
+    let rules = parsed.as_array().expect("schema rules returns an array");
+
+    assert!(
+        !rules.is_empty(),
+        "cis_lvl1 has rules; if this fails, embedded schema data is broken"
+    );
+
+    // Every rule entry MUST expose has_odv (typed bool); the procedural SOP's
+    // resolve_odv step relies on it.
+    let first = &rules[0];
+    let has_odv = first.get("has_odv");
+    assert!(
+        has_odv.is_some(),
+        "rule entry MUST include `has_odv` field; got keys: {:?}",
+        first.as_object().map(|o| o.keys().collect::<Vec<_>>())
+    );
+    assert!(
+        has_odv.unwrap().is_boolean(),
+        "has_odv MUST be a boolean (procedural SOP filters on it)"
+    );
+}
