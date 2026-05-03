@@ -955,3 +955,260 @@ MinimumLength = 8
         "compose failure leaves no files behind"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2 traps (36–39): predicate ↔ status-subscription cross-validation.
+//
+// Apple's DDM spec defines two distinct predicate failure modes:
+//   - Error.PredicateFailed         — evaluated cleanly to false (gating)
+//   - Error.UnableToEvaluatePredicate — couldn't evaluate (e.g., a referenced
+//                                       @status('key') isn't subscribed)
+// The second is an authoring bug that ships clean and breaks at deploy.
+// `compose` PRECONDITION + `ddm verify` directory-level cross-check pin
+// this so it can't drift.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 36: `ddm compose` rejects a bundle whose activation predicate
+//          references a status key that the bundle's [subscriptions].keys
+//          list does not cover.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_36_compose_rejects_unsubscribed_status_key() {
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml(dir.path(), "com.acme");
+
+    let bundle = dir.path().join("bundle.toml");
+    fs::write(
+        &bundle,
+        r#"intent_name = "miss-sub"
+
+[configuration]
+type = "com.apple.configuration.passcode.settings"
+
+[configuration.payload]
+MinimumLength = 8
+
+[activation]
+predicate = "@status('passcode.is-compliant') == TRUE"
+"#,
+    )
+    .unwrap();
+
+    let out = dir.path().join("out");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "--json",
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !result.status.success(),
+        "compose must reject unsubscribed status key"
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("SCHEMA_VIOLATION"),
+        "stderr includes SCHEMA_VIOLATION; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("passcode.is-compliant"),
+        "error names the missing key"
+    );
+    assert!(
+        !out.join("configuration.json").exists() && !out.join("activation.json").exists(),
+        "compose failure leaves no files behind"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 37: `ddm compose` with a [subscriptions] section emits a fourth
+//          declaration file `status-subscriptions.json` whose
+//          Payload.StatusItems list matches the declared keys.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_37_compose_emits_status_subscriptions_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml(dir.path(), "com.acme");
+
+    let bundle = dir.path().join("bundle.toml");
+    fs::write(
+        &bundle,
+        r#"intent_name = "with-sub"
+
+[configuration]
+type = "com.apple.configuration.passcode.settings"
+
+[configuration.payload]
+MinimumLength = 8
+
+[activation]
+predicate = "@status('passcode.is-compliant') == TRUE"
+
+[subscriptions]
+keys = ["passcode.is-compliant"]
+"#,
+    )
+    .unwrap();
+
+    let out = dir.path().join("out");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "--json",
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "compose must succeed");
+
+    let subs_path = out.join("status-subscriptions.json");
+    assert!(subs_path.exists(), "status-subscriptions.json emitted");
+
+    let subs: Value = serde_json::from_str(&fs::read_to_string(&subs_path).unwrap()).unwrap();
+    assert_eq!(
+        subs["Type"].as_str().unwrap(),
+        "com.apple.configuration.management.status-subscriptions"
+    );
+    let items = subs["Payload"]["StatusItems"]
+        .as_array()
+        .expect("StatusItems is an array");
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0]["Name"].as_str().unwrap(),
+        "passcode.is-compliant",
+        "StatusItems[].Name carries the subscribed key per Apple's schema"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 38: `ddm verify <dir>` finds an activation predicate that references
+//          a key not covered by any status-subscriptions in the directory.
+//          Hand-author a directory of declarations missing the subscription
+//          and assert verify exits non-zero with UnsubscribedStatusKey.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_38_verify_finds_unsubscribed_predicate_key_in_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let decls = dir.path().join("decls");
+    fs::create_dir_all(&decls).unwrap();
+
+    fs::write(
+        decls.join("configuration.json"),
+        r#"{
+            "Type": "com.apple.configuration.passcode.settings",
+            "Identifier": "com.acme.config.x",
+            "Payload": { "MinimumLength": 8 }
+        }"#,
+    )
+    .unwrap();
+    fs::write(
+        decls.join("activation.json"),
+        r#"{
+            "Type": "com.apple.activation.simple",
+            "Identifier": "com.acme.activation.x",
+            "Payload": {
+                "StandardConfigurations": ["com.acme.config.x"],
+                "Predicate": "@status('passcode.is-compliant') == TRUE"
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["--json", "ddm", "verify", decls.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !result.status.success(),
+        "verify must fail when predicate key is unsubscribed"
+    );
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let parsed: Value = serde_json::from_str(stdout.trim()).expect("verify --json emits JSON");
+    assert_eq!(parsed["success"], false);
+    let errs = parsed["errors"].as_array().expect("errors array");
+    let unsubscribed = errs
+        .iter()
+        .find(|e| e["kind"] == "UnsubscribedStatusKey")
+        .expect("UnsubscribedStatusKey error present");
+    assert_eq!(
+        unsubscribed["key"].as_str().unwrap(),
+        "passcode.is-compliant"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 39: `ddm verify <dir>` exits 0 on a clean directory — configuration
+//          + activation + matching status-subscriptions all wired correctly.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_39_verify_passes_clean_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let decls = dir.path().join("decls");
+    fs::create_dir_all(&decls).unwrap();
+
+    fs::write(
+        decls.join("configuration.json"),
+        r#"{
+            "Type": "com.apple.configuration.passcode.settings",
+            "Identifier": "com.acme.config.x",
+            "Payload": { "MinimumLength": 8 }
+        }"#,
+    )
+    .unwrap();
+    fs::write(
+        decls.join("activation.json"),
+        r#"{
+            "Type": "com.apple.activation.simple",
+            "Identifier": "com.acme.activation.x",
+            "Payload": {
+                "StandardConfigurations": ["com.acme.config.x"],
+                "Predicate": "@status('passcode.is-compliant') == TRUE"
+            }
+        }"#,
+    )
+    .unwrap();
+    fs::write(
+        decls.join("status-subscriptions.json"),
+        r#"{
+            "Type": "com.apple.configuration.management.status-subscriptions",
+            "Identifier": "com.acme.subscriptions.x",
+            "Payload": {
+                "StatusItems": [{"Name": "passcode.is-compliant"}]
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["--json", "ddm", "verify", decls.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "verify on a clean directory must succeed; stdout: {}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let parsed: Value = serde_json::from_str(stdout.trim()).expect("verify --json emits JSON");
+    assert_eq!(parsed["success"], true);
+    assert_eq!(parsed["errors"].as_array().unwrap().len(), 0);
+    // No warnings either — config IS referenced by activation, subscription IS used.
+    assert_eq!(parsed["warnings"].as_array().unwrap().len(), 0);
+}

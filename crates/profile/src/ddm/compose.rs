@@ -24,7 +24,8 @@ use serde_json::{Map, Value};
 /// procedural SOP documents it at `sop-ddm.md`.
 pub const DEFAULT_ACTIVATION_TYPE: &str = "com.apple.activation.simple";
 
-/// A bundle describing one DDM intent (asset + configuration + activation).
+/// A bundle describing one DDM intent (asset + configuration + activation
+/// + optional status-subscriptions).
 #[derive(Debug, Clone, Deserialize)]
 pub struct Bundle {
     /// Used as the `{tail}` segment in computed identifiers
@@ -38,6 +39,19 @@ pub struct Bundle {
 
     #[serde(default)]
     pub activation: Option<BundleActivation>,
+
+    /// Optional `[subscriptions]` section listing the status keys the
+    /// activation predicate references. When the predicate uses
+    /// `@status(...)`, the bundle MUST include those keys here — Apple
+    /// does not auto-subscribe based on predicate parsing, so a
+    /// predicate referencing an unsubscribed key produces
+    /// `Error.UnableToEvaluatePredicate` at deploy time.
+    ///
+    /// When present, `compose` emits a fourth declaration file
+    /// `status-subscriptions.json` (type
+    /// `com.apple.management.status-subscriptions`).
+    #[serde(default)]
+    pub subscriptions: Option<BundleSubscriptions>,
 }
 
 /// Bundle [asset] section.
@@ -74,6 +88,24 @@ pub struct BundleConfiguration {
     pub payload: Map<String, Value>,
 }
 
+/// Bundle [subscriptions] section.
+///
+/// Maps to a `com.apple.management.status-subscriptions` declaration —
+/// the manifest of status items the device is willing to report. The
+/// activation's predicate (and any other declarations on the device)
+/// can only `@status('key')` reference keys present here.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BundleSubscriptions {
+    /// Status keys the device should subscribe to (e.g.
+    /// `passcode.is-compliant`, `softwareupdate.install-state`).
+    pub keys: Vec<String>,
+
+    /// Override for the computed identifier; defaults to
+    /// `{org}.subscriptions.{intent_name}`.
+    #[serde(default)]
+    pub identifier: Option<String>,
+}
+
 /// Bundle [activation] section.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct BundleActivation {
@@ -100,6 +132,11 @@ pub struct ComposedBundle {
     pub asset: Option<Declaration>,
     pub configuration: Declaration,
     pub activation: Option<Declaration>,
+    /// Status-subscriptions declaration emitted when the bundle has a
+    /// `[subscriptions]` section. When present, this MUST be deployed
+    /// before the activation so the device has the subscription set up
+    /// before the predicate evaluates.
+    pub subscriptions: Option<Declaration>,
     /// Which configuration field was used for the asset reference (if any).
     /// Surfaced so the CLI can include it in `--json` output.
     pub asset_ref_field_used: Option<String>,
@@ -139,6 +176,14 @@ pub enum ComposeError {
         type_name: String,
         actual: Option<DeclarationType>,
     },
+    /// Activation predicate references `@status('key')` keys that the
+    /// bundle's `[subscriptions].keys` list does not cover. Without the
+    /// subscription, the device returns `Error.UnableToEvaluatePredicate`
+    /// at deploy time — pinned by the procedural SOP.
+    UnsubscribedStatusKey {
+        activation_id: String,
+        missing_keys: Vec<String>,
+    },
     /// Bundle declares an asset that nothing references and `--allow-orphans`
     /// was not set. (Configurations are not currently checked for orphan
     /// status — a configuration without an activation is a valid Apple
@@ -158,7 +203,8 @@ impl ComposeError {
             | Self::MissingAssetRef { .. }
             | Self::UnknownAssetRefField { .. }
             | Self::WrongCategory { .. }
-            | Self::OrphanAsset { .. } => "SCHEMA_VIOLATION",
+            | Self::OrphanAsset { .. }
+            | Self::UnsubscribedStatusKey { .. } => "SCHEMA_VIOLATION",
             Self::InvalidIdentifier { .. } => "INVALID_IDENTIFIER",
             Self::InvalidOrg { .. } => "INVALID_ORG",
         }
@@ -211,6 +257,18 @@ impl std::fmt::Display for ComposeError {
                 f,
                 "asset '{identifier}' is declared but nothing references it; \
                  pass --allow-orphans to permit"
+            ),
+            Self::UnsubscribedStatusKey {
+                activation_id,
+                missing_keys,
+            } => write!(
+                f,
+                "activation '{activation_id}' predicate references status \
+                 key(s) {missing_keys:?} that the bundle's [subscriptions].keys \
+                 list does not cover; without subscription, the device \
+                 returns Error.UnableToEvaluatePredicate at deploy time. \
+                 Add the missing keys to [subscriptions].keys or remove \
+                 them from the predicate."
             ),
             Self::InvalidOrg { domain } => {
                 write!(f, "invalid organization domain '{domain}'")
@@ -435,12 +493,98 @@ pub fn compose(
         }
     }
 
+    // 9. Predicate ↔ subscription cross-check (strict by default).
+    //
+    // If the activation has a predicate that references @status('key'),
+    // the bundle MUST include those keys in [subscriptions].keys —
+    // otherwise the device returns Error.UnableToEvaluatePredicate.
+    let subscriptions_decl =
+        build_subscriptions_decl(bundle, org_domain, activation_decl.as_ref())?;
+
     Ok(ComposedBundle {
         asset: asset_decl,
         configuration: configuration_decl,
         activation: activation_decl,
+        subscriptions: subscriptions_decl,
         asset_ref_field_used: asset_ref_field,
     })
+}
+
+/// Resolve the optional `[subscriptions]` declaration and verify the
+/// activation predicate's `@status(...)` references are covered.
+fn build_subscriptions_decl(
+    bundle: &Bundle,
+    org_domain: &str,
+    activation: Option<&Declaration>,
+) -> Result<Option<Declaration>, ComposeError> {
+    // Extract @status(...) keys the predicate references (if any).
+    let referenced_keys: Vec<String> = activation
+        .and_then(|d| d.payload.get("Predicate"))
+        .and_then(|v| v.as_str())
+        .map(|p| crate::ddm::predicate::extract_predicate_keys(p).status)
+        .unwrap_or_default();
+
+    // No predicate references AND no [subscriptions] section → nothing to do.
+    if referenced_keys.is_empty() && bundle.subscriptions.is_none() {
+        return Ok(None);
+    }
+
+    // Predicate references status keys but bundle has no [subscriptions]
+    // section → strict failure.
+    let Some(subs) = &bundle.subscriptions else {
+        return Err(ComposeError::UnsubscribedStatusKey {
+            activation_id: activation
+                .map(|a| a.identifier.clone())
+                .unwrap_or_else(|| "<unknown>".to_string()),
+            missing_keys: referenced_keys,
+        });
+    };
+
+    // Bundle has [subscriptions]; verify it covers every referenced key.
+    let subscribed: std::collections::BTreeSet<&str> =
+        subs.keys.iter().map(String::as_str).collect();
+    let missing: Vec<String> = referenced_keys
+        .iter()
+        .filter(|k| !subscribed.contains(k.as_str()))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        return Err(ComposeError::UnsubscribedStatusKey {
+            activation_id: activation
+                .map(|a| a.identifier.clone())
+                .unwrap_or_else(|| "<unknown>".to_string()),
+            missing_keys: missing,
+        });
+    }
+
+    // Build the status-subscriptions declaration.
+    let id = subs
+        .identifier
+        .clone()
+        .unwrap_or_else(|| format!("{org_domain}.subscriptions.{}", bundle.intent_name));
+    check_identifier_shape(&id)?;
+
+    let mut payload: Map<String, Value> = Map::new();
+    // Apple's status-subscriptions schema (verified against
+    // device-management/declarative/declarations/configurations/management.status-subscriptions.yaml):
+    //   StatusItems: array of { Name: <status-item-name> } dicts.
+    let status_items: Vec<Value> = subs
+        .keys
+        .iter()
+        .map(|k| {
+            let mut entry = Map::new();
+            entry.insert("Name".to_string(), Value::String(k.clone()));
+            Value::Object(entry)
+        })
+        .collect();
+    payload.insert("StatusItems".to_string(), Value::Array(status_items));
+
+    Ok(Some(Declaration {
+        declaration_type: "com.apple.configuration.management.status-subscriptions".to_string(),
+        identifier: id,
+        server_token: None,
+        payload: DeclarationPayload(payload.into_iter().collect()),
+    }))
 }
 
 fn validate_org_domain(domain: &str) -> Result<(), ComposeError> {
@@ -592,6 +736,7 @@ mod tests {
                 payload: Map::new(),
             },
             activation: None,
+            subscriptions: None,
         };
         let composed = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap();
         assert!(composed.asset.is_none());
@@ -632,6 +777,7 @@ mod tests {
                 predicate: None,
                 references: None,
             }),
+            subscriptions: None,
         };
         let composed = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap();
         let asset = composed.asset.expect("asset emitted");
@@ -682,6 +828,7 @@ mod tests {
                 payload: Map::new(),
             },
             activation: None,
+            subscriptions: None,
         };
         let err = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap_err();
         assert!(matches!(err, ComposeError::AmbiguousAssetRef { .. }));
@@ -711,6 +858,7 @@ mod tests {
                 payload: Map::new(),
             },
             activation: None,
+            subscriptions: None,
         };
         let err = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap_err();
         assert!(matches!(err, ComposeError::MissingAssetRef { .. }));
@@ -740,6 +888,7 @@ mod tests {
                 payload: Map::new(),
             },
             activation: Some(BundleActivation::default()),
+            subscriptions: None,
         };
         let composed = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap();
         assert!(composed.asset.unwrap().server_token.is_none());
@@ -772,6 +921,7 @@ mod tests {
                 payload: Map::new(),
             },
             activation: None,
+            subscriptions: None,
         };
         // Without --allow-orphans: MissingAssetRef fires first (the asset
         // can't even be wired). The orphan check is the second line of
@@ -797,6 +947,7 @@ mod tests {
                 payload: Map::new(),
             },
             activation: None,
+            subscriptions: None,
         };
         let err = compose(
             &bundle,
@@ -821,8 +972,146 @@ mod tests {
                 payload: Map::new(),
             },
             activation: None,
+            subscriptions: None,
         };
         let err = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap_err();
         assert!(matches!(err, ComposeError::UnknownType { .. }));
+    }
+
+    fn make_passcode_registry() -> SchemaRegistry {
+        registry_with(vec![
+            make_manifest(
+                "com.apple.configuration.passcode.settings",
+                &["MinimumLength"],
+            ),
+            make_manifest("com.apple.activation.simple", &[]),
+        ])
+    }
+
+    #[test]
+    fn compose_predicate_without_subscriptions_fails() {
+        let registry = make_passcode_registry();
+        let bundle = Bundle {
+            intent_name: "p".into(),
+            asset: None,
+            configuration: BundleConfiguration {
+                type_name: "com.apple.configuration.passcode.settings".into(),
+                identifier: None,
+                asset_ref_field: None,
+                payload: Map::new(),
+            },
+            activation: Some(BundleActivation {
+                predicate: Some("@status('passcode.is-compliant') == TRUE".into()),
+                ..Default::default()
+            }),
+            subscriptions: None,
+        };
+        let err = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap_err();
+        match err {
+            ComposeError::UnsubscribedStatusKey { missing_keys, .. } => {
+                assert_eq!(missing_keys, vec!["passcode.is-compliant"])
+            }
+            other => panic!("expected UnsubscribedStatusKey, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compose_subscription_covers_predicate() {
+        let registry = make_passcode_registry();
+        let bundle = Bundle {
+            intent_name: "p".into(),
+            asset: None,
+            configuration: BundleConfiguration {
+                type_name: "com.apple.configuration.passcode.settings".into(),
+                identifier: None,
+                asset_ref_field: None,
+                payload: Map::new(),
+            },
+            activation: Some(BundleActivation {
+                predicate: Some("@status('passcode.is-compliant') == TRUE".into()),
+                ..Default::default()
+            }),
+            subscriptions: Some(BundleSubscriptions {
+                keys: vec!["passcode.is-compliant".into()],
+                identifier: None,
+            }),
+        };
+        let composed = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap();
+        let subs = composed.subscriptions.expect("subscriptions emitted");
+        assert_eq!(
+            subs.declaration_type,
+            "com.apple.configuration.management.status-subscriptions"
+        );
+        assert_eq!(subs.identifier, "com.acme.subscriptions.p");
+        // StatusItems is an array of { Name: <key> } per Apple's schema.
+        let items = subs
+            .payload
+            .get("StatusItems")
+            .and_then(Value::as_array)
+            .expect("StatusItems array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].get("Name").and_then(Value::as_str),
+            Some("passcode.is-compliant"),
+        );
+    }
+
+    #[test]
+    fn compose_subscription_partial_coverage_fails() {
+        let registry = make_passcode_registry();
+        let bundle = Bundle {
+            intent_name: "p".into(),
+            asset: None,
+            configuration: BundleConfiguration {
+                type_name: "com.apple.configuration.passcode.settings".into(),
+                identifier: None,
+                asset_ref_field: None,
+                payload: Map::new(),
+            },
+            activation: Some(BundleActivation {
+                predicate: Some(
+                    "@status('passcode.is-compliant') == TRUE AND \
+                     @status('softwareupdate.install-state') == 'Idle'"
+                        .into(),
+                ),
+                ..Default::default()
+            }),
+            subscriptions: Some(BundleSubscriptions {
+                // Subscribed to one key but predicate references two.
+                keys: vec!["passcode.is-compliant".into()],
+                identifier: None,
+            }),
+        };
+        let err = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap_err();
+        match err {
+            ComposeError::UnsubscribedStatusKey { missing_keys, .. } => {
+                assert_eq!(missing_keys, vec!["softwareupdate.install-state"]);
+            }
+            other => panic!("expected UnsubscribedStatusKey, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compose_no_predicate_skips_subscriptions_check() {
+        // No predicate, no [subscriptions] → no subscriptions decl emitted,
+        // no error.
+        let registry = make_passcode_registry();
+        let bundle = Bundle {
+            intent_name: "p".into(),
+            asset: None,
+            configuration: BundleConfiguration {
+                type_name: "com.apple.configuration.passcode.settings".into(),
+                identifier: None,
+                asset_ref_field: None,
+                payload: Map::new(),
+            },
+            activation: Some(BundleActivation {
+                predicate: None,
+                ..Default::default()
+            }),
+            subscriptions: None,
+        };
+        let composed = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap();
+        assert!(composed.subscriptions.is_none());
     }
 }

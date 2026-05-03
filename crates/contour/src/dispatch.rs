@@ -787,6 +787,13 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output_mode,
                 )?;
             }
+            DdmAction::Verify {
+                directory,
+                recursive,
+                strict,
+            } => {
+                profile::cli::ddm::handle_ddm_verify(&directory, recursive, strict, output_mode)?;
+            }
         },
         Commands::Enrollment { action } => match action {
             EnrollmentAction::List {

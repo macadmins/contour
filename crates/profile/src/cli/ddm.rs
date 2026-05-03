@@ -5,6 +5,7 @@
 
 use crate::config::ProfileConfig;
 use crate::ddm::compose::{Bundle, ComposeOptions, ComposedBundle, compose};
+use crate::ddm::verify::{VerifyError, VerifyReport, VerifyWarning, build_report};
 use crate::ddm::{
     Declaration, DeclarationPayload, is_ddm_file, parse_declaration_file, write_declaration,
 };
@@ -907,6 +908,14 @@ pub fn handle_ddm_compose(
 
     let mut written: Vec<(String, PathBuf, Declaration)> = Vec::new();
 
+    // Deploy order: status-subscriptions first (so the device has the
+    // subscription set up before any predicate evaluates), then asset,
+    // then configuration, then activation.
+    if let Some(subs) = &composed.subscriptions {
+        let path = out.join("status-subscriptions.json");
+        std::fs::write(&path, write_declaration(subs)?)?;
+        written.push(("status-subscriptions".to_string(), path, subs.clone()));
+    }
     if let Some(asset) = &composed.asset {
         let path = out.join("asset.json");
         std::fs::write(&path, write_declaration(asset)?)?;
@@ -1003,6 +1012,272 @@ fn emit_compose_human(
             decl.identifier.bold(),
             path.display()
         );
+    }
+}
+
+/// Verify cross-references across a directory of DDM declarations.
+///
+/// Pure-Rust check delegated to [`crate::ddm::verify::build_report`].
+/// This handler walks the directory, parses each `*.json` file with the
+/// existing `parse_declaration_file`, and emits a typed report.
+pub fn handle_ddm_verify(
+    directory: &str,
+    recursive: bool,
+    strict: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let dir = Path::new(directory);
+    if !dir.exists() || !dir.is_dir() {
+        let msg = format!("--directory must be an existing directory: {directory}");
+        if output_mode == OutputMode::Json {
+            contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
+        }
+        anyhow::bail!(msg);
+    }
+
+    // Walk and parse.
+    let mut files: Vec<PathBuf> = Vec::new();
+    if recursive {
+        for entry in WalkDir::new(dir).follow_links(true).into_iter().flatten() {
+            let p = entry.path();
+            if p.is_file() && p.extension().is_some_and(|e| e == "json") && is_ddm_file(p) {
+                files.push(p.to_path_buf());
+            }
+        }
+    } else if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let p = entry.path();
+            if p.is_file() && p.extension().is_some_and(|e| e == "json") && is_ddm_file(&p) {
+                files.push(p);
+            }
+        }
+    }
+
+    let mut declarations: Vec<(PathBuf, Declaration)> = Vec::new();
+    let mut parse_errors: Vec<(PathBuf, String)> = Vec::new();
+    for file in files {
+        match parse_declaration_file(&file) {
+            Ok(decl) => declarations.push((file, decl)),
+            Err(e) => parse_errors.push((file, e.to_string())),
+        }
+    }
+
+    let report = build_report(&declarations);
+
+    let clean = if strict {
+        report.is_clean_strict()
+    } else {
+        report.is_clean()
+    };
+    let exit_ok = clean && parse_errors.is_empty();
+
+    match output_mode {
+        OutputMode::Json => emit_verify_json(directory, &report, &parse_errors),
+        OutputMode::Human => emit_verify_human(directory, &report, &parse_errors, strict),
+    }
+
+    if !exit_ok {
+        anyhow::bail!(
+            "{} verify error(s), {} warning(s), {} parse failure(s)",
+            report.errors.len(),
+            report.warnings.len(),
+            parse_errors.len()
+        );
+    }
+
+    Ok(())
+}
+
+fn emit_verify_json(directory: &str, report: &VerifyReport, parse_errors: &[(PathBuf, String)]) {
+    let json = serde_json::json!({
+        "success":          report.is_clean() && parse_errors.is_empty(),
+        "directory":        directory,
+        "asset_count":      report.assets.len(),
+        "config_count":     report.configurations.len(),
+        "activation_count": report.activations.len(),
+        "subscription_count": report.subscriptions.len(),
+        "errors":   report.errors.iter().map(verify_error_to_json).collect::<Vec<_>>(),
+        "warnings": report.warnings.iter().map(verify_warning_to_json).collect::<Vec<_>>(),
+        "parse_errors": parse_errors
+            .iter()
+            .map(|(p, e)| serde_json::json!({ "file": p.display().to_string(), "error": e }))
+            .collect::<Vec<_>>(),
+        "graph": {
+            "assets": report.assets.iter().map(|a| serde_json::json!({
+                "identifier": a.identifier, "type": a.r#type, "file": a.file.display().to_string()
+            })).collect::<Vec<_>>(),
+            "configurations": report.configurations.iter().map(|c| serde_json::json!({
+                "identifier": c.identifier, "type": c.r#type, "file": c.file.display().to_string(),
+                "asset_refs": c.asset_refs,
+            })).collect::<Vec<_>>(),
+            "activations": report.activations.iter().map(|a| serde_json::json!({
+                "identifier": a.identifier, "type": a.r#type, "file": a.file.display().to_string(),
+                "configuration_refs": a.configuration_refs,
+                "predicate": a.predicate,
+                "predicate_status_keys": a.predicate_status_keys,
+            })).collect::<Vec<_>>(),
+            "subscriptions": report.subscriptions.iter().map(|s| serde_json::json!({
+                "identifier": s.identifier, "type": s.r#type, "file": s.file.display().to_string(),
+                "status_items": s.status_items,
+            })).collect::<Vec<_>>(),
+        }
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string())
+    );
+}
+
+fn verify_error_to_json(err: &VerifyError) -> serde_json::Value {
+    match err {
+        VerifyError::DanglingAssetReference {
+            configuration_id,
+            field,
+            target,
+            file,
+        } => serde_json::json!({
+            "kind": "DanglingAssetReference",
+            "configuration_id": configuration_id,
+            "field": field,
+            "target": target,
+            "file": file.display().to_string(),
+        }),
+        VerifyError::DanglingConfigurationReference {
+            activation_id,
+            target,
+            file,
+        } => serde_json::json!({
+            "kind": "DanglingConfigurationReference",
+            "activation_id": activation_id,
+            "target": target,
+            "file": file.display().to_string(),
+        }),
+        VerifyError::UnsubscribedStatusKey {
+            activation_id,
+            key,
+            file,
+        } => serde_json::json!({
+            "kind": "UnsubscribedStatusKey",
+            "activation_id": activation_id,
+            "key": key,
+            "file": file.display().to_string(),
+        }),
+        VerifyError::ServerTokenAuthored { identifier, file } => serde_json::json!({
+            "kind": "ServerTokenAuthored",
+            "identifier": identifier,
+            "file": file.display().to_string(),
+        }),
+    }
+}
+
+fn verify_warning_to_json(warn: &VerifyWarning) -> serde_json::Value {
+    match warn {
+        VerifyWarning::OrphanAsset { identifier, file } => serde_json::json!({
+            "kind": "OrphanAsset",
+            "identifier": identifier,
+            "file": file.display().to_string(),
+        }),
+        VerifyWarning::OrphanConfiguration { identifier, file } => serde_json::json!({
+            "kind": "OrphanConfiguration",
+            "identifier": identifier,
+            "file": file.display().to_string(),
+        }),
+        VerifyWarning::UnusedSubscriptionKey { key, file } => serde_json::json!({
+            "kind": "UnusedSubscriptionKey",
+            "key": key,
+            "file": file.display().to_string(),
+        }),
+    }
+}
+
+fn emit_verify_human(
+    directory: &str,
+    report: &VerifyReport,
+    parse_errors: &[(PathBuf, String)],
+    strict: bool,
+) {
+    let clean = if strict {
+        report.is_clean_strict() && parse_errors.is_empty()
+    } else {
+        report.is_clean() && parse_errors.is_empty()
+    };
+    if clean {
+        println!(
+            "{} {} ({} asset(s), {} configuration(s), {} activation(s), {} subscription(s))",
+            "✓".green().bold(),
+            format!("Verified {directory}").bold(),
+            report.assets.len(),
+            report.configurations.len(),
+            report.activations.len(),
+            report.subscriptions.len(),
+        );
+        return;
+    }
+    println!(
+        "{} {}",
+        "✗".red().bold(),
+        format!("Verify failed for {directory}").bold()
+    );
+    for err in &report.errors {
+        println!("  {} {}", "·".red(), describe_error(err));
+    }
+    for (file, msg) in parse_errors {
+        println!("  {} parse error in {}: {}", "·".red(), file.display(), msg);
+    }
+    if !report.warnings.is_empty() {
+        let label = if strict {
+            "·".red().to_string()
+        } else {
+            "·".yellow().to_string()
+        };
+        for warn in &report.warnings {
+            println!("  {label} {}", describe_warning(warn));
+        }
+    }
+}
+
+fn describe_error(err: &VerifyError) -> String {
+    match err {
+        VerifyError::DanglingAssetReference {
+            configuration_id,
+            field,
+            target,
+            ..
+        } => format!(
+            "configuration '{configuration_id}' references missing asset '{target}' \
+             via {field}"
+        ),
+        VerifyError::DanglingConfigurationReference {
+            activation_id,
+            target,
+            ..
+        } => format!("activation '{activation_id}' references missing configuration '{target}'"),
+        VerifyError::UnsubscribedStatusKey {
+            activation_id, key, ..
+        } => format!(
+            "activation '{activation_id}' predicate references unsubscribed status key \
+             '{key}' (would deploy as Error.UnableToEvaluatePredicate)"
+        ),
+        VerifyError::ServerTokenAuthored { identifier, .. } => format!(
+            "declaration '{identifier}' has ServerToken authored — that field is \
+             server-managed; remove it"
+        ),
+    }
+}
+
+fn describe_warning(warn: &VerifyWarning) -> String {
+    match warn {
+        VerifyWarning::OrphanAsset { identifier, .. } => {
+            format!("orphan asset '{identifier}' (no configuration references it)")
+        }
+        VerifyWarning::OrphanConfiguration { identifier, .. } => format!(
+            "orphan configuration '{identifier}' (no activation references it; \
+             this is valid Apple-side but worth confirming)"
+        ),
+        VerifyWarning::UnusedSubscriptionKey { key, .. } => format!(
+            "unused subscription key '{key}' (subscribed but no predicate \
+             references it)"
+        ),
     }
 }
 
