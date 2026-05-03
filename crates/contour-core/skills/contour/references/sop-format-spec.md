@@ -138,31 +138,63 @@ without re-parsing potentially-empty `failure_categories[]`.
 | `SOP_NOTIFICATIONS` | ✅ Migrated | `sop-notifications.md`. `generate_notifications_profile`; documents the user-prior-choice deployment-order constraint |
 | `SOP_SUPPORT` | ✅ Migrated | `sop-support.md`. `generate_support_profile` pins `nl.root3.support` PayloadType as an INVARIANT |
 | `SOP_PRECOMMIT` | ✅ Migrated | `sop-precommit.md`. `configure_pre_commit_validation` PROCEDURE; uvx pre-commit + framework-free shell hook recipes; `${CONTOUR:-contour}` env-var override for testing pre-release binaries |
-| `SOP_SANTA` | ❌ Different format | Cookbook of 6 divergent recipes — needs decision tree at top |
-| `SOP_FLEET_MIGRATE` | ❌ Different format | One-time migration playbook with manual diff checks |
-| `SOP_CI` | ⚠️ Hybrid | Configuration setup + thin `configure-ci` procedure |
-| `SOP_SCHEMA_DATA` | ⚠️ Hybrid | Developer reference + happy-path `update-schema-data` procedure |
+| `SOP_SANTA` | ✅ Migrated (cookbook format) | `sop-santa.md`. **Different shape** from procedural: decision tree at top + 6 named recipes. Procedural fights a fan-out command surface. CEL `target.*` field surface verified against `santa/Source/common/cel/Activation.{h,mm}` + santa.proto |
+| `SOP_FLEET_MIGRATE` | ✅ Migrated (numbered playbook) | `sop-fleet-migrate.md`. **Different shape** from procedural: numbered playbook with manual diff-checkpoints between steps. Validated against fleetctl v4.84.2 `it-and-security` scaffold + `yaml-files.md`. Canonical v4.84+ form is `paths:` globs; per-file `path:` + `labels_include_*` is the targeted alternative |
+| `SOP_CI` | ✅ Migrated (hybrid) | `sop-ci.md`. Hybrid: `configure_ci` PROCEDURE for the `gh variable set` / `gh secret set` bootstrap + workflow-recipe reference for the YAML patterns. Procedural where contracts are sharp; recipes where they're configuration |
+| `SOP_SCHEMA_DATA` | ✅ Migrated (hybrid) | `sop-schema-data.md`. Hybrid: data inventory + three-layer versioning reference + `update_schema_data` PROCEDURE for the happy-path refresh from posture. Internal contour-dev SOP |
+
+**14/14 SOPs migrated.** Three formats are in active use:
+- **Procedural** (10 SOPs) — single canonical procedure with typed errors
+- **Cookbook / decision tree** (1: SOP_SANTA) — fan-out command surface
+- **Numbered playbook** (1: SOP_FLEET_MIGRATE) — one-time, human-driven
+- **Hybrid** (2: SOP_CI, SOP_SCHEMA_DATA) — procedure for the bootstrap, reference for the rest
 
 ---
 
-## Migrating a new SOP — recipe
+## Adding a new SOP — recipe
 
-1. Pick an SOP from the "⏳ Pending" list above.
-2. **Trace every documented command end-to-end** against the CLI with `--json`.
-   Capture actual JSON shapes; do not guess.
-3. **Add traps** to `crates/profile/tests/sop_traps.rs` for each precondition
-   and postcondition the new procedure documents. The trap suite is the
-   effectiveness indicator — every migrated SOP should grow it.
+The 14 existing SOPs cover the current contour surface. Add a new SOP
+when a meaningful new tool is added (e.g. a new top-level command) or
+when an existing SOP grows past the point where one file is readable.
+
+1. **Pick the format** that fits the content:
+   - Procedural (default) — when there's one canonical procedure with
+     fail-fast preconditions and verifiable postconditions.
+   - Cookbook + decision tree — when the surface is fan-out (multiple
+     goals each with a different end-to-end pipeline; SOP_SANTA is the
+     example).
+   - Numbered playbook — for one-time / human-driven migrations where
+     auto-fix would do more harm than good (SOP_FLEET_MIGRATE).
+   - Hybrid — when one part is genuinely procedural and the rest is
+     reference (SOP_CI, SOP_SCHEMA_DATA).
+
+2. **Trace every documented command end-to-end** against the CLI with
+   `--json`. Capture actual JSON shapes; do not guess.
+
+3. **Add traps** to `crates/profile/tests/sop_traps.rs` (or the
+   appropriate sibling file) for each precondition and postcondition
+   the procedure documents. The trap suite is the effectiveness
+   indicator — every migrated SOP should grow it.
+
 4. **Write the SOP** as `crates/contour-core/skills/contour/references/sop-{name}.md`,
-   following the structure of `sop-profile.md`:
-   - Brief preamble pointing to this file as the format spec
-   - Inline copy of the ERROR-CODE ENUM for self-containment
-   - One PROCEDURE block per traced operation
-   - Prose recipes for any operation not yet traced
+   following the closest existing example:
+   - Procedural: `sop-profile.md` / `sop-ddm.md`
+   - Cookbook + decision tree: `sop-santa.md`
+   - Numbered playbook: `sop-fleet-migrate.md`
+   - Hybrid: `sop-ci.md` / `sop-schema-data.md`
+
 5. **Wire it up** in `crates/contour-core/src/help_agents.rs`:
    ```rust
    const SOP_FOO: &str = include_str!("../skills/contour/references/sop-foo.md");
+   // …add `"foo" | …aliases…` arm to fn generate_sop's match.
    ```
-6. Run `cargo test -p profile --test sop_traps` and `cargo test -p contour-core`.
-   Both must stay green.
-7. Update this file's "Migration status" table.
+
+6. **Validate against upstream** when the SOP cites external behaviour
+   (Apple's device-management repo, Fleet's `fleetctl new` scaffold,
+   Santa's CEL Activation, etc.). Cite the path you validated against
+   in the SOP itself.
+
+7. Run `cargo test -p profile --test sop_traps` and
+   `cargo test -p contour-core`. Both must stay green.
+
+8. Update this file's "Migration status" table.
