@@ -1152,6 +1152,64 @@ fn trap_38_verify_finds_unsubscribed_predicate_key_in_directory() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Trap 40: `CONTOUR_ORG` env var is honored by `ddm compose` and `ddm
+//          generate` — pinned because both handlers initially shipped
+//          with only profile.toml + .contour/config.toml resolution,
+//          breaking CI workflows that set CONTOUR_ORG. Resolution order:
+//          profile.toml → CONTOUR_ORG → .contour/config.toml.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_40_ddm_compose_honors_contour_org_env() {
+    let dir = tempfile::tempdir().unwrap();
+    // No profile.toml, no .contour/config.toml — only CONTOUR_ORG.
+    let bundle = dir.path().join("bundle.toml");
+    fs::write(
+        &bundle,
+        r#"intent_name = "env-test"
+
+[configuration]
+type = "com.apple.configuration.passcode.settings"
+
+[configuration.payload]
+MinimumLength = 8
+"#,
+    )
+    .unwrap();
+
+    let out = dir.path().join("out");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", std::env::var("HOME").unwrap_or_default())
+        .env("CONTOUR_ORG", "com.envacme")
+        .args([
+            "--json",
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "compose with CONTOUR_ORG must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let cfg: Value =
+        serde_json::from_str(&fs::read_to_string(out.join("configuration.json")).unwrap()).unwrap();
+    assert_eq!(
+        cfg["Identifier"].as_str().unwrap(),
+        "com.envacme.config.env-test",
+        "Identifier reflects CONTOUR_ORG env var, not a hardcoded fallback"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Trap 39: `ddm verify <dir>` exits 0 on a clean directory — configuration
 //          + activation + matching status-subscriptions all wired correctly.
 // ─────────────────────────────────────────────────────────────────────────────
