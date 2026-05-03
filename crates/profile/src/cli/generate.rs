@@ -226,13 +226,13 @@ fn toml_to_plist_resolved(val: &toml::Value) -> Value {
 /// Resolve all secret references in a recipe's profile specs.
 fn resolve_recipe_secrets(profiles: &mut [recipe::ProfileSpec]) -> Result<()> {
     for spec in profiles.iter_mut() {
-        let mut resolved_fields = HashMap::new();
+        let mut resolved_fields = std::collections::BTreeMap::new();
         for (k, v) in &spec.fields {
             resolved_fields.insert(k.clone(), resolve_toml_value(v)?);
         }
         spec.fields = resolved_fields;
 
-        let mut resolved_extra = HashMap::new();
+        let mut resolved_extra = std::collections::BTreeMap::new();
         for (k, v) in &spec.extra_fields {
             resolved_extra.insert(k.clone(), resolve_toml_value(v)?);
         }
@@ -305,7 +305,8 @@ pub fn handle_generate(
     }
 
     // Build payload content from schema fields
-    let payload_content = build_payload_from_schema(manifest, &HashMap::new(), full);
+    let payload_content =
+        build_payload_from_schema(manifest, &std::collections::BTreeMap::new(), full);
 
     let is_plist = format == "plist";
 
@@ -1107,7 +1108,7 @@ fn build_interactive_recipe(
 /// Build a plist Dictionary from a schema manifest, applying any field overrides.
 fn build_payload_from_schema(
     manifest: &crate::schema::PayloadManifest,
-    overrides: &HashMap<String, toml::Value>,
+    overrides: &std::collections::BTreeMap<String, toml::Value>,
     full: bool,
 ) -> Dictionary {
     let mut dict = Dictionary::new();
@@ -1133,7 +1134,7 @@ fn build_payload_from_schema(
     fn build_field_value(
         manifest: &crate::schema::PayloadManifest,
         idx: usize,
-        overrides: &HashMap<String, toml::Value>,
+        overrides: &std::collections::BTreeMap<String, toml::Value>,
         full: bool,
         children_of: &dyn Fn(usize, u8) -> Vec<usize>,
     ) -> Value {
