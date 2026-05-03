@@ -201,10 +201,11 @@ impl TeamYamlGenerator {
         Ok(baseline_ref)
     }
 
-    /// Generate team YAML content for a baseline
+    /// Generate fleet YAML content for a baseline.
     ///
-    /// Creates a deployable team configuration that references the baseline's
-    /// profiles and scripts with correct relative paths from fleets/ directory.
+    /// Creates a deployable fleet configuration that references the
+    /// baseline's profiles and scripts with correct relative paths from the
+    /// `fleets/` directory.
     pub fn generate_team_yaml(&self, baseline_name: &str) -> Result<String> {
         let team_name = baseline_name.replace('_', "-");
         let label_name = format!("mscp-{baseline_name}");
@@ -284,7 +285,7 @@ controls:
         let content = self.generate_team_yaml(baseline_name)?;
         std::fs::write(&file_path, content)?;
 
-        tracing::info!("Wrote team configuration: {:?}", file_path);
+        tracing::info!("Wrote fleet configuration: {:?}", file_path);
         Ok(file_path)
     }
 

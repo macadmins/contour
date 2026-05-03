@@ -188,7 +188,7 @@ contour pppc generate pppc.toml --fragment -o pppc-fragment
 
 **Combined mode** (`--combined`): Merges all TCC entries into a single profile. Profile identifier: `{org}.pppc`.
 
-**Fleet mode** (`--fragment`): Produces a fragment directory with profiles under `lib/macos/configuration-profiles/`, a `fleets/reference-team.yml`, and a `fragment.toml` for merging into a Fleet GitOps repository.
+**Fleet mode** (`--fragment`): Produces a fragment directory with profiles under `lib/macos/configuration-profiles/`, a `fleets/reference-fleet.yml`, and a `fragment.toml` for merging into a Fleet GitOps repository.
 
 Apps with empty `services = []` are skipped during generation.
 
@@ -466,7 +466,7 @@ pppc-fragment/
         Google-Chrome-pppc.mobileconfig
         Slack-pppc.mobileconfig
   fleets/
-    reference-team.yml
+    reference-fleet.yml
   fragment.toml
 ```
 

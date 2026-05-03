@@ -127,7 +127,7 @@ pub fn run(
 ///
 /// Produces:
 /// - `platforms/macos/configuration-profiles/` with mobileconfig and plist files
-/// - `fleets/reference-team.yml` with profile entries
+/// - `fleets/reference-fleet.yml` with profile entries
 /// - `fragment.toml` manifest for merge
 fn run_fragment(
     config_path: &Path,
@@ -227,10 +227,10 @@ fn run_fragment(
         files_written += 3;
     }
 
-    // Generate fleets/reference-team.yml
+    // Generate fleets/reference-fleet.yml
     {
         let mut content = String::from(
-            "# Fleet GitOps - Team Configuration: Support App\n\
+            "# Fleet GitOps - Fleet Configuration: Support App\n\
              #\n\
              # Root3 Support App profiles for MDM deployment.\n\
              #\n\
@@ -247,7 +247,7 @@ fn run_fragment(
             let _ = writeln!(content, "      - path: {}", entry.path);
         }
 
-        std::fs::write(fleets_dir.join("reference-team.yml"), &content)?
+        std::fs::write(fleets_dir.join("reference-fleet.yml"), &content)?
     };
 
     // Generate fragment.toml

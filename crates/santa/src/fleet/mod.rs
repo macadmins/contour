@@ -2,7 +2,7 @@
 //!
 //! Generates Fleet-compatible directory structure with:
 //! - profiles/ directory with mobileconfig files
-//! - team files with profile references and labels
+//! - fleet files with profile references and labels
 
 use crate::generator::{GeneratorOptions, generate};
 use crate::models::{ProfileCategory, ProfileNaming, Ring, RingConfig, RuleCategory, RuleSet};
@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Fleet profile reference in team file
+/// Fleet profile reference in a fleet config file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FleetProfile {
     /// Path to the mobileconfig file (relative to gitops root)
@@ -21,13 +21,13 @@ pub struct FleetProfile {
     pub labels: Vec<String>,
 }
 
-/// Fleet team configuration
+/// A single fleet's configuration entry within the GitOps manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FleetTeam {
-    /// Team name
+pub struct FleetConfig {
+    /// Fleet name
     pub name: String,
 
-    /// macOS profiles for this team
+    /// macOS profiles for this fleet
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub macos_profiles: Vec<FleetProfile>,
 }
@@ -37,7 +37,7 @@ pub struct FleetTeam {
 pub struct FleetManifest {
     /// Fleets configuration
     #[serde(default)]
-    pub fleets: Vec<FleetTeam>,
+    pub fleets: Vec<FleetConfig>,
 }
 
 /// Result of Fleet generation
@@ -55,8 +55,8 @@ pub struct FleetOutputConfig {
     pub org: String,
     /// Profile name prefix
     pub prefix: String,
-    /// Team name for profiles
-    pub team_name: String,
+    /// Fleet name for profiles
+    pub fleet_name: String,
     /// Ring configuration
     pub ring_config: RingConfig,
     /// Base path for profiles in manifest (e.g., "platforms/profiles")
@@ -71,7 +71,7 @@ impl Default for FleetOutputConfig {
         Self {
             org: "com.example".to_string(),
             prefix: "santa".to_string(),
-            team_name: "Workstations".to_string(),
+            fleet_name: "Workstations".to_string(),
             ring_config: RingConfig::standard_five_rings(),
             profiles_base_path: format!("{}/profiles", layout.platforms_dir),
             deterministic_uuids: true,
@@ -148,8 +148,8 @@ pub fn generate_fleet_output(
 
     // Generate Fleet manifest
     let manifest = FleetManifest {
-        fleets: vec![FleetTeam {
-            name: config.team_name.clone(),
+        fleets: vec![FleetConfig {
+            name: config.fleet_name.clone(),
             macos_profiles: fleet_profiles,
         }],
     };

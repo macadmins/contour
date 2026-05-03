@@ -61,7 +61,7 @@ pub fn run(
     let config = FleetOutputConfig {
         org: org.to_string(),
         prefix: prefix.to_string(),
-        team_name: team_name.to_string(),
+        fleet_name: team_name.to_string(),
         ring_config,
         profiles_base_path: format!("{}/profiles", layout.platforms_dir),
         deterministic_uuids: true,
@@ -123,7 +123,7 @@ pub fn run(
 /// - `lib/macos/configuration-profiles/` with mobileconfig files
 /// - `lib/all/labels/` with ring label YAML files
 /// - `default.yml` with labels section only
-/// - `fleets/reference-team.yml` with profile entries using `../lib/` paths
+/// - `fleets/reference-fleet.yml` with profile entries using `../lib/` paths
 /// - `fragment.toml` manifest for merge
 #[expect(
     clippy::too_many_arguments,
@@ -196,10 +196,10 @@ fn run_fragment(
     // Create directory structure
     let profiles_dir = output_dir.join(layout.macos_profiles_subdir);
     let labels_dir = output_dir.join(layout.labels_dir);
-    let teams_dir = output_dir.join(layout.fleets_dir);
+    let fleets_dir = output_dir.join(layout.fleets_dir);
     std::fs::create_dir_all(&profiles_dir)?;
     std::fs::create_dir_all(&labels_dir)?;
-    std::fs::create_dir_all(&teams_dir)?;
+    std::fs::create_dir_all(&fleets_dir)?;
 
     let naming = ProfileNaming::new(prefix);
     let mut profile_paths = Vec::new();
@@ -308,11 +308,11 @@ fn run_fragment(
         std::fs::write(output_dir.join("default.yml"), &content)?
     };
 
-    // Generate fleets/reference-team.yml
+    // Generate fleets/reference-fleet.yml
     {
         let team_slug = team_name.to_lowercase().replace(' ', "-");
         let mut content = format!(
-            "# Fleet GitOps - Team Configuration: {team_name}\n\
+            "# Fleet GitOps - Fleet Configuration: {team_name}\n\
              #\n\
              # Santa rule profiles organized by ring.\n\
              #\n\
@@ -334,7 +334,7 @@ fn run_fragment(
             }
         }
 
-        std::fs::write(teams_dir.join("reference-team.yml"), &content)?
+        std::fs::write(fleets_dir.join("reference-fleet.yml"), &content)?
     };
 
     // Generate fragment.toml

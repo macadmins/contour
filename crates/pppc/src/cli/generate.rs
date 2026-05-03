@@ -323,7 +323,7 @@ pub fn find_duplicate_bundle_ids(config: &PppcConfig) -> Vec<(String, usize)> {
 ///
 /// Produces:
 /// - `<layout.macos_profiles_subdir>/` with mobileconfig files
-/// - `<layout.fleets_dir>/reference-team.yml` with profile entries
+/// - `<layout.fleets_dir>/reference-fleet.yml` with profile entries
 /// - `fragment.toml` manifest for merge
 fn run_fragment(
     input: &Path,
@@ -411,10 +411,10 @@ fn run_fragment(
         profiles_written += 1;
     }
 
-    // Generate fleets/reference-team.yml
+    // Generate fleets/reference-fleet.yml
     {
         let mut content = String::from(
-            "# Fleet GitOps - Team Configuration: PPPC/TCC\n\
+            "# Fleet GitOps - Fleet Configuration: PPPC/TCC\n\
              #\n\
              # Privacy permission profiles for MDM deployment.\n\
              #\n\
@@ -431,7 +431,7 @@ fn run_fragment(
             let _ = writeln!(content, "      - path: {}", entry.path);
         }
 
-        std::fs::write(fleets_dir.join("reference-team.yml"), &content)?
+        std::fs::write(fleets_dir.join("reference-fleet.yml"), &content)?
     };
 
     // Generate fragment.toml

@@ -189,7 +189,7 @@ contour notifications generate <INPUT> [flags]
 | `<INPUT>` | Input `notifications.toml` | **required** |
 | `-o, --output <PATH>` | Output directory or file path | same dir as input |
 | `--combined` | Merge all apps into a single profile | `false` |
-| `--fragment` | Generate a Fleet GitOps fragment directory (per-app profiles, `fleets/reference-team.yml`, `fragment.toml` manifest) | `false` |
+| `--fragment` | Generate a Fleet GitOps fragment directory (per-app profiles, `fleets/reference-fleet.yml`, `fragment.toml` manifest) | `false` |
 | `--dry-run` | Preview profiles without writing | `false` |
 
 ```bash
@@ -217,7 +217,7 @@ notifications-fragment/
 ├── platforms/macos/configuration-profiles/
 │   └── <app-name>-notifications.mobileconfig   (one per app)
 ├── fleets/
-│   └── reference-team.yml                      (profile references)
+│   └── reference-fleet.yml                      (profile references)
 └── fragment.toml                               (merge manifest)
 ```
 
