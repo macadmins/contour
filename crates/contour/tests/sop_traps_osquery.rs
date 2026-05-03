@@ -1,17 +1,19 @@
-//! Procedural SOP — trap suite for `contour osquery` commands.
+//! Procedural SOP — trap suite for `contour osquery` and `contour profile
+//! enrollment` commands.
 //!
 //! Companion to `crates/profile/tests/sop_traps.rs` and
 //! `crates/mscp/tests/sop_traps_mscp.rs`. Each trap exercises one CLI
-//! contract that the procedural SOP in `sop-osquery.md` relies on.
+//! contract that a procedural SOP relies on.
 //!
 //! Failure means either the CLI changed (update the SOP) or the SOP is
 //! wrong (fix the SOP).
 //!
 //! Spec:    `crates/contour-core/skills/contour/references/sop-format-spec.md`
-//! SOP:     `crates/contour-core/skills/contour/references/sop-osquery.md`
+//! SOPs:    `sop-osquery.md`, `sop-enrollment.md`
 
 use assert_cmd::Command;
 use serde_json::Value;
+use std::fs;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trap 19: `osquery search <unknown_keyword> --json` returns `[]` exit 0.
@@ -175,4 +177,108 @@ fn trap_22_osquery_table_returns_columns_under_table_object() {
     let first = &columns[0];
     assert!(first.get("column_name").is_some(), "column has column_name");
     assert!(first.get("column_type").is_some(), "column has column_type");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 23: `profile enrollment generate --skip-all` includes FileVault AND
+//          SoftwareUpdate in skip_setup_items. The procedural SOP's INVARIANT
+//          forbids these in production output, so any agent following the SOP
+//          MUST filter them out (or use --skip with an explicit list).
+//
+// SOP procedure: generate_enrollment_profile / NEVER_SKIP invariant
+//
+// Catches: regressions that quietly drop --skip-all's coverage of these
+// keys would change the trap shape silently. Also pins the FACT that the
+// CLI does not enforce the rule itself — agents must.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_23_enrollment_skip_all_includes_filevault_and_softwareupdate() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("test.dep.json");
+
+    let result = Command::cargo_bin("contour")
+        .unwrap()
+        .args([
+            "profile",
+            "enrollment",
+            "generate",
+            "--platform",
+            "macOS",
+            "--skip-all",
+            "-o",
+            out.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "enrollment generate --skip-all must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let body = fs::read_to_string(&out).unwrap();
+    let parsed: Value = serde_json::from_str(&body).expect("dep profile is valid JSON");
+    let skip = parsed
+        .get("skip_setup_items")
+        .and_then(|v| v.as_array())
+        .expect("dep profile must have skip_setup_items array");
+
+    let names: Vec<&str> = skip.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        names.contains(&"FileVault"),
+        "--skip-all MUST include FileVault (the SOP exists to filter this out)"
+    );
+    assert!(
+        names.contains(&"SoftwareUpdate"),
+        "--skip-all MUST include SoftwareUpdate (the SOP exists to filter this out)"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 24: `profile enrollment list --json` returns entries with the fields
+//          the procedural SOP reads (`key`, `title`, `description`, `platform`,
+//          `introduced`, `removed`, `deprecated`, `always_skippable`).
+// SOP procedure: generate_enrollment_profile / STEP 1
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_24_enrollment_list_entry_shape() {
+    let output = Command::cargo_bin("contour")
+        .unwrap()
+        .args([
+            "profile",
+            "enrollment",
+            "list",
+            "--platform",
+            "macOS",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "enrollment list must succeed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value =
+        serde_json::from_str(stdout.trim()).expect("enrollment list --json must emit a JSON array");
+    let entries = parsed.as_array().expect("array");
+    assert!(!entries.is_empty(), "macOS has skip keys");
+
+    let first = &entries[0];
+    for required in [
+        "key",
+        "title",
+        "description",
+        "platform",
+        "introduced",
+        "removed",
+        "deprecated",
+        "always_skippable",
+    ] {
+        assert!(
+            first.get(required).is_some(),
+            "entry must include {required}; missing in: {first:?}"
+        );
+    }
+    // `key` MUST be a string — that's the value agents pass to --skip.
+    assert!(first["key"].is_string(), "key is a string");
 }
