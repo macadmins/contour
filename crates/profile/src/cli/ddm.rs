@@ -25,6 +25,27 @@ fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
     }
 }
 
+/// Resolve the organization domain for DDM generation/compose.
+///
+/// Resolution order matches `contour_core::config::resolve_org`:
+///   1. `profile.toml` (`config.organization.domain`)
+///   2. `CONTOUR_ORG` env var (ideal for CI / GitHub Actions)
+///   3. `.contour/config.toml` walked up from cwd
+///
+/// Returns `None` only when no source provides a value; the caller emits
+/// the typed error envelope.
+fn resolve_ddm_org_domain(config: Option<&ProfileConfig>) -> Option<String> {
+    if let Some(cfg) = config {
+        return Some(cfg.organization.domain.clone());
+    }
+    if let Ok(env_org) = std::env::var("CONTOUR_ORG") {
+        if !env_org.is_empty() {
+            return Some(env_org);
+        }
+    }
+    contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
+}
+
 /// Collect DDM JSON files from paths
 fn collect_ddm_files(paths: &[String], recursive: bool, max_depth: Option<usize>) -> Vec<PathBuf> {
     let mut files = Vec::new();
@@ -726,16 +747,15 @@ pub fn handle_ddm_generate(
         .split('.')
         .next_back()
         .unwrap_or("declaration");
-    let domain = if let Some(cfg) = config {
-        cfg.organization.domain.clone()
-    } else if let Some(c) = contour_core::config::ContourConfig::load_nearest() {
-        c.organization.domain
-    } else {
-        anyhow::bail!(
+    let domain = resolve_ddm_org_domain(config).ok_or_else(|| {
+        anyhow::anyhow!(
             "organization domain is required for DDM generation\n\
-             Set organization.domain in profile.toml or .contour/config.toml"
-        );
-    };
+             Set it via:\n  \
+             • organization.domain in profile.toml\n  \
+             • CONTOUR_ORG=com.yourcompany (env var, ideal for CI)\n  \
+             • organization.domain in .contour/config.toml"
+        )
+    })?;
     let identifier = format!("{domain}.{short_name}");
 
     let decl = Declaration {
@@ -871,14 +891,13 @@ pub fn handle_ddm_compose(
         }
     };
 
-    // 2. Resolve org domain (same path handle_ddm_generate uses).
-    let domain = if let Some(cfg) = config {
-        cfg.organization.domain.clone()
-    } else if let Some(c) = contour_core::config::ContourConfig::load_nearest() {
-        c.organization.domain
-    } else {
+    // 2. Resolve org domain (shared resolution: profile.toml → CONTOUR_ORG → .contour/config.toml).
+    let Some(domain) = resolve_ddm_org_domain(config) else {
         let msg = "organization domain is required for DDM compose\n\
-                   Set organization.domain in profile.toml or .contour/config.toml"
+                   Set it via:\n  \
+                   • organization.domain in profile.toml\n  \
+                   • CONTOUR_ORG=com.yourcompany (env var, ideal for CI)\n  \
+                   • organization.domain in .contour/config.toml"
             .to_string();
         if output_mode == OutputMode::Json {
             contour_core::output::print_error_json(&msg, Some("INVALID_ORG"));
