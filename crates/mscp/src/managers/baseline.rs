@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use contour_core::fleet_layout::FleetLayout;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -29,9 +30,13 @@ impl BaselineIndex {
         Self { output_base }
     }
 
-    /// List all baselines in the output directory
+    /// List all baselines in the output directory.
+    ///
+    /// Fleet v4.83+: each baseline has a `mscp/{name}/baseline.toml` manifest.
+    /// We list immediate children of `mscp/`, skipping the `versions/` subdir
+    /// which holds the version manifest, not a baseline.
     pub fn list_baselines(&self) -> Result<Vec<BaselineInfo>> {
-        let mscp_dir = self.output_base.join("lib/mscp");
+        let mscp_dir = self.output_base.join("mscp");
         if !mscp_dir.exists() {
             return Ok(vec![]);
         }
@@ -135,15 +140,25 @@ impl BaselineIndex {
         Ok(count)
     }
 
-    /// Find team files that reference a specific baseline
+    /// Find team files that reference a specific baseline.
+    ///
+    /// Fleet v4.83+ team YAMLs reference baselines in three ways:
+    ///   - profile/script/policy paths under `../platforms/macos/.../{baseline}/`
+    ///   - the baseline component manifest at `../mscp/{baseline}/`
+    ///   - via the `mscp-{baseline}` label attached to entries
+    ///
+    /// We detect any of these patterns; the unique combination of `{baseline}/`
+    /// after a v4.83 prefix is what makes this baseline-specific.
     fn find_team_references(&self, baseline_name: &str) -> Result<Vec<PathBuf>> {
         let fleets_dir = self.output_base.join("fleets");
         if !fleets_dir.exists() {
             return Ok(vec![]);
         }
 
+        let layout = FleetLayout::default();
+        let patterns = baseline_reference_patterns(&layout, baseline_name);
+
         let mut references = Vec::new();
-        let search_pattern = format!("lib/mscp/{baseline_name}/");
 
         for entry in std::fs::read_dir(&fleets_dir)? {
             let entry = entry?;
@@ -158,9 +173,8 @@ impl BaselineIndex {
                 continue;
             }
 
-            // Read file and check if it contains baseline reference
             if let Ok(content) = std::fs::read_to_string(&path)
-                && content.contains(&search_pattern)
+                && patterns.iter().any(|p| content.contains(p))
             {
                 references.push(path);
             }
@@ -169,9 +183,13 @@ impl BaselineIndex {
         Ok(references)
     }
 
-    /// Clean (remove) a baseline and all associated files
+    /// Clean (remove) a baseline and all associated files.
+    ///
+    /// Fleet v4.83+: removes `mscp/{name}/` (baseline component dir),
+    /// `labels/mscp-{name}.labels.yml`, and `platforms/macos/{kind}/{name}/`
+    /// for each artifact kind (configuration-profiles, scripts, policies).
     pub fn clean_baseline(&self, baseline_name: &str, force: bool) -> Result<CleanReport> {
-        let baseline_path = self.output_base.join("lib/mscp").join(baseline_name);
+        let baseline_path = self.output_base.join("mscp").join(baseline_name);
 
         if !baseline_path.exists() {
             anyhow::bail!(
@@ -208,10 +226,11 @@ impl BaselineIndex {
             report.removed_files.push(baseline_path);
         }
 
-        // Remove label file
+        // Remove label file (Fleet v4.83+: top-level `labels/`, was `lib/all/labels/`)
+        let layout = FleetLayout::default();
         let label_file = self
             .output_base
-            .join("lib/all/labels")
+            .join(layout.labels_dir)
             .join(format!("mscp-{baseline_name}.labels.yml"));
 
         if label_file.exists() {
@@ -258,16 +277,23 @@ impl BaselineIndex {
 
         let content = std::fs::read_to_string(team_file)?;
 
-        // Check if file actually references the old baseline
-        let old_pattern = format!("lib/mscp/{from_baseline}/");
-        if !content.contains(&old_pattern) {
+        // Check if file references the old baseline. Fleet v4.83 team YAMLs may
+        // reference a baseline via several v4.83 path prefixes — match any of
+        // them. (Pre-v4.83 outputs use `lib/mscp/{baseline}/`; that pattern is
+        // detected separately via the legacy substring as a courtesy fallback,
+        // since users may be migrating older repos.)
+        let layout = FleetLayout::default();
+        let from_patterns = baseline_reference_patterns(&layout, from_baseline);
+        let legacy_pattern = format!("lib/mscp/{from_baseline}/");
+        if !from_patterns.iter().any(|p| content.contains(p)) && !content.contains(&legacy_pattern)
+        {
             anyhow::bail!("Team file does not reference baseline '{from_baseline}'");
         }
 
-        // Load the new baseline manifest
+        // Load the new baseline manifest. Fleet v4.83+: at `mscp/{name}/baseline.toml`.
         let new_baseline_path = self
             .output_base
-            .join("lib/mscp")
+            .join("mscp")
             .join(to_baseline)
             .join("baseline.toml");
 
@@ -295,6 +321,9 @@ impl BaselineIndex {
         let mut path_replacements = 0;
 
         // Remove old mSCP profiles and scripts
+        let path_matches_old_baseline = |path: &str| -> bool {
+            from_patterns.iter().any(|p| path.contains(p)) || path.contains(&legacy_pattern)
+        };
         if let Some(controls) = team_yaml.get_mut("controls") {
             if let Some(macos_settings) = controls.get_mut("macos_settings")
                 && let Some(custom_settings) = macos_settings.get_mut("custom_settings")
@@ -302,7 +331,7 @@ impl BaselineIndex {
             {
                 settings_array.retain(|item| {
                     if let Some(path) = item.get("path").and_then(|p| p.as_str()) {
-                        let should_remove = path.contains(&old_pattern);
+                        let should_remove = path_matches_old_baseline(path);
                         if should_remove {
                             path_replacements += 1;
                         }
@@ -312,13 +341,12 @@ impl BaselineIndex {
                     }
                 });
 
-                // Add new baseline profiles
+                // Add new baseline profiles. baseline.toml stores paths relative
+                // from mscp/{name}/ (e.g. `../../platforms/macos/.../file`); team
+                // YAML lives at fleets/{team}.yml and needs paths relative from
+                // there (one ../ shallower).
                 for profile in &new_baseline.profiles {
-                    let team_relative_path = format!(
-                        "../lib/mscp/{}/{}",
-                        to_baseline,
-                        profile.path.trim_start_matches("./")
-                    );
+                    let team_relative_path = baseline_path_to_team_path(&profile.path);
 
                     let mut profile_entry = yaml_serde::Mapping::new();
                     profile_entry.insert(
@@ -348,7 +376,7 @@ impl BaselineIndex {
             {
                 scripts_array.retain(|item| {
                     if let Some(path) = item.get("path").and_then(|p| p.as_str()) {
-                        let should_remove = path.contains(&old_pattern);
+                        let should_remove = path_matches_old_baseline(path);
                         if should_remove {
                             path_replacements += 1;
                         }
@@ -358,13 +386,9 @@ impl BaselineIndex {
                     }
                 });
 
-                // Add new baseline scripts
+                // Add new baseline scripts (same path-conversion as profiles)
                 for script in &new_baseline.scripts {
-                    let team_relative_path = format!(
-                        "../lib/mscp/{}/{}",
-                        to_baseline,
-                        script.path.trim_start_matches("./")
-                    );
+                    let team_relative_path = baseline_path_to_team_path(&script.path);
 
                     let mut script_entry = yaml_serde::Mapping::new();
                     script_entry.insert(
@@ -440,10 +464,11 @@ impl BaselineIndex {
                         report.valid = false;
                     }
 
-                    // Check if label references a baseline that doesn't exist
+                    // Check if label references a baseline that doesn't exist.
+                    // Fleet v4.83+: labels live at top-level `labels/`.
                     if path.contains("mscp-") {
                         let baseline_name = path
-                            .trim_start_matches("./lib/all/labels/mscp-")
+                            .trim_start_matches("./labels/mscp-")
                             .trim_end_matches(".labels.yml");
 
                         if !baseline_names.contains(&baseline_name.to_string()) {
@@ -478,29 +503,44 @@ impl BaselineIndex {
                 }
 
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    // Check for references to baselines that don't exist
-                    if content.contains("lib/mscp/") {
-                        for line in content.lines() {
-                            if line.contains("lib/mscp/") && !line.trim().starts_with('#') {
-                                // Extract baseline name from path
-                                if let Some(start) = line.find("lib/mscp/") {
-                                    let after_mscp = &line[start + 9..];
-                                    if let Some(end) = after_mscp.find('/') {
-                                        let referenced_baseline = &after_mscp[..end];
-
-                                        if !baseline_names
-                                            .contains(&referenced_baseline.to_string())
-                                        {
-                                            report.orphaned_baseline_references.push(
-                                                OrphanedReference {
-                                                    file: path.clone(),
-                                                    reference: referenced_baseline.to_string(),
-                                                    reason: "Baseline directory does not exist"
-                                                        .to_string(),
-                                                },
-                                            );
-                                            report.valid = false;
-                                        }
+                    // Check for references to baselines that don't exist.
+                    // Fleet v4.83+ team YAMLs reference baselines via four prefixes:
+                    //   ../platforms/macos/configuration-profiles/{name}/...
+                    //   ../platforms/macos/scripts/{name}/...
+                    //   ../platforms/macos/policies/{name}/...
+                    //   ../mscp/{name}/...
+                    // Extract the {name} segment after each prefix and check whether
+                    // it matches a known baseline directory.
+                    let layout = FleetLayout::default();
+                    let v483_prefixes = [
+                        format!("../{}/", layout.macos_profiles_subdir),
+                        format!("../{}/", layout.macos_scripts_subdir),
+                        format!("../{}/", layout.macos_policies_subdir),
+                        "../mscp/".to_string(),
+                    ];
+                    for line in content.lines() {
+                        if line.trim().starts_with('#') {
+                            continue;
+                        }
+                        for prefix in &v483_prefixes {
+                            if let Some(start) = line.find(prefix.as_str()) {
+                                let after_prefix = &line[start + prefix.len()..];
+                                if let Some(end) = after_prefix.find('/') {
+                                    let referenced_baseline = &after_prefix[..end];
+                                    // Skip the special `versions/` subdir of `mscp/`
+                                    if referenced_baseline == "versions" {
+                                        continue;
+                                    }
+                                    if !baseline_names.contains(&referenced_baseline.to_string()) {
+                                        report.orphaned_baseline_references.push(
+                                            OrphanedReference {
+                                                file: path.clone(),
+                                                reference: referenced_baseline.to_string(),
+                                                reason: "Baseline directory does not exist"
+                                                    .to_string(),
+                                            },
+                                        );
+                                        report.valid = false;
                                     }
                                 }
                             }
@@ -551,4 +591,36 @@ pub struct OrphanedReference {
     pub file: PathBuf,
     pub reference: String,
     pub reason: String,
+}
+
+/// Build the set of substring patterns that uniquely identify references to a
+/// given baseline in a Fleet v4.83+ team YAML.
+///
+/// A team YAML references a baseline through any of:
+///   1. profile/script/policy paths under `../platforms/macos/.../{name}/`
+///   2. the baseline component manifest at `../mscp/{name}/`
+pub(crate) fn baseline_reference_patterns(
+    layout: &FleetLayout,
+    baseline_name: &str,
+) -> Vec<String> {
+    vec![
+        format!("../{}/{baseline_name}/", layout.macos_profiles_subdir),
+        format!("../{}/{baseline_name}/", layout.macos_scripts_subdir),
+        format!("../{}/{baseline_name}/", layout.macos_policies_subdir),
+        format!("../mscp/{baseline_name}/"),
+    ]
+}
+
+/// Convert a baseline.toml-relative path to a team-yaml-relative path.
+///
+/// Fleet v4.83+: baseline.toml lives at `mscp/{name}/baseline.toml` and stores
+/// artifact paths relative from there (e.g.
+/// `../../platforms/macos/configuration-profiles/{name}/file.mobileconfig`).
+/// Team YAML lives at `fleets/{team}.yml`, one level shallower, so the team-
+/// relative path drops one leading `../`.
+pub(crate) fn baseline_path_to_team_path(baseline_relative: &str) -> String {
+    baseline_relative
+        .strip_prefix("../")
+        .unwrap_or(baseline_relative)
+        .to_string()
 }

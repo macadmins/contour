@@ -1,9 +1,14 @@
 use crate::deduplicator::profile_deduplicator::{DeduplicationReport, ProfileGroup};
 use anyhow::{Context, Result};
+use contour_core::fleet_layout::FleetLayout;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Manages the shared profile library at lib/mscp/profiles/
+/// Manages the shared profile library.
+///
+/// Fleet v4.83+: shared profiles live at `mscp/profiles/` (alongside the
+/// per-baseline manifest dirs at `mscp/{name}/`). Pre-v4.83 layout used
+/// `lib/mscp/profiles/`.
 #[derive(Debug)]
 pub struct SharedProfileLibrary {
     /// Output base path
@@ -17,7 +22,7 @@ impl SharedProfileLibrary {
     /// Create a new shared library manager
     pub fn new<P: AsRef<Path>>(output_base: P) -> Self {
         let output_base = output_base.as_ref().to_path_buf();
-        let shared_dir = output_base.join("lib/mscp/profiles");
+        let shared_dir = output_base.join("mscp/profiles");
 
         Self {
             output_base,
@@ -116,13 +121,15 @@ impl SharedProfileLibrary {
 
         let mut removed_count = 0;
 
+        // Fleet v4.83+: per-baseline profiles live at
+        // platforms/macos/configuration-profiles/{baseline}/, NOT in mscp/{baseline}/profiles/.
+        let layout = FleetLayout::default();
         for (baseline, profiles) in &mapping.baseline_mappings {
             for original_filename in profiles.keys() {
                 let baseline_profile = self
                     .output_base
-                    .join("lib/mscp")
+                    .join(layout.macos_profiles_subdir)
                     .join(baseline)
-                    .join("profiles")
                     .join(original_filename);
 
                 if baseline_profile.exists() {

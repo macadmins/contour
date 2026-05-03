@@ -98,7 +98,7 @@ pub struct Features {
     pub enable_software_inventory: Option<bool>,
 }
 
-/// Agent options configuration (lib/agent-options.yml)
+/// Agent options configuration (Fleet v4.83+: platforms/all/agent-options.yml)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOptions {
     #[serde(skip_serializing_if = "Option::is_none")]

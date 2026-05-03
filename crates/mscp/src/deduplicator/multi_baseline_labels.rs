@@ -1,6 +1,7 @@
 use crate::deduplicator::shared_library::DeduplicationMapping;
 use crate::models::Platform;
 use anyhow::{Context, Result};
+use contour_core::fleet_layout::FleetLayout;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -143,9 +144,12 @@ impl MultiBaselineLabelGenerator {
         format!("mscp-shared-{meaningful_part}")
     }
 
-    /// Write shared labels to a file
+    /// Write shared labels to a file.
+    ///
+    /// Fleet v4.83+: labels live at top-level `labels/`, not `lib/all/labels/`.
     pub fn write_shared_labels(&self, labels: &[SharedProfileLabel]) -> Result<PathBuf> {
-        let labels_dir = self.output_base.join("lib/all/labels");
+        let layout = FleetLayout::default();
+        let labels_dir = self.output_base.join(layout.labels_dir);
         std::fs::create_dir_all(&labels_dir)?;
 
         let labels_file = labels_dir.join("mscp-shared-profiles.labels.yml");
@@ -185,8 +189,10 @@ impl MultiBaselineLabelGenerator {
             .and_then(|v| v.as_sequence_mut())
             .context("'labels' must be an array in default.yml")?;
 
-        // Create label path entry
-        let label_path_value = "./lib/all/labels/mscp-shared-profiles.labels.yml";
+        // Create label path entry. Fleet v4.83+: top-level `labels/`.
+        let layout = FleetLayout::default();
+        let label_path_value = format!("./{}/mscp-shared-profiles.labels.yml", layout.labels_dir);
+        let label_path_value = label_path_value.as_str();
 
         // Check if already present
         let already_exists = labels.iter().any(|entry| {

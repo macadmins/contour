@@ -1621,7 +1621,7 @@ pub fn list_baselines(output: PathBuf, output_mode: OutputMode) -> Result<()> {
         "\n{} {} baseline(s) in {}:\n",
         "Found".cyan().bold(),
         baselines.len(),
-        output.join("lib/mscp").display().to_string().dimmed()
+        output.join("mscp").display().to_string().dimmed()
     );
 
     for baseline in baselines {

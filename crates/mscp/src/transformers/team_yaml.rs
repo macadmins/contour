@@ -216,10 +216,11 @@ impl TeamYamlGenerator {
 
         let layout = contour_core::fleet_layout::FleetLayout::default();
         let content = format!(
-            r#"# Fleet GitOps - Fleet Configuration: {team_name} (Fleet v4.82+)
+            r#"# Fleet GitOps - Fleet Configuration: {team_name} (Fleet v4.83+)
 #
 # mSCP Baseline: {baseline_name}
-# Profiles and scripts are in: {platforms_dir}/mscp/{baseline_name}/
+# Profiles: {profiles_dir}/{baseline_name}/
+# Scripts:  {scripts_dir}/{baseline_name}/
 #
 # Required environment variables:
 #   - ${secret_var}
@@ -253,15 +254,16 @@ controls:
     custom_settings:
       # Add profile paths here after generating the baseline
       # Example:
-      # - path: ../{platforms_dir}/mscp/{baseline_name}/profiles/com.apple.applicationaccess.mobileconfig
+      # - path: ../{profiles_dir}/{baseline_name}/com.apple.applicationaccess.mobileconfig
       #   labels_include_all:
       #     - {label_name}
   scripts:
     # Add script paths here after generating the baseline
     # Example:
-    # - path: ../{platforms_dir}/mscp/{baseline_name}/scripts/{baseline_name}_audit.sh
+    # - path: ../{scripts_dir}/{baseline_name}/{baseline_name}_audit.sh
 "#,
-            platforms_dir = layout.platforms_dir,
+            profiles_dir = layout.macos_profiles_subdir,
+            scripts_dir = layout.macos_scripts_subdir,
             agent_options_path = layout.agent_options_path,
         );
 

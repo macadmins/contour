@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use contour_core::fleet_layout::FleetLayout;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -181,13 +182,15 @@ impl ProfileDeduplicator {
         })
     }
 
-    /// Scan a single baseline for profiles
+    /// Scan a single baseline for profiles.
+    ///
+    /// Fleet v4.83+: profiles live at `platforms/macos/configuration-profiles/{name}/`.
     fn scan_baseline(&self, baseline_name: &str) -> Result<Vec<ProfileEntry>> {
+        let layout = FleetLayout::default();
         let profiles_dir = self
             .output_base
-            .join("lib/mscp")
-            .join(baseline_name)
-            .join("profiles");
+            .join(layout.macos_profiles_subdir)
+            .join(baseline_name);
 
         if !profiles_dir.exists() {
             tracing::warn!(

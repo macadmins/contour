@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+use crate::managers::baseline::baseline_path_to_team_path;
+use contour_core::fleet_layout::FleetLayout;
 use contour_core::yaml_edit;
 
 /// Updates Fleet team YAML files to include baseline profiles and scripts.
@@ -131,7 +133,12 @@ impl TeamUpdater {
         let content =
             std::fs::read_to_string(&default_file).context("Failed to read default.yml")?;
 
-        let label_path_value = format!("./lib/all/labels/mscp-{}.labels.yml", self.baseline_name);
+        // Fleet v4.83+: labels live at top-level `labels/`.
+        let layout = FleetLayout::default();
+        let label_path_value = format!(
+            "./{}/mscp-{}.labels.yml",
+            layout.labels_dir, self.baseline_name
+        );
 
         // Check if already present (simple text search)
         if content.contains(&label_path_value) {
@@ -287,11 +294,17 @@ impl TeamUpdater {
         Ok(Some(result))
     }
 
-    /// Read baseline.toml and extract profile paths
+    /// Read baseline.toml and extract profile paths.
+    ///
+    /// Fleet v4.83+: baseline.toml lives at `mscp/{name}/baseline.toml` and
+    /// stores profile paths relative from there (e.g.
+    /// `../../platforms/macos/configuration-profiles/{name}/file.mobileconfig`).
+    /// Team YAML lives one level shallower (`fleets/{team}.yml`), so we drop
+    /// one leading `../` to convert.
     fn get_baseline_profiles(&self) -> Result<Vec<String>> {
         let baseline_file = self
             .output_base
-            .join("lib/mscp")
+            .join("mscp")
             .join(&self.baseline_name)
             .join("baseline.toml");
 
@@ -305,23 +318,17 @@ impl TeamUpdater {
         let mut profiles = Vec::new();
 
         for profile in baseline.profiles {
-            // Convert relative path to team-relative path
-            let team_relative = format!(
-                "../lib/mscp/{}/{}",
-                self.baseline_name,
-                profile.path.trim_start_matches("./")
-            );
-            profiles.push(team_relative);
+            profiles.push(baseline_path_to_team_path(&profile.path));
         }
 
         Ok(profiles)
     }
 
-    /// Read baseline.toml and extract script paths with labels
+    /// Read baseline.toml and extract script paths with labels (Fleet v4.83+ paths).
     fn get_baseline_scripts(&self) -> Result<Vec<(String, String)>> {
         let baseline_file = self
             .output_base
-            .join("lib/mscp")
+            .join("mscp")
             .join(&self.baseline_name)
             .join("baseline.toml");
 
@@ -335,20 +342,13 @@ impl TeamUpdater {
         let mut scripts = Vec::new();
 
         for script in baseline.scripts {
-            // Get label from labels_include_all (first label)
             let label = script
                 .labels_include_all
                 .first()
                 .cloned()
                 .unwrap_or_else(|| format!("mscp-{}", self.baseline_name));
 
-            // Convert relative path to team-relative path
-            let team_relative = format!(
-                "../lib/mscp/{}/{}",
-                self.baseline_name,
-                script.path.trim_start_matches("./")
-            );
-            scripts.push((team_relative, label));
+            scripts.push((baseline_path_to_team_path(&script.path), label));
         }
 
         Ok(scripts)
@@ -390,19 +390,13 @@ mod tests {
 
     #[test]
     fn test_profile_path_conversion() {
-        let updater = TeamUpdater::new("/tmp/test", "800-53r5_high".to_string());
-
-        // Test relative path conversion
-        let baseline_path = "./profiles/com.apple.security.firewall.mobileconfig";
-        let expected =
-            "../lib/mscp/800-53r5_high/profiles/com.apple.security.firewall.mobileconfig";
-
-        let result = format!(
-            "../lib/mscp/{}/{}",
-            updater.baseline_name,
-            baseline_path.trim_start_matches("./")
-        );
-        assert_eq!(result, expected);
+        // Fleet v4.83+: baseline.toml at mscp/{name}/baseline.toml stores
+        // paths relative from there (`../../platforms/...`). Team YAML at
+        // fleets/{team}.yml is one level shallower, so the helper drops
+        // one leading `../`.
+        let baseline_relative = "../../platforms/macos/configuration-profiles/800-53r5_high/com.apple.security.firewall.mobileconfig";
+        let expected = "../platforms/macos/configuration-profiles/800-53r5_high/com.apple.security.firewall.mobileconfig";
+        assert_eq!(baseline_path_to_team_path(baseline_relative), expected);
     }
 
     #[test]
@@ -440,9 +434,10 @@ mod tests {
     fn test_add_labels_to_default_preserves_comments() {
         let tmp = tempfile::TempDir::new().unwrap();
         let default_file = tmp.path().join("default.yml");
+        // Fleet v4.83+: labels live at top-level `labels/`.
         fs::write(
             &default_file,
-            "# Fleet GitOps default configuration\norg_settings:\n  org_name: Test\n\n# Labels for scoping\nlabels:\n  - path: ./lib/all/labels/existing.yml\n",
+            "# Fleet GitOps default configuration\norg_settings:\n  org_name: Test\n\n# Labels for scoping\nlabels:\n  - path: ./labels/existing.yml\n",
         ).unwrap();
 
         let updater = TeamUpdater::new(tmp.path(), "cis_lvl2".to_string());
@@ -452,10 +447,10 @@ mod tests {
         // Comment should be preserved
         assert!(content.contains("# Fleet GitOps default configuration"));
         assert!(content.contains("# Labels for scoping"));
-        // New label should be added
-        assert!(content.contains("./lib/all/labels/mscp-cis_lvl2.labels.yml"));
+        // New label should be added at the v4.83 path
+        assert!(content.contains("./labels/mscp-cis_lvl2.labels.yml"));
         // Existing label still there
-        assert!(content.contains("./lib/all/labels/existing.yml"));
+        assert!(content.contains("./labels/existing.yml"));
     }
 
     #[test]
@@ -464,7 +459,7 @@ mod tests {
         let default_file = tmp.path().join("default.yml");
         fs::write(
             &default_file,
-            "labels:\n  - path: ./lib/all/labels/mscp-cis_lvl2.labels.yml\n",
+            "labels:\n  - path: ./labels/mscp-cis_lvl2.labels.yml\n",
         )
         .unwrap();
 

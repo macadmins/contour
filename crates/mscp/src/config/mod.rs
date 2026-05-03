@@ -13,7 +13,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputStructure {
-    /// Fleet GitOps layout: lib/mscp/<baseline>/, team YAMLs, labels, policies
+    /// Fleet GitOps layout (v4.83+): platforms/macos/<kind>/<baseline>/, mscp/<baseline>/baseline.toml, labels/, fleets/
     #[default]
     Pluggable,
     /// Jamf Pro layout: <baseline>/profiles/, scripts/ — no Fleet artifacts

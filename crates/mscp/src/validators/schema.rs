@@ -100,9 +100,14 @@ impl SchemaValidator {
 
         let obj = value.as_object().unwrap();
 
-        // Check for required fields (basic Fleet team structure)
+        // Check for required fields (basic Fleet team structure).
+        // Treat `controls: null` (a YAML key with no value) as absent — that's
+        // how Fleet GitOps templates ship the empty placeholder. Only an
+        // explicitly non-null, non-object `controls` is a structural error.
         if let Some(controls) = obj.get("controls") {
-            if controls.is_object() {
+            if controls.is_null() {
+                // Empty `controls:` key — same as absent. No further checks.
+            } else if controls.is_object() {
                 // Validate controls.macos_settings if exists
                 if let Some(macos_settings) = controls.get("macos_settings")
                     && let Some(custom_settings) = macos_settings.get("custom_settings")
@@ -135,10 +140,9 @@ impl SchemaValidator {
     pub fn validate_file_paths<P: AsRef<Path>>(
         &self,
         yaml_path: P,
-        base_dir: P,
+        _base_dir: P,
     ) -> Result<PathValidationResult> {
         let yaml_path = yaml_path.as_ref();
-        let base_dir = base_dir.as_ref();
 
         let content = fs::read_to_string(yaml_path)?;
         let yaml_value: yaml_serde::Value = yaml_serde::from_str(&content)?;
@@ -147,23 +151,32 @@ impl SchemaValidator {
         let mut missing_paths = Vec::new();
         let mut found_paths = Vec::new();
 
-        // Extract paths from custom_settings
+        // Resolve paths relative to the YAML file's own directory.
+        // Team YAMLs at `fleets/{team}.yml` reference artifacts via `../platforms/...`;
+        // those `..` segments must be resolved from the yaml file's parent, NOT
+        // from the repo root, or `..` walks out of the repo entirely.
+        let yaml_dir = yaml_path.parent().unwrap_or_else(|| Path::new("."));
+
+        let mut check_path = |path_str: &str| {
+            let path_clean = path_str.trim_start_matches("./");
+            let full_path = yaml_dir.join(path_clean);
+
+            if full_path.exists() {
+                found_paths.push(path_str.to_string());
+            } else {
+                missing_paths.push(path_str.to_string());
+            }
+        };
+
         if let Some(controls) = json_value.get("controls") {
+            // Extract paths from custom_settings
             if let Some(macos_settings) = controls.get("macos_settings")
                 && let Some(custom_settings) = macos_settings.get("custom_settings")
                 && let Some(settings_array) = custom_settings.as_array()
             {
                 for setting in settings_array {
                     if let Some(path_str) = setting.get("path").and_then(|p| p.as_str()) {
-                        // Remove leading ./ if exists
-                        let path_clean = path_str.trim_start_matches("./");
-                        let full_path = base_dir.join(path_clean);
-
-                        if full_path.exists() {
-                            found_paths.push(path_str.to_string());
-                        } else {
-                            missing_paths.push(path_str.to_string());
-                        }
+                        check_path(path_str);
                     }
                 }
             }
@@ -174,14 +187,7 @@ impl SchemaValidator {
             {
                 for script in scripts_array {
                     if let Some(path_str) = script.get("path").and_then(|p| p.as_str()) {
-                        let path_clean = path_str.trim_start_matches("./");
-                        let full_path = base_dir.join(path_clean);
-
-                        if full_path.exists() {
-                            found_paths.push(path_str.to_string());
-                        } else {
-                            missing_paths.push(path_str.to_string());
-                        }
+                        check_path(path_str);
                     }
                 }
             }
