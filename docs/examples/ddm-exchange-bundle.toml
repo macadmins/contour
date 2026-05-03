@@ -47,4 +47,11 @@ ContactsServiceActive = true
 
 [activation]
 # type defaults to com.apple.activation.simple
-predicate = "@status(passcode-compliance.compliant) == true"
+predicate = "@status('passcode.is-compliant') == TRUE"
+
+[subscriptions]
+# Every status key the predicate references MUST be listed here. Without
+# the subscription, the device returns Error.UnableToEvaluatePredicate
+# at deploy time and the activation never installs. Compose enforces
+# this at authoring time.
+keys = ["passcode.is-compliant"]

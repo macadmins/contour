@@ -742,6 +742,34 @@ pub enum DdmAction {
         )]
         allow_orphans: bool,
     },
+
+    #[command(
+        about = "Verify cross-references across a directory of DDM declarations",
+        long_about = "Walks every .json declaration in a directory and checks:\n\
+                      \n\
+                      - reference DAG: configurations resolve to assets, activations\n\
+                        resolve to configurations\n\
+                      - predicate gating: every @status('key') in an activation\n\
+                        predicate is covered by a status-subscriptions declaration\n\
+                      - ServerToken absence (server-managed field, never authored)\n\
+                      \n\
+                      Exits 0 on a clean directory; exits 1 on any error. Warnings\n\
+                      (orphan assets / configurations, unused subscription keys) do not\n\
+                      fail unless --strict is set."
+    )]
+    Verify {
+        #[arg(help = "Directory containing DDM .json declaration files")]
+        directory: String,
+
+        #[arg(short, long, help = "Recurse into subdirectories")]
+        recursive: bool,
+
+        #[arg(
+            long,
+            help = "Treat warnings as errors (orphans, unused subscriptions)"
+        )]
+        strict: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

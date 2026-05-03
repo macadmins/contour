@@ -186,16 +186,43 @@ EmailAddress = "user@example.com"
 [activation]                                # OPTIONAL section
 # type = "com.apple.activation.simple"      # default when omitted
 # identifier = "{override}"
-predicate = "@status(passcode-compliance.compliant) == true"
+predicate = "@status('passcode.is-compliant') == TRUE"
 # references = [ "...override..." ]         # default = [{configuration.identifier}]
+
+[subscriptions]                             # REQUIRED if predicate uses @status(...)
+keys = ["passcode.is-compliant"]            # status keys the device should subscribe to
+# identifier = "{override}"                 # default {org}.subscriptions.{intent_name}
 ```
 
 Override hatches (rare; defaults are correct for most intents):
-- `asset.identifier`, `configuration.identifier`, `activation.identifier`
-  — explicit identifier; bypasses the `{org}.{kind}.{intent_name}` default.
+- `asset.identifier`, `configuration.identifier`, `activation.identifier`,
+  `subscriptions.identifier` — explicit identifier; bypasses the
+  `{org}.{kind}.{intent_name}` default.
 - `configuration.asset_ref_field` — disambiguate when a configuration's
   schema has multiple `*AssetReference` fields.
 - `activation.references` — explicit `StandardConfigurations[]` array.
+
+### Predicate ↔ status-subscription invariant
+
+Apple's DDM spec defines two distinct predicate failure modes:
+- `Error.PredicateFailed` — predicate cleanly evaluated to `false`
+  (intentional gating; activation simply doesn't install).
+- `Error.UnableToEvaluatePredicate` — predicate could not evaluate
+  (syntax error, type mismatch, OR a referenced `@status('key')` isn't
+  subscribed). This is an **authoring bug** that ships clean and
+  surfaces at deploy time.
+
+The CLI prevents the unsubscribed-key class at authoring time:
+
+- **`compose` PRECONDITION**: parses the activation predicate's
+  `@status(...)` references and asserts every referenced key is in
+  `[subscriptions].keys`. Missing key → `SCHEMA_VIOLATION /
+  UnsubscribedStatusKey`. When `[subscriptions]` is present, compose
+  emits a fourth declaration file `status-subscriptions.json`
+  (`com.apple.configuration.management.status-subscriptions`).
+- **`ddm verify <dir>`**: walks all `*.json` declarations in a
+  directory and applies the same cross-check across files (useful for
+  hand-authored or externally-sourced sets — see below).
 
 ---
 
@@ -243,6 +270,25 @@ TOML schema and `docs/examples/ddm-exchange-bundle.toml` for a worked
 example. Strict by default — declared assets that aren't wired into the
 configuration trigger `SCHEMA_VIOLATION`. Pass `--allow-orphans` for
 incremental authoring.
+
+### Verify a directory of declarations
+
+```
+contour profile ddm verify <dir> --json
+contour profile ddm verify <dir> --recursive --json
+contour profile ddm verify <dir> --strict --json   # warnings → errors
+```
+
+Walks all `*.json` declarations in `<dir>` and reports:
+
+| Class | Errors (exit 1) | Warnings (exit 0; `--strict` upgrades) |
+|---|---|---|
+| Reference DAG | `DanglingAssetReference`, `DanglingConfigurationReference` | `OrphanAsset`, `OrphanConfiguration` |
+| Predicate gating | `UnsubscribedStatusKey` | `UnusedSubscriptionKey` |
+| Authoring | `ServerTokenAuthored` | — |
+
+Pure cross-reference check; per-file schema validation lives in
+`ddm validate`. Use both as a CI gate.
 
 ### Parse + validate existing declarations
 

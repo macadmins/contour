@@ -622,6 +622,13 @@ fn run(cli: Cli) -> Result<()> {
                     output_mode,
                 )?;
             }
+            DdmAction::Verify {
+                directory,
+                recursive,
+                strict,
+            } => {
+                cli::ddm::handle_ddm_verify(&directory, recursive, strict, output_mode)?;
+            }
         },
         Commands::Enrollment { action } => match action {
             EnrollmentAction::List {

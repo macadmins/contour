@@ -8,8 +8,10 @@
 
 pub mod compose;
 pub mod parser;
+pub mod predicate;
 pub mod schema;
 pub mod types;
+pub mod verify;
 
 #[allow(unused_imports, reason = "conditionally used")]
 pub use parser::parse_declaration;
