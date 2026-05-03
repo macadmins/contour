@@ -4,7 +4,7 @@ This SOP covers Apple Declarative Device Management (DDM). Unlike profile
 generation, DDM declarations form a **dependency DAG** — agents that emit
 declarations in the wrong order, or whose identifier references don't match,
 produce configurations that fail at deploy time without any authoring-time
-signal. The procedural pseudocode here makes that DAG explicit.
+signal. The procedural format here makes that DAG explicit.
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Drift detector: `crates/profile/tests/sop_traps.rs`
@@ -194,7 +194,7 @@ POSTCONDITIONS:
 
 ---
 
-## Other operations (prose recipes; not yet migrated to pseudocode)
+## Other operations (prose recipes; not yet migrated to the procedural format)
 
 These DDM CLI operations work with the existing prose recipes; they will be
 migrated as each one is end-to-end traced.

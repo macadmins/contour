@@ -416,9 +416,9 @@ struct FailureCategory<'a> {
 /// Map an individual error message to a stable typed error code.
 ///
 /// Used by [`output_batch_json`] to emit `error_code` alongside the prose
-/// `error` field, so agents (and the pseudocode SOPs) can SWITCH on a stable
-/// enum instead of substring-matching humans-readable text. See the SOP
-/// pseudocode pilot's `normalize_profile` and `import_jamf_backup` procedures
+/// `error` field, so agents (and the procedural SOPs) can SWITCH on a stable
+/// enum instead of substring-matching humans-readable text. See the
+/// `normalize_profile` and `import_jamf_backup` procedures in `sop-profile.md`
 /// for how agents consume these codes.
 ///
 /// **Stability contract:** never rename existing variants. If a new failure

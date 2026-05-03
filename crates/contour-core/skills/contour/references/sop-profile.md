@@ -1,10 +1,10 @@
 # SOP: Profile Generation & Validation
 
-This SOP uses **procedural pseudocode** for piloted operations (generate,
+This SOP uses the **procedural format** for piloted operations (generate,
 normalize, jamf import) and **prose recipes** for ops not yet migrated.
-Pseudocode procedures specify INPUT, PRECONDITIONS, EXECUTION, POSTCONDITIONS,
-and INVARIANTS — agents follow them deterministically. The prose sections
-are progressively being migrated as each operation is end-to-end traced.
+Procedures specify INPUT, PRECONDITIONS, EXECUTION, POSTCONDITIONS, and
+INVARIANTS — agents follow them deterministically. The prose sections are
+progressively being migrated as each operation is end-to-end traced.
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Drift detector: `crates/profile/tests/sop_traps.rs`
@@ -270,7 +270,7 @@ POSTCONDITIONS:
 
 ---
 
-## Other operations (prose recipes; not yet migrated to pseudocode)
+## Other operations (prose recipes; not yet migrated to the procedural format)
 
 These operations work with the existing prose recipes. They will be migrated
 once each one has been end-to-end traced and added to the `sop_traps` suite.

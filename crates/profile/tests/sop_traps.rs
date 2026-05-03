@@ -1,22 +1,23 @@
-//! Pseudocode SOP pilot — trap-counter integration suite.
+//! Procedural SOP — trap-counter integration suite.
 //!
-//! Each test exercises one **agent trap** documented in the pseudocode SOP pilot:
+//! Each test exercises one **agent trap** documented in the procedural SOP
+//! format spec at:
 //!   `crates/contour-core/skills/contour/references/sop-format-spec.md`
 //!
 //! A "trap" is a CLI behavior that an agent following a prose SOP could easily
-//! miss but that the pseudocode pilot catches by design — via a PRECONDITION,
+//! miss but that the procedural SOP catches by design — via a PRECONDITION,
 //! POSTCONDITION, INPUT contract, or branch in EXECUTION.
 //!
 //! ## What this suite measures
 //!
-//! - **Pilot-vs-CLI parity**: every trap should pass; failure means either
-//!   (a) the CLI changed and the pilot needs updating, or (b) the pilot is wrong
+//! - **SOP-vs-CLI parity**: every trap should pass; failure means either
+//!   (a) the CLI changed and the SOP needs updating, or (b) the SOP is wrong
 //!   and the CLI is right.
 //! - **Drift detector**: run on every `cargo test`. Catches CLI output-format
 //!   changes (rename a JSON field, change exit codes) before they break agents.
-//! - **Effectiveness signal**: as more SOPs migrate to pseudocode (Phase C of
-//!   the migration plan), each new procedure adds traps here. Trap count =
-//!   number of agent failure modes the format catches by design.
+//! - **Effectiveness signal**: as more SOPs migrate to the procedural format
+//!   (Phase 3 of the migration plan), each new procedure adds traps here.
+//!   Trap count = number of agent failure modes the format catches by design.
 //!
 //! ## What changed in Phase B
 //!
@@ -75,7 +76,7 @@ fn trap_01_generate_requires_org() {
 // Trap 2: Explicit --org com.example is still accepted by the CLI.
 // Pilot procedure: generate_profile / PRECONDITIONS (defence-in-depth)
 // Catches: prose SOPs say "NEVER default to com.example", but the CLI permits
-// the explicit value. The pseudocode pilot enforces this at the agent layer
+// the explicit value. The procedural SOP enforces this at the agent layer
 // via `ASSERT org != "com.example"`. This trap documents that the *agent layer*
 // is the only place this rule lives.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -236,7 +237,7 @@ fn trap_05_normalize_single_file_json_shape() {
 // Trap 6: BatchResult failure entries expose typed `error_code` (Phase B2).
 // Pilot procedures: normalize_profile + import_jamf_backup / POSTCONDITIONS
 // Catches: regressions that drop the typed code, leaving agents to substring-
-// match prose. The pseudocode SOPs use the SWITCH-on-error_code pattern; this
+// match prose. The procedural SOPs use the SWITCH-on-error_code pattern; this
 // trap ensures that pattern keeps working.
 // ─────────────────────────────────────────────────────────────────────────────
 #[test]
@@ -332,7 +333,7 @@ fn trap_07_jamf_import_empty_source_alt_shape() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Trap 9: top-level errors with `--json` emit a parseable JSON envelope
 //         on stderr (Phase B3).
-// Pilot context: pseudocode SOPs treat failure paths as JSON; without B3, the
+// SOP context: procedural SOPs treat failure paths as JSON; without B3, the
 // CLI fell back to plain `Error: ...` on stderr, breaking that contract.
 // Catches: regressions that drop the JSON-error wrapping in main(), or any
 // missing `error_code` on a top-level error.
@@ -424,7 +425,7 @@ fn trap_08_jamf_import_silently_filters_bad_yaml() {
 // Pilot procedure: create_ddm_config / DEPRECATED_LIST + PRECONDITIONS
 // Catches: agents that keep generating the legacy profile payload — broken
 // on macOS Tahoe (26/27) where the legacy SoftwareUpdate payload is removed.
-// The pseudocode redirects to the DDM replacements, but only if those types
+// The procedural SOP redirects to the DDM replacements, but only if those types
 // exist in the registered DDM schema. This trap pins their existence.
 // ─────────────────────────────────────────────────────────────────────────────
 #[test]
@@ -573,7 +574,7 @@ fn trap_15_ddm_generate_identifier_uses_type_tail() {
 
     // Both end in `.settings`, so type-tail-based identifier generation
     // produces collision: passcode_id == softwareupdate_id == "com.acme.settings".
-    // The pseudocode pilot's STEP 2 mandates agents override this default.
+    // The procedural SOP's STEP 2 mandates agents override this default.
     assert_eq!(
         passcode_id, "com.acme.settings",
         "passcode identifier follows {{org}}.{{type-tail}} pattern"

@@ -222,7 +222,7 @@ pub fn print_error(msg: &str) {
 /// INVALID_ORG, UNKNOWN). When `error_code` is `None`, emits `"UNKNOWN"`.
 ///
 /// **Stability:** the JSON shape is part of the agent contract documented in
-/// the SOP pseudocode pilot. Don't rename fields without updating the pilot.
+/// the procedural SOP format spec. Don't rename fields without updating the spec.
 pub fn print_error_json(msg: &str, error_code: Option<&str>) {
     let json = serde_json::json!({
         "success": false,
