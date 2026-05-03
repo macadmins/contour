@@ -6,7 +6,7 @@
 pub mod loader;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// A recipe defines a bundle of related profiles to generate together.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,10 +44,17 @@ pub struct ProfileSpec {
     pub description: String,
     #[serde(default)]
     pub removal_disallowed: bool,
-    /// Field overrides matching schema field names
+    /// Field overrides matching schema field names.
+    ///
+    /// `BTreeMap` (not `HashMap`) so iteration is sorted and serialized
+    /// output is byte-stable across runs — without this, every CI
+    /// regeneration produces a spurious diff from re-ordered keys
+    /// (semantically harmless since Apple parses dicts by key, not
+    /// position, but creates churn).
     #[serde(default)]
-    pub fields: HashMap<String, toml::Value>,
-    /// Extra fields NOT in schema (vendor-specific, dot notation for nesting)
+    pub fields: BTreeMap<String, toml::Value>,
+    /// Extra fields NOT in schema (vendor-specific, dot notation for nesting).
+    /// Same `BTreeMap` rationale as `fields`.
     #[serde(default)]
-    pub extra_fields: HashMap<String, toml::Value>,
+    pub extra_fields: BTreeMap<String, toml::Value>,
 }

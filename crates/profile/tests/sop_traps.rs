@@ -1270,3 +1270,78 @@ fn trap_39_verify_passes_clean_directory() {
     // No warnings either — config IS referenced by activation, subscription IS used.
     assert_eq!(parsed["warnings"].as_array().unwrap().len(), 0);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 41: `profile generate --recipe` produces byte-identical output across
+//          independent process invocations. Each Rust process gets a fresh
+//          HashMap hasher seed, so iterating a HashMap to build the plist
+//          produces non-deterministic key order — semantically harmless
+//          (Apple parses dicts by key, not position) but creates spurious
+//          diff churn on every CI regen. Pinned by switching ProfileSpec
+//          fields to BTreeMap; this trap fires if anyone reverts that.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_41_recipe_generation_is_byte_stable() {
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml_for_org(dir.path(), "com.acme", "Acme");
+
+    let mut hashes: Vec<Vec<u8>> = Vec::new();
+    for run_idx in 0..3 {
+        let run_dir = dir.path().join(format!("run{run_idx}"));
+        fs::create_dir_all(&run_dir).unwrap();
+
+        let result = Command::cargo_bin("profile")
+            .unwrap()
+            .current_dir(dir.path())
+            .args([
+                "generate",
+                "--recipe",
+                "okta",
+                "--set",
+                "OKTA_DOMAIN=acme.okta.com",
+                "--set",
+                "REGISTRATION_TOKEN=tok",
+                "--set",
+                "SCEP_CHALLENGE=ch",
+                "-o",
+                run_dir.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "recipe generation must succeed; stderr: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+
+        // Concatenate every emitted file in lexicographic order so we get a
+        // stable digest of the whole bundle.
+        let mut entries: Vec<_> = fs::read_dir(&run_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        entries.sort();
+        let mut buf = Vec::new();
+        for path in &entries {
+            buf.extend_from_slice(&fs::read(path).unwrap());
+        }
+        assert!(!buf.is_empty(), "recipe must emit at least one file");
+        hashes.push(buf);
+    }
+
+    assert_eq!(hashes[0], hashes[1], "run 0 and 1 must be byte-identical");
+    assert_eq!(hashes[1], hashes[2], "run 1 and 2 must be byte-identical");
+}
+
+/// Helper: write a profile.toml-equivalent .contour/config.toml in `dir`.
+fn write_profile_toml_for_org(dir: &std::path::Path, domain: &str, name: &str) {
+    let contour_dir = dir.join(".contour");
+    fs::create_dir_all(&contour_dir).unwrap();
+    fs::write(
+        contour_dir.join("config.toml"),
+        format!("[organization]\nname = \"{name}\"\ndomain = \"{domain}\"\n"),
+    )
+    .unwrap();
+}
