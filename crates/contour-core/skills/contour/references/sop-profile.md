@@ -6,7 +6,7 @@ Pseudocode procedures specify INPUT, PRECONDITIONS, EXECUTION, POSTCONDITIONS,
 and INVARIANTS — agents follow them deterministically. The prose sections
 are progressively being migrated as each operation is end-to-end traced.
 
-Format spec: `crates/contour-core/skills/contour/references/sop-pseudocode-pilot.md`
+Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Drift detector: `crates/profile/tests/sop_traps.rs`
 
 ## ERROR-CODE ENUM

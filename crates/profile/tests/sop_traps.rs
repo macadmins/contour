@@ -1,7 +1,7 @@
 //! Pseudocode SOP pilot — trap-counter integration suite.
 //!
 //! Each test exercises one **agent trap** documented in the pseudocode SOP pilot:
-//!   `crates/contour-core/skills/contour/references/sop-pseudocode-pilot.md`
+//!   `crates/contour-core/skills/contour/references/sop-format-spec.md`
 //!
 //! A "trap" is a CLI behavior that an agent following a prose SOP could easily
 //! miss but that the pseudocode pilot catches by design — via a PRECONDITION,
