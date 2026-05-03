@@ -1,0 +1,50 @@
+# DDM bundle: managed Exchange account with conditional rollout.
+#
+# Compose with:
+#   contour profile ddm compose docs/examples/ddm-exchange-bundle.toml \
+#     -o /tmp/exchange-out --json
+#
+# Produces three correctly cross-referenced declarations under <output_dir>:
+#   asset.json         — credentials (referenced by configuration)
+#   configuration.json — Exchange account settings (references asset)
+#   activation.json    — Predicate-gated rollout (references configuration)
+#
+# Compose enforces the cross-file invariants by construction: the asset's
+# Identifier is wired into configuration.Payload.AuthenticationCredentialsAssetReference,
+# and the configuration's Identifier is wired into
+# activation.Payload.StandardConfigurations.
+#
+# The payload bodies below are schema-compliant against the embedded Apple
+# DDM schema — round-trip clean through `contour profile ddm validate`.
+
+intent_name = "exchange-account"
+
+[asset]
+type = "com.apple.asset.credential.userpassword"
+
+# Apple's userpassword asset references the credential bytes via a
+# Reference dict (DataURL etc.). The actual username/password are
+# served by the MDM at the DataURL — this is what makes the asset a
+# pointer rather than an inline secret.
+[asset.payload.Reference]
+ContentType = "application/x-apple-aspen-userpassword"
+DataURL = "https://mdm.example.com/credentials/exchange-user"
+
+[configuration]
+type = "com.apple.configuration.account.exchange"
+# Exchange has multiple *AssetReference fields (Authentication-,
+# Identity-, UserIdentity-); pick the one we want compose to wire.
+asset_ref_field = "AuthenticationCredentialsAssetReference"
+
+[configuration.payload]
+VisibleName = "Work Mail"
+HostName = "outlook.example.com"
+Port = 443
+EnabledProtocolTypes = ["EAS"]
+MailServiceActive = true
+CalendarServiceActive = true
+ContactsServiceActive = true
+
+[activation]
+# type defaults to com.apple.activation.simple
+predicate = "@status(passcode-compliance.compliant) == true"
