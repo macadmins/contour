@@ -23,6 +23,7 @@ use crate::config::{BaselineConfig, Config, GlobException, GlobSection};
 use crate::managers::constraints::Constraints;
 use anyhow::Result;
 use colored::Colorize;
+use contour_core::fleet_layout::FleetLayout;
 use inquire::{Confirm, MultiSelect, Text};
 use std::path::Path;
 
@@ -260,8 +261,12 @@ fn read_csv_labels(prompt: &str) -> Result<Vec<String>> {
 }
 
 fn print_preview_profiles(baseline_name: &str, section: &GlobSection) {
+    let layout = FleetLayout::default();
     println!("\n  {} preview:", "Profiles".bold());
-    println!("    - paths: ../platforms/mscp/{baseline_name}/profiles/*.mobileconfig");
+    println!(
+        "    - paths: ../{}/{baseline_name}/*.mobileconfig",
+        layout.macos_profiles_subdir
+    );
     for exc in &section.exceptions {
         let sub = exc
             .subfolder
@@ -269,8 +274,8 @@ fn print_preview_profiles(baseline_name: &str, section: &GlobSection) {
             .map(|s| format!("/{s}"))
             .unwrap_or_default();
         println!(
-            "    - path: ../platforms/mscp/{baseline_name}/profiles{sub}/{}",
-            exc.filename
+            "    - path: ../{}/{baseline_name}{sub}/{}",
+            layout.macos_profiles_subdir, exc.filename
         );
         if !exc.labels_include_all.is_empty() {
             println!(
@@ -295,8 +300,12 @@ fn print_preview_profiles(baseline_name: &str, section: &GlobSection) {
 }
 
 fn print_preview_scripts(baseline_name: &str, section: &GlobSection) {
+    let layout = FleetLayout::default();
     println!("\n  {} preview:", "Scripts".bold());
-    println!("    - paths: ../platforms/mscp/{baseline_name}/scripts/*.sh");
+    println!(
+        "    - paths: ../{}/{baseline_name}/*.sh",
+        layout.macos_scripts_subdir
+    );
     for exc in &section.exceptions {
         let sub = exc
             .subfolder
@@ -304,8 +313,8 @@ fn print_preview_scripts(baseline_name: &str, section: &GlobSection) {
             .map(|s| format!("/{s}"))
             .unwrap_or_default();
         println!(
-            "    - path: ../platforms/mscp/{baseline_name}/scripts{sub}/{}",
-            exc.filename
+            "    - path: ../{}/{baseline_name}{sub}/{}",
+            layout.macos_scripts_subdir, exc.filename
         );
     }
     println!();

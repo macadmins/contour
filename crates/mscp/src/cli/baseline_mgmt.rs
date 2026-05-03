@@ -1,6 +1,7 @@
 use crate::managers::{BaselineIndex, VerificationReport};
 use anyhow::Result;
 use colored::Colorize;
+use contour_core::fleet_layout::FleetLayout;
 use std::path::PathBuf;
 
 pub fn clean_baseline(baseline: String, output: PathBuf, force: bool) -> Result<()> {
@@ -216,12 +217,25 @@ fn fix_orphaned_references(report: &VerificationReport) -> Result<()> {
             .push(orphan.reference.clone());
     }
 
+    // Fleet v4.83+: a baseline reference in a team YAML lives under any of the
+    // platform/macos/{kind}/{name}/ paths or mscp/{name}/. Push every prefix so
+    // the retain() loops below remove all variants.
+    let layout = FleetLayout::default();
     for orphan in &report.orphaned_baseline_references {
-        let baseline_pattern = format!("lib/mscp/{}/", orphan.reference);
-        files_to_fix
-            .entry(orphan.file.clone())
-            .or_default()
-            .push(baseline_pattern);
+        let entry = files_to_fix.entry(orphan.file.clone()).or_default();
+        entry.push(format!(
+            "../{}/{}/",
+            layout.macos_profiles_subdir, orphan.reference
+        ));
+        entry.push(format!(
+            "../{}/{}/",
+            layout.macos_scripts_subdir, orphan.reference
+        ));
+        entry.push(format!(
+            "../{}/{}/",
+            layout.macos_policies_subdir, orphan.reference
+        ));
+        entry.push(format!("../mscp/{}/", orphan.reference));
     }
 
     // Fix each file

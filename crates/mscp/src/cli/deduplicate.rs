@@ -236,9 +236,14 @@ fn parse_platform(platform_str: &str) -> Result<Platform> {
     }
 }
 
-/// Auto-detect baselines in the output directory
+/// Auto-detect baselines in the output directory.
+///
+/// Fleet v4.83+: each baseline lives at `mscp/{name}/baseline.toml`. We list
+/// immediate children of `mscp/` and treat any subdir containing a manifest
+/// (`baseline.toml` or legacy `baseline.yml`) as a baseline; we skip the
+/// `versions/` subdir (manifest store) and `profiles/` (shared library).
 fn auto_detect_baselines(output_path: &PathBuf) -> Result<Vec<String>> {
-    let mscp_dir = output_path.join("lib/mscp");
+    let mscp_dir = output_path.join("mscp");
 
     if !mscp_dir.exists() {
         return Ok(Vec::new());
@@ -250,20 +255,20 @@ fn auto_detect_baselines(output_path: &PathBuf) -> Result<Vec<String>> {
         let entry = entry?;
         let path = entry.path();
 
-        if path.is_dir() {
-            // Skip the shared profiles directory
-            if path.file_name().and_then(|s| s.to_str()) == Some("profiles") {
-                continue;
-            }
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // Skip special subdirs
+        if name == "profiles" || name == "versions" {
+            continue;
+        }
 
-            // Check if it has a profiles subdirectory
-            let profiles_dir = path.join("profiles");
-            if profiles_dir.exists()
-                && profiles_dir.is_dir()
-                && let Some(name) = path.file_name().and_then(|s| s.to_str())
-            {
-                baselines.push(name.to_string());
-            }
+        // A baseline directory has either baseline.toml (v4.83) or baseline.yml (legacy)
+        if path.join("baseline.toml").exists() || path.join("baseline.yml").exists() {
+            baselines.push(name.to_string());
         }
     }
 
@@ -278,13 +283,18 @@ fn update_baseline_yamls(
     mapping: &crate::deduplicator::shared_library::DeduplicationMapping,
 ) -> Result<()> {
     for baseline in baselines {
-        let baseline_file = output_path
-            .join("lib/mscp")
-            .join(baseline)
-            .join("baseline.yml");
+        // Fleet v4.83+: baseline lives at `mscp/{name}/`. This function only
+        // updates legacy `baseline.yml` files (kept for backward compat with
+        // older repos that pre-date the v4.83 migration). New v4.83 output
+        // uses `baseline.toml`, which the rest of the codebase reads/writes;
+        // deduplicating .toml manifests is a follow-up — for now we no-op.
+        let baseline_file = output_path.join("mscp").join(baseline).join("baseline.yml");
 
         if !baseline_file.exists() {
-            tracing::warn!("Baseline YAML not found: {}", baseline_file.display());
+            tracing::debug!(
+                "Skipping {}: legacy baseline.yml not present (v4.83 uses baseline.toml; deduplicator yaml-only for now)",
+                baseline
+            );
             continue;
         }
 

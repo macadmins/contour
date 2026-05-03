@@ -24,13 +24,15 @@ pub fn validate_output(
     if output_mode == OutputMode::Human {
         println!("{}", "Checking directory structure...".cyan());
     }
-    let lib_mscp = output_path.join("lib").join("mscp");
+    // Fleet v4.83+ layout: baseline components live at mscp/{baseline}/baseline.toml
+    // (no longer under lib/mscp/). See sop-format-spec.md migration history.
+    let mscp_dir = output_path.join("mscp");
     let teams_dir = output_path.join("fleets");
 
-    if !lib_mscp.exists() {
-        result.add_error("Missing lib/mscp directory");
+    if !mscp_dir.exists() {
+        result.add_error("Missing mscp/ directory (run `contour mscp generate` to populate)");
     } else if output_mode == OutputMode::Human {
-        println!("  {} lib/mscp directory exists", "✓".green());
+        println!("  {} mscp/ directory exists", "✓".green());
     }
 
     if !teams_dir.exists() {
@@ -182,13 +184,17 @@ pub fn validate_output(
     Ok(())
 }
 
-/// Find baselines in the output directory
+/// Find baselines in the output directory.
+///
+/// Fleet v4.83+ layout: each baseline lives at `mscp/{name}/baseline.toml`.
+/// We list immediate children of `mscp/`, skipping the `versions/` subdir
+/// which holds the manifest file rather than a baseline.
 fn find_baselines(output_path: &PathBuf) -> Result<Vec<String>> {
     let mut baselines = Vec::new();
-    let lib_mscp = output_path.join("lib").join("mscp");
+    let mscp_dir = output_path.join("mscp");
 
-    if lib_mscp.exists() {
-        for entry in fs::read_dir(&lib_mscp)? {
+    if mscp_dir.exists() {
+        for entry in fs::read_dir(&mscp_dir)? {
             let entry = entry?;
             if entry.file_type()?.is_dir()
                 && let Some(name) = entry.file_name().to_str()

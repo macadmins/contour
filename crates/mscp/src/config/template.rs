@@ -226,9 +226,10 @@ fn add_comments(toml_str: &str) -> String {
 #
 # [output]
 #   structure: "pluggable" | "flat" | "nested"
-#     - pluggable: Fleet GitOps layout
-#         lib/mscp/<baseline>/profiles/, scripts/, policies/
-#         lib/all/labels/, fleets/<baseline>.yml, default.yml
+#     - pluggable: Fleet GitOps layout (v4.83+)
+#         platforms/macos/configuration-profiles/<baseline>/, scripts/<baseline>/,
+#         policies/<baseline>/, labels/, fleets/<baseline>.yml,
+#         mscp/<baseline>/baseline.toml, default.yml
 #     - flat: Jamf Pro layout
 #         <baseline>/profiles/, scripts/, declarative/
 #         No Fleet artifacts. Jamf postprocessing applied from [settings.jamf].
