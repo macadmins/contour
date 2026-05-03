@@ -164,7 +164,8 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
         "- `--sop fleet-migrate` — migrate Fleet GitOps repo from legacy/v4.82 to v4.83 structure\n\
          - `--sop enrollment` — DEP/ADE enrollment profiles (Setup Assistant skip keys)\n\
          - `--sop ci` — GitHub Actions setup, env vars (CONTOUR_ORG, CONTOUR_NAME), workflow config\n\
-         - `--sop schema-data` — embedded parquet data: verify, update, track schema versions"
+         - `--sop schema-data` — embedded parquet data: verify, update, track schema versions\n\
+         - `--sop precommit` — wire contour validators into a Git pre-commit hook (uvx pre-commit)"
     )?;
     writeln!(buf)?;
 
@@ -201,8 +202,9 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "schema-data" | "schema" | "data" | "parquet" => SOP_SCHEMA_DATA,
         "enrollment" | "dep" | "ade" | "setup-assistant" => SOP_ENROLLMENT,
         "osquery" => SOP_OSQUERY,
+        "precommit" | "pre-commit" | "hook" | "git-hook" | "githook" => SOP_PRECOMMIT,
         _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support, osquery"
+            "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support, osquery, precommit"
         ),
     };
     writer.write_all(sop.as_bytes())?;
@@ -396,6 +398,13 @@ const SOP_NOTIFICATIONS: &str = include_str!("../skills/contour/references/sop-n
 /// an INVARIANT that pins the `nl.root3.support` PayloadType so a CLI
 /// regression cannot silently emit profiles the Support app won't read.
 const SOP_SUPPORT: &str = include_str!("../skills/contour/references/sop-support.md");
+
+/// SOP_PRECOMMIT — tenth SOP. Documents wiring contour's validators
+/// into a Git pre-commit hook (canonical path: `uvx pre-commit`) so
+/// malformed profiles, dangling DDM references, and broken TOML
+/// configs block the commit at the developer's keyboard rather than
+/// failing in CI 20+ minutes later.
+const SOP_PRECOMMIT: &str = include_str!("../skills/contour/references/sop-precommit.md");
 
 const SOP_FLEET_MIGRATE: &str = r"# SOP: Migrate Fleet GitOps Repo to v4.83 Structure
 

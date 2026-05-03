@@ -137,6 +137,7 @@ without re-parsing potentially-empty `failure_categories[]`.
 | `SOP_BTM` | ✅ Migrated | `sop-btm.md`. `generate_btm_profile` pins the mobileconfig-vs-DDM target choice (macOS 15+ guidance) |
 | `SOP_NOTIFICATIONS` | ✅ Migrated | `sop-notifications.md`. `generate_notifications_profile`; documents the user-prior-choice deployment-order constraint |
 | `SOP_SUPPORT` | ✅ Migrated | `sop-support.md`. `generate_support_profile` pins `nl.root3.support` PayloadType as an INVARIANT |
+| `SOP_PRECOMMIT` | ✅ Migrated | `sop-precommit.md`. `configure_pre_commit_validation` PROCEDURE; uvx pre-commit + framework-free shell hook recipes; `${CONTOUR:-contour}` env-var override for testing pre-release binaries |
 | `SOP_SANTA` | ❌ Different format | Cookbook of 6 divergent recipes — needs decision tree at top |
 | `SOP_FLEET_MIGRATE` | ❌ Different format | One-time migration playbook with manual diff checks |
 | `SOP_CI` | ⚠️ Hybrid | Configuration setup + thin `configure-ci` procedure |
