@@ -1473,3 +1473,197 @@ fn trap_46_lint_clean_baseline_has_no_findings() {
         "clean baseline must have no lint findings; got {clean:?}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// --lint-policy traps (47–51): the opt-in surface for Tier-2
+// (org-policy) lint checks. `validate` defaults to Apple-schema only;
+// `--lint-policy` adds authoring-convention checks on top.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Variant of `lint_findings_for` that runs validate with extra args
+/// (for `--lint-policy …` and/or `--strict`).
+fn lint_findings_with_args(fixture: &str, extra_args: &[&str]) -> Vec<Value> {
+    let path = lint_fixture_path(fixture);
+    let mut args = vec!["validate", path.to_str().unwrap(), "--no-schema", "--json"];
+    args.extend_from_slice(extra_args);
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(&args)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value = serde_json::from_str(stdout.trim()).expect("validate --json emits JSON");
+    parsed["lint_findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[test]
+fn trap_47_default_validate_does_not_fire_tier_2() {
+    // The architectural contract: `validate` (no flag) is Apple-schema
+    // only. Even on a fixture that would trigger every Tier-2 check,
+    // none should appear in lint_findings without `--lint-policy`.
+    let names: Vec<String> = lint_findings_for("payload-identifier-reverse-dns")
+        .iter()
+        .filter_map(|f| f["check"].as_str().map(str::to_string))
+        .collect();
+    for tier_2 in [
+        "payload-identifier-reverse-dns",
+        "payload-organization-required",
+        "payload-scope-consistency",
+        "nested-payload-identifier-prefix",
+    ] {
+        assert!(
+            !names.iter().any(|n| n == tier_2),
+            "Tier-2 check {tier_2} fired in default validate; got {names:?}"
+        );
+    }
+}
+
+#[test]
+fn trap_48_lint_policy_named_check_fires_only_that_check() {
+    // Single explicit name → exactly that Tier-2 check fires; the
+    // other three stay silent even on a fixture they would trigger.
+    let findings = lint_findings_with_args(
+        "payload-identifier-reverse-dns",
+        &["--lint-policy", "payload-identifier-reverse-dns"],
+    );
+    let names: Vec<String> = findings
+        .iter()
+        .filter_map(|f| f["check"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "payload-identifier-reverse-dns"),
+        "expected payload-identifier-reverse-dns; got {names:?}"
+    );
+    for other in [
+        "payload-organization-required",
+        "payload-scope-consistency",
+        "nested-payload-identifier-prefix",
+    ] {
+        assert!(
+            !names.iter().any(|n| n == other),
+            "non-selected Tier-2 {other} must not fire; got {names:?}"
+        );
+    }
+}
+
+#[test]
+fn trap_49_lint_policy_all_fires_every_tier_2_check_on_matching_fixture() {
+    // `--lint-policy all` enables every Tier-2 check. On a fixture
+    // crafted to trip all four, all four should appear.
+    let mut profile = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("lint");
+    profile.push("all-tier-2.mobileconfig");
+    fs::write(
+        &profile,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadType</key><string>Configuration</string>
+    <key>PayloadVersion</key><integer>1</integer>
+    <key>PayloadIdentifier</key><string>BareIdentifier</string>
+    <key>PayloadUUID</key><string>A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D</string>
+    <key>PayloadDisplayName</key><string>All Tier-2</string>
+    <key>PayloadScope</key><string>User</string>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key><string>com.apple.MCXFileVault2</string>
+            <key>PayloadVersion</key><integer>1</integer>
+            <key>PayloadIdentifier</key><string>com.othervendor.fv</string>
+            <key>PayloadUUID</key><string>B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E</string>
+        </dict>
+    </array>
+</dict>
+</plist>"#,
+    )
+    .unwrap();
+    let findings = lint_findings_with_args("all-tier-2", &["--lint-policy", "all"]);
+    let names: std::collections::HashSet<&str> = findings
+        .iter()
+        .filter_map(|f| f["check"].as_str())
+        .collect();
+    for required in [
+        "payload-identifier-reverse-dns",
+        "payload-organization-required",
+        "payload-scope-consistency",
+        "nested-payload-identifier-prefix",
+    ] {
+        assert!(
+            names.contains(required),
+            "expected {required} in --lint-policy all output; got {names:?}"
+        );
+    }
+    let _ = fs::remove_file(&profile);
+}
+
+#[test]
+fn trap_50_lint_policy_unknown_name_errors_with_valid_list() {
+    let path = lint_fixture_path("clean");
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "validate",
+            path.to_str().unwrap(),
+            "--no-schema",
+            "--lint-policy",
+            "bogus-not-a-real-check",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "unknown --lint-policy name must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Unknown --lint-policy check"),
+        "stderr should name the contract; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("bogus-not-a-real-check"),
+        "stderr should echo the bad name"
+    );
+    assert!(stderr.contains("all"), "stderr should list 'all' as valid");
+    assert!(
+        stderr.contains("payload-identifier-reverse-dns"),
+        "stderr should list valid Tier-2 names"
+    );
+}
+
+#[test]
+fn trap_51_strict_promotes_tier_2_warning_to_error_when_selected() {
+    // Tier-2 is opt-in; `--strict` is severity-only (does NOT widen the
+    // check set). When both are set, the selected Tier-2 warning is
+    // promoted to error.
+    let warn = lint_findings_with_args(
+        "payload-identifier-reverse-dns",
+        &["--lint-policy", "payload-identifier-reverse-dns"],
+    );
+    let warn_sev = warn
+        .iter()
+        .find(|f| f["check"] == "payload-identifier-reverse-dns")
+        .and_then(|f| f["severity"].as_str())
+        .map(str::to_string);
+    assert_eq!(warn_sev.as_deref(), Some("warning"));
+
+    let err = lint_findings_with_args(
+        "payload-identifier-reverse-dns",
+        &[
+            "--lint-policy",
+            "payload-identifier-reverse-dns",
+            "--strict",
+        ],
+    );
+    let err_sev = err
+        .iter()
+        .find(|f| f["check"] == "payload-identifier-reverse-dns")
+        .and_then(|f| f["severity"].as_str())
+        .map(str::to_string);
+    assert_eq!(err_sev.as_deref(), Some("error"));
+}
