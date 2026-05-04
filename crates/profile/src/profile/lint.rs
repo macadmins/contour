@@ -1,5 +1,6 @@
 //! Profile lint checks — Apple-spec-adjacent issues that the structural
-//! validator alone misses.
+//! validator alone misses, plus an organizational-policy tier reserved
+//! for opt-in callers.
 //!
 //! These checks operate on the raw `plist::Value` tree (post-parse,
 //! pre-deserialization) so they can:
@@ -9,14 +10,28 @@
 //! - Walk every nested dict to collect cross-payload state (duplicate
 //!   PayloadUUIDs, deprecated PayloadType usage)
 //!
-//! Each finding carries a stable `check` name so callers can map back to
-//! the procedural-SOP STEP 3 named checklist and so trap fixtures can
-//! pin "the X check fires on the X-defect fixture, not on the clean
-//! one" per-violation.
+//! Each finding carries a stable `check` name so callers can map a
+//! finding back to its trap fixture and to the SOP step that triggers
+//! the workflow.
 //!
-//! Run by `validate_profile` after the structural validator. Defaults
-//! to ON (these are spec-adjacent, not Fleet-policy). Future Phase 2
-//! adds Fleet-policy checks gated behind `--strict`.
+//! ## Tiers
+//!
+//! **Tier 1 (Apple-spec-adjacent, always on)**: `duplicate-payload-uuid`,
+//! `payload-version-type`, `placeholder-payload-uuid`,
+//! `deprecated-payload-type`. Fired by `lint_profile_with_options` and
+//! surfaced through `profile validate`. These hurt any Apple-profile
+//! authoring workflow,
+//! regardless of vendor.
+//!
+//! **Tier 2 (org-policy, opt-in)**: `payload-identifier-reverse-dns`,
+//! `payload-organization-required`, `payload-scope-consistency`,
+//! `nested-payload-identifier-prefix`. Off by default; callers opt in
+//! via `LintOptions::selected_checks` or the
+//! `validate --lint-policy <names|all>` CLI flag. `--strict` promotes
+//! Tier-2 warnings to errors but does NOT widen the check set —
+//! `--lint-policy` is the only opt-in. Default `validate` stays
+//! Apple-schema-only; organizational conventions are off the agent's
+//! path until explicitly requested.
 
 use crate::migrate::mapping::{MigrationRegistry, MigrationStatus};
 use crate::uuid::is_placeholder_uuid;
@@ -71,43 +86,40 @@ impl LintFinding {
     }
 }
 
-/// All known lint check IDs, partitioned by tier.
-///
-/// Tier 1 (Apple-spec-adjacent) — fire by default, regardless of mode:
-/// `duplicate-payload-uuid`, `payload-version-type`,
-/// `placeholder-payload-uuid`, `deprecated-payload-type`.
-///
-/// Tier 2 (Fleet-policy) — gated on `LintOptions.strict` OR explicit
-/// `selected_checks`:
-/// `payload-identifier-reverse-dns` (warn default → error strict),
-/// `payload-organization-required` (off default → error strict),
-/// `payload-scope-consistency` (off default → error strict),
-/// `nested-payload-identifier-prefix` (warn default → error strict).
-pub const ALL_CHECKS: &[&str] = &[
-    // Tier 1 — always on
+/// Tier-1 (Apple-spec-adjacent) check names — always fired by
+/// `lint_profile_with_options` regardless of `selected_checks`.
+pub const TIER_1_CHECKS: &[&str] = &[
     "duplicate-payload-uuid",
     "payload-version-type",
     "placeholder-payload-uuid",
     "deprecated-payload-type",
-    // Tier 2 — strict / selectable
+];
+
+/// Tier-2 (org-policy) check names — opt-in via
+/// `LintOptions::selected_checks` or the `validate --lint-policy` CLI
+/// flag.
+pub const TIER_2_CHECKS: &[&str] = &[
     "payload-identifier-reverse-dns",
     "payload-organization-required",
     "payload-scope-consistency",
     "nested-payload-identifier-prefix",
 ];
 
-/// Selection knobs for the lint pass.
+/// Selection knobs for the lint pass. Tier-1 always fires; Tier-2
+/// (org-policy) is opt-in via `selected_checks`.
+///
+/// `validate` (without `--lint-policy`) constructs a `LintOptions`
+/// with `selected_checks: None` and gets Tier-1 only. Callers that
+/// want Tier-2 checks construct an explicit `selected_checks` set
+/// containing the Tier-2 names — `strict` is severity-only and does
+/// NOT widen the check set.
 #[derive(Debug, Clone, Default)]
 pub struct LintOptions {
-    /// `--strict`: severity promotion (warn → error) AND fires the
-    /// off-by-default Fleet-policy checks. Composed with
-    /// `selected_checks`: when both are set, only the listed checks
-    /// run, but at strict severity.
+    /// Severity promotion: Tier-2 warnings become errors. Does not
+    /// widen the check set — Tier-2 stays opt-in via `selected_checks`.
     pub strict: bool,
-    /// `--check <list>`: opt into specific checks by name. When
-    /// `Some(set)`, only checks whose name is in the set are run.
-    /// `None` means "run the default set" (Tier 1 always + Tier 2's
-    /// always-on members + all Tier 2 if `strict`).
+    /// Opt into specific checks by name. `Some(set)` runs only the
+    /// listed checks; `None` runs the Tier-1 defaults.
     pub selected_checks: Option<std::collections::HashSet<String>>,
 }
 
@@ -115,21 +127,17 @@ impl LintOptions {
     fn includes(&self, name: &str) -> bool {
         match &self.selected_checks {
             Some(set) => set.contains(name),
-            // No explicit selection: Tier 1 always; Tier 2 only the
-            // always-on members OR everything in strict mode.
-            None => match name {
-                // Tier 1 — always on
+            // No explicit selection: Tier 1 only. Tier 2 (org-policy)
+            // is opt-in via `selected_checks` — callers construct the
+            // set explicitly. `strict` only promotes severity; it does
+            // NOT widen the check set.
+            None => matches!(
+                name,
                 "duplicate-payload-uuid"
-                | "payload-version-type"
-                | "placeholder-payload-uuid"
-                | "deprecated-payload-type" => true,
-                // Tier 2, on by default at warn severity
-                "payload-identifier-reverse-dns"
-                | "nested-payload-identifier-prefix" => true,
-                // Tier 2, off by default — only fire in strict
-                "payload-organization-required" | "payload-scope-consistency" => self.strict,
-                _ => false,
-            },
+                    | "payload-version-type"
+                    | "placeholder-payload-uuid"
+                    | "deprecated-payload-type"
+            ),
         }
     }
 
@@ -139,7 +147,10 @@ impl LintOptions {
     /// (the per-check function chose error vs warning at write time).
     /// Tier 2 checks promote warning → error in strict.
     fn promote_if_strict(&self, finding: LintFinding) -> LintFinding {
-        if self.strict && matches!(finding.severity, LintSeverity::Warning) && is_tier_2(finding.check) {
+        if self.strict
+            && matches!(finding.severity, LintSeverity::Warning)
+            && is_tier_2(finding.check)
+        {
             LintFinding {
                 severity: LintSeverity::Error,
                 ..finding
@@ -160,19 +171,13 @@ fn is_tier_2(check: &str) -> bool {
     )
 }
 
-/// Run the default lint pass — equivalent to `lint_profile_with_options`
-/// with `LintOptions::default()`. Kept for backwards compat with
-/// existing callers and unit tests.
-pub fn lint_profile(value: &Value, registry: &MigrationRegistry) -> Vec<LintFinding> {
-    lint_profile_with_options(value, registry, &LintOptions::default())
-}
-
 /// Run lint checks with explicit options.
 ///
 /// Filters by `options.includes(check)` and applies strict severity
 /// promotion via `options.promote_if_strict`. Unknown check names in
 /// `selected_checks` are silently ignored — caller is responsible for
-/// validating CLI input.
+/// validating CLI input. The `validate` CLI handler does this via
+/// `resolve_lint_options` in `cli/validate.rs`.
 pub fn lint_profile_with_options(
     value: &Value,
     registry: &MigrationRegistry,
@@ -430,10 +435,12 @@ fn walk_check_payload_type(
 // ── 2a. payload-identifier-reverse-dns ─────────────────────────────────
 
 /// Apple's spec accepts any non-empty string as PayloadIdentifier.
-/// Fleet/MDM convention is reverse-DNS — `com.acme.passcode` — so a
+/// Industry convention is reverse-DNS — `com.acme.passcode` — so a
 /// bare UUID or single-segment string slips through Apple-strict but
 /// will collide in any GitOps repo with multiple profiles. Default
 /// severity: warning. Strict severity: error (promoted by the caller).
+///
+/// Tier-2 (org-policy). Library-only — not wired into `validate`.
 pub fn check_payload_identifier_reverse_dns(value: &Value) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     walk_check_identifier(value, None, &mut findings);
@@ -457,7 +464,11 @@ fn walk_check_identifier(value: &Value, idx: Option<usize>, findings: &mut Vec<L
                  Bare strings collide across profiles in a GitOps repo."
             ),
         );
-        findings.push(if let Some(i) = idx { f.with_payload(i) } else { f });
+        findings.push(if let Some(i) = idx {
+            f.with_payload(i)
+        } else {
+            f
+        });
     }
     if let Some(Value::Array(items)) = dict.get("PayloadContent") {
         for (i, item) in items.iter().enumerate() {
@@ -483,8 +494,10 @@ fn is_reverse_dns(s: &str) -> bool {
 // ── 2b. payload-organization-required ──────────────────────────────────
 
 /// PayloadOrganization is optional per Apple's spec, but required by
-/// Fleet/audit conventions — without it, profiles can't be attributed
-/// to a vendor in GitOps logs. Off by default; fires in strict.
+/// audit conventions — without it, profiles can't be attributed to a
+/// vendor in GitOps logs. Off by default; fires in strict.
+///
+/// Tier-2 (org-policy). Library-only — not wired into `validate`.
 pub fn check_payload_organization_required(value: &Value) -> Vec<LintFinding> {
     let Value::Dictionary(dict) = value else {
         return Vec::new();
@@ -493,7 +506,7 @@ pub fn check_payload_organization_required(value: &Value) -> Vec<LintFinding> {
     if org.is_none_or(str::is_empty) {
         vec![LintFinding::warn(
             "payload-organization-required",
-            "Profile: PayloadOrganization is missing or empty. Fleet/audit \
+            "Profile: PayloadOrganization is missing or empty. Audit \
              convention requires it; agents should set it from the org \
              config (see `contour profile init` / CONTOUR_NAME)."
                 .to_string(),
@@ -522,6 +535,7 @@ const SYSTEM_ONLY_PAYLOAD_TYPES: &[&str] = &[
     "com.apple.servicemanagement.managed",
 ];
 
+/// Tier-2 (org-policy). Library-only — not wired into `validate`.
 pub fn check_payload_scope_consistency(value: &Value) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     let Value::Dictionary(top) = value else {
@@ -565,10 +579,12 @@ pub fn check_payload_scope_consistency(value: &Value) -> Vec<LintFinding> {
 // ── 2d. nested-payload-identifier-prefix ───────────────────────────────
 
 /// Each nested payload's PayloadIdentifier should start with the
-/// top-level PayloadIdentifier — a Fleet/audit convention that makes
+/// top-level PayloadIdentifier — an audit convention that makes
 /// profile attribution unambiguous and prevents PayloadIdentifier
 /// collisions across profiles authored by different teams. Default
 /// warning; strict error.
+///
+/// Tier-2 (org-policy). Library-only — not wired into `validate`.
 pub fn check_nested_payload_identifier_prefix(value: &Value) -> Vec<LintFinding> {
     let Value::Dictionary(top) = value else {
         return Vec::new();
@@ -795,7 +811,8 @@ mod tests {
             "PayloadContent".into(),
             Value::Array(vec![Value::Dictionary(a), Value::Dictionary(b)]),
         );
-        let findings = lint_profile(&Value::Dictionary(top), &registry);
+        let findings =
+            lint_profile_with_options(&Value::Dictionary(top), &registry, &LintOptions::default());
         let names: std::collections::HashSet<&str> = findings.iter().map(|f| f.check).collect();
         assert!(names.contains("duplicate-payload-uuid"), "1a fired");
         assert!(names.contains("payload-version-type"), "1b fired");
@@ -812,7 +829,10 @@ mod tests {
         top.insert("PayloadType".into(), s("Configuration"));
         top.insert("PayloadVersion".into(), Value::Integer(1.into()));
         top.insert("PayloadIdentifier".into(), s(bare));
-        top.insert("PayloadUUID".into(), s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"));
+        top.insert(
+            "PayloadUUID".into(),
+            s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"),
+        );
         let findings = check_payload_identifier_reverse_dns(&Value::Dictionary(top));
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].check, "payload-identifier-reverse-dns");
@@ -859,7 +879,10 @@ mod tests {
         let mut child = Dictionary::new();
         child.insert("PayloadType".into(), s("com.apple.MCXFileVault2"));
         child.insert("PayloadIdentifier".into(), s("com.acme.fv"));
-        child.insert("PayloadUUID".into(), s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"));
+        child.insert(
+            "PayloadUUID".into(),
+            s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"),
+        );
         let mut top = Dictionary::new();
         top.insert("PayloadScope".into(), s("User"));
         top.insert("PayloadIdentifier".into(), s("com.acme.test"));
@@ -918,31 +941,47 @@ mod tests {
     // ── strict-mode promotion + selection ──
 
     #[test]
-    fn strict_promotes_warnings_to_errors_on_tier_2() {
-        // A profile with a bare-UUID PayloadIdentifier triggers
-        // payload-identifier-reverse-dns at warn (default) → error (strict).
+    fn strict_promotes_tier_2_warning_to_error_when_explicitly_selected() {
+        // Tier-2 is opt-in via selected_checks. With opt-in + strict,
+        // warning → error promotion fires.
         let bare = "C1B2A3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D";
         let mut top = Dictionary::new();
         top.insert("PayloadType".into(), s("Configuration"));
         top.insert("PayloadVersion".into(), Value::Integer(1.into()));
         top.insert("PayloadIdentifier".into(), s(bare));
-        top.insert("PayloadUUID".into(), s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"));
+        top.insert(
+            "PayloadUUID".into(),
+            s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"),
+        );
         top.insert("PayloadOrganization".into(), s("Acme"));
         let registry = MigrationRegistry::new();
         let value = Value::Dictionary(top);
 
-        let default = lint_profile_with_options(&value, &registry, &LintOptions::default());
-        let strict = lint_profile_with_options(
+        let mut tier_2 = std::collections::HashSet::new();
+        tier_2.insert("payload-identifier-reverse-dns".to_string());
+
+        let opted_in = lint_profile_with_options(
             &value,
             &registry,
-            &LintOptions { strict: true, selected_checks: None },
+            &LintOptions {
+                strict: false,
+                selected_checks: Some(tier_2.clone()),
+            },
+        );
+        let opted_in_strict = lint_profile_with_options(
+            &value,
+            &registry,
+            &LintOptions {
+                strict: true,
+                selected_checks: Some(tier_2),
+            },
         );
 
-        let default_severity = default
+        let default_severity = opted_in
             .iter()
             .find(|f| f.check == "payload-identifier-reverse-dns")
             .map(|f| f.severity);
-        let strict_severity = strict
+        let strict_severity = opted_in_strict
             .iter()
             .find(|f| f.check == "payload-identifier-reverse-dns")
             .map(|f| f.severity);
@@ -952,30 +991,62 @@ mod tests {
     }
 
     #[test]
-    fn off_by_default_check_only_fires_in_strict() {
+    fn tier_2_off_by_default_unless_explicitly_selected() {
         let mut top = Dictionary::new();
         top.insert("PayloadType".into(), s("Configuration"));
         top.insert("PayloadVersion".into(), Value::Integer(1.into()));
         top.insert("PayloadIdentifier".into(), s("com.acme.test"));
-        top.insert("PayloadUUID".into(), s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"));
-        // No PayloadOrganization — payload-organization-required triggers.
+        top.insert(
+            "PayloadUUID".into(),
+            s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"),
+        );
+        // No PayloadOrganization — payload-organization-required would
+        // fire if selected.
         let registry = MigrationRegistry::new();
         let value = Value::Dictionary(top);
 
+        // Default mode: Tier-2 silent.
         let default = lint_profile_with_options(&value, &registry, &LintOptions::default());
         assert!(
-            !default.iter().any(|f| f.check == "payload-organization-required"),
-            "off-by-default check must NOT fire without --strict"
+            !default
+                .iter()
+                .any(|f| f.check == "payload-organization-required"),
+            "Tier-2 must NOT fire without explicit selected_checks"
         );
 
-        let strict = lint_profile_with_options(
+        // Strict alone: still silent. Strict only promotes severity, it
+        // does NOT widen the check set — Tier-2 stays opt-in.
+        let strict_only = lint_profile_with_options(
             &value,
             &registry,
-            &LintOptions { strict: true, selected_checks: None },
+            &LintOptions {
+                strict: true,
+                selected_checks: None,
+            },
         );
         assert!(
-            strict.iter().any(|f| f.check == "payload-organization-required"),
-            "off-by-default check MUST fire in --strict"
+            !strict_only
+                .iter()
+                .any(|f| f.check == "payload-organization-required"),
+            "strict alone must NOT widen the check set"
+        );
+
+        // Explicit opt-in via selected_checks fires Tier-2.
+        let mut tier_2 = std::collections::HashSet::new();
+        tier_2.insert("payload-organization-required".to_string());
+        let opted_in = lint_profile_with_options(
+            &value,
+            &registry,
+            &LintOptions {
+                strict: false,
+                selected_checks: Some(tier_2),
+            },
+        );
+        assert!(
+            opted_in
+                .iter()
+                .any(|f| f.check == "payload-organization-required"),
+            "explicit selected_checks MUST fire the named Tier-2 check"
         );
     }
 
@@ -985,8 +1056,11 @@ mod tests {
         let mut top = Dictionary::new();
         top.insert("PayloadType".into(), s("Configuration"));
         top.insert("PayloadVersion".into(), Value::Real(1.0)); // tier-1 fires
-        top.insert("PayloadIdentifier".into(), s("bare"));      // tier-2 fires (default)
-        top.insert("PayloadUUID".into(), s("00000000-0000-0000-0000-000000000000")); // tier-1 fires
+        top.insert("PayloadIdentifier".into(), s("bare")); // tier-2 fires (default)
+        top.insert(
+            "PayloadUUID".into(),
+            s("00000000-0000-0000-0000-000000000000"),
+        ); // tier-1 fires
         let registry = MigrationRegistry::new();
         let value = Value::Dictionary(top);
 

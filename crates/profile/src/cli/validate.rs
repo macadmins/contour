@@ -9,7 +9,10 @@ use crate::cli::glob_utils::{
 };
 use crate::migrate::mapping::MigrationRegistry;
 use crate::output::OutputMode;
-use crate::profile::{lint, parser, validator};
+use crate::profile::{
+    lint::{self, LintOptions},
+    parser, validator,
+};
 use crate::schema::SchemaRegistry;
 use crate::schema::lookup::load_known_identifiers;
 use crate::validation::{SchemaValidator, Severity, ValidationOptions};
@@ -18,13 +21,18 @@ use colored::Colorize;
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Main entry point for validate command with batch support
+/// Main entry point for validate command with batch support.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "validate handler threads many CLI flags"
+)]
 pub fn handle_validate(
     paths: &[String],
     schema: bool,
     schema_path: Option<&str>,
     lookup: Option<&str>,
     strict: bool,
+    lint_policy: &[String],
     recursive: bool,
     max_depth: Option<usize>,
     parallel: bool,
@@ -32,6 +40,11 @@ pub fn handle_validate(
     report: Option<&str>,
     allow_placeholders: bool,
 ) -> Result<()> {
+    // Resolve --lint-policy + --strict into a LintOptions once.
+    // Errors fast on unknown check names so a typo can't silently
+    // skip a check the user thought they enabled.
+    let lint_options = resolve_lint_options(strict, lint_policy)?;
+
     // Resolve lookup path: CLI flag > config.toml manifests_path
     let lookup_path = lookup.map(std::path::PathBuf::from).or_else(|| {
         contour_core::ContourConfig::load_nearest().and_then(|c| c.defaults.manifests_path)
@@ -62,6 +75,7 @@ pub fn handle_validate(
             schema_path,
             known_ids.as_ref(),
             strict,
+            &lint_options,
             recursive,
             max_depth,
             parallel,
@@ -76,18 +90,61 @@ pub fn handle_validate(
             schema_path,
             known_ids.as_ref(),
             strict,
+            &lint_options,
             output_mode,
             allow_placeholders,
         )
     }
 }
 
+/// Resolve `--lint-policy <names...>` + `--strict` into a `LintOptions`.
+///
+/// Empty `lint_policy` (no flag passed) → `selected_checks: None`,
+/// meaning the lint pass runs Tier-1 only.
+///
+/// `all` expands to every Tier-2 check; explicit names must match
+/// `lint::TIER_2_CHECKS` exactly. Unknown names produce a fail-fast
+/// error listing the valid ones — a typo can't silently skip the check
+/// the user thought they enabled.
+fn resolve_lint_options(strict: bool, lint_policy: &[String]) -> Result<LintOptions> {
+    if lint_policy.is_empty() {
+        return Ok(LintOptions {
+            strict,
+            selected_checks: None,
+        });
+    }
+    let mut chosen: HashSet<String> = HashSet::new();
+    for raw in lint_policy {
+        let name = raw.trim();
+        if name == "all" {
+            chosen.extend(lint::TIER_2_CHECKS.iter().map(|s| (*s).to_string()));
+            continue;
+        }
+        if !lint::TIER_2_CHECKS.contains(&name) {
+            let valid = lint::TIER_2_CHECKS.join(", ");
+            anyhow::bail!("Unknown --lint-policy check '{name}'. Valid: all, {valid}");
+        }
+        chosen.insert(name.to_string());
+    }
+    // Tier-1 always fires, even when --lint-policy is set.
+    chosen.extend(lint::TIER_1_CHECKS.iter().map(|s| (*s).to_string()));
+    Ok(LintOptions {
+        strict,
+        selected_checks: Some(chosen),
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "validate handler threads many CLI flags"
+)]
 fn handle_validate_batch(
     paths: &[String],
     schema: bool,
     schema_path: Option<&str>,
     known_ids: Option<&HashSet<String>>,
     strict: bool,
+    lint_options: &LintOptions,
     recursive: bool,
     max_depth: Option<usize>,
     parallel: bool,
@@ -140,6 +197,7 @@ fn handle_validate_batch(
                     &options,
                     known_ids,
                     allow_placeholders,
+                    lint_options,
                 )
             })
             .collect();
@@ -263,6 +321,7 @@ fn validate_single_file_detailed(
     options: &ValidationOptions,
     known_ids: Option<&HashSet<String>>,
     allow_placeholders: bool,
+    lint_options: &LintOptions,
 ) -> DetailedValidationResult {
     let file = file_path.to_str().unwrap_or_default().to_string();
 
@@ -424,7 +483,7 @@ fn validate_single_file_detailed(
     let mut lint_findings: Vec<serde_json::Value> = Vec::new();
     if let Ok(raw_value) = plist::from_file::<_, plist::Value>(file_path) {
         let registry = MigrationRegistry::new();
-        for finding in lint::lint_profile(&raw_value, &registry) {
+        for finding in lint::lint_profile_with_options(&raw_value, &registry, lint_options) {
             let severity = match finding.severity {
                 lint::LintSeverity::Error => "error",
                 lint::LintSeverity::Warning => "warning",
@@ -546,12 +605,17 @@ fn validate_single_file_internal(
     Ok(SingleFileValidationResult { warnings })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "validate handler threads many CLI flags"
+)]
 fn handle_validate_single(
     file: &str,
     schema: bool,
     schema_path: Option<&str>,
     known_ids: Option<&HashSet<String>>,
     strict: bool,
+    lint_options: &LintOptions,
     output_mode: OutputMode,
     allow_placeholders: bool,
 ) -> Result<()> {
@@ -615,7 +679,7 @@ fn handle_validate_single(
     let mut lint_warnings: Vec<String> = Vec::new();
     if let Ok(raw_value) = plist::from_file::<_, plist::Value>(file) {
         let registry = MigrationRegistry::new();
-        for finding in lint::lint_profile(&raw_value, &registry) {
+        for finding in lint::lint_profile_with_options(&raw_value, &registry, lint_options) {
             let severity = match finding.severity {
                 lint::LintSeverity::Error => "error",
                 lint::LintSeverity::Warning => "warning",

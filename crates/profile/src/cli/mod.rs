@@ -197,6 +197,31 @@ pub enum Commands {
         #[arg(long, help = "Strict mode: treat warnings as errors")]
         strict: bool,
 
+        #[arg(
+            long,
+            value_delimiter = ',',
+            value_name = "NAMES",
+            long_help = "Opt into org-policy lint checks (Tier-2). Default\n\
+                         `validate` runs Apple-schema checks only; this\n\
+                         flag adds authoring-convention checks on top.\n\
+                         \n\
+                         Pass `all` to enable every Tier-2 check, or a\n\
+                         comma-separated list of names. Unknown names\n\
+                         exit non-zero with the valid list.\n\
+                         \n\
+                         Composes with --strict: when both are set,\n\
+                         Tier-2 warnings are promoted to errors.\n\
+                         \n\
+                         Valid names:\n  \
+                         - all\n  \
+                         - payload-identifier-reverse-dns\n  \
+                         - payload-organization-required\n  \
+                         - payload-scope-consistency\n  \
+                         - nested-payload-identifier-prefix",
+            help = "Opt into org-policy lint checks (comma-separated names, or `all`)"
+        )]
+        lint_policy: Vec<String>,
+
         #[arg(short, long, help = "Process directories recursively")]
         recursive: bool,
 
