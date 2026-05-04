@@ -37,6 +37,40 @@ pub fn is_valid_uuid(uuid: &str) -> bool {
     Uuid::parse_str(uuid).is_ok()
 }
 
+/// Detect placeholder UUIDs that are well-formed per RFC 4122 but
+/// practically defective (deploy-time MDM collision risk).
+///
+/// Catches:
+/// - All-zeros: `00000000-0000-0000-0000-000000000000`
+/// - All-Fs / all-ones / single-digit repetitions: `FFFFFFFF-...`,
+///   `11111111-...`, `BBBBBBBB-...`
+/// - Common boilerplate placeholders like
+///   `12345678-1234-1234-1234-123456789012` whose hex chars only
+///   cover a narrow distinct set.
+///
+/// Heuristic: parse via `Uuid::parse_str` (so it returns false on
+/// invalid input — caller can pair this with `is_valid_uuid` for full
+/// coverage), then collapse the 32 hex chars and assert at least 4
+/// distinct characters appear. Real UUIDs from any standard random or
+/// v5 generator have well over 4 distinct hex chars; a 4-distinct
+/// threshold is a comfortable line below which a UUID is almost
+/// certainly a hand-typed placeholder, not a generated one.
+///
+/// Returns `false` if the input is not a valid UUID at all (caller
+/// already gets that signal from `is_valid_uuid`).
+pub fn is_placeholder_uuid(uuid: &str) -> bool {
+    let Ok(parsed) = Uuid::parse_str(uuid) else {
+        return false;
+    };
+    let bytes = parsed.as_bytes();
+    let mut distinct_nibbles: u32 = 0;
+    for byte in bytes {
+        distinct_nibbles |= 1 << (byte >> 4);
+        distinct_nibbles |= 1 << (byte & 0x0F);
+    }
+    distinct_nibbles.count_ones() < 4
+}
+
 pub fn regenerate_uuid(existing: &str, config: &UuidConfig, identifier: &str) -> Result<String> {
     if !is_valid_uuid(existing) {
         return generate_uuid(config, identifier);
@@ -91,6 +125,59 @@ mod tests {
 
         assert_ne!(existing, regenerated);
         assert!(is_valid_uuid(&regenerated));
+    }
+
+    #[test]
+    fn placeholder_all_zeros() {
+        assert!(is_placeholder_uuid("00000000-0000-0000-0000-000000000000"));
+    }
+
+    #[test]
+    fn placeholder_all_fs() {
+        assert!(is_placeholder_uuid("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"));
+    }
+
+    #[test]
+    fn placeholder_repeating_single_digit() {
+        assert!(is_placeholder_uuid("11111111-1111-1111-1111-111111111111"));
+        assert!(is_placeholder_uuid("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"));
+    }
+
+    #[test]
+    fn placeholder_classic_increment_boilerplate() {
+        // 12345678-1234-1234-1234-123456789012 — hex chars 0-9 = 10 distinct;
+        // does NOT trip the heuristic. That's intentional: 10 distinct hex
+        // chars looks like a real UUID, even if a human typed it.
+        assert!(!is_placeholder_uuid("12345678-1234-1234-1234-123456789012"));
+        // But a "narrow boilerplate" with <4 distinct hex chars does trip:
+        assert!(is_placeholder_uuid("11111111-2222-1111-2222-111111111111"));
+    }
+
+    #[test]
+    fn real_random_uuid_is_not_placeholder() {
+        let real = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D";
+        assert!(!is_placeholder_uuid(real));
+    }
+
+    #[test]
+    fn real_v5_uuid_is_not_placeholder() {
+        // Generated via NAMESPACE_DNS for "com.example.test"
+        let cfg = UuidConfig {
+            org_domain: Some("com.example".to_string()),
+            predictable: true,
+        };
+        let v5 = generate_uuid(&cfg, "test.identifier").unwrap();
+        assert!(is_valid_uuid(&v5));
+        assert!(
+            !is_placeholder_uuid(&v5),
+            "v5 UUIDs must not register as placeholder"
+        );
+    }
+
+    #[test]
+    fn invalid_input_returns_false() {
+        assert!(!is_placeholder_uuid("not-a-uuid"));
+        assert!(!is_placeholder_uuid(""));
     }
 
     #[test]

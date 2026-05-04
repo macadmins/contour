@@ -1345,3 +1345,131 @@ fn write_profile_toml_for_org(dir: &std::path::Path, domain: &str, name: &str) {
     )
     .unwrap();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 1 lint traps (42–46): per-violation fixtures pin that each named
+// lint check fires on its own fixture (positive case) and that the clean
+// baseline never trips any of them (negative case).
+//
+// Per-violation accountability is the whole point — combined-violation
+// fixtures hide which tier caught what. The fixtures live under
+// `crates/profile/tests/fixtures/lint/` and are named after the check
+// they trigger.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn lint_fixture_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("lint")
+        .join(format!("{name}.mobileconfig"))
+}
+
+/// Run validate against a fixture and return the parsed JSON envelope's
+/// `lint_findings` array. Single-file path → `lint_findings` is at the
+/// top level of the JSON object.
+fn lint_findings_for(fixture: &str) -> Vec<Value> {
+    let path = lint_fixture_path(fixture);
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["validate", path.to_str().unwrap(), "--no-schema", "--json"])
+        .output()
+        .unwrap();
+    // exit code may be non-zero (e.g. duplicate-uuid is an error) — that's fine.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value = serde_json::from_str(stdout.trim()).expect("validate --json emits JSON");
+    parsed["lint_findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[test]
+fn trap_42_lint_duplicate_payload_uuid_fires_only_on_its_fixture() {
+    let findings = lint_findings_for("duplicate-payload-uuid");
+    let names: Vec<&str> = findings
+        .iter()
+        .filter_map(|f| f["check"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"duplicate-payload-uuid"),
+        "expected duplicate-payload-uuid finding; got {names:?}"
+    );
+
+    let clean = lint_findings_for("clean");
+    assert!(
+        !clean.iter().any(|f| f["check"] == "duplicate-payload-uuid"),
+        "clean baseline must not trip duplicate-payload-uuid"
+    );
+}
+
+#[test]
+fn trap_43_lint_payload_version_type_fires_only_on_its_fixture() {
+    let findings = lint_findings_for("payload-version-type");
+    let names: Vec<&str> = findings
+        .iter()
+        .filter_map(|f| f["check"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"payload-version-type"),
+        "expected payload-version-type finding; got {names:?}"
+    );
+    let clean = lint_findings_for("clean");
+    assert!(
+        !clean.iter().any(|f| f["check"] == "payload-version-type"),
+        "clean baseline must not trip payload-version-type"
+    );
+}
+
+#[test]
+fn trap_44_lint_placeholder_payload_uuid_fires_only_on_its_fixture() {
+    let findings = lint_findings_for("placeholder-payload-uuid");
+    let names: Vec<&str> = findings
+        .iter()
+        .filter_map(|f| f["check"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"placeholder-payload-uuid"),
+        "expected placeholder-payload-uuid finding; got {names:?}"
+    );
+    let clean = lint_findings_for("clean");
+    assert!(
+        !clean
+            .iter()
+            .any(|f| f["check"] == "placeholder-payload-uuid"),
+        "clean baseline must not trip placeholder-payload-uuid"
+    );
+}
+
+#[test]
+fn trap_45_lint_deprecated_payload_type_fires_only_on_its_fixture() {
+    let findings = lint_findings_for("deprecated-payload-type");
+    let names: Vec<&str> = findings
+        .iter()
+        .filter_map(|f| f["check"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"deprecated-payload-type"),
+        "expected deprecated-payload-type finding; got {names:?}"
+    );
+    let clean = lint_findings_for("clean");
+    assert!(
+        !clean
+            .iter()
+            .any(|f| f["check"] == "deprecated-payload-type"),
+        "clean baseline must not trip deprecated-payload-type"
+    );
+}
+
+#[test]
+fn trap_46_lint_clean_baseline_has_no_findings() {
+    // Independent gate: the clean baseline must produce ZERO lint
+    // findings. If a future check starts firing on clean, either the
+    // check is wrong or the baseline needs updating — both worth
+    // surfacing loudly.
+    let clean = lint_findings_for("clean");
+    assert!(
+        clean.is_empty(),
+        "clean baseline must have no lint findings; got {clean:?}"
+    );
+}

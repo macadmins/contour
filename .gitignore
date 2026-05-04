@@ -45,6 +45,8 @@ pkg/*/build-info.toml
 # Generated output (root only, not crate src/output/ modules)
 /output/
 *.mobileconfig
+# …but checked-in test fixtures override the global ignore
+!crates/*/tests/fixtures/**/*.mobileconfig
 
 # Project config (user-specific)
 .contour/
