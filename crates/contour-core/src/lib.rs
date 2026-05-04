@@ -26,7 +26,7 @@ pub mod trainer;
 pub mod validation;
 pub mod yaml_edit;
 
-pub use app_discovery::{extract_team_id, find_apps_recursive};
+pub use app_discovery::{BUNDLE_EXTENSIONS, extract_team_id, find_apps_recursive, is_bundle_dir};
 pub use codesign::{find_main_executable, get_app_name, get_bundle_id, get_code_requirement};
 pub use completions::generate_completions;
 pub use config::{ConfigSettings, ContourConfig, resolve_name, resolve_org};

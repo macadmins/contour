@@ -80,18 +80,27 @@ fn classify_scan_error(app_path: &Path, error: &anyhow::Error) -> SkipReason {
     }
 }
 
-/// Deduplicate apps by bundle_id, keeping the first occurrence.
+/// Deduplicate apps by their identifier value, keeping the first occurrence.
 ///
-/// This handles cases like Adobe CC frameworks where the recursive scan
+/// Handles cases like Adobe CC frameworks where the recursive scan
 /// follows both `Versions/A/` and `Versions/Current/` symlinks, producing
-/// duplicate entries with the same bundle_id.
+/// duplicate entries with the same bundle_id. For path-based entries
+/// (signed bare binaries), the absolute path is the identifier — same
+/// dedup logic applies.
 pub fn deduplicate_apps(apps: Vec<AppInfo>, output_mode: OutputMode) -> Vec<AppInfo> {
     let mut seen = HashSet::new();
     let mut deduped = Vec::with_capacity(apps.len());
     let mut dup_count = 0usize;
 
     for app in apps {
-        if seen.insert(app.bundle_id.clone()) {
+        // Path-based entries have empty bundle_id; key on the absolute
+        // path so they don't all collapse into one bucket.
+        let key = if app.bundle_id.is_empty() {
+            app.path.display().to_string()
+        } else {
+            app.bundle_id.clone()
+        };
+        if seen.insert(key) {
             deduped.push(app);
         } else {
             dup_count += 1;
@@ -173,7 +182,16 @@ pub fn run(
                 continue;
             }
 
-            if path.extension().is_some_and(|e| e == "app") {
+            // Three input shapes are accepted:
+            //   1. A bundle directory (.app, .xpc, .appex, .systemextension,
+            //      .bundle, .plugin) — added directly.
+            //   2. A signed bare binary file (e.g. /usr/local/munki/...) —
+            //      added directly so extract_app_info routes it to the
+            //      bare-binary path.
+            //   3. Any other directory — recursed into to discover bundles.
+            if contour_core::app_discovery::is_bundle_dir(path) {
+                apps.push(path.clone());
+            } else if path.is_file() {
                 apps.push(path.clone());
             } else {
                 find_apps_recursive(path, &mut apps)?;
@@ -366,8 +384,22 @@ pub fn find_apps_recursive(path: &Path, apps: &mut Vec<PathBuf>) -> Result<()> {
     contour_core::find_apps_recursive(path, apps)
 }
 
-/// Extract application info (name, bundle ID, code requirement) from an app bundle.
+/// Extract application info from a bundle directory or a signed bare binary.
+///
+/// Two paths:
+/// - **Bundle directory** (`.app`, `.xpc`, `.appex`, `.systemextension`,
+///   `.bundle`, `.plugin`): reads `Contents/Info.plist` for `CFBundleIdentifier`
+///   and finds the main executable to extract the code requirement.
+///   Emits `identifier_type=bundleID`.
+/// - **Bare file** (signed Mach-O binary, e.g. `/usr/local/munki/managedsoftwareupdate`):
+///   no Info.plist; the file IS the executable. Extracts the code
+///   requirement directly via `codesign -d -r-`. Emits
+///   `identifier_type=path` with the absolute path as the identifier
+///   value, and `bundle_id` empty.
 pub fn extract_app_info(app_path: &Path) -> Result<AppInfo> {
+    if app_path.is_file() {
+        return extract_bare_binary_info(app_path);
+    }
     let name = get_app_name(app_path);
     let bundle_id = get_bundle_id(app_path)?;
 
@@ -381,6 +413,33 @@ pub fn extract_app_info(app_path: &Path) -> Result<AppInfo> {
         code_requirement,
         identifier_type: "bundleID".to_string(),
         path: app_path.to_path_buf(),
+    })
+}
+
+/// Extract code-signing info from a signed bare binary (no bundle structure).
+///
+/// Uses the file's basename as the display name. The TCC plist will use
+/// the absolute path as the `Identifier` with `IdentifierType=path` —
+/// this is the form Apple's TCC framework uses for non-bundled tools
+/// like `managedsoftwareupdate`, helper binaries shipped under
+/// `/usr/local/`, and similar.
+fn extract_bare_binary_info(binary_path: &Path) -> Result<AppInfo> {
+    let absolute = binary_path
+        .canonicalize()
+        .unwrap_or_else(|_| binary_path.to_path_buf());
+    let name = absolute
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Unknown".to_string());
+    let code_requirement = get_code_requirement(&absolute)?;
+    Ok(AppInfo {
+        name,
+        // bundle_id stays empty — path-based entries carry the identifier
+        // value via the path field (see PppcAppEntry::identifier_value).
+        bundle_id: String::new(),
+        code_requirement,
+        identifier_type: "path".to_string(),
+        path: absolute,
     })
 }
 

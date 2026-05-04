@@ -307,11 +307,15 @@ fn count_services(policies: &[PppcPolicy]) -> Vec<(PppcService, usize)> {
     sorted
 }
 
-/// Find duplicate bundle_ids in the config.
+/// Find duplicate identifiers in the config.
+///
+/// Compares on the resolved identifier value — for bundleID entries
+/// that's the bundle id, for path-based entries it's the path. Two
+/// entries with the same identifier collide regardless of mode.
 pub fn find_duplicate_bundle_ids(config: &PppcConfig) -> Vec<(String, usize)> {
     let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
     for app in &config.apps {
-        *seen.entry(&app.bundle_id).or_default() += 1;
+        *seen.entry(app.identifier_value()).or_default() += 1;
     }
     seen.into_iter()
         .filter(|(_, count)| *count > 1)
