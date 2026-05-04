@@ -271,8 +271,12 @@ create_zip() {
     local version=$(get_version)
     local zip_name="${BINARY}-${version}-macos-arm64.zip"
 
+    # Pack the binary at the top level (no parent dir). Users running
+    # `unzip contour-*.zip && sudo mv contour /usr/local/bin/` should
+    # find `contour` directly — not `dist/contour`.
+    # https://github.com/macadmins/contour/issues — christian-glattfelder-at-ethz
     cd "$DIST_DIR"
-    ditto -c -k --keepParent "$BINARY" "$zip_name"
+    ditto -c -k "$BINARY" "$zip_name"
     log_info "Created: $zip_name"
 }
 

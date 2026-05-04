@@ -49,10 +49,21 @@ pub fn run(input: &Path, strict: bool, mode: OutputMode) -> Result<()> {
         errors.push("config.org is empty".to_string());
     }
 
-    // 3. Each app has bundle_id + code_requirement
+    // 3. Each app has an identifier (bundle_id OR path) + code_requirement.
+    //    Path-based entries (signed bare binaries like managedsoftwareupdate)
+    //    have no bundle_id and are valid when path + identifier_type=path.
     for (i, app) in config.apps.iter().enumerate() {
-        if app.bundle_id.is_empty() {
-            errors.push(format!("apps[{}] ({}) has empty bundle_id", i, app.name));
+        if app.identifier_value().is_empty() {
+            errors.push(format!(
+                "apps[{}] ({}) has neither bundle_id nor path; one is required",
+                i, app.name
+            ));
+        }
+        if app.identifier_type == "path" && app.path.is_none() {
+            errors.push(format!(
+                "apps[{}] ({}) has identifier_type=path but no `path` field",
+                i, app.name
+            ));
         }
         if app.code_requirement.is_empty() {
             warnings.push(format!(
@@ -62,16 +73,17 @@ pub fn run(input: &Path, strict: bool, mode: OutputMode) -> Result<()> {
         }
         if app.name.is_empty() {
             warnings.push(format!(
-                "apps[{}] has empty name (bundle_id: {})",
-                i, app.bundle_id
+                "apps[{}] has empty name (identifier: {})",
+                i,
+                app.identifier_value()
             ));
         }
     }
 
-    // 4. Duplicate bundle_id detection
+    // 4. Duplicate identifier detection (compares on the resolved value).
     let duplicates = find_duplicate_bundle_ids(&config);
     for (id, count) in &duplicates {
-        warnings.push(format!("Duplicate bundle_id '{id}' appears {count} times"));
+        warnings.push(format!("Duplicate identifier '{id}' appears {count} times"));
     }
 
     // 5. Strict mode: warnings become errors

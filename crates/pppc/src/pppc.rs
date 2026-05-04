@@ -319,26 +319,86 @@ pub struct PppcConfigMeta {
 }
 
 /// An application entry in a PPPC configuration file.
+///
+/// Two identifier modes are supported:
+/// - **bundleID** (default): an `.app` / `.xpc` / `.appex` / `.systemextension` /
+///   `.bundle` / `.plugin` whose `Info.plist` has a `CFBundleIdentifier`. The
+///   `bundle_id` field carries the reverse-DNS identifier.
+/// - **path**: a signed bare binary (e.g. `/usr/local/munki/managedsoftwareupdate`)
+///   that has no Info.plist. The `path` field carries the absolute path; that
+///   path is what gets emitted as the plist `Identifier` value with
+///   `IdentifierType=path`. `bundle_id` is empty/absent in this mode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PppcAppEntry {
-    /// Application display name
+    /// Application display name.
     pub name: String,
-    /// Bundle identifier (e.g., "com.apple.Safari") or binary path (e.g., "/usr/local/munki/managedsoftwareupdate")
+    /// Bundle identifier (reverse-DNS, e.g. "com.apple.Safari") for bundleID mode.
+    /// Empty/omitted when the entry is path-based; `path` carries the identifier.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub bundle_id: String,
-    /// Code requirement string from codesign
+    /// Code requirement string from `codesign -d -r-`.
     pub code_requirement: String,
-    /// Identifier type: "bundleID" (default) or "path" for non-bundled binaries
+    /// Identifier type: "bundleID" (default) or "path" for non-bundled binaries.
     #[serde(
         default = "default_identifier_type",
         skip_serializing_if = "is_bundle_id"
     )]
     pub identifier_type: String,
-    /// Path to the application bundle (optional, for reference)
+    /// Absolute path to the bundle or bare binary. Required when
+    /// `identifier_type == "path"`; optional reference for bundleID entries.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// TCC/PPPC services to grant to this application
+    /// TCC/PPPC services to grant to this application.
     #[serde(default)]
     pub services: Vec<PppcService>,
+}
+
+impl PppcAppEntry {
+    /// The identifier value that goes into the plist `Identifier` field.
+    ///
+    /// Selects the right source based on `identifier_type`:
+    /// - "path" → the `path` field (or `bundle_id` as a fallback if path is
+    ///   absent — kept for backwards-compat with hand-authored entries that
+    ///   put the path directly into `bundle_id`)
+    /// - "bundleID" → the `bundle_id` field
+    pub fn identifier_value(&self) -> &str {
+        if self.identifier_type == "path" {
+            self.path.as_deref().unwrap_or(self.bundle_id.as_str())
+        } else {
+            self.bundle_id.as_str()
+        }
+    }
+
+    /// Normalize an entry that was loaded from TOML.
+    ///
+    /// Handles the case where the user authored a path-based entry in the
+    /// "natural" form (no `bundle_id`, just `path`) by inferring
+    /// `identifier_type = "path"`. Idempotent.
+    pub fn normalize(&mut self) {
+        if self.bundle_id.is_empty() && self.path.is_some() && self.identifier_type == "bundleID" {
+            self.identifier_type = "path".to_string();
+        }
+    }
+
+    /// Validate the entry has enough information to generate a plist.
+    pub fn validate(&self) -> Result<()> {
+        if self.identifier_value().is_empty() {
+            anyhow::bail!(
+                "app '{}' has neither bundle_id nor path; one is required",
+                self.name
+            );
+        }
+        if self.code_requirement.is_empty() {
+            anyhow::bail!("app '{}' is missing code_requirement", self.name);
+        }
+        if self.identifier_type == "path" && self.path.is_none() {
+            anyhow::bail!(
+                "app '{}' has identifier_type=path but no `path` field set",
+                self.name
+            );
+        }
+        Ok(())
+    }
 }
 
 fn default_identifier_type() -> String {
@@ -351,11 +411,20 @@ fn is_bundle_id(s: &str) -> bool {
 
 impl PppcConfig {
     /// Load a PPPC configuration from a TOML file.
+    ///
+    /// Each `[[apps]]` entry is normalized after parsing — entries that
+    /// supply only `path = "..."` (no `bundle_id`) are auto-promoted to
+    /// `identifier_type = "path"` so the user-natural authoring form
+    /// works without manual `identifier_type` annotation.
     pub fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path.display(), e))?;
-        toml::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse TOML from {}: {}", path.display(), e))
+        let mut cfg: Self = toml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse TOML from {}: {}", path.display(), e))?;
+        for app in &mut cfg.apps {
+            app.normalize();
+        }
+        Ok(cfg)
     }
 
     /// Save the configuration to a TOML file.
@@ -376,6 +445,12 @@ impl PppcConfig {
     }
 
     /// Convert to PppcPolicy list for profile generation.
+    ///
+    /// `AppInfo.bundle_id` carries the resolved Identifier value — for
+    /// path-based entries this is the path string, for bundleID entries
+    /// it's the reverse-DNS bundle identifier. The plist generator
+    /// pairs it with `identifier_type` to emit the correct
+    /// `IdentifierType` field.
     pub fn to_policies(&self) -> Vec<PppcPolicy> {
         self.apps
             .iter()
@@ -383,7 +458,7 @@ impl PppcConfig {
             .map(|app| PppcPolicy {
                 app: AppInfo {
                     name: app.name.clone(),
-                    bundle_id: app.bundle_id.clone(),
+                    bundle_id: app.identifier_value().to_string(),
                     code_requirement: app.code_requirement.clone(),
                     identifier_type: app.identifier_type.clone(),
                     path: app
@@ -406,11 +481,15 @@ impl PppcAppEntry {
 
 impl From<&AppInfo> for PppcAppEntry {
     fn from(info: &AppInfo) -> Self {
+        // Preserve the identifier_type the scanner emitted ("bundleID"
+        // for bundle directories, "path" for signed bare binaries).
+        // Path-based entries leave bundle_id empty — `path` carries the
+        // identifier value (see PppcAppEntry::identifier_value).
         Self {
             name: info.name.clone(),
             bundle_id: info.bundle_id.clone(),
             code_requirement: info.code_requirement.clone(),
-            identifier_type: "bundleID".to_string(),
+            identifier_type: info.identifier_type.clone(),
             path: Some(info.path.display().to_string()),
             services: Vec::new(),
         }
@@ -424,9 +503,20 @@ pub fn extract_team_id(code_requirement: &str) -> Option<String> {
     contour_core::extract_team_id(code_requirement)
 }
 
-/// Sanitize a bundle ID for use in a profile identifier.
-pub fn sanitize_id(bundle_id: &str) -> String {
-    bundle_id.replace(['.', '-'], "_")
+/// Sanitize an identifier (bundle ID or absolute path) for use as a
+/// profile identifier suffix.
+///
+/// - Replaces `.` and `-` with `_` (used by both bundleID and path forms)
+/// - Replaces `/` with `_` (path form)
+/// - Trims leading underscores left over from a leading slash
+///
+/// Example: `/usr/local/munki/managedsoftwareupdate` →
+///          `usr_local_munki_managedsoftwareupdate`
+pub fn sanitize_id(identifier: &str) -> String {
+    identifier
+        .replace(['.', '-', '/'], "_")
+        .trim_start_matches('_')
+        .to_string()
 }
 
 /// Generate a PPPC mobileconfig profile from policies.
@@ -714,5 +804,106 @@ mod tests {
         assert!(PppcService::ListenEvent.supports_standard_user_set());
         assert!(!PppcService::Camera.supports_standard_user_set());
         assert!(!PppcService::SystemPolicyAllFiles.supports_standard_user_set());
+    }
+
+    // ── Path-based identifier tests (managedsoftwareupdate-style) ────
+
+    #[test]
+    fn path_based_entry_loads_without_bundle_id() {
+        // The user-natural form: `path` set, no `bundle_id`, no
+        // `identifier_type`. Loader normalizes to identifier_type=path.
+        let toml = r#"
+[config]
+org = "com.acme"
+
+[[apps]]
+name = "managedsoftwareupdate"
+code_requirement = "identifier munkishim and anchor apple generic"
+path = "/usr/local/munki/managedsoftwareupdate"
+services = ["fda"]
+"#;
+        let mut cfg: PppcConfig = toml::from_str(toml).expect("parse");
+        for app in &mut cfg.apps {
+            app.normalize();
+        }
+        assert_eq!(cfg.apps.len(), 1);
+        let app = &cfg.apps[0];
+        assert_eq!(app.bundle_id, "");
+        assert_eq!(app.identifier_type, "path");
+        assert_eq!(
+            app.path.as_deref(),
+            Some("/usr/local/munki/managedsoftwareupdate")
+        );
+        assert_eq!(
+            app.identifier_value(),
+            "/usr/local/munki/managedsoftwareupdate"
+        );
+        app.validate().expect("path-based entry validates");
+    }
+
+    #[test]
+    fn explicit_path_mode_round_trips() {
+        // User explicitly sets identifier_type=path; should be preserved.
+        let entry = PppcAppEntry {
+            name: "managedsoftwareupdate".into(),
+            bundle_id: String::new(),
+            code_requirement: "identifier munkishim and anchor apple generic".into(),
+            identifier_type: "path".into(),
+            path: Some("/usr/local/munki/managedsoftwareupdate".into()),
+            services: vec![PppcService::SystemPolicyAllFiles],
+        };
+        let serialized = toml::to_string(&entry).expect("serialize");
+        // bundle_id is skipped (empty); identifier_type IS emitted (not "bundleID")
+        assert!(!serialized.contains("bundle_id"));
+        assert!(serialized.contains("identifier_type = \"path\""));
+        let mut roundtrip: PppcAppEntry = toml::from_str(&serialized).expect("parse");
+        roundtrip.normalize();
+        assert_eq!(roundtrip.identifier_type, "path");
+        assert_eq!(
+            roundtrip.identifier_value(),
+            "/usr/local/munki/managedsoftwareupdate"
+        );
+    }
+
+    #[test]
+    fn missing_identifier_value_validation_fails() {
+        let entry = PppcAppEntry {
+            name: "ghost".into(),
+            bundle_id: String::new(),
+            code_requirement: "anchor apple".into(),
+            identifier_type: "bundleID".into(),
+            path: None,
+            services: vec![],
+        };
+        assert!(entry.validate().is_err());
+    }
+
+    #[test]
+    fn bundle_id_entry_unchanged_by_normalize() {
+        let mut entry = PppcAppEntry {
+            name: "Slack".into(),
+            bundle_id: "com.tinyspeck.slackmacgap".into(),
+            code_requirement: "anchor apple generic".into(),
+            identifier_type: "bundleID".into(),
+            path: Some("/Applications/Slack.app".into()),
+            services: vec![],
+        };
+        entry.normalize();
+        assert_eq!(entry.identifier_type, "bundleID");
+        assert_eq!(entry.identifier_value(), "com.tinyspeck.slackmacgap");
+    }
+
+    #[test]
+    fn sanitize_id_handles_paths() {
+        assert_eq!(
+            sanitize_id("/usr/local/munki/managedsoftwareupdate"),
+            "usr_local_munki_managedsoftwareupdate"
+        );
+        // Bundle IDs unchanged in shape, just dots → underscores
+        assert_eq!(
+            sanitize_id("com.tinyspeck.slackmacgap"),
+            "com_tinyspeck_slackmacgap"
+        );
+        assert_eq!(sanitize_id("com.foo-bar"), "com_foo_bar");
     }
 }
