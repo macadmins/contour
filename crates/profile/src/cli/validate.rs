@@ -7,8 +7,9 @@ use crate::cli::glob_utils::{
     collect_profile_files_multi_with_depth, print_batch_summary, process_parallel_with_warnings,
     process_sequential_with_warnings, should_batch_process_multi,
 };
+use crate::migrate::mapping::MigrationRegistry;
 use crate::output::OutputMode;
-use crate::profile::{parser, validator};
+use crate::profile::{lint, parser, validator};
 use crate::schema::SchemaRegistry;
 use crate::schema::lookup::load_known_identifiers;
 use crate::validation::{SchemaValidator, Severity, ValidationOptions};
@@ -172,6 +173,12 @@ fn handle_validate_batch(
                         "errors": r.errors,
                         "warnings": r.warnings,
                         "profile": r.profile,
+                        // Lint findings are emitted as a separate array
+                        // keyed by stable check name. Existing consumers
+                        // that key on errors/warnings keep working — lint
+                        // messages are mirrored there with a `[<check>]`
+                        // prefix for backwards compat.
+                        "lint_findings": r.lint_findings,
                     });
                     if let Some(ref sv) = r.schema_validation {
                         entry["schema_validation"] = sv.clone();
@@ -241,6 +248,11 @@ struct DetailedValidationResult {
     warnings: Vec<String>,
     profile: serde_json::Value,
     schema_validation: Option<serde_json::Value>,
+    /// Lint findings keyed by check name. Side-channel from
+    /// `errors`/`warnings` so consumers that key on the legacy fields
+    /// keep working unchanged. Each entry: `{check, severity, message,
+    /// payload_index?}`.
+    lint_findings: Vec<serde_json::Value>,
 }
 
 /// Detailed validation for JSON batch output — captures the same structure as single-file JSON
@@ -271,6 +283,7 @@ fn validate_single_file_detailed(
                             warnings: vec![],
                             profile: serde_json::json!(null),
                             schema_validation: None,
+                            lint_findings: vec![],
                         };
                     }
                     match parser::parse_profile_from_bytes(&pr.substituted) {
@@ -296,6 +309,7 @@ fn validate_single_file_detailed(
                                     .collect(),
                                 profile: serde_json::json!(null),
                                 schema_validation: None,
+                                lint_findings: vec![],
                             };
                         }
                     }
@@ -308,6 +322,7 @@ fn validate_single_file_detailed(
                         warnings: vec![],
                         profile: serde_json::json!(null),
                         schema_validation: None,
+                        lint_findings: vec![],
                     };
                 }
             }
@@ -320,6 +335,7 @@ fn validate_single_file_detailed(
                 warnings: vec![],
                 profile: serde_json::json!(null),
                 schema_validation: None,
+                lint_findings: vec![],
             };
         }
     };
@@ -334,6 +350,7 @@ fn validate_single_file_detailed(
                 warnings: vec![],
                 profile: serde_json::json!(null),
                 schema_validation: None,
+                lint_findings: vec![],
             };
         }
     };
@@ -398,13 +415,49 @@ fn validate_single_file_detailed(
     let mut warnings = validation.warnings;
     warnings.extend(placeholder_warnings);
 
+    // Lint pass — re-parse the raw plist::Value so checks that need
+    // the literal plist tag (e.g. <integer> vs <real>) can run.
+    // Cheap on the small mobileconfig sizes we deal with; cleaner than
+    // threading the value through every parse path.
+    let mut lint_errors: Vec<String> = Vec::new();
+    let mut lint_warnings: Vec<String> = Vec::new();
+    let mut lint_findings: Vec<serde_json::Value> = Vec::new();
+    if let Ok(raw_value) = plist::from_file::<_, plist::Value>(file_path) {
+        let registry = MigrationRegistry::new();
+        for finding in lint::lint_profile(&raw_value, &registry) {
+            let severity = match finding.severity {
+                lint::LintSeverity::Error => "error",
+                lint::LintSeverity::Warning => "warning",
+            };
+            let entry = serde_json::json!({
+                "check": finding.check,
+                "severity": severity,
+                "message": finding.message,
+                "payload_index": finding.payload_index,
+            });
+            lint_findings.push(entry);
+            // Surface in the legacy errors/warnings vectors too so
+            // existing JSON consumers see them without parsing the
+            // new lint_findings field.
+            let prefixed = format!("[{}] {}", finding.check, finding.message);
+            match finding.severity {
+                lint::LintSeverity::Error => lint_errors.push(prefixed),
+                lint::LintSeverity::Warning => lint_warnings.push(prefixed),
+            }
+        }
+    }
+    let mut all_errors = validation.errors;
+    all_errors.extend(lint_errors);
+    warnings.extend(lint_warnings);
+
     DetailedValidationResult {
         file,
-        valid: validation.valid && schema_valid,
-        errors: validation.errors,
+        valid: all_errors.is_empty() && schema_valid,
+        errors: all_errors,
         warnings,
         profile: profile_json,
         schema_validation,
+        lint_findings,
     }
 }
 
@@ -554,14 +607,45 @@ fn handle_validate_single(
         None
     };
 
+    // Lint pass — re-parse the raw plist::Value so the lint walker can
+    // see literal plist tags (e.g. <integer> vs <real>). Failures here
+    // are non-fatal: a clean lint result is better than no lint at all.
+    let mut lint_findings: Vec<serde_json::Value> = Vec::new();
+    let mut lint_errors: Vec<String> = Vec::new();
+    let mut lint_warnings: Vec<String> = Vec::new();
+    if let Ok(raw_value) = plist::from_file::<_, plist::Value>(file) {
+        let registry = MigrationRegistry::new();
+        for finding in lint::lint_profile(&raw_value, &registry) {
+            let severity = match finding.severity {
+                lint::LintSeverity::Error => "error",
+                lint::LintSeverity::Warning => "warning",
+            };
+            lint_findings.push(serde_json::json!({
+                "check": finding.check,
+                "severity": severity,
+                "message": finding.message,
+                "payload_index": finding.payload_index,
+            }));
+            let prefixed = format!("[{}] {}", finding.check, finding.message);
+            match finding.severity {
+                lint::LintSeverity::Error => lint_errors.push(prefixed),
+                lint::LintSeverity::Warning => lint_warnings.push(prefixed),
+            }
+        }
+    }
+
     let mut all_warnings = validation.warnings.clone();
     all_warnings.extend(placeholder_warnings);
+    all_warnings.extend(lint_warnings);
+    let mut all_errors = validation.errors.clone();
+    all_errors.extend(lint_errors);
+    let valid_after_lint = all_errors.is_empty();
 
     if output_mode == OutputMode::Json {
         let mut json_result = serde_json::json!({
             "file": file,
-            "valid": validation.valid,
-            "errors": validation.errors,
+            "valid": valid_after_lint,
+            "errors": all_errors,
             "warnings": all_warnings,
             "profile": {
                 "display_name": profile.payload_display_name,
@@ -571,7 +655,8 @@ fn handle_validate_single(
                 "version": profile.payload_version,
                 "payload_count": profile.payload_content.len(),
                 "organization": profile.payload_organization(),
-            }
+            },
+            "lint_findings": lint_findings,
         });
 
         if let Some(ref sr) = schema_result {
@@ -598,20 +683,20 @@ fn handle_validate_single(
 
         println!("{}", serde_json::to_string_pretty(&json_result)?);
 
-        if !validation.valid || schema_result.as_ref().is_some_and(|s| !s.is_valid()) {
+        if !valid_after_lint || schema_result.as_ref().is_some_and(|s| !s.is_valid()) {
             anyhow::bail!("Validation failed");
         }
         return Ok(());
     }
 
     // Human output
-    if validation.valid {
+    if valid_after_lint {
         println!("{}", "✓ Basic validation passed".green());
     } else {
         println!("{}", "✗ Basic validation failed".red());
         println!();
         println!("{}", "Errors:".red());
-        for error in &validation.errors {
+        for error in &all_errors {
             println!("  {} {}", "✗".red(), error);
         }
     }

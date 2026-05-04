@@ -9,6 +9,7 @@ mod ddm;
 mod diff;
 mod docs;
 mod link;
+mod migrate;
 mod output;
 mod profile;
 mod recipe;
