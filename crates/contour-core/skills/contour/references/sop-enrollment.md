@@ -202,21 +202,23 @@ contour profile enrollment list --platform iOS --json
 contour profile enrollment list --platform macOS --os-version 26.0 --json
 ```
 
-### Use the generated profile in Fleet GitOps (v4.83 layout)
+### Use the generated profile in a GitOps repo (Fleet v4.83 layout shown)
 
 ```
 # Place under platforms/macos/enrollment-profiles/
 cp enrollment.dep.json \
   platforms/macos/enrollment-profiles/automatic-enrollment.dep.json
 
-# Reference from a fleet YAML
+# Reference from the consuming YAML (Fleet's `controls.setup_experience` shape):
 controls:
   setup_experience:
     apple_setup_assistant:
       ../platforms/macos/enrollment-profiles/automatic-enrollment.dep.json
 ```
 
-The filename is arbitrary — Fleet reads by path reference, not name convention.
+The filename is arbitrary — Fleet reads by path reference, not name
+convention. Other GitOps engines that consume DEP profiles use
+analogous path references.
 
 ---
 

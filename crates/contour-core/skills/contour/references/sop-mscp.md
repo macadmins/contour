@@ -144,10 +144,10 @@ STEP 4 — Validate the emitted set:
   # have drifted — file an issue.
 
 CROSS-FILE INVARIANT (after STEP 4):
-  ASSERT every team yaml in {output_dir}/fleets/ that references {baseline}
+  ASSERT every fleet yaml in {output_dir}/fleets/ that references {baseline}
          points at files that exist on disk
     # Phase 1 fix made the validator's path resolution use the YAML file's
-    # parent dir; warnings here mean the team yaml has stale paths.
+    # parent dir; warnings here mean the fleet yaml has stale paths.
 
 INVARIANTS:
   # Re-running with identical {baseline, org, mscp_repo} MUST produce

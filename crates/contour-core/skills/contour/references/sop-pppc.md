@@ -44,7 +44,7 @@ INPUT:
   output_dir   : directory to write generated profiles
   mode         : "per_app"  — one profile per app entry (default)
                  "combined" — single profile with all entries merged
-  fragment     : bool — when true, emit a Fleet GitOps fragment
+  fragment     : bool — when true, emit a GitOps fragment (Fleet `fragment.toml` schema)
                         directory instead of plain mobileconfig files
 
 PRECONDITIONS:
@@ -225,8 +225,9 @@ contour pppc batch pppc.toml --service ScreenCapture=Allow \
   `accessibility`, `fda` (Full Disk Access), etc. Run
   `contour pppc info --json` for the complete enum.
 - Fragment mode (`--fragment`) is the recommended output for adding to
-  an existing Fleet GitOps repo; it produces a fragment.toml manifest
-  plus a platforms/macos/ subtree that merges cleanly into v4.83 layout.
+  an existing GitOps repo (Fleet v4.83 layout); it produces a
+  fragment.toml manifest plus a platforms/macos/ subtree that merges
+  cleanly into that layout.
 - TCC services accept `Allow` or `Deny`. `Deny` profiles are useful for
   hardening (e.g. block ScreenCapture for browsers), but most production
   use cases are allowlists.

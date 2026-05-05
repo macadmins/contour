@@ -40,7 +40,7 @@ SCHEMA_TOOL:   contour notifications validate {notif_toml} --json
 INPUT:
   notif_toml   : path to a populated notifications.toml file
   output_dir   : directory to write generated profiles
-  fragment     : bool — when true, emit a Fleet GitOps fragment
+  fragment     : bool — when true, emit a GitOps fragment (Fleet `fragment.toml` schema)
 
 PRECONDITIONS:
   ASSERT notif_toml exists AND is readable
@@ -169,4 +169,4 @@ contour notifications diff base.toml updated.toml --json
   notification prompt, the user's choice is sticky — the profile only
   reliably wins for first-time launches.
 - Fragment mode (`--fragment`) is the recommended output for adding to
-  a Fleet GitOps repo (v4.83 layout).
+  a GitOps repo (Fleet v4.83 layout) (v4.83 layout).

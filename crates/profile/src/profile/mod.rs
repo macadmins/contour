@@ -171,8 +171,15 @@ pub struct PayloadContent {
     pub payload_type: String,
 
     /// Payload version, always 1. Accepts both `<integer>` and `<real>` from plist.
+    ///
+    /// `default` lets the parser accept profiles where a nested entry is missing
+    /// the key entirely; the resulting sentinel 0 is then surfaced by the
+    /// `nested-missing-payload-version` lint check (Tier-1, error severity).
+    /// Without `default`, parse would fail outright and no other findings
+    /// in the same file would be reachable.
     #[serde(
         rename = "PayloadVersion",
+        default,
         deserialize_with = "deserialize_version",
         serialize_with = "serialize_version"
     )]

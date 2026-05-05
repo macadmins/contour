@@ -55,8 +55,32 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    #[command(about = "Show Profile CLI version, configuration, and schema statistics")]
-    Info,
+    #[command(
+        about = "Show CLI info, OR detailed schema for a payload type if one is given",
+        long_about = "Without arguments: show CLI version, config, and schema statistics.\n\
+                      \n\
+                      With `<payload_type>`: dump the full Apple schema for that\n\
+                      payload — title, description, platforms, and every field's\n\
+                      type + plist tag (`<real>`, `<integer>`, …) + required flag\n\
+                      + default + allowed values. Mirrors `profile ddm info <name>`\n\
+                      so schema-introspection has one consistent surface.\n\
+                      \n\
+                      Examples:\n  \
+                      contour profile info\n  \
+                      contour profile info com.apple.applicationaccess --json\n  \
+                      contour profile info com.apple.applicationaccess --full"
+    )]
+    Info {
+        /// Payload type for schema lookup (optional). Omit to show CLI metadata.
+        #[arg(value_name = "PAYLOAD_TYPE")]
+        payload_type: Option<String>,
+
+        #[arg(long, help = "External schema directory (overrides embedded)")]
+        schema_path: Option<String>,
+
+        #[arg(long, help = "Include all fields (not just required + top-level)")]
+        full: bool,
+    },
 
     #[command(about = "Initialize a new profile.toml configuration file")]
     Init {
@@ -268,10 +292,55 @@ pub enum Commands {
         no_parallel: bool,
     },
 
-    #[command(about = "Search payload schemas by keyword (type, title, description, keys)")]
+    #[command(
+        about = "Search payload schemas by keyword, by exact field name, or in polymorphic mode",
+        long_about = "Three modes:\n\
+                      \n\
+                      Substring search (default): match against payload type,\n\
+                      title, description, and field names — returns matching\n\
+                      payloads.\n\
+                      \n\
+                      `--field <NAME>`: exact field-name lookup across every\n\
+                      payload. Returns each match with the payload_type plus\n\
+                      full field detail (type, plist tag, required, default,\n\
+                      allowed values). Single-call answer to 'what type does\n\
+                      Apple expect for <key>?'.\n\
+                      \n\
+                      `--include-fields`: polymorphic mode. Substring-matches\n\
+                      across payload-level metadata AND field-level metadata,\n\
+                      returns categorized JSON with `payload_matches[]` and\n\
+                      `field_matches[]` arrays — each hit carries a\n\
+                      `matched_in[]` tag naming where the substring landed\n\
+                      (name / title / description / payload_type).\n\
+                      \n\
+                      Examples:\n  \
+                      contour profile search wifi\n  \
+                      contour profile search --field safariAcceptCookies --json\n  \
+                      contour profile search cookie --include-fields --json"
+    )]
     Search {
-        #[arg(help = "Search query (e.g., passcode, wifi, vpn, filevault)")]
-        query: String,
+        #[arg(
+            help = "Substring query (e.g., passcode, wifi). Required unless --field is given.",
+            required_unless_present = "field",
+            conflicts_with = "field"
+        )]
+        query: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with_all = ["query", "include_fields"],
+            help = "Exact field-name lookup across all payloads — returns field detail per match"
+        )]
+        field: Option<String>,
+
+        #[arg(
+            long,
+            requires = "query",
+            conflicts_with = "field",
+            help = "Polymorphic mode: also walk field metadata; returns {payload_matches, field_matches}"
+        )]
+        include_fields: bool,
 
         #[arg(long, help = "External schema directory")]
         schema_path: Option<String>,
@@ -547,8 +616,21 @@ pub enum Commands {
 pub enum DocsAction {
     #[command(about = "Generate markdown documentation")]
     Generate {
-        #[arg(short, long, help = "Output directory")]
-        output: String,
+        #[arg(
+            short,
+            long,
+            help = "Output directory (required unless --stdout)",
+            conflicts_with = "stdout",
+            required_unless_present = "stdout"
+        )]
+        output: Option<String>,
+
+        #[arg(
+            long,
+            help = "Print markdown to stdout instead of writing files (no /tmp clutter)",
+            conflicts_with = "output"
+        )]
+        stdout: bool,
 
         #[arg(long, help = "Specific payload type (optional)")]
         payload: Option<String>,

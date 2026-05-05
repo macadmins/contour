@@ -529,7 +529,7 @@ pub fn handle_ddm_info(
     // Verify it's a DDM declaration
     if !manifest.category.starts_with("ddm-") {
         anyhow::bail!(
-            "'{name}' is a profile payload type, not a DDM declaration.\nUse 'contour profile schema info {name}' for profile schemas."
+            "'{name}' is a profile payload type, not a DDM declaration.\nUse 'contour profile info {name}' for profile schemas."
         );
     }
 
