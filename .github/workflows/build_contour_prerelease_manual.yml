@@ -62,7 +62,7 @@ jobs:
         reverse: 'true'
 
     - name: Create draft pre-release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         name: Contour ${{ env.CONTOUR_VERSION }}
         tag_name: v${{ env.CONTOUR_VERSION }}
