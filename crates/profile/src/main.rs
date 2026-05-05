@@ -79,8 +79,16 @@ fn run(cli: Cli) -> Result<()> {
     }
 
     match cli.command {
-        Commands::Info => {
-            cli::info::handle_info(config.as_ref(), output_mode)?;
+        Commands::Info {
+            payload_type,
+            schema_path,
+            full,
+        } => {
+            if let Some(t) = payload_type {
+                cli::info::handle_payload_info(&t, schema_path.as_deref(), full, output_mode)?;
+            } else {
+                cli::info::handle_info(config.as_ref(), output_mode)?;
+            }
         }
         Commands::Init {
             output,
@@ -253,8 +261,17 @@ fn run(cli: Cli) -> Result<()> {
                 output_mode,
             )?;
         }
-        Commands::Search { query, schema_path } => {
-            cli::search::handle_search(&query, schema_path.as_deref(), output_mode)?;
+        Commands::Search {
+            query,
+            field,
+            schema_path,
+        } => {
+            cli::search::handle_search(
+                query.as_deref(),
+                field.as_deref(),
+                schema_path.as_deref(),
+                output_mode,
+            )?;
         }
         Commands::Uuid {
             paths,
@@ -440,12 +457,14 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Docs { action } => match action {
             DocsAction::Generate {
                 output,
+                stdout,
                 payload,
                 category,
                 schema_path,
             } => {
                 cli::docs::handle_docs_generate(
-                    &output,
+                    output.as_deref(),
+                    stdout,
                     payload.as_deref(),
                     category.as_deref(),
                     schema_path.as_deref(),

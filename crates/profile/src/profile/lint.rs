@@ -91,6 +91,7 @@ impl LintFinding {
 pub const TIER_1_CHECKS: &[&str] = &[
     "duplicate-payload-uuid",
     "payload-version-type",
+    "nested-missing-payload-version",
     "placeholder-payload-uuid",
     "deprecated-payload-type",
 ];
@@ -135,6 +136,7 @@ impl LintOptions {
                 name,
                 "duplicate-payload-uuid"
                     | "payload-version-type"
+                    | "nested-missing-payload-version"
                     | "placeholder-payload-uuid"
                     | "deprecated-payload-type"
             ),
@@ -189,6 +191,9 @@ pub fn lint_profile_with_options(
     }
     if options.includes("payload-version-type") {
         all.extend(check_payload_version_type(value));
+    }
+    if options.includes("nested-missing-payload-version") {
+        all.extend(check_nested_missing_payload_version(value));
     }
     if options.includes("placeholder-payload-uuid") {
         all.extend(check_placeholder_uuids(value));
@@ -323,6 +328,53 @@ fn check_one_payload_version(
             f
         });
     }
+}
+
+// ── 1b'. Nested missing PayloadVersion ─────────────────────────────────
+
+/// Apple's spec requires `PayloadVersion` on every payload — top-level
+/// AND nested. The structural validator catches a missing top-level
+/// version (required-field check), but nested entries silently
+/// deserialize with a default value when the key is absent, masking
+/// real-world authoring drift.
+///
+/// We inspect the raw plist tree so absence is observable: a nested
+/// dict that has `PayloadType` but lacks the literal `PayloadVersion`
+/// key is flagged as an error.
+pub fn check_nested_missing_payload_version(value: &Value) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+    let Value::Dictionary(top) = value else {
+        return findings;
+    };
+    let Some(Value::Array(items)) = top.get("PayloadContent") else {
+        return findings;
+    };
+    for (idx, item) in items.iter().enumerate() {
+        let Value::Dictionary(child) = item else {
+            continue;
+        };
+        // Only meaningful for entries that look like a payload
+        // (`PayloadType` present). Plain config dicts inside other
+        // keys are out of scope.
+        if child.get("PayloadType").is_none() {
+            continue;
+        }
+        if child.get("PayloadVersion").is_none() {
+            findings.push(
+                LintFinding::error(
+                    "nested-missing-payload-version",
+                    format!(
+                        "PayloadContent[{idx}]: required field PayloadVersion is missing. \
+                         Apple's spec requires <integer>1</integer> on every payload; \
+                         absent values are silently defaulted by some MDM stacks and \
+                         outright rejected by others."
+                    ),
+                )
+                .with_payload(idx),
+            );
+        }
+    }
+    findings
 }
 
 // ── 1c. Placeholder UUIDs ──────────────────────────────────────────────
@@ -728,6 +780,54 @@ mod tests {
         let findings = check_payload_version_type(&profile);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].payload_index, Some(0));
+    }
+
+    // ── 1b' nested missing PayloadVersion ──
+
+    #[test]
+    fn nested_missing_payload_version_flagged() {
+        let mut child = Dictionary::new();
+        child.insert("PayloadType".into(), s("com.apple.passcode"));
+        // intentionally omit PayloadVersion
+        child.insert("PayloadIdentifier".into(), s("com.acme.test.passcode"));
+        child.insert(
+            "PayloadUUID".into(),
+            s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"),
+        );
+        let profile = build_profile(
+            "11111111-2222-3333-4444-555555555555",
+            vec![Value::Dictionary(child)],
+        );
+        let findings = check_nested_missing_payload_version(&profile);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].check, "nested-missing-payload-version");
+        assert_eq!(findings[0].severity, LintSeverity::Error);
+        assert_eq!(findings[0].payload_index, Some(0));
+    }
+
+    #[test]
+    fn nested_payload_version_present_passes() {
+        let profile = build_profile(
+            "11111111-2222-3333-4444-555555555555",
+            vec![nested(
+                "com.apple.passcode",
+                "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D",
+            )],
+        );
+        assert!(check_nested_missing_payload_version(&profile).is_empty());
+    }
+
+    #[test]
+    fn nested_dict_without_payload_type_is_skipped() {
+        // A dict without PayloadType isn't a payload — skip it rather
+        // than false-positive on inner config sub-dicts.
+        let mut not_a_payload = Dictionary::new();
+        not_a_payload.insert("SomeConfigKey".into(), s("value"));
+        let profile = build_profile(
+            "11111111-2222-3333-4444-555555555555",
+            vec![Value::Dictionary(not_a_payload)],
+        );
+        assert!(check_nested_missing_payload_version(&profile).is_empty());
     }
 
     // ── 1c placeholder UUIDs ──

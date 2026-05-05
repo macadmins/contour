@@ -1,13 +1,20 @@
 //! Handler for the `profile info` command.
 //!
-//! Displays CLI version, configuration status, and schema statistics.
+//! Two modes:
+//! - No argument: displays CLI version, configuration status, and schema statistics.
+//! - `<payload_type>`: displays the full schema for that payload type — title,
+//!   description, platforms, every field's name + type + plist tag + required
+//!   flag + default + allowed values. Mirrors the `ddm info` JSON shape so
+//!   agents can route schema questions through one consistent surface.
+
+use std::path::Path;
 
 use anyhow::Result;
 use colored::Colorize;
 
 use crate::config::ProfileConfig;
 use crate::output::OutputMode;
-use crate::schema::SchemaRegistry;
+use crate::schema::{FieldType, PayloadManifest, SchemaRegistry};
 
 /// Handle the `info` command
 pub fn handle_info(config: Option<&ProfileConfig>, output_mode: OutputMode) -> Result<()> {
@@ -147,6 +154,214 @@ fn output_human(
         pm_sha, sv.profile_manifests_date
     );
     println!("  Generated:               {}", sv.generation_date);
+}
+
+/// Handle the `info <payload_type>` command — schema lookup for a single
+/// payload type.
+///
+/// Mirrors `profile ddm info <name>`: returns title, description, platforms,
+/// and every field with its type, plist tag (`<real>`, `<integer>`, …),
+/// required flag, default, and allowed values. Designed so an agent can
+/// answer "what type does Apple expect for `<key>` in `<payload>`?" with
+/// one CLI call and a single jq filter.
+pub fn handle_payload_info(
+    payload_type: &str,
+    schema_path: Option<&str>,
+    full: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let registry = if let Some(p) = schema_path {
+        SchemaRegistry::from_auto_detect(Path::new(p))?
+    } else {
+        SchemaRegistry::embedded()?
+    };
+
+    let manifest = registry.get(payload_type).ok_or_else(|| {
+        let suggestions = registry.search(payload_type);
+        let hint = if suggestions.is_empty() {
+            "Use 'contour profile docs list' to see available types.".to_string()
+        } else {
+            let names: Vec<&str> = suggestions
+                .iter()
+                .take(3)
+                .map(|m| m.payload_type.as_str())
+                .collect();
+            format!("Did you mean one of: {}?", names.join(", "))
+        };
+        anyhow::anyhow!("Payload type '{payload_type}' not found.\n{hint}")
+    })?;
+
+    if output_mode == OutputMode::Json {
+        emit_payload_info_json(manifest, full)?;
+    } else {
+        emit_payload_info_human(manifest, full);
+    }
+    Ok(())
+}
+
+/// Map a `FieldType` to the plist XML tag agents see in `.mobileconfig`
+/// files. Authors verify mobileconfig contents against this exact tag —
+/// it's the answer to "what should `<key>` look like in the file?".
+pub fn plist_tag_for(t: &FieldType) -> &'static str {
+    match t {
+        FieldType::String => "string",
+        FieldType::Integer => "integer",
+        FieldType::Boolean => "boolean",
+        FieldType::Array => "array",
+        FieldType::Dictionary => "dict",
+        FieldType::Data => "data",
+        FieldType::Date => "date",
+        FieldType::Real => "real",
+    }
+}
+
+fn emit_payload_info_json(manifest: &PayloadManifest, full: bool) -> Result<()> {
+    let mut platforms = Vec::new();
+    if manifest.platforms.macos {
+        platforms.push("macOS");
+    }
+    if manifest.platforms.ios {
+        platforms.push("iOS");
+    }
+    if manifest.platforms.tvos {
+        platforms.push("tvOS");
+    }
+    if manifest.platforms.watchos {
+        platforms.push("watchOS");
+    }
+    if manifest.platforms.visionos {
+        platforms.push("visionOS");
+    }
+
+    let fields: Vec<_> = manifest
+        .field_order
+        .iter()
+        .filter_map(|name| manifest.fields.get(name))
+        .filter(|f| full || f.flags.required || f.depth == 0)
+        .map(|f| {
+            serde_json::json!({
+                "name": f.name,
+                "type": f.field_type.as_str(),
+                "plist_tag": plist_tag_for(&f.field_type),
+                "required": f.flags.required,
+                "supervised": f.flags.supervised,
+                "sensitive": f.flags.sensitive,
+                "default": f.default,
+                "allowed_values": f.allowed_values,
+                "min_version": f.min_version,
+                "depth": f.depth,
+                "parent_key": f.parent_key,
+                "title": f.title,
+                "description": f.description,
+            })
+        })
+        .collect();
+
+    let info = serde_json::json!({
+        "payload_type": manifest.payload_type,
+        "title": manifest.title,
+        "description": manifest.description,
+        "category": manifest.category,
+        "platforms": platforms,
+        "field_count": manifest.fields.len(),
+        "fields_returned": fields.len(),
+        "fields": fields,
+    });
+    println!("{}", serde_json::to_string_pretty(&info)?);
+    Ok(())
+}
+
+fn emit_payload_info_human(manifest: &PayloadManifest, full: bool) {
+    println!("{}\n", manifest.title.bold());
+    println!("{}: {}", "Payload Type".cyan(), manifest.payload_type);
+    println!("{}: {}", "Category".cyan(), manifest.category.magenta());
+
+    let mut platforms = Vec::new();
+    if manifest.platforms.macos {
+        platforms.push("macOS");
+    }
+    if manifest.platforms.ios {
+        platforms.push("iOS");
+    }
+    if manifest.platforms.tvos {
+        platforms.push("tvOS");
+    }
+    if manifest.platforms.watchos {
+        platforms.push("watchOS");
+    }
+    if manifest.platforms.visionos {
+        platforms.push("visionOS");
+    }
+    println!("{}: {}", "Platforms".cyan(), platforms.join(", "));
+
+    if !manifest.description.is_empty() {
+        println!("\n{}", "Description:".cyan());
+        println!("  {}", manifest.description);
+    }
+
+    let fields: Vec<_> = manifest
+        .field_order
+        .iter()
+        .filter_map(|name| manifest.fields.get(name))
+        .filter(|f| full || f.flags.required || f.depth == 0)
+        .collect();
+
+    if fields.is_empty() {
+        println!("\n{}", "(no top-level fields documented)".dimmed());
+        return;
+    }
+
+    println!(
+        "\n{} ({} of {}):",
+        "Fields".cyan().bold(),
+        fields.len(),
+        manifest.fields.len()
+    );
+    for f in &fields {
+        let mut markers = Vec::new();
+        if f.flags.required {
+            markers.push("required".red().to_string());
+        }
+        if f.flags.supervised {
+            markers.push("supervised".yellow().to_string());
+        }
+        if f.flags.sensitive {
+            markers.push("sensitive".red().to_string());
+        }
+        let marker_str = if markers.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", markers.join(", "))
+        };
+        let indent = "  ".repeat(usize::from(f.depth) + 1);
+        println!(
+            "{}{} : <{}>{}",
+            indent,
+            f.name.green(),
+            plist_tag_for(&f.field_type).cyan(),
+            marker_str
+        );
+        if !f.allowed_values.is_empty() {
+            println!(
+                "{}  values: {}",
+                indent,
+                f.allowed_values.join(", ").dimmed()
+            );
+        }
+        if let Some(d) = &f.default {
+            println!("{}  default: {}", indent, d.dimmed());
+        }
+    }
+
+    if !full {
+        let hidden = manifest.fields.len() - fields.len();
+        if hidden > 0 {
+            println!(
+                "\n  {} {hidden} additional fields hidden (use --full to show)",
+                "ℹ".blue()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
