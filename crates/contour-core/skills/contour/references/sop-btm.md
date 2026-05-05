@@ -44,7 +44,7 @@ INPUT:
   output_dir   : directory to write generated profiles or declarations
   target       : "mobileconfig" — legacy payload (com.apple.servicemanagement.managed)
                  "ddm"          — declaration JSON for macOS 15+ (preferred)
-  fragment     : bool — when true, emit a Fleet GitOps fragment
+  fragment     : bool — when true, emit a GitOps fragment (Fleet `fragment.toml` schema)
                         directory instead of plain output
 
 PRECONDITIONS:
@@ -190,6 +190,6 @@ contour btm diff base.toml updated.toml --json
 - BTM is the canonical replacement for ManagedLoginItems on macOS 15+.
   Pre-Tahoe hosts continue to honour the mobileconfig form.
 - Fragment mode (`--fragment`) is the recommended output for adding to
-  a Fleet GitOps repo; it places `.mobileconfig` files under
+  a GitOps repo (Fleet v4.83 layout); it places `.mobileconfig` files under
   `platforms/macos/configuration-profiles/` and `.json` declarations
   under `platforms/macos/declaration-profiles/`.

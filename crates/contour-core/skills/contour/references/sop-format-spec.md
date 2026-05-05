@@ -131,7 +131,7 @@ without re-parsing potentially-empty `failure_categories[]`.
 | `SOP_PROFILE` | ✅ Migrated | First, in `sop-profile.md`. 3 procedures + prose for non-piloted ops |
 | `SOP_DDM` | ✅ Migrated | `sop-ddm.md`. `create_ddm_config` PROCEDURE introduces BUILD ORDER, CROSS-FILE INVARIANT, DEPRECATED_LIST, SCHEMA_SOURCE primitives |
 | `SOP_MSCP` | ✅ Migrated | `sop-mscp.md`. `generate_baseline_compliance` + `resolve_odv` procedures. ODV-resolution is the killer trap prose SOPs only mention weakly |
-| `SOP_OSQUERY` | ✅ Migrated | `sop-osquery.md`. `find_query_table` + `write_policy_query` procedures. Cookbook of idiomatic Fleet policy patterns kept as prose |
+| `SOP_OSQUERY` | ✅ Migrated | `sop-osquery.md`. `find_query_table` + `write_policy_query` procedures. Cookbook of idiomatic policy patterns kept as prose (Fleet's `it-and-security` repo is the source for several worked examples) |
 | `SOP_ENROLLMENT` | ✅ Migrated | `sop-enrollment.md`. `generate_enrollment_profile` enforces a NEVER_SKIP invariant (FileVault, SoftwareUpdate) that prose SOP only mentioned weakly |
 | `SOP_PPPC` | ✅ Migrated | `sop-pppc.md`. `generate_pppc_profile` PROCEDURE; per_app vs combined modes; org-suffix INVARIANT on PayloadIdentifier |
 | `SOP_BTM` | ✅ Migrated | `sop-btm.md`. `generate_btm_profile` pins the mobileconfig-vs-DDM target choice (macOS 15+ guidance) |

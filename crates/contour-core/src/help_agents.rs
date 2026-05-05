@@ -157,16 +157,19 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     writeln!(buf, "- `--sop support` — Root3 Support App profiles")?;
     writeln!(
         buf,
-        "- `--sop osquery` — osquery schema lookup + Fleet policy query patterns + software assignment"
+        "- `--sop osquery` — osquery schema lookup + policy query patterns + software-assignment recipes"
     )?;
     writeln!(
         buf,
         "- `--sop fleet-migrate` — migrate Fleet GitOps repo from legacy/v4.82 to v4.83 structure\n\
          - `--sop enrollment` — DEP/ADE enrollment profiles (Setup Assistant skip keys)\n\
          - `--sop ci` — GitHub Actions setup, env vars (CONTOUR_ORG, CONTOUR_NAME), workflow config\n\
-         - `--sop schema-data` — embedded parquet data: verify, update, track schema versions\n\
          - `--sop precommit` — wire contour validators into a Git pre-commit hook (uvx pre-commit)"
     )?;
+    // schema-data is intentionally NOT advertised — it's a contour-developer
+    // SOP about refreshing embedded parquet data from the upstream `posture`
+    // pipeline. Reachable via `generate_sop("schema-data", ...)` for devs
+    // who know about it; agents shouldn't be routing through it.
     writeln!(buf)?;
 
     // Command index
