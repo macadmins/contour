@@ -1,10 +1,16 @@
 # SOP: GitHub Actions & CI Setup for contour
 
 Wire contour into a GitHub Actions workflow so profile generation,
-validation, and Fleet GitOps deployment run consistently in CI. This
-SOP is a **hybrid**: the bulk is configuration recipes (env vars,
-workflow snippets, secrets vs. variables), with one small procedural
-block for the bootstrap step that has unambiguous preconditions.
+validation, and MDM-side deployment run consistently in CI. This SOP
+is a **hybrid**: the bulk is configuration recipes (env vars, workflow
+snippets, secrets vs. variables), with one small procedural block for
+the bootstrap step that has unambiguous preconditions.
+
+The full-workflow example below uses Fleet's GitOps `gitops.sh` as the
+deploy step because it has a stable env-var contract and is widely
+deployed; the same pattern applies to any MDM that exposes a
+shell-callable apply script (Jamf, Kandji, etc.) — substitute the
+deploy step and its env vars accordingly.
 
 For the developer-side mirror of this (catch the same errors at commit
 time), see `--sop precommit`.
@@ -17,7 +23,7 @@ contour reads these env vars as fallbacks when CLI flags are not provided:
 
 | Variable | Purpose | Required |
 |---|---|---|
-| `CONTOUR_ORG` | Organization reverse-DNS (e.g. `com.fleetdm`) | Yes for any profile/DDM generation |
+| `CONTOUR_ORG` | Organization reverse-DNS (e.g. `com.acme`) | Yes for any profile/DDM generation |
 | `CONTOUR_NAME` | Display name (sets `PayloadOrganization`) | Optional |
 
 **Resolution order** (per `crates/contour-core/src/config.rs::resolve_org`):
@@ -36,63 +42,30 @@ pinned by `trap_40` in `sop_traps.rs`.
 
 ---
 
-## PROCEDURE configure_ci(repo_owner, repo_name, contour_org, contour_name)
+## Repo wiring contract
 
-```
-SCHEMA_TOOL: gh repo view {repo_owner}/{repo_name}
-             gh variable list --repo {repo_owner}/{repo_name}
-             gh secret list --repo {repo_owner}/{repo_name}
+Before the workflow can run, the repo needs the right keys registered
+in the right place. Use whatever tool you prefer (GitHub UI, `gh` CLI,
+Terraform) — only the contract below matters.
 
-INPUT:
-  repo_owner    : GitHub org/user owning the GitOps repo (e.g. "yourorg")
-  repo_name     : repo name (e.g. "fleet-gitops")
-  contour_org   : reverse-DNS organization (e.g. "com.yourcompany")
-  contour_name  : optional display name (e.g. "Your Company Inc.")
+| Key | Kind | Why |
+|---|---|---|
+| `CONTOUR_ORG` | repository **variable** | reverse-DNS organization (e.g. `com.yourcompany`); appears in CI logs unredacted regardless, so making it a secret buys nothing |
+| `CONTOUR_NAME` | repository **variable** (optional) | display name for `PayloadOrganization` |
+| MDM URL (e.g. `FLEET_URL`) | repository **variable** or **secret** depending on sensitivity | API endpoint your apply step calls |
+| MDM API token (e.g. `FLEET_API_TOKEN`) | repository **secret** | grants write access; never log, never put in a variable |
 
-PRECONDITIONS:
-  ASSERT gh CLI authenticated
-    HALT "run `gh auth login` first"
-  ASSERT contour_org matches /^[a-z0-9-]+(\.[a-z0-9-]+)+$/
-    HALT "contour_org must be reverse-DNS (a-z 0-9 . -); got '{contour_org}'"
-  ASSERT contour_org != "com.example"
-    HALT "refusing default 'com.example' — set the real org domain"
+**Validation rules** the agent should enforce when configuring or auditing:
 
-STEP 1 — Set repository VARIABLES (NOT secrets — these are not sensitive):
-  gh variable set CONTOUR_ORG  --repo {repo_owner}/{repo_name} --body '{contour_org}'
-  if contour_name is provided:
-    gh variable set CONTOUR_NAME --repo {repo_owner}/{repo_name} --body '{contour_name}'
+- `CONTOUR_ORG` must match `^[a-z0-9-]+(\.[a-z0-9-]+)+$` — reverse-DNS only.
+- `CONTOUR_ORG` must not be `com.example` — that produces invalid output that has to be redone.
+- The MDM API token must be registered as a **secret**, not a variable.
+- `CONTOUR_ORG` and `CONTOUR_NAME` must be **variables**, not secrets.
 
-STEP 2 — Set the Fleet-side SECRETS (sensitive — these go in secrets):
-  echo "$FLEET_URL"       | gh secret set FLEET_URL       --repo {repo_owner}/{repo_name}
-  echo "$FLEET_API_TOKEN" | gh secret set FLEET_API_TOKEN --repo {repo_owner}/{repo_name}
-
-STEP 3 — Verify wiring:
-  gh variable list --repo {repo_owner}/{repo_name} | grep -E '^CONTOUR_(ORG|NAME)\s'
-  gh secret   list --repo {repo_owner}/{repo_name} | grep -E '^FLEET_(URL|API_TOKEN)\s'
-  ASSERT both lists contain the expected entries
-    HALT "{name} not registered — re-run STEP 1/2 or check `gh auth status`"
-
-INVARIANTS:
-  # CONTOUR_ORG/CONTOUR_NAME are repository VARIABLES, not secrets — they
-  # appear in the Fleet GitOps output unredacted, so encrypting them
-  # buys nothing and just makes debugging harder.
-  ASSERT CONTOUR_ORG  is registered as a variable, not a secret
-  ASSERT CONTOUR_NAME is registered as a variable, not a secret
-
-  # FLEET_API_TOKEN is sensitive — must be a secret.
-  ASSERT FLEET_API_TOKEN is registered as a secret, not a variable
-
-POSTCONDITIONS:
-  RETURN {
-    repo: "{repo_owner}/{repo_name}",
-    variables: ["CONTOUR_ORG", "CONTOUR_NAME"?],
-    secrets:   ["FLEET_URL", "FLEET_API_TOKEN"],
-  }
-```
-
-This procedural block is small because the rest of CI setup is YAML
-configuration that doesn't have meaningful "fail fast" preconditions —
-it's just text.
+These are the load-bearing rules — the rest of CI setup is YAML
+configuration that doesn't have meaningful "fail fast" preconditions,
+just text. Most teams set up the keys once via the GitHub UI or their
+IaC of choice, then never touch them.
 
 ---
 
@@ -152,10 +125,13 @@ the right one per the INVARIANTS above.
     contour profile ddm verify platforms/macos/declaration-profiles --json
 ```
 
-### Fleet GitOps + contour (full workflow)
+### Full workflow (Fleet GitOps shown as the deploy step)
+
+The example apply step calls Fleet's `gitops.sh`; for other MDMs,
+substitute your vendor's apply script and its env-var contract.
 
 ```yaml
-name: Fleet GitOps
+name: MDM GitOps
 on:
   push:        { branches: [main] }
   pull_request: { branches: [main] }
@@ -165,6 +141,7 @@ on:
 env:
   CONTOUR_ORG:     ${{ vars.CONTOUR_ORG }}
   CONTOUR_NAME:    ${{ vars.CONTOUR_NAME }}
+  # Fleet-specific env vars below — substitute for your MDM.
   FLEET_URL:       ${{ secrets.FLEET_URL }}
   FLEET_API_TOKEN: ${{ secrets.FLEET_API_TOKEN }}
   FLEET_DRY_RUN_ONLY: ${{ github.event_name == 'pull_request' }}
@@ -190,12 +167,15 @@ jobs:
           contour profile ddm verify platforms/macos/declaration-profiles \
               --json
 
-      - name: Apply Fleet GitOps
+      - name: Apply (Fleet example)
         run: ./.github/fleet-gitops/gitops.sh
+        # For other MDMs, swap this for your vendor's apply script.
 ```
 
-The PR trigger sets `FLEET_DRY_RUN_ONLY=true` (read by `gitops.sh`), so
-PRs only validate without applying. Push-to-main applies for real.
+The PR trigger sets `FLEET_DRY_RUN_ONLY=true` (read by Fleet's
+`gitops.sh`), so PRs only validate without applying. Push-to-main
+applies for real. Your MDM's apply script likely has an equivalent
+dry-run flag — wire it the same way.
 
 ### Claude Code in GitHub Actions
 
@@ -227,9 +207,9 @@ allowed_tools:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `INVALID_ORG` from `ddm compose`/`generate` in CI | `CONTOUR_ORG` set as a secret instead of variable, or not set at all | Move to repository variable; check `gh variable list` |
+| `INVALID_ORG` from `ddm compose`/`generate` in CI | `CONTOUR_ORG` set as a secret instead of variable, or not set at all | Move to repository variable; verify it's listed under variables, not secrets |
 | Profiles generate with `com.example` identifiers | `CONTOUR_ORG` is unset and the runner has no `.contour/config.toml` | Set the variable; or commit `.contour/config.toml` to the repo |
-| `gitops.sh` deletes a fleet you wanted to keep | `FLEET_DELETE_OTHER_FLEETS=true` (the default) and the fleet is missing from `fleets/` | Add the fleet YAML, or set `FLEET_DELETE_OTHER_FLEETS=false` for that run |
+| Fleet's `gitops.sh` deletes a fleet you wanted to keep | `FLEET_DELETE_OTHER_FLEETS=true` (the default) and the fleet's YAML is missing from `fleets/` | Add the fleet YAML, or set `FLEET_DELETE_OTHER_FLEETS=false` for that run. Other MDMs' apply scripts have equivalent destructive defaults — read your vendor's docs. |
 | Profiles regenerate with churn on every CI run | Old contour version (pre-`cdeed17`) — recipe field iteration was non-deterministic | Upgrade contour; the fix landed via HashMap → BTreeMap |
 | `ddm verify` complains about unsubscribed status keys | Predicate references `@status('foo')` but no `status-subscriptions` declaration covers it | Use `compose` with `[subscriptions]` (see `--sop ddm`); the SOP enforces this at authoring time |
 
@@ -255,5 +235,9 @@ need.
 - contour env-var resolution: `crates/contour-core/src/config.rs::resolve_org`
 - DDM-handler env-var fix: commit `8dc7e05` (CONTOUR_ORG honoured in `ddm generate` + `compose`)
 - Trap pinning the env-var path: `trap_40_ddm_compose_honors_contour_org_env`
-- Fleet's `gitops.sh` env-var contract: `fleet/cmd/fleetctl/fleetctl/templates/new/.github/fleet-gitops/gitops.sh`
-- Fleet GitOps schema: `fleet/docs/Configuration/yaml-files.md`
+- Fleet GitOps deploy script (used as the example apply step):
+  `fleet/cmd/fleetctl/fleetctl/templates/new/.github/fleet-gitops/gitops.sh`
+- Fleet GitOps schema (vendor-specific reference):
+  `fleet/docs/Configuration/yaml-files.md`
+- For other MDMs (Jamf, Kandji, …), see your vendor's deploy-script docs
+  and substitute the apply step + secrets accordingly.

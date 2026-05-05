@@ -58,10 +58,11 @@ SCHEMA_TOOL:   contour profile validate <paths> --json
                contour mscp validate -o <repo-root> --json
 
 INPUT:
-  repo_root   : Fleet GitOps repo root (or any contour-output repo)
+  repo_root   : GitOps repo root (Fleet v4.83 layout shown; any
+                contour-output repo works)
   hook_style  : "git-hooks"            — plain `.git/hooks/pre-commit`
                 "pre-commit-framework" — pre-commit (Python tool, the
-                                          dominant pattern in Fleet
+                                          dominant pattern in MDM
                                           GitOps repos)
                 "husky"                — Node-based hook manager
                 "lefthook"             — Go-based, parallel-friendly
@@ -82,9 +83,9 @@ PRECONDITIONS:
 STEP 1 — Classify staged changes:
   staged = git diff --cached --name-only --diff-filter=ACMR
 
-  Bucket by extension and path. The SOP-canonical layout is Fleet's
-  v4.83 (`platforms/{platform}/...`) but the matchers are layout-
-  agnostic — they key off file shape, not directory.
+  Bucket by extension and path. The canonical layout shown here is
+  Fleet's v4.83 (`platforms/{platform}/...`) but the matchers are
+  layout-agnostic — they key off file shape, not directory.
 
   buckets = {
     profiles_macos    : staged.match("*.mobileconfig"),
@@ -122,7 +123,7 @@ STEP 2 — Validate each bucket:
       on non-zero: errors += per-file-errors
 
   if buckets.mscp_present:
-    # Whole-repo Fleet GitOps validate (paths, identifiers, label refs).
+    # Whole-repo GitOps validate (paths, identifiers, label refs).
     # Slow-ish; opt-in via --mscp flag in the hook config.
     contour mscp validate -o {repo_root} --strict --json
     on non-zero: errors += mscp-errors
@@ -344,7 +345,7 @@ chmod +x .git/hooks/pre-commit
 
 ## Demo — the malformed → fix → pass loop
 
-Starting point: clean Fleet GitOps repo with the hook registered:
+Starting point: clean GitOps repo (Fleet v4.83 layout) with the hook registered:
 
 ```
 $ uvx pre-commit install
@@ -399,7 +400,7 @@ $ # The hook ran but found nothing staged — clean exit, commit lands.
   nothing to validate. Renames re-validate with the new path's content.
 - **Performance**: contour validates are fast (~50ms per file, parallel
   with rayon by default). Even large commits stay <1s. The slow outlier
-  is `contour mscp validate` on a full Fleet repo — gate that behind
+  is `contour mscp validate` on a full repo — gate that behind
   `--mscp` opt-in or a `commit-msg` hook so it doesn't block every
   routine commit.
 - **CI parity**: the same validators that run in the hook should run

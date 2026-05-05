@@ -10,18 +10,20 @@ In CI/GitHub Actions: set `CONTOUR_ORG` as a repository secret or env var.
 Interactive: ask the user if not configured.
 NEVER default to `com.example` — this produces invalid output that must be redone.
 
-## Fleet Policy & osquery → `--sop osquery`
+## osquery & policy patterns → `--sop osquery`
 
-Use when: writing Fleet policies, osquery queries, compliance checks, software assignments.
+Use when: writing osquery queries, compliance checks, or policies for any
+osquery-consuming engine (Fleet shown as the canonical example).
 
 ```bash
 contour osquery search disk_encryption --json     # find tables
 contour osquery table alf --json                  # show columns
-contour help-ai --sop osquery                     # full patterns + Fleet software assignment
+contour help-ai --sop osquery                     # full patterns + software-assignment recipes
 ```
 
 Includes: idiomatic query patterns (disk encryption, app install, version check, disk space),
-software assignment YAML templates, and Fleet auto-install via `install_software`.
+software-assignment YAML templates, and Fleet's `install_software`
+auto-install wiring as the worked example.
 
 ## Mobileconfig Profile → `--sop profile`
 
@@ -124,14 +126,11 @@ contour profile synthesize /Library/Managed\ Preferences/ -o profiles/ --org <OR
 
 Use when: setting up contour in GitHub Actions, configuring env vars, or CI workflows.
 
-```bash
-# Set org domain as repository variable
-gh variable set CONTOUR_ORG --repo yourorg/fleet-gitops --body 'com.yourcompany'
-gh variable set CONTOUR_NAME --repo yourorg/fleet-gitops --body 'Your Company'
-```
-
-Key: `CONTOUR_ORG` and `CONTOUR_NAME` as repository variables (not secrets).
-contour reads these automatically — no `--org` flag needed in CI when env vars are set.
+Key contract: `CONTOUR_ORG` and `CONTOUR_NAME` registered as repository
+**variables** (not secrets). The MDM API token is a **secret**. contour
+reads `CONTOUR_ORG` / `CONTOUR_NAME` automatically — no `--org` flag
+needed in CI when env vars are set. See `--sop ci` for the full wiring
+contract and example workflow.
 
 ## Other SOPs
 
@@ -142,4 +141,3 @@ contour reads these automatically — no `--org` flag needed in CI when env vars
 | `--sop notifications` | Notification settings profiles |
 | `--sop support` | Root3 Support App profiles |
 | `--sop ci` | GitHub Actions setup, env vars, workflow config |
-| `--sop schema-data` | Embedded parquet data management |
