@@ -1809,6 +1809,69 @@ fn trap_57_search_field_no_match_returns_empty_array() {
 }
 
 #[test]
+fn trap_59_search_include_fields_returns_categorized_shape() {
+    // Polymorphic mode emits {payload_matches[], field_matches[],
+    // summary, query} — never mixed. Each hit carries a matched_in[]
+    // array naming where the substring landed.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["search", "cookie", "--include-fields", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "polymorphic search must exit 0");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("must emit JSON");
+
+    assert!(
+        parsed.get("payload_matches").is_some(),
+        "envelope must have payload_matches[]"
+    );
+    assert!(
+        parsed.get("field_matches").is_some(),
+        "envelope must have field_matches[]"
+    );
+    assert_eq!(parsed["query"], "cookie");
+
+    let fm = parsed["field_matches"]
+        .as_array()
+        .expect("field_matches is array");
+    assert!(
+        !fm.is_empty(),
+        "expect at least one field_match for 'cookie'; got {fm:?}"
+    );
+
+    // Locate safariAcceptCookies and verify matched_in tags
+    // surface — this is the whole point of the new mode.
+    let safari = fm
+        .iter()
+        .find(|m| m["field"]["name"] == "safariAcceptCookies")
+        .expect("safariAcceptCookies must appear");
+    let matched_in = safari["matched_in"]
+        .as_array()
+        .expect("matched_in is an array");
+    let tags: Vec<&str> = matched_in.iter().filter_map(|v| v.as_str()).collect();
+    assert!(
+        tags.contains(&"name"),
+        "field-name match must report 'name' in matched_in; got {tags:?}"
+    );
+    assert_eq!(safari["field"]["plist_tag"], "real");
+}
+
+#[test]
+fn trap_60_search_include_fields_requires_query() {
+    // --include-fields is a polymorphic substring widening — there's
+    // no substring without a query, so clap rejects.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["search", "--include-fields"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "--include-fields without query must error"
+    );
+}
+
+#[test]
 fn trap_58_search_query_and_field_mutually_exclusive() {
     // clap rejects both forms together — they're different modes.
     let output = Command::cargo_bin("profile")

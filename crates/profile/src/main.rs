@@ -264,11 +264,13 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Search {
             query,
             field,
+            include_fields,
             schema_path,
         } => {
             cli::search::handle_search(
                 query.as_deref(),
                 field.as_deref(),
+                include_fields,
                 schema_path.as_deref(),
                 output_mode,
             )?;

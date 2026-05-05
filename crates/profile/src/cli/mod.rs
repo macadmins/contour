@@ -293,8 +293,8 @@ pub enum Commands {
     },
 
     #[command(
-        about = "Search payload schemas by keyword OR drill into a specific field by name",
-        long_about = "Two modes:\n\
+        about = "Search payload schemas by keyword, by exact field name, or in polymorphic mode",
+        long_about = "Three modes:\n\
                       \n\
                       Substring search (default): match against payload type,\n\
                       title, description, and field names — returns matching\n\
@@ -306,9 +306,17 @@ pub enum Commands {
                       allowed values). Single-call answer to 'what type does\n\
                       Apple expect for <key>?'.\n\
                       \n\
+                      `--include-fields`: polymorphic mode. Substring-matches\n\
+                      across payload-level metadata AND field-level metadata,\n\
+                      returns categorized JSON with `payload_matches[]` and\n\
+                      `field_matches[]` arrays — each hit carries a\n\
+                      `matched_in[]` tag naming where the substring landed\n\
+                      (name / title / description / payload_type).\n\
+                      \n\
                       Examples:\n  \
                       contour profile search wifi\n  \
-                      contour profile search --field safariAcceptCookies --json"
+                      contour profile search --field safariAcceptCookies --json\n  \
+                      contour profile search cookie --include-fields --json"
     )]
     Search {
         #[arg(
@@ -321,10 +329,18 @@ pub enum Commands {
         #[arg(
             long,
             value_name = "NAME",
-            conflicts_with = "query",
+            conflicts_with_all = ["query", "include_fields"],
             help = "Exact field-name lookup across all payloads — returns field detail per match"
         )]
         field: Option<String>,
+
+        #[arg(
+            long,
+            requires = "query",
+            conflicts_with = "field",
+            help = "Polymorphic mode: also walk field metadata; returns {payload_matches, field_matches}"
+        )]
+        include_fields: bool,
 
         #[arg(long, help = "External schema directory")]
         schema_path: Option<String>,
