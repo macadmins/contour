@@ -1,12 +1,14 @@
-# SOP: osquery Schema Lookup + Fleet Policy Patterns
+# SOP: osquery Schema Lookup + Policy Patterns
 
 This SOP covers two distinct concerns, both centred on osquery:
 1. **Schema lookup** (procedural) — finding the right table and columns to
    query, given a keyword or compliance requirement.
 2. **Idiomatic policy patterns** (reference cookbook) — battle-tested SQL
-   templates from Fleet's own deployments. Agents should reuse these
-   patterns; inventing new query structures is a common source of false-
-   negatives (queries that work locally but fail across host versions).
+   templates drawn from real-world deployments (Fleet's `it-and-security`
+   repo is the source for many; the patterns generalize to any osquery
+   consumer). Agents should reuse these patterns; inventing new query
+   structures is a common source of false-negatives (queries that work
+   locally but fail across host versions).
 
 The lookup half is procedural. The patterns half is a cookbook —
 agents pick a pattern, fill in the table/column, and validate against the
@@ -153,7 +155,9 @@ POSTCONDITIONS:
 
 ## Idiomatic policy patterns (reference cookbook)
 
-Battle-tested patterns from Fleet's own it-and-security repo. **Reuse these
+Battle-tested patterns drawn from real-world osquery deployments
+(Fleet's public `it-and-security` repo is the source for several below).
+**Reuse these
 verbatim; do not invent new query structures** — agents that synthesize
 queries from scratch produce false-negatives that look like compliant
 hosts but are actually unmonitored.
@@ -251,11 +255,13 @@ SELECT 1 WHERE
 
 ---
 
-## Fleet software-assignment patterns (prose recipes)
+## Software-assignment patterns (Fleet shown; generalizes to any policy engine)
 
 These are not osquery patterns, but agents writing osquery policies often
-need them as the next step. Fleet's policy engine can auto-install
-software when a policy fails — this section documents that wiring.
+need them as the next step. Fleet's policy engine is the example shown
+below — when a policy query returns no rows, Fleet's `install_software`
+wires an auto-install. Other policy engines that consume osquery
+results have analogous hooks; the SQL patterns are portable.
 
 ### Custom package YAML
 

@@ -42,7 +42,7 @@ INPUT:
   output_dir   : directory to write generated profiles
   brand        : optional — when set, emit a single profile for the
                  named brand only (multi-tenant repos)
-  fragment     : bool — when true, emit a Fleet GitOps fragment
+  fragment     : bool — when true, emit a GitOps fragment (Fleet `fragment.toml` schema)
 
 PRECONDITIONS:
   ASSERT support_toml exists AND is readable
@@ -144,7 +144,7 @@ contour support --org com.acme -o support.mobileconfig
   manages tenants under separate org identifiers; use
   `--brand <name>` to scope a single generation.
 - Fragment mode (`--fragment`) is the recommended output for adding to
-  a Fleet GitOps repo (v4.83 layout). It places `.mobileconfig` files
+  a GitOps repo (Fleet v4.83 layout) (v4.83 layout). It places `.mobileconfig` files
   under `platforms/macos/configuration-profiles/`.
 - `support` is the simplest of the procedural-format SOPs — there is
   no scan/configure step, since brand assets and links are set by

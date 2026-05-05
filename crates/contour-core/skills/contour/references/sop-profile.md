@@ -299,11 +299,12 @@ once each one has been end-to-end traced and added to the `sop_traps` suite.
 2. contour profile validate <dir> --recursive --report report.md
 ```
 
-### Generate for Fleet (fragment mode)
+### Generate as a GitOps fragment (Fleet v4.83 layout)
 
 ```
 contour profile generate <payload_type> --full --fragment -o fragment/
-# Creates a composable fragment that merges into existing Fleet GitOps repos.
+# Creates a composable fragment that merges into existing GitOps repos
+# using Fleet's v4.83 directory layout.
 # Output: fragment.toml + platforms/macos/configuration-profiles/*.mobileconfig
 ```
 
@@ -326,7 +327,7 @@ contour profile duplicate <source> --name 'New Name' --org com.yourco \
 Creates a copy with new PayloadDisplayName, PayloadIdentifier, and UUIDs.
 Use this to fix identifier typos or create variants of an existing profile.
 
-### Generate MDM command payloads (.plist for Fleet/MDM)
+### Generate MDM command payloads (.plist)
 
 ```
 1. contour profile command list --json                # list all 65 MDM commands
@@ -352,27 +353,25 @@ contour profile command generate EnableRemoteDesktop -o remote.plist
 contour profile command generate RotateFileVaultKey -o rotate-fvkey.plist
 ```
 
-#### Send via Fleet CLI
+#### Send via your MDM (Fleet shown as the worked example)
 
 ```
+# Fleet CLI:
 fleetctl mdm run-command --host <hostname> --payload cmd.plist
-```
 
-#### Send via Fleet API (base64)
-
-```
-# Get base64 directly:
+# Fleet API (base64 form — also the form most other MDM APIs accept):
 contour profile command generate RestartDevice --uuid --base64
 
-# Or from JSON (base64 field included automatically):
+# JSON form (base64 field included automatically — pipe to your MDM's API):
 contour profile command generate RestartDevice --uuid --json
-# JSON output includes 'base64' field ready for Fleet API
 
-# Use base64 value in Fleet API POST to /api/v1/fleet/commands/run
-# Payload keys: command (base64 string), host_uuids (array of host UUIDs)
-
-# Verify result:
-# fleetctl get mdm-command-results --id=<CommandUUID>
+# Fleet API POST: /api/v1/fleet/commands/run
+#   payload keys: command (base64 string), host_uuids (array)
+# Verify result via Fleet:
+#   fleetctl get mdm-command-results --id=<CommandUUID>
+#
+# Other MDMs accept the same .plist or its base64 — substitute the
+# vendor's send-command endpoint and identifier shape.
 ```
 
 ### Generate DEP enrollment profiles
@@ -392,4 +391,4 @@ contour profile enrollment generate --platform macOS --interactive -o enrollment
 - `--format plist` — raw payload dict (for Workspace ONE)
 - `--org com.yourcompany` — set organization identifier (REQUIRED for generate/normalize/import)
 - `--json` — structured output for programmatic consumption
-- `--fragment` — generate composable fragment for Fleet GitOps
+- `--fragment` — generate composable fragment (Fleet v4.83 GitOps layout)
