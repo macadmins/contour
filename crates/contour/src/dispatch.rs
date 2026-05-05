@@ -227,8 +227,21 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
     }
 
     match action {
-        Commands::Info => {
-            profile::cli::info::handle_info(config.as_ref(), output_mode)?;
+        Commands::Info {
+            payload_type,
+            schema_path,
+            full,
+        } => {
+            if let Some(t) = payload_type {
+                profile::cli::info::handle_payload_info(
+                    &t,
+                    schema_path.as_deref(),
+                    full,
+                    output_mode,
+                )?;
+            } else {
+                profile::cli::info::handle_info(config.as_ref(), output_mode)?;
+            }
         }
         Commands::Init {
             output,
@@ -401,8 +414,17 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 output_mode,
             )?;
         }
-        Commands::Search { query, schema_path } => {
-            profile::cli::search::handle_search(&query, schema_path.as_deref(), output_mode)?;
+        Commands::Search {
+            query,
+            field,
+            schema_path,
+        } => {
+            profile::cli::search::handle_search(
+                query.as_deref(),
+                field.as_deref(),
+                schema_path.as_deref(),
+                output_mode,
+            )?;
         }
         Commands::Uuid {
             paths,
@@ -588,12 +610,14 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
         Commands::Docs { action } => match action {
             DocsAction::Generate {
                 output,
+                stdout,
                 payload,
                 category,
                 schema_path,
             } => {
                 profile::cli::docs::handle_docs_generate(
-                    &output,
+                    output.as_deref(),
+                    stdout,
                     payload.as_deref(),
                     category.as_deref(),
                     schema_path.as_deref(),

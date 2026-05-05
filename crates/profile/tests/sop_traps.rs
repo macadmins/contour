@@ -1474,6 +1474,37 @@ fn trap_46_lint_clean_baseline_has_no_findings() {
     );
 }
 
+#[test]
+fn trap_52_lint_nested_missing_payload_version_fires_only_on_its_fixture() {
+    // Tier-1 default-on check: a nested payload missing the literal
+    // PayloadVersion key fires `nested-missing-payload-version` at
+    // error severity. Real-world Fleet repos have ~80+ files with
+    // this drift; the structural validator can't see it because the
+    // serde deserializer silently defaults the missing field.
+    let findings = lint_findings_for("nested-missing-payload-version");
+    let names: Vec<&str> = findings
+        .iter()
+        .filter_map(|f| f["check"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"nested-missing-payload-version"),
+        "expected nested-missing-payload-version finding; got {names:?}"
+    );
+    let sev = findings
+        .iter()
+        .find(|f| f["check"] == "nested-missing-payload-version")
+        .and_then(|f| f["severity"].as_str());
+    assert_eq!(sev, Some("error"), "must be error severity");
+
+    let clean = lint_findings_for("clean");
+    assert!(
+        !clean
+            .iter()
+            .any(|f| f["check"] == "nested-missing-payload-version"),
+        "clean baseline must not trip nested-missing-payload-version"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // --lint-policy traps (47–51): the opt-in surface for Tier-2
 // (org-policy) lint checks. `validate` defaults to Apple-schema only;
@@ -1666,4 +1697,176 @@ fn trap_51_strict_promotes_tier_2_warning_to_error_when_selected() {
         .and_then(|f| f["severity"].as_str())
         .map(str::to_string);
     assert_eq!(err_sev.as_deref(), Some("error"));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// info / docs ergonomics traps (53–55): direct schema lookup without
+// disk I/O. `profile info <type>` mirrors `profile ddm info <name>`,
+// returning every field's plist tag so agents can answer "what type
+// does Apple expect for <key> in <payload>?" in one CLI call. The
+// `--stdout` flag on `docs generate` removes the file-write detour.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn trap_53_info_returns_plist_tag_for_known_field() {
+    // The motivating use case: an agent checks the type of
+    // `safariAcceptCookies` in `com.apple.applicationaccess`. Apple
+    // specs it as <real> (counterintuitive — values look enum-shaped).
+    // The info command must surface that exact plist tag.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["info", "com.apple.applicationaccess", "--full", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "info <type> must exit 0 on known type"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Value = serde_json::from_str(stdout.trim()).expect("info --json emits JSON");
+    let fields = parsed["fields"].as_array().expect("fields is an array");
+    let safari = fields
+        .iter()
+        .find(|f| f["name"] == "safariAcceptCookies")
+        .expect("safariAcceptCookies must be present in com.apple.applicationaccess");
+    assert_eq!(
+        safari["plist_tag"], "real",
+        "Apple specs safariAcceptCookies as <real>; agent must see that exact tag"
+    );
+}
+
+#[test]
+fn trap_54_info_unknown_payload_type_errors_with_hint() {
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["info", "com.apple.bogus.never.exists", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "info on unknown payload type must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stderr}{stdout}");
+    assert!(
+        combined.contains("not found"),
+        "must explain that the type is not found; got: {combined}"
+    );
+}
+
+#[test]
+fn trap_56_search_field_returns_field_detail_with_plist_tag() {
+    // `search --field <name>` is a single-call answer to "what type
+    // does Apple expect for <key>?". Each hit must include the field's
+    // plist_tag (the literal `<real>` / `<integer>` / etc. an author
+    // would write in the .mobileconfig).
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["search", "--field", "safariAcceptCookies", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "search --field must exit 0 on hit");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("must emit JSON");
+    let arr = parsed.as_array().expect("returns a JSON array");
+    assert!(
+        !arr.is_empty(),
+        "safariAcceptCookies exists in com.apple.applicationaccess; got {arr:?}"
+    );
+    let hit = &arr[0];
+    assert_eq!(
+        hit["payload_type"], "com.apple.applicationaccess",
+        "must report the payload that contains the field"
+    );
+    assert_eq!(
+        hit["field"]["plist_tag"], "real",
+        "Apple specs safariAcceptCookies as <real>; --field must surface that"
+    );
+    assert_eq!(hit["field"]["name"], "safariAcceptCookies");
+}
+
+#[test]
+fn trap_57_search_field_no_match_returns_empty_array() {
+    // No false-error on misses — return [] so CI scripts can simply
+    // check len == 0.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "search",
+            "--field",
+            "bogus_never_a_real_apple_key",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "no-match --field must exit 0, not error"
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("must emit JSON");
+    let arr = parsed.as_array().expect("returns a JSON array");
+    assert!(arr.is_empty(), "expected empty array; got {arr:?}");
+}
+
+#[test]
+fn trap_58_search_query_and_field_mutually_exclusive() {
+    // clap rejects both forms together — they're different modes.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["search", "wifi", "--field", "passcode"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "clap must reject query + --field together"
+    );
+}
+
+#[test]
+fn trap_55_docs_generate_stdout_writes_no_files() {
+    // --stdout streams markdown to stdout instead of writing to disk —
+    // no /tmp clutter, no second-pass grep on a file. Verify (a) markdown
+    // headed with the title appears on stdout, and (b) clap rejects
+    // running both --output and --stdout together.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "docs",
+            "generate",
+            "--stdout",
+            "--payload",
+            "com.apple.applicationaccess",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "docs --stdout must exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("# "),
+        "stdout must start with markdown header; got first 60 chars: {:?}",
+        &stdout.chars().take(60).collect::<String>()
+    );
+    assert!(
+        stdout.contains("safariAcceptCookies"),
+        "stdout markdown must include the field table"
+    );
+
+    // Mutual exclusion: clap rejects both --output and --stdout.
+    let conflict = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "docs",
+            "generate",
+            "--stdout",
+            "--output",
+            "/tmp/should-not-exist",
+            "--payload",
+            "com.apple.applicationaccess",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !conflict.status.success(),
+        "clap must reject --stdout + --output as mutually exclusive"
+    );
 }

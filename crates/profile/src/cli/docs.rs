@@ -10,20 +10,54 @@ use colored::Colorize;
 use std::path::Path;
 
 pub fn handle_docs_generate(
-    output: &str,
+    output: Option<&str>,
+    stdout: bool,
     payload: Option<&str>,
     category: Option<&str>,
     schema_path: Option<&str>,
     output_mode: OutputMode,
 ) -> Result<()> {
     let registry = load_registry(schema_path)?;
-    let output_path = Path::new(output);
 
+    if stdout {
+        // Stream matching payload markdown to stdout — no disk I/O,
+        // no /tmp clutter. When multiple manifests match (no --payload
+        // filter, or category filter), separate them with `\n---\n` so
+        // downstream tools can split.
+        let mut count = 0;
+        let mut first = true;
+        for manifest in registry.all() {
+            if let Some(f) = payload
+                && manifest.payload_type != f
+            {
+                continue;
+            }
+            if let Some(cat) = category
+                && manifest.category != cat
+            {
+                continue;
+            }
+            if !first {
+                println!("\n---\n");
+            }
+            print!("{}", docs::generate_payload_doc(manifest)?);
+            first = false;
+            count += 1;
+        }
+        if count == 0 {
+            anyhow::bail!("No matching payloads for --stdout output");
+        }
+        return Ok(());
+    }
+
+    // File-output path (default).
+    let output_dir = output.expect("clap enforces --output when --stdout is unset");
+    let output_path = Path::new(output_dir);
     let count = docs::generate_docs(&registry, output_path, payload, category)?;
 
     if output_mode == OutputMode::Json {
         let json = serde_json::json!({
-            "output_directory": output,
+            "output_directory": output_dir,
             "files_generated": count,
             "payload_filter": payload,
             "category_filter": category,
