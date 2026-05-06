@@ -45,10 +45,49 @@ fn toml_to_plist(val: &toml::Value) -> Value {
     }
 }
 
+/// Wrap a flat preferences dict into the legacy MCX (Managed Client
+/// for X) envelope:
+///
+/// ```text
+/// PayloadContent:
+///   <domain>:
+///     Forced:
+///       - mcx_preference_settings: <flat dict>
+/// ```
+///
+/// Inverse of `unwrap_mcx_if_canonical` in `cli::import_recipe`. Used
+/// when a recipe profile declares `mcx_domain` so that authors can
+/// express MCX preferences as ordinary `[profile.fields]` instead of
+/// writing the full nested envelope by hand.
+fn wrap_mcx_payload(domain: &str, flat: Dictionary) -> Dictionary {
+    let mut inner = Dictionary::new();
+    inner.insert(
+        "mcx_preference_settings".to_string(),
+        Value::Dictionary(flat),
+    );
+
+    let mut domain_dict = Dictionary::new();
+    domain_dict.insert(
+        "Forced".to_string(),
+        Value::Array(vec![Value::Dictionary(inner)]),
+    );
+
+    let mut payload_content = Dictionary::new();
+    payload_content.insert(domain.to_string(), Value::Dictionary(domain_dict));
+
+    let mut wrapper = Dictionary::new();
+    wrapper.insert(
+        "PayloadContent".to_string(),
+        Value::Dictionary(payload_content),
+    );
+    wrapper
+}
+
 /// Apply a dot-notation key into a nested dictionary structure.
 ///
-/// For example, `"PlatformSSO.AuthenticationMethod"` with value `"UserSecureEnclaveKey"`
-/// creates `{"PlatformSSO": {"AuthenticationMethod": "UserSecureEnclaveKey"}}`.
+/// For example, `"PlatformSSO.AuthenticationMethod"` with value
+/// `"UserSecureEnclaveKey"` creates
+/// `{"PlatformSSO": {"AuthenticationMethod": "UserSecureEnclaveKey"}}`.
 fn apply_nested_field(dict: &mut Dictionary, dotted_key: &str, value: Value) {
     let parts: Vec<&str> = dotted_key.splitn(2, '.').collect();
     if parts.len() == 1 {
@@ -476,7 +515,7 @@ pub fn handle_generate_recipe(
         let manifest = registry.get_by_name(&spec.payload_type);
 
         // Build payload content (using resolved values for secret references)
-        let payload_content = if let Some(m) = manifest {
+        let mut payload_content = if let Some(m) = manifest {
             let mut content = build_payload_from_schema(m, &spec.fields, true);
             // Apply extra fields with dot-notation nesting
             for (key, val) in &spec.extra_fields {
@@ -501,6 +540,16 @@ pub fn handle_generate_recipe(
             }
             content
         };
+
+        // MCX wrap: when a recipe declares `mcx_domain`, re-shape the
+        // flat fields under the legacy
+        // PayloadContent.<domain>.Forced[0].mcx_preference_settings
+        // structure that `com.apple.ManagedClient.preferences` payloads
+        // require. The importer does the inverse unwrap when this
+        // shape is detected on the source side.
+        if let Some(domain) = &spec.mcx_domain {
+            payload_content = wrap_mcx_payload(domain, payload_content);
+        }
 
         let is_plist = format == "plist";
 

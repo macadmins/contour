@@ -54,6 +54,14 @@ pub struct ProfileSpec {
     pub description: String,
     #[serde(default)]
     pub removal_disallowed: bool,
+    /// MCX preference domain — set this on a
+    /// `com.apple.ManagedClient.preferences` profile to author the
+    /// preferences flat under `[profile.fields]` instead of writing the
+    /// full `PayloadContent.<domain>.Forced[0].mcx_preference_settings`
+    /// envelope by hand. The generator re-wraps on output; the importer
+    /// auto-unwraps on input. Leave unset for non-MCX profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcx_domain: Option<String>,
     /// Field overrides matching schema field names.
     ///
     /// `BTreeMap` (not `HashMap`) so iteration is sorted and serialized
