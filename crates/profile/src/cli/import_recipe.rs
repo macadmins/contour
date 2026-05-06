@@ -11,7 +11,7 @@
 use crate::cli::generate::load_registry;
 use crate::cli::info::plist_tag_for;
 use crate::output::OutputMode;
-use crate::profile::parser::parse_profile_lenient;
+use crate::profile::parser::{XmlComment, parse_profile_lenient};
 use crate::recipe::{ProfileSpec, Recipe, RecipeMeta};
 use crate::schema::{PayloadManifest, Platform, SchemaRegistry};
 use anyhow::{Context, Result};
@@ -200,6 +200,7 @@ fn import_one(
     })?;
     let profile = fixup.profile;
     let placeholder_mapping = fixup.placeholder_mapping;
+    let xml_comments = fixup.comments;
 
     // 2. Recipe name.
     let recipe_name = name_override
@@ -302,8 +303,13 @@ fn import_one(
     };
 
     // 5. Write TOML + enriched sidecar.
-    let toml_body =
+    let raw_toml =
         toml::to_string(&recipe).with_context(|| "Failed to serialize imported recipe to TOML")?;
+    // Inject XML comments captured from the source as TOML `#` lines
+    // above the matching `key = value` pair. The plist crate strips
+    // `<!-- … -->` on parse; the lenient parser kept them aside via
+    // `extract_comments`, anchored to the next non-empty XML line.
+    let toml_body = inject_xml_comments(&raw_toml, &xml_comments);
     std::fs::write(&recipe_path, &toml_body)
         .with_context(|| format!("Failed to write {}", recipe_path.display()))?;
     let registry = load_registry(None).ok();
@@ -758,6 +764,105 @@ fn lookup_data_sentinel(decoded: &str, mapping: &[(String, String)]) -> Option<S
 /// Anything non-canonical (multiple domains, multiple Forced entries,
 /// extra peer keys) falls back to faithful pass-through — better an
 /// ugly recipe that round-trips than silent data loss.
+/// Inject XML comments captured from the source mobileconfig as TOML
+/// `#` lines above the matching `key = value` pair.
+///
+/// The plist crate strips `<!-- … -->` on parse, but
+/// `parse_profile_lenient` keeps each comment with its `anchor_line`
+/// (the next non-empty XML line). When the anchor is shaped
+/// `<key>X</key>`, we pull `X` and look for `X = …` lines in the
+/// emitted TOML. Each match gets the comment text re-emitted as
+/// `# …` lines just above it.
+///
+/// Comments whose anchor isn't a `<key>X</key>` are silently dropped —
+/// they could land on the wrong line, which is worse than losing them.
+fn inject_xml_comments(toml_body: &str, comments: &[XmlComment]) -> String {
+    if comments.is_empty() {
+        return toml_body.to_string();
+    }
+
+    // Build {key_name → joined `#` comment block}. Multiple comments
+    // anchored to the same key concatenate (rare but possible).
+    let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for c in comments {
+        let Some(key) = anchor_key_name(&c.anchor_line) else {
+            continue;
+        };
+        let block = comment_to_toml_lines(&c.text);
+        if block.is_empty() {
+            continue;
+        }
+        map.entry(key).or_default().push_str(&block);
+    }
+
+    if map.is_empty() {
+        return toml_body.to_string();
+    }
+
+    // Walk the TOML output. Inject when a non-section line starts with
+    // `<KEY> = …` and we have a comment block keyed by `<KEY>`.
+    let mut out = String::with_capacity(toml_body.len());
+    for line in toml_body.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('[') && !trimmed.starts_with('#') && !trimmed.is_empty() {
+            if let Some(eq) = trimmed.find('=') {
+                let key = trimmed[..eq].trim().trim_matches('"');
+                if let Some(block) = map.get(key) {
+                    out.push_str(block);
+                }
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Pull the key name out of an XML `<key>NAME</key>` anchor line.
+/// Returns `None` for any other shape — we won't risk attaching a
+/// comment to a non-key element.
+fn anchor_key_name(anchor: &str) -> Option<String> {
+    let trimmed = anchor.trim();
+    let rest = trimmed.strip_prefix("<key>")?;
+    let inner = rest.strip_suffix("</key>")?;
+    let name = inner.trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+/// Turn a raw `<!-- … -->` block into TOML `#` lines, preserving
+/// internal line structure. Always ends with a trailing newline so
+/// callers can prepend it to a target line directly.
+fn comment_to_toml_lines(raw: &str) -> String {
+    let inner = raw
+        .trim()
+        .strip_prefix("<!--")
+        .unwrap_or(raw)
+        .strip_suffix("-->")
+        .unwrap_or(raw)
+        .trim_matches(|c: char| c == '\n' || c == '\r');
+
+    let mut out = String::new();
+    for line in inner.lines() {
+        let cleaned = line.trim_end();
+        // Skip leading whitespace from the source's indentation —
+        // re-emit each comment line at column 0 so it stays readable
+        // regardless of nesting depth.
+        let body = cleaned.trim_start();
+        if body.is_empty() {
+            out.push_str("#\n");
+        } else {
+            out.push_str("# ");
+            out.push_str(body);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 fn unwrap_mcx_if_canonical(
     payload_type: &str,
     fields: BTreeMap<String, toml::Value>,

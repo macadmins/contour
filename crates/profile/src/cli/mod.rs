@@ -18,6 +18,7 @@ pub mod info;
 pub mod init;
 pub mod jamf_import;
 pub mod library;
+pub mod library_diff;
 pub mod library_validate;
 pub mod link;
 pub mod normalize;
@@ -1164,6 +1165,32 @@ pub enum LibraryAction {
         /// Library root (must contain `ddm/` and/or `recipes/`)
         #[arg(value_name = "PATH")]
         path: String,
+    },
+
+    #[command(
+        about = "Semantic diff between two recipe TOML files",
+        long_about = "Compares two recipe TOML files and reports the\n\
+                      semantic differences — recipe metadata, profile\n\
+                      adds/removes/changes, DDM bundle adds/removes/\n\
+                      changes, per-key field changes inside each\n\
+                      profile.\n\
+                      \n\
+                      Useful for PR review when two team members fork\n\
+                      a library recipe. Match `diff(1)` semantics:\n\
+                      exits 0 if identical, 1 if any change found.\n\
+                      \n\
+                      Example:\n  \
+                      contour profile library diff old.toml new.toml\n  \
+                      contour profile library diff old.toml new.toml --json"
+    )]
+    Diff {
+        /// Recipe TOML on the "before" side
+        #[arg(value_name = "A")]
+        a: String,
+
+        /// Recipe TOML on the "after" side
+        #[arg(value_name = "B")]
+        b: String,
     },
 }
 

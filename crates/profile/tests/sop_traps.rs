@@ -3487,3 +3487,229 @@ fn trap_80_mcx_profile_unwraps_on_import_and_rewraps_on_generate() {
         "EnforcePrivileges=\"user\" must survive flatten→regen round-trip"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 81: `library diff` reports semantic recipe changes and matches
+// diff(1) exit semantics. Catches regressions where:
+//   - identical files don't exit 0
+//   - field-level changes inside [profile.fields] aren't surfaced
+//   - added DDM bundles aren't reported
+//   - JSON `findings` array drops entries on edge-case shapes
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_81_library_diff_reports_semantic_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a_path = tmp.path().join("a.toml");
+    let b_path = tmp.path().join("b.toml");
+
+    let a_body = r#"
+[recipe]
+name = "demo"
+description = "before"
+
+[[profile]]
+filename = "p.mobileconfig"
+payload_type = "com.apple.security.firewall"
+display_name = "FW"
+
+[profile.fields]
+EnableFirewall = true
+EnableStealthMode = false
+"#;
+    let b_body = r#"
+[recipe]
+name = "demo"
+description = "after"
+
+[[profile]]
+filename = "p.mobileconfig"
+payload_type = "com.apple.security.firewall"
+display_name = "FW"
+
+[profile.fields]
+EnableFirewall = true
+EnableStealthMode = true
+BlockAllIncoming = true
+
+[[ddm]]
+intent_name = "su"
+
+[ddm.configuration]
+type = "com.apple.configuration.softwareupdate.settings"
+
+[ddm.configuration.payload]
+Notifications = true
+"#;
+    fs::write(&a_path, a_body).unwrap();
+    fs::write(&b_path, b_body).unwrap();
+
+    // Identical → exit 0, no findings.
+    let identical = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "diff",
+            a_path.to_str().unwrap(),
+            a_path.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        identical.status.success(),
+        "identical recipes must exit 0; stderr: {}",
+        String::from_utf8_lossy(&identical.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&identical.stdout).expect("identical JSON");
+    assert_eq!(parsed["identical"], true);
+    assert_eq!(parsed["findings"].as_array().unwrap().len(), 0);
+
+    // Different → exit 1 with the right findings.
+    let different = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "diff",
+            a_path.to_str().unwrap(),
+            b_path.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !different.status.success(),
+        "differing recipes must exit non-zero (diff(1) semantics)"
+    );
+    let parsed: Value = serde_json::from_slice(&different.stdout).expect("diff JSON");
+    assert_eq!(parsed["identical"], false);
+    let findings = parsed["findings"].as_array().expect("findings array");
+    let paths: Vec<&str> = findings.iter().filter_map(|f| f["path"].as_str()).collect();
+
+    // Expected findings:
+    //  - recipe.description changed
+    //  - profile.fields.EnableStealthMode changed
+    //  - profile.fields.BlockAllIncoming added
+    //  - ddm[su] added
+    assert!(
+        paths.contains(&"recipe.description"),
+        "must flag description change; got: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.contains("EnableStealthMode")),
+        "must flag EnableStealthMode change; got: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.contains("BlockAllIncoming")),
+        "must flag BlockAllIncoming added; got: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.contains("ddm[su]")),
+        "must flag added DDM bundle; got: {paths:?}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 82: XML comments captured during `library import` survive into the
+// emitted TOML, anchored above the matching key.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_82_library_import_preserves_xml_comments_as_toml_comments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = tmp.path().join("lib");
+    let scaffold = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(scaffold.status.success());
+
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>PayloadContent</key><array><dict>
+<key>PayloadType</key><string>com.apple.security.firewall</string>
+<key>PayloadIdentifier</key><string>com.example.fw.inner</string>
+<key>PayloadUUID</key><string>11111111-1111-1111-1111-111111111111</string>
+<key>PayloadVersion</key><integer>1</integer>
+<!--
+    Distinctive marker: pencils
+    Documents EnableFirewall — the canonical anchored case.
+-->
+<key>EnableFirewall</key>
+<true/>
+</dict></array>
+<key>PayloadDisplayName</key><string>FW</string>
+<key>PayloadIdentifier</key><string>com.example.fw</string>
+<key>PayloadType</key><string>Configuration</string>
+<key>PayloadUUID</key><string>22222222-2222-2222-2222-222222222222</string>
+<key>PayloadVersion</key><integer>1</integer>
+</dict></plist>"#;
+    let src = tmp.path().join("fw.mobileconfig");
+    fs::write(&src, xml).unwrap();
+
+    let imported = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            src.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        imported.status.success(),
+        "import must succeed; stderr: {}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+
+    let recipe_path = lib.join("recipes/fw.toml");
+    let recipe_toml = fs::read_to_string(&recipe_path).unwrap();
+
+    assert!(
+        recipe_toml.contains("# Distinctive marker: pencils"),
+        "XML comment text must be preserved as TOML `#` line; got: {recipe_toml}"
+    );
+    assert!(
+        recipe_toml.contains("# Documents EnableFirewall"),
+        "multi-line comment must round-trip; got: {recipe_toml}"
+    );
+
+    let lines: Vec<&str> = recipe_toml.lines().collect();
+    let marker_pos = lines
+        .iter()
+        .position(|l| l.contains("Distinctive marker: pencils"))
+        .expect("marker must be present");
+    let next_real = lines[marker_pos + 1..]
+        .iter()
+        .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+        .expect("must have a real line after the comment block");
+    assert!(
+        next_real.trim_start().starts_with("EnableFirewall"),
+        "comment must be anchored above EnableFirewall; got next-real-line: {next_real}"
+    );
+
+    let out = tempfile::tempdir().unwrap();
+    let regen = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe-path",
+            lib.join("recipes").to_str().unwrap(),
+            "--recipe",
+            "fw",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        regen.status.success(),
+        "comment-decorated recipe must still parse + compose; stderr: {}",
+        String::from_utf8_lossy(&regen.stderr)
+    );
+}
