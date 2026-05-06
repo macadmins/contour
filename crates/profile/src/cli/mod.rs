@@ -18,6 +18,7 @@ pub mod info;
 pub mod init;
 pub mod jamf_import;
 pub mod library;
+pub mod library_validate;
 pub mod link;
 pub mod normalize;
 pub mod payload;
@@ -1139,6 +1140,30 @@ pub enum LibraryAction {
         /// Indentation style: `flat` (no indent) or `nested` (2-space per dot-depth)
         #[arg(long, value_name = "STYLE", default_value = "nested")]
         style: LibraryStyle,
+    },
+
+    #[command(
+        about = "Lint a preset/recipe library and report compose-time issues",
+        long_about = "Walks <PATH>/recipes/ and <PATH>/ddm/, reporting\n\
+                      issues that would break end-user `generate` /\n\
+                      `compose` runs:\n  \
+                      - TOML parse failures\n  \
+                      - payload types unknown to the embedded schema\n  \
+                      - DDM bundles that fail to compose against a\n    \
+                      synthetic CI org\n\
+                      \n\
+                      Designed for CI: exits non-zero if any finding\n\
+                      is at error severity. JSON output is structured\n\
+                      for dashboards / reviewers.\n\
+                      \n\
+                      Example:\n  \
+                      contour profile library validate ./contour-presets\n  \
+                      contour profile library validate ./contour-presets --json"
+    )]
+    Validate {
+        /// Library root (must contain `ddm/` and/or `recipes/`)
+        #[arg(value_name = "PATH")]
+        path: String,
     },
 }
 

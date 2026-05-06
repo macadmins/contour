@@ -632,6 +632,14 @@ fn run(cli: Cli) -> Result<()> {
                     output_mode,
                 )?;
             }
+            LibraryAction::Validate { path } => {
+                cli::library_validate::handle_library_validate(
+                    cli::library_validate::LibraryValidateOptions {
+                        path: std::path::Path::new(&path),
+                    },
+                    output_mode,
+                )?;
+            }
         },
         Commands::Ddm { action } => match action {
             DdmAction::Parse {
