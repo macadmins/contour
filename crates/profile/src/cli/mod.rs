@@ -1075,4 +1075,36 @@ pub enum LibraryAction {
         #[arg(short, long)]
         force: bool,
     },
+
+    #[command(
+        about = "Restyle every TOML in a library to a chosen indentation style",
+        long_about = "Rewrites every `.toml` under <PATH>/ddm/ and\n\
+                      <PATH>/recipes/ so headers and key/value lines\n\
+                      line up with the chosen style. Indentation in\n\
+                      TOML is purely cosmetic — semantics are preserved\n\
+                      bit-for-bit. Comments and blank lines pass\n\
+                      through verbatim.\n\
+                      \n\
+                      Idempotent: running twice produces byte-identical\n\
+                      output, so this is safe to run in CI.\n\
+                      \n\
+                      Examples:\n  \
+                      contour profile library normalize ./contour-presets --style flat\n  \
+                      contour profile library normalize ./contour-presets --style nested"
+    )]
+    Normalize {
+        /// Library root (must contain `ddm/` and/or `recipes/`)
+        #[arg(value_name = "PATH")]
+        path: String,
+
+        /// Indentation style: `flat` (no indent) or `nested` (2-space per dot-depth)
+        #[arg(long, value_name = "STYLE", default_value = "nested")]
+        style: LibraryStyle,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum LibraryStyle {
+    Flat,
+    Nested,
 }

@@ -5,15 +5,25 @@
 
 pub mod loader;
 
+use crate::ddm::compose::Bundle;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// A recipe defines a bundle of related profiles to generate together.
+///
+/// Optional `[[ddm]]` blocks let a single recipe emit DDM declarations
+/// alongside its mobileconfig profiles — used for hardening/baseline
+/// intents that need both delivery channels (e.g. the embedded
+/// `hardening-macos-baseline`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recipe {
     pub recipe: RecipeMeta,
-    #[serde(rename = "profile")]
+    #[serde(rename = "profile", default)]
     pub profiles: Vec<ProfileSpec>,
+    /// DDM bundles emitted under `<output_dir>/<intent_name>/` per
+    /// entry. Same shape as a standalone DDM preset bundle.
+    #[serde(rename = "ddm", default, skip_serializing_if = "Vec::is_empty")]
+    pub ddm: Vec<Bundle>,
 }
 
 /// Recipe metadata.

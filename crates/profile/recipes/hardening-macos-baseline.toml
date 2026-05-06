@@ -1,0 +1,86 @@
+# macOS hardening baseline — MVP.
+#
+# Hand-curated minimum hardening posture distilled from mSCP's CIS Level 1
+# rules:
+#   - os_gatekeeper_enable                       (Gatekeeper)
+#   - system_settings_firewall_enable            (App Firewall)
+#   - system_settings_firewall_stealth_mode_enable
+#   - pwpolicy_minimum_length_enforce            (12-char minimum, see note)
+#   - DDM com.apple.configuration.softwareupdate.settings (auto-install OS updates)
+#
+# mSCP's CIS-recommended `minLength` is 15. This baseline ships with 12 as
+# a conservative floor — bump in your library override if your posture
+# requires the full mSCP value. The DDM software-update bundle is the
+# DDM-native replacement for the legacy `com.apple.SoftwareUpdate`
+# mobileconfig knobs (which mSCP currently lists as ProfileCapable).
+#
+# Generate with:
+#   contour profile generate --recipe hardening-macos-baseline \
+#       --org com.acme -o ./out
+#
+# Output:
+#   ./out/gatekeeper.mobileconfig
+#   ./out/firewall.mobileconfig
+#   ./out/password-policy.mobileconfig
+#   ./out/softwareupdate-settings/configuration.json
+#   ./out/softwareupdate-settings/activation.json
+
+[recipe]
+name = "hardening-macos-baseline"
+description = "macOS hardening MVP — Gatekeeper, Firewall, password length, DDM software updates"
+vendor = "mSCP"
+
+# ─── Gatekeeper ────────────────────────────────────────────────────────
+[[profile]]
+filename = "gatekeeper.mobileconfig"
+payload_type = "com.apple.systempolicy.control"
+display_name = "Gatekeeper"
+description = "Enable Gatekeeper assessment (mSCP os_gatekeeper_enable)"
+removal_disallowed = true
+
+  [profile.fields]
+  EnableAssessment = true
+
+# ─── Application firewall + stealth mode ───────────────────────────────
+[[profile]]
+filename = "firewall.mobileconfig"
+payload_type = "com.apple.security.firewall"
+display_name = "Application Firewall + Stealth Mode"
+description = "Enable the macOS Application Firewall and Stealth Mode (mSCP system_settings_firewall_enable + stealth_mode_enable)"
+removal_disallowed = true
+
+  [profile.fields]
+  EnableFirewall = true
+  EnableStealthMode = true
+
+# ─── Password policy (12-char minimum) ─────────────────────────────────
+[[profile]]
+filename = "password-policy.mobileconfig"
+payload_type = "com.apple.mobiledevice.passwordpolicy"
+display_name = "Password Policy"
+description = "Enforce a 12-character minimum password length (mSCP pwpolicy_minimum_length_enforce, CIS-recommended 15)"
+removal_disallowed = true
+
+  [profile.fields]
+  minLength = 12
+
+# ─── DDM software updates ──────────────────────────────────────────────
+[[ddm]]
+intent_name = "softwareupdate-settings"
+
+  [ddm.configuration]
+  type = "com.apple.configuration.softwareupdate.settings"
+
+    [ddm.configuration.payload]
+    Notifications = true
+    AllowStandardUserOSUpdates = false
+
+      [ddm.configuration.payload.AutomaticActions]
+      Download = "AlwaysOn"
+      InstallOSUpdates = "AlwaysOn"
+
+      [ddm.configuration.payload.Deferrals]
+      CombinedPeriodInDays = 30
+
+  [ddm.activation]
+  type = "com.apple.activation.simple"

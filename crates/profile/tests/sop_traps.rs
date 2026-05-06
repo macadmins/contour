@@ -2572,3 +2572,224 @@ fn trap_73_library_new_scaffolds_a_working_library() {
     );
     assert!(out.path().join("configuration.json").exists());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 74: hardening-macos-baseline recipe emits both mobileconfig and DDM.
+// Hybrid recipe pattern — the [[ddm]] section composes alongside the
+// [[profile]] section in one `generate --recipe` invocation. Catches:
+//   - Recipe loader dropping the `ddm` field
+//   - DDM compose path silently skipped during recipe generation
+//   - Embedded recipe drifting from the documented mSCP-derived values
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_74_hardening_baseline_emits_mobileconfig_and_ddm() {
+    let out = tempfile::tempdir().unwrap();
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe",
+            "hardening-macos-baseline",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "hardening-macos-baseline must compose; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&result.stdout).expect("JSON envelope");
+    assert_eq!(parsed["success"], true);
+    assert_eq!(parsed["recipe"], "hardening-macos-baseline");
+
+    // 3 mobileconfig profiles emitted.
+    let profiles = parsed["profiles"].as_array().expect("profiles array");
+    assert_eq!(
+        profiles.len(),
+        3,
+        "expected 3 mobileconfigs; got {profiles:?}"
+    );
+    assert!(out.path().join("gatekeeper.mobileconfig").exists());
+    assert!(out.path().join("firewall.mobileconfig").exists());
+    assert!(out.path().join("password-policy.mobileconfig").exists());
+
+    // DDM bundle emitted under <intent_name>/.
+    let ddm = parsed["ddm"].as_array().expect("ddm array");
+    assert!(
+        ddm.iter().any(|d| d["kind"] == "configuration"),
+        "ddm array must include a configuration; got {ddm:?}"
+    );
+    assert!(
+        ddm.iter().any(|d| d["kind"] == "activation"),
+        "ddm array must include an activation; got {ddm:?}"
+    );
+    let cfg_path = out
+        .path()
+        .join("softwareupdate-settings/configuration.json");
+    let act_path = out.path().join("softwareupdate-settings/activation.json");
+    assert!(cfg_path.exists(), "DDM configuration.json missing");
+    assert!(act_path.exists(), "DDM activation.json missing");
+
+    // Configuration carries the org-prefixed identifier and the
+    // mSCP-derived AutomaticActions.InstallOSUpdates value.
+    let cfg: Value = serde_json::from_slice(&fs::read(&cfg_path).unwrap()).unwrap();
+    assert_eq!(
+        cfg["Type"].as_str(),
+        Some("com.apple.configuration.softwareupdate.settings")
+    );
+    assert_eq!(
+        cfg["Identifier"].as_str(),
+        Some("com.acme.config.softwareupdate-settings")
+    );
+    assert_eq!(
+        cfg["Payload"]["AutomaticActions"]["InstallOSUpdates"].as_str(),
+        Some("AlwaysOn"),
+        "AutomaticActions.InstallOSUpdates must propagate from the recipe"
+    );
+
+    // No recipe placeholders surface. The password-policy mobileconfig
+    // carries Apple's `{{key}}/{{value}}` runtime template markers from
+    // the embedded schema — these are NOT user-fillable and must be
+    // filtered from the placeholder warning. A regression here means
+    // operators see a misleading "Replace these placeholders" prompt.
+    let placeholders = parsed["placeholders"]
+        .as_array()
+        .expect("placeholders array");
+    assert!(
+        placeholders.is_empty(),
+        "hardening recipe must not surface any user placeholders; got: {placeholders:?}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 75: `profile library normalize --style {flat,nested}` is reversible
+// and preserves recipe semantics. Catches regressions where:
+//   - Indentation changes break the TOML parse
+//   - normalize stops being idempotent
+//   - flip → flip back doesn't return to byte-identical content
+//   - the restyled recipe stops composing
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_75_library_normalize_round_trips_and_preserves_semantics() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = tmp.path().join("lib");
+
+    // Scaffold a fresh library — embedded hardening recipe lands as nested.
+    let scaffold = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(scaffold.status.success());
+
+    let recipe_path = lib.join("recipes/hardening-macos-baseline.toml");
+    let original = fs::read_to_string(&recipe_path).unwrap();
+
+    // Flip to flat.
+    let flat = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "normalize",
+            lib.to_str().unwrap(),
+            "--style",
+            "flat",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        flat.status.success(),
+        "normalize --style flat must succeed; stderr: {}",
+        String::from_utf8_lossy(&flat.stderr)
+    );
+    let after_flat = fs::read_to_string(&recipe_path).unwrap();
+    assert_ne!(
+        original, after_flat,
+        "flat normalize must change a nested-style file"
+    );
+
+    // Idempotency: a second flat normalize is a no-op.
+    let flat_again = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "normalize",
+            lib.to_str().unwrap(),
+            "--style",
+            "flat",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(flat_again.status.success());
+    let parsed: Value = serde_json::from_slice(&flat_again.stdout).unwrap();
+    let rewritten = parsed["rewritten"].as_array().expect("rewritten array");
+    assert!(
+        rewritten.is_empty(),
+        "second flat normalize must rewrite nothing (idempotency); got: {rewritten:?}"
+    );
+
+    // Flip back to nested — must restore the original byte-for-byte
+    // (the embedded recipe was authored in nested style).
+    let nested = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "normalize",
+            lib.to_str().unwrap(),
+            "--style",
+            "nested",
+        ])
+        .output()
+        .unwrap();
+    assert!(nested.status.success());
+    let after_nested = fs::read_to_string(&recipe_path).unwrap();
+    assert_eq!(
+        original, after_nested,
+        "flat → nested must round-trip to the original byte-for-byte"
+    );
+
+    // After all the flipping, the recipe still composes.
+    let out = tempfile::tempdir().unwrap();
+    let composed = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe-path",
+            lib.join("recipes").to_str().unwrap(),
+            "--recipe",
+            "hardening-macos-baseline",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        composed.status.success(),
+        "post-normalize recipe must still compose; stderr: {}",
+        String::from_utf8_lossy(&composed.stderr)
+    );
+    let cfg: Value = serde_json::from_slice(
+        &fs::read(
+            out.path()
+                .join("softwareupdate-settings/configuration.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        cfg["Payload"]["AutomaticActions"]["InstallOSUpdates"].as_str(),
+        Some("AlwaysOn"),
+        "DDM payload must survive the round-trip"
+    );
+}
