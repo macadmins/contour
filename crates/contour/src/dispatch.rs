@@ -798,6 +798,15 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output_mode,
                 )?;
             }
+            LibraryAction::Diff { a, b } => {
+                profile::cli::library_diff::handle_library_diff(
+                    profile::cli::library_diff::LibraryDiffOptions {
+                        a: std::path::Path::new(&a),
+                        b: std::path::Path::new(&b),
+                    },
+                    output_mode,
+                )?;
+            }
         },
         Commands::Ddm { action } => match action {
             DdmAction::Parse {

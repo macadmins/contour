@@ -640,6 +640,15 @@ fn run(cli: Cli) -> Result<()> {
                     output_mode,
                 )?;
             }
+            LibraryAction::Diff { a, b } => {
+                cli::library_diff::handle_library_diff(
+                    cli::library_diff::LibraryDiffOptions {
+                        a: std::path::Path::new(&a),
+                        b: std::path::Path::new(&b),
+                    },
+                    output_mode,
+                )?;
+            }
         },
         Commands::Ddm { action } => match action {
             DdmAction::Parse {
