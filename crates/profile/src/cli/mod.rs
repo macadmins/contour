@@ -613,16 +613,37 @@ pub enum Commands {
 
     /// Scaffold or manage an external preset/recipe library
     #[command(
-        about = "Scaffold an external preset/recipe library",
-        long_about = "Create a starter directory for hosting your own DDM\n\
-                      presets and MDM recipes that contour can resolve via\n\
-                      `--preset-path` / `--recipe-path`. The scaffold copies\n\
-                      every embedded built-in into the new tree, alongside\n\
-                      a `.meaning.md` sidecar per file and a CI workflow\n\
-                      that lints the library on every push.\n\
+        about = "Scaffold and manage an external preset/recipe library",
+        long_about = "Create and maintain a directory of MDM recipes and\n\
+                      DDM presets that contour can resolve via\n\
+                      `--preset-path` / `--recipe-path`. Each TOML lives\n\
+                      next to a `.meaning.md` sidecar carrying schema-\n\
+                      enriched docs (Apple title, platforms, per-key\n\
+                      descriptions).\n\
                       \n\
-                      Example:\n  \
-                      contour profile library new ./contour-presets"
+                      Subcommands\n  \
+                      new        Scaffold a fresh library tree (copies every\n             \
+                      embedded built-in + a CI workflow)\n  \
+                      import     Convert an existing .mobileconfig (or DDM\n             \
+                      JSON) into a recipe in the library\n  \
+                      validate   Lint every recipe/preset; flags unknown\n             \
+                      payload types and DDM compose failures\n  \
+                      diff       Semantic diff between two recipe TOMLs\n             \
+                      (matches diff(1) exit semantics)\n  \
+                      normalize  Restyle every TOML to flat or nested\n             \
+                      indentation (idempotent)\n  \
+                      \n\
+                      Worked examples\n  \
+                      contour profile library new ./contour-presets\n  \
+                      contour profile library import ~/Profiles --into ./contour-presets\n  \
+                      contour profile library validate ./contour-presets --json\n  \
+                      contour profile library diff old.toml new.toml\n  \
+                      contour profile library normalize ./contour-presets --style flat\n  \
+                      \n\
+                      Resolution order at lookup time\n  \
+                      1. Explicit `--preset-path` / `--recipe-path`\n  \
+                      2. `~/.contour/{presets,recipes}/`\n  \
+                      3. Embedded built-ins (compiled into contour)"
     )]
     Library {
         #[command(subcommand)]
