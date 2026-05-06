@@ -24,7 +24,10 @@ use colored::Colorize;
 use mimalloc::MiMalloc;
 use output::OutputMode;
 
-use cli::{Cli, CommandAction, Commands, DdmAction, DocsAction, EnrollmentAction, PayloadAction};
+use cli::{
+    Cli, CommandAction, Commands, DdmAction, DocsAction, EnrollmentAction, LibraryAction,
+    PayloadAction,
+};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -583,6 +586,24 @@ fn run(cli: Cli) -> Result<()> {
                 output_mode,
             )?;
         }
+        Commands::Library { action } => match action {
+            LibraryAction::New {
+                path,
+                no_presets,
+                no_recipes,
+                force,
+            } => {
+                cli::library::handle_library_new(
+                    cli::library::LibraryNewOptions {
+                        path: std::path::Path::new(&path),
+                        include_presets: !no_presets,
+                        include_recipes: !no_recipes,
+                        force,
+                    },
+                    output_mode,
+                )?;
+            }
+        },
         Commands::Ddm { action } => match action {
             DdmAction::Parse {
                 paths,

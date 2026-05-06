@@ -9,6 +9,14 @@ const EMBEDDED_OKTA: &str = include_str!("../../recipes/okta.toml");
 const EMBEDDED_ENTRA_PSSO: &str = include_str!("../../recipes/entra-psso.toml");
 const EMBEDDED_SANTA: &str = include_str!("../../recipes/santa.toml");
 
+/// Built-in recipes as `(name, raw TOML body)`. Used by the library
+/// scaffolder to drop starting files into a fresh preset library.
+pub const EMBEDDED_RECIPES: &[(&str, &str)] = &[
+    ("okta", EMBEDDED_OKTA),
+    ("entra-psso", EMBEDDED_ENTRA_PSSO),
+    ("santa", EMBEDDED_SANTA),
+];
+
 /// Summary of an available recipe.
 #[derive(Debug)]
 pub struct RecipeSummary {

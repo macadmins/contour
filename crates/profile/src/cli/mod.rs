@@ -16,6 +16,7 @@ pub mod import;
 pub mod info;
 pub mod init;
 pub mod jamf_import;
+pub mod library;
 pub mod link;
 pub mod normalize;
 pub mod payload;
@@ -607,6 +608,24 @@ pub enum Commands {
         action: EnrollmentAction,
     },
 
+    /// Scaffold or manage an external preset/recipe library
+    #[command(
+        about = "Scaffold an external preset/recipe library",
+        long_about = "Create a starter directory for hosting your own DDM\n\
+                      presets and MDM recipes that contour can resolve via\n\
+                      `--preset-path` / `--recipe-path`. The scaffold copies\n\
+                      every embedded built-in into the new tree, alongside\n\
+                      a `.meaning.md` sidecar per file and a CI workflow\n\
+                      that lints the library on every push.\n\
+                      \n\
+                      Example:\n  \
+                      contour profile library new ./contour-presets"
+    )]
+    Library {
+        #[command(subcommand)]
+        action: LibraryAction,
+    },
+
     /// Synthesize mobileconfig profiles from managed preference plists
     Synthesize {
         #[arg(help = "Plist file(s) or directory of managed preferences", required = true, num_args = 1..)]
@@ -1019,5 +1038,41 @@ pub enum EnrollmentAction {
         /// Interactive mode — select which items to skip
         #[arg(long)]
         interactive: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LibraryAction {
+    #[command(
+        about = "Scaffold a new preset/recipe library at PATH",
+        long_about = "Create a starter directory tree for hosting your\n\
+                      own DDM presets and MDM recipes. Copies every\n\
+                      embedded built-in into the new tree as a starting\n\
+                      point and writes a CI workflow that lints the\n\
+                      library. Each TOML ships with a `.meaning.md`\n\
+                      sidecar for human-readable intent docs.\n\
+                      \n\
+                      Refuses to overwrite a non-empty target unless\n\
+                      `--force` is passed.\n\
+                      \n\
+                      Example:\n  \
+                      contour profile library new ./contour-presets"
+    )]
+    New {
+        /// Target directory for the scaffold (created if missing)
+        #[arg(value_name = "PATH")]
+        path: String,
+
+        /// Skip the `ddm/` directory and embedded DDM presets
+        #[arg(long)]
+        no_presets: bool,
+
+        /// Skip the `recipes/` directory and embedded MDM recipes
+        #[arg(long)]
+        no_recipes: bool,
+
+        /// Overwrite files in a non-empty target directory
+        #[arg(short, long)]
+        force: bool,
     },
 }

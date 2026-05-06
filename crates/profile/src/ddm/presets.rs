@@ -146,11 +146,7 @@ pub fn list(preset_path: Option<&str>) -> Vec<PresetSummary> {
 /// Skips names already present (so explicit `--preset-path` wins over
 /// `~/.contour/presets/`). Source label includes
 /// `"(overrides embedded)"` when a preset shadows a built-in.
-fn collect_external(
-    dir: &Path,
-    presets: &mut Vec<PresetSummary>,
-    embedded_names: &HashSet<&str>,
-) {
+fn collect_external(dir: &Path, presets: &mut Vec<PresetSummary>, embedded_names: &HashSet<&str>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -161,7 +157,11 @@ fn collect_external(
         .collect();
     paths.sort();
     for path in paths {
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(str::to_string) else {
+        let Some(stem) = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(str::to_string)
+        else {
             continue;
         };
         if presets.iter().any(|p| p.name == stem) {

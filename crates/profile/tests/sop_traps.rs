@@ -2311,3 +2311,264 @@ fn trap_55_docs_generate_stdout_writes_no_files() {
         "clap must reject --stdout + --output as mutually exclusive"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 71: External --preset-path library overrides embedded preset.
+// Library extensibility: anyone can publish a directory of `.toml` bundles
+// and override built-in DDM presets by name. End-to-end check that the
+// override wins on `compose` and that listings flag the shadow with
+// "(overrides embedded)".
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_71_preset_path_override_wins_and_lists_with_label() {
+    let lib = tempfile::tempdir().unwrap();
+    // External preset shadows the built-in `disable-apple-intelligence-macos`
+    // — distinguishable by `intent_name` so we can tell which body composed.
+    let body = r#"
+intent_name = "external-override-marker"
+
+[configuration]
+type = "com.apple.configuration.intelligence.settings"
+
+  [configuration.payload]
+  AllowGenmoji = false
+"#;
+    fs::write(
+        lib.path().join("disable-apple-intelligence-macos.toml"),
+        body,
+    )
+    .unwrap();
+    let lib_path = lib.path().to_str().unwrap();
+
+    // 1. compose with --preset-path picks up the override.
+    let out = tempfile::tempdir().unwrap();
+    let composed = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "ddm",
+            "compose",
+            "--preset",
+            "disable-apple-intelligence-macos",
+            "--preset-path",
+            lib_path,
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        composed.status.success(),
+        "preset compose with --preset-path must succeed; stderr: {}",
+        String::from_utf8_lossy(&composed.stderr)
+    );
+    // configuration.json is always emitted; its Identifier is
+    // `{org}.config.{intent_name}` — the override's intent_name is
+    // the load-time discriminator.
+    let config_path = out.path().join("configuration.json");
+    let config: Value =
+        serde_json::from_slice(&fs::read(&config_path).unwrap()).expect("configuration JSON");
+    let identifier = config["Identifier"].as_str().unwrap_or_default();
+    assert!(
+        identifier.contains("external-override-marker"),
+        "external preset must win on compose — configuration Identifier should carry the override's intent_name; got {identifier}"
+    );
+
+    // 2. --list-presets --preset-path emits the override label on the source.
+    let listed = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "ddm",
+            "compose",
+            "--list-presets",
+            "--preset-path",
+            lib_path,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(listed.status.success(), "list-presets must exit 0");
+    let parsed: Value = serde_json::from_slice(&listed.stdout).expect("list JSON");
+    let arr = parsed.as_array().expect("array");
+    let entry = arr
+        .iter()
+        .find(|p| p["name"] == "disable-apple-intelligence-macos")
+        .expect("preset must appear in listing");
+    let source = entry["source"].as_str().unwrap_or_default();
+    assert!(
+        source.contains("overrides embedded"),
+        "shadowed embedded preset must carry the override label; source={source}"
+    );
+    // exactly one entry — no duplicate from the embedded fallback.
+    assert_eq!(
+        arr.iter()
+            .filter(|p| p["name"] == "disable-apple-intelligence-macos")
+            .count(),
+        1,
+        "external must shadow embedded — no duplicate entry"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 72: External --recipe-path overrides embedded recipe in listing.
+// Symmetric with trap 71 for MDM recipes. Catches regressions where the
+// listing reverts to "embedded wins" while load picks the external — the
+// pre-fix bug that motivated this trap.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_72_recipe_path_override_lists_with_label() {
+    let lib = tempfile::tempdir().unwrap();
+    // Minimal Recipe TOML shadowing the built-in `okta`. Description is
+    // the load-time discriminator.
+    let body = r#"
+[recipe]
+name = "okta"
+description = "external-okta-override"
+vendor = "MyOrg"
+
+[[profile]]
+filename = "custom-okta.mobileconfig"
+payload_type = "com.apple.extensiblesso"
+display_name = "Custom Okta"
+description = "User override"
+
+[profile.fields]
+Type = "Redirect"
+TeamIdentifier = "DEADBEEF"
+ExtensionIdentifier = "com.okta.mobile.auth-service-extension"
+"#;
+    fs::write(lib.path().join("okta.toml"), body).unwrap();
+    let lib_path = lib.path().to_str().unwrap();
+
+    let listed = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "generate",
+            "--list-recipes",
+            "--recipe-path",
+            lib_path,
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        listed.status.success(),
+        "list-recipes must exit 0; stderr: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&listed.stdout).expect("list-recipes JSON");
+    let recipes = parsed["recipes"].as_array().expect("recipes array");
+    let okta = recipes
+        .iter()
+        .find(|r| r["name"] == "okta")
+        .expect("okta entry must appear in listing");
+    let source = okta["source"].as_str().unwrap_or_default();
+    assert!(
+        source.contains("overrides embedded"),
+        "shadowed embedded recipe must carry the override label; source={source}"
+    );
+    assert_eq!(
+        okta["description"].as_str(),
+        Some("external-okta-override"),
+        "listing must reflect the external recipe's description (external wins on listing)"
+    );
+    assert_eq!(
+        recipes.iter().filter(|r| r["name"] == "okta").count(),
+        1,
+        "exactly one okta entry — external must shadow embedded"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 73: `profile library new` scaffolds a working preset library.
+// End-to-end: scaffold a fresh dir, then run `ddm compose --preset-path
+// <dir>/ddm --preset <name>` against the just-emitted preset to prove
+// the scaffold isn't just file-shaped — it actually composes.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_73_library_new_scaffolds_a_working_library() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib_root = tmp.path().join("lib");
+
+    let scaffold = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib_root.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        scaffold.status.success(),
+        "library new must succeed; stderr: {}",
+        String::from_utf8_lossy(&scaffold.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&scaffold.stdout).expect("JSON envelope");
+    assert_eq!(parsed["success"], true);
+    let file_count = parsed["file_count"].as_u64().expect("file_count");
+    assert!(file_count > 0, "scaffold must write files");
+
+    // Top-level files land.
+    assert!(lib_root.join("README.md").exists());
+    assert!(lib_root.join(".gitignore").exists());
+    assert!(lib_root.join(".github/workflows/validate.yml").exists());
+
+    // Each DDM preset has a sibling .meaning.md (the user-requested
+    // sidecar pattern — regression target if the scaffolder ever
+    // forgets to emit them).
+    let macos_toml = lib_root.join("ddm/disable-apple-intelligence-macos.toml");
+    let macos_meaning = lib_root.join("ddm/disable-apple-intelligence-macos.meaning.md");
+    assert!(macos_toml.exists(), "scaffold must copy DDM preset TOMLs");
+    assert!(
+        macos_meaning.exists(),
+        ".meaning.md sidecar must accompany every preset"
+    );
+    let meaning_body = fs::read_to_string(&macos_meaning).unwrap();
+    assert!(
+        meaning_body.contains("## Intent"),
+        ".meaning.md must include the Intent section"
+    );
+
+    // Re-running without --force must refuse on a non-empty target.
+    let refused = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib_root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !refused.status.success(),
+        "second scaffold without --force must fail"
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("already exists") && stderr.contains("--force"),
+        "refusal must mention --force; got: {stderr}"
+    );
+
+    // The scaffolded preset must actually compose.
+    let out = tempfile::tempdir().unwrap();
+    let composed = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "ddm",
+            "compose",
+            "--preset-path",
+            lib_root.join("ddm").to_str().unwrap(),
+            "--preset",
+            "disable-apple-intelligence-macos",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        composed.status.success(),
+        "scaffolded preset must compose; stderr: {}",
+        String::from_utf8_lossy(&composed.stderr)
+    );
+    assert!(out.path().join("configuration.json").exists());
+}
