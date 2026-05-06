@@ -843,15 +843,22 @@ pub enum DdmAction {
                       Bundle format documented in sop-ddm.md."
     )]
     Compose {
-        #[arg(help = "Bundle TOML file describing a DDM intent")]
-        bundle: String,
+        /// Path to a bundle TOML. Required unless `--preset` or
+        /// `--list-presets` is set.
+        #[arg(
+            help = "Bundle TOML file describing a DDM intent",
+            required_unless_present_any = ["preset", "list_presets"],
+            conflicts_with_all = ["preset", "list_presets"]
+        )]
+        bundle: Option<String>,
 
         #[arg(
             short,
             long,
-            help = "Output directory for the emitted .json declarations"
+            help = "Output directory for the emitted .json declarations",
+            required_unless_present = "list_presets"
         )]
-        output: String,
+        output: Option<String>,
 
         #[arg(
             short = 'p',
@@ -865,6 +872,37 @@ pub enum DdmAction {
             help = "Allow assets that are declared but not referenced by the configuration"
         )]
         allow_orphans: bool,
+
+        #[arg(
+            long,
+            value_name = "ORG",
+            help = "Organization reverse-DNS (overrides CONTOUR_ORG env / profile.toml)"
+        )]
+        org: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with_all = ["bundle", "list_presets"],
+            help = "Compose a built-in preset by name (run --list-presets to see available)",
+            long_help = "Compose a built-in preset bundle by name instead of a path.\n\
+                         End users without the source tree reach common DDM\n\
+                         intents by name — e.g.:\n\
+                         \n  \
+                         contour profile ddm compose \\\n    \
+                           --preset disable-apple-intelligence-macos \\\n    \
+                           --org com.acme -o ./out/\n\
+                         \n\
+                         List available presets with --list-presets."
+        )]
+        preset: Option<String>,
+
+        #[arg(
+            long,
+            help = "List built-in presets available via --preset",
+            conflicts_with_all = ["bundle", "preset", "output"]
+        )]
+        list_presets: bool,
     },
 
     #[command(

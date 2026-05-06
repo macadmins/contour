@@ -9,6 +9,7 @@
 pub mod compose;
 pub mod parser;
 pub mod predicate;
+pub mod presets;
 pub mod schema;
 pub mod types;
 pub mod verify;

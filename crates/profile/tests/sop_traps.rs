@@ -1475,6 +1475,90 @@ fn trap_46_lint_clean_baseline_has_no_findings() {
 }
 
 #[test]
+fn trap_68_ddm_compose_preset_works_without_source_tree() {
+    // End-user UX: ddm compose --preset <NAME> --org <ORG> composes
+    // entirely from embedded TOML — no source-tree path, no env vars,
+    // no .contour/config.toml needed. Drift signal: preset name change
+    // or embedded TOML failing to parse as a Bundle.
+    let out = tempfile::tempdir().unwrap();
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "ddm",
+            "compose",
+            "--preset",
+            "disable-apple-intelligence-macos",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "preset compose with --org must succeed without env or config; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&result.stdout).expect("JSON");
+    assert_eq!(parsed["success"], true);
+    assert!(out.path().join("configuration.json").exists());
+    assert!(out.path().join("activation.json").exists());
+
+    // Verify --org actually scoped the configuration identifier.
+    let config_json: Value =
+        serde_json::from_slice(&fs::read(out.path().join("configuration.json")).unwrap()).unwrap();
+    let id = config_json["Identifier"].as_str().unwrap();
+    assert!(
+        id.starts_with("com.acme."),
+        "configuration identifier must start with --org prefix; got {id}"
+    );
+}
+
+#[test]
+fn trap_69_ddm_compose_list_presets_advertises_known_presets() {
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "compose", "--list-presets", "--json"])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let parsed: Value = serde_json::from_slice(&result.stdout).expect("JSON");
+    let arr = parsed.as_array().expect("array");
+    let names: Vec<&str> = arr.iter().filter_map(|e| e["name"].as_str()).collect();
+    assert!(names.contains(&"disable-apple-intelligence-macos"));
+    assert!(names.contains(&"disable-apple-intelligence-ios"));
+}
+
+#[test]
+fn trap_70_ddm_compose_unknown_preset_errors_with_valid_list() {
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "ddm",
+            "compose",
+            "--preset",
+            "bogus-not-a-preset",
+            "-o",
+            "/tmp/x",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !result.status.success(),
+        "unknown preset must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("Unknown --preset 'bogus-not-a-preset'"),
+        "stderr should name the contract; got: {stderr}"
+    );
+    assert!(stderr.contains("disable-apple-intelligence-macos"));
+}
+
+#[test]
 fn trap_67_single_instance_payload_repeated_fires_on_real_apply_mode_single() {
     // End-to-end: per-violation fixture has com.apple.NetworkBrowser
     // (apply_mode=single in the embedded parquet) listed twice. The

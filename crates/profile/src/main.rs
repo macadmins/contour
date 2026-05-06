@@ -643,12 +643,18 @@ fn run(cli: Cli) -> Result<()> {
                 output,
                 schema_path,
                 allow_orphans,
+                org,
+                preset,
+                list_presets,
             } => {
                 cli::ddm::handle_ddm_compose(
-                    &bundle,
-                    &output,
+                    bundle.as_deref(),
+                    output.as_deref(),
                     schema_path.as_deref(),
                     allow_orphans,
+                    org.as_deref(),
+                    preset.as_deref(),
+                    list_presets,
                     config.as_ref(),
                     output_mode,
                 )?;
