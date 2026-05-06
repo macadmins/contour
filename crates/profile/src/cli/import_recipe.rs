@@ -171,12 +171,20 @@ fn handle_directory_import(opts: LibraryImportOptions<'_>, output_mode: OutputMo
     Ok(())
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct CommentInjectionStats {
+    total: usize,
+    anchored: usize,
+    dropped: usize,
+}
+
 #[derive(Debug)]
 struct SingleImportReport {
     input: PathBuf,
     recipe_path: PathBuf,
     meaning_path: PathBuf,
     payload_types: Vec<String>,
+    comment_stats: CommentInjectionStats,
 }
 
 fn import_one(
@@ -309,7 +317,7 @@ fn import_one(
     // above the matching `key = value` pair. The plist crate strips
     // `<!-- … -->` on parse; the lenient parser kept them aside via
     // `extract_comments`, anchored to the next non-empty XML line.
-    let toml_body = inject_xml_comments(&raw_toml, &xml_comments);
+    let (toml_body, comment_stats) = inject_xml_comments(&raw_toml, &xml_comments);
     std::fs::write(&recipe_path, &toml_body)
         .with_context(|| format!("Failed to write {}", recipe_path.display()))?;
     let registry = load_registry(None).ok();
@@ -322,6 +330,7 @@ fn import_one(
         recipe_path,
         meaning_path,
         payload_types,
+        comment_stats,
     })
 }
 
@@ -334,6 +343,11 @@ fn emit_single_report(report: &SingleImportReport, output_mode: OutputMode) {
                 "meaning_path": report.meaning_path.display().to_string(),
                 "payload_count": report.payload_types.len(),
                 "payload_types": report.payload_types,
+                "comments": {
+                    "total": report.comment_stats.total,
+                    "anchored": report.comment_stats.anchored,
+                    "dropped": report.comment_stats.dropped,
+                },
             });
             if let Ok(s) = serde_json::to_string_pretty(&payload) {
                 println!("{s}");
@@ -355,6 +369,25 @@ fn emit_single_report(report: &SingleImportReport, output_mode: OutputMode) {
             println!("  {} {}", "→".green(), report.meaning_path.display());
             for pt in &report.payload_types {
                 println!("    {} {}", "•".dimmed(), pt.dimmed());
+            }
+            // Surface comment-injection results when comments existed.
+            // Anchored count is the headline; dropped count is the
+            // honesty signal so reviewers know docs were lost.
+            if report.comment_stats.total > 0 {
+                let stats = &report.comment_stats;
+                let mut line = format!(
+                    "  {} {} XML comment(s) preserved",
+                    "•".dimmed(),
+                    stats.anchored,
+                );
+                if stats.dropped > 0 {
+                    let _ = write!(
+                        line,
+                        ", {} dropped (non-key anchors — see docs)",
+                        stats.dropped
+                    );
+                }
+                println!("{}", line.dimmed());
             }
         }
     }
@@ -480,9 +513,16 @@ fn import_ddm_json(
         .and_then(|v| v.as_object())
         .ok_or_else(|| anyhow::anyhow!("DDM declaration missing required `Payload` object"))?;
 
-    // intent_name from override > snake-cased filename stem.
+    // intent_name precedence:
+    //   1. Explicit --name override
+    //   2. Tail of the source Identifier when shaped
+    //      `<reverse-dns>.config.<intent>` — the canonical pattern
+    //      `compose` itself emits, so round-tripping recovers the
+    //      original tail.
+    //   3. Snake-cased filename stem (last resort).
     let intent_name = name_override
         .map(str::to_string)
+        .or_else(|| identifier_intent_tail(&original_identifier))
         .unwrap_or_else(|| recipe_name_from_path(input).unwrap_or_else(|| "imported".to_string()));
 
     // Output path under the library's `ddm/` subdir.
@@ -612,6 +652,8 @@ fn import_ddm_json(
         recipe_path: bundle_path,
         meaning_path,
         payload_types: vec![decl_type],
+        // DDM JSON has no XML comments to inject — the field stays at default zero.
+        comment_stats: CommentInjectionStats::default(),
     })
 }
 
@@ -776,9 +818,17 @@ fn lookup_data_sentinel(decoded: &str, mapping: &[(String, String)]) -> Option<S
 ///
 /// Comments whose anchor isn't a `<key>X</key>` are silently dropped —
 /// they could land on the wrong line, which is worse than losing them.
-fn inject_xml_comments(toml_body: &str, comments: &[XmlComment]) -> String {
+fn inject_xml_comments(
+    toml_body: &str,
+    comments: &[XmlComment],
+) -> (String, CommentInjectionStats) {
+    let mut stats = CommentInjectionStats {
+        total: comments.len(),
+        anchored: 0,
+        dropped: 0,
+    };
     if comments.is_empty() {
-        return toml_body.to_string();
+        return (toml_body.to_string(), stats);
     }
 
     // Build {key_name → joined `#` comment block}. Multiple comments
@@ -786,17 +836,20 @@ fn inject_xml_comments(toml_body: &str, comments: &[XmlComment]) -> String {
     let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for c in comments {
         let Some(key) = anchor_key_name(&c.anchor_line) else {
+            stats.dropped += 1;
             continue;
         };
         let block = comment_to_toml_lines(&c.text);
         if block.is_empty() {
+            stats.dropped += 1;
             continue;
         }
+        stats.anchored += 1;
         map.entry(key).or_default().push_str(&block);
     }
 
     if map.is_empty() {
-        return toml_body.to_string();
+        return (toml_body.to_string(), stats);
     }
 
     // Walk the TOML output. Inject when a non-section line starts with
@@ -815,7 +868,7 @@ fn inject_xml_comments(toml_body: &str, comments: &[XmlComment]) -> String {
         out.push_str(line);
         out.push('\n');
     }
-    out
+    (out, stats)
 }
 
 /// Pull the key name out of an XML `<key>NAME</key>` anchor line.
@@ -917,6 +970,35 @@ fn unwrap_mcx_if_canonical(
     // Materialize as BTreeMap so the recipe stays byte-stable.
     let flat: BTreeMap<String, toml::Value> = settings.into_iter().collect();
     (Some(domain), flat)
+}
+
+/// Extract the intent tail from a DDM declaration `Identifier` when
+/// it follows the canonical shape `<reverse-dns>.{config,activation}.<intent>`.
+///
+/// `compose()` emits identifiers as `{org}.{config|activation}.{intent_name}`,
+/// so round-tripping a previously-composed JSON recovers the
+/// original tail. Returns `None` when the identifier is empty or
+/// doesn't fit the shape — caller falls back to the filename stem.
+fn identifier_intent_tail(identifier: &str) -> Option<String> {
+    if identifier.is_empty() {
+        return None;
+    }
+    let segments: Vec<&str> = identifier.split('.').collect();
+    if segments.len() < 4 {
+        return None;
+    }
+    // The penultimate segment must be `config` or `activation` for the
+    // identifier to match contour's compose-time shape.
+    let kind = segments[segments.len() - 2];
+    if kind != "config" && kind != "activation" {
+        return None;
+    }
+    let tail = segments.last().copied()?;
+    if tail.is_empty() {
+        None
+    } else {
+        Some(tail.to_string())
+    }
 }
 
 fn recipe_name_from_path(path: &Path) -> Option<String> {
