@@ -106,11 +106,16 @@ pub fn handle_validate(
 /// `lint::TIER_2_CHECKS` exactly. Unknown names produce a fail-fast
 /// error listing the valid ones — a typo can't silently skip the check
 /// the user thought they enabled.
+///
+/// `apply_modes` is left empty here — call sites that have a
+/// `SchemaRegistry` inject it via `with_apply_modes()` before passing
+/// the options into `lint::lint_profile_with_options`.
 fn resolve_lint_options(strict: bool, lint_policy: &[String]) -> Result<LintOptions> {
     if lint_policy.is_empty() {
         return Ok(LintOptions {
             strict,
             selected_checks: None,
+            apply_modes: std::collections::HashMap::new(),
         });
     }
     let mut chosen: HashSet<String> = HashSet::new();
@@ -131,7 +136,26 @@ fn resolve_lint_options(strict: bool, lint_policy: &[String]) -> Result<LintOpti
     Ok(LintOptions {
         strict,
         selected_checks: Some(chosen),
+        apply_modes: std::collections::HashMap::new(),
     })
+}
+
+/// Build a `payload_type → apply_mode` map for the lint pass. Returns
+/// an empty map when no registry is available — `single-instance-
+/// payload-repeated` becomes a no-op in that case.
+fn apply_modes_from_registry(
+    registry: Option<&SchemaRegistry>,
+) -> std::collections::HashMap<String, String> {
+    let Some(reg) = registry else {
+        return std::collections::HashMap::new();
+    };
+    reg.all()
+        .filter_map(|m| {
+            m.apply_mode
+                .as_ref()
+                .map(|mode| (m.payload_type.clone(), mode.clone()))
+        })
+        .collect()
 }
 
 #[expect(
@@ -482,8 +506,17 @@ fn validate_single_file_detailed(
     let mut lint_warnings: Vec<String> = Vec::new();
     let mut lint_findings: Vec<serde_json::Value> = Vec::new();
     if let Ok(raw_value) = plist::from_file::<_, plist::Value>(file_path) {
-        let registry = MigrationRegistry::new();
-        for finding in lint::lint_profile_with_options(&raw_value, &registry, lint_options) {
+        let migration_registry = MigrationRegistry::new();
+        // Inject apply_modes from the schema registry — clones are cheap
+        // (~hundreds of small strings) and avoids passing two registries
+        // through the lint API.
+        let mut lint_options_with_modes = lint_options.clone();
+        lint_options_with_modes.apply_modes = apply_modes_from_registry(registry);
+        for finding in lint::lint_profile_with_options(
+            &raw_value,
+            &migration_registry,
+            &lint_options_with_modes,
+        ) {
             let severity = match finding.severity {
                 lint::LintSeverity::Error => "error",
                 lint::LintSeverity::Warning => "warning",
@@ -648,13 +681,17 @@ fn handle_validate_single(
     // Basic validation
     let validation = validator::validate_profile(&profile)?;
 
+    // Build the schema registry once — used for both schema validation
+    // (when requested) and the lint pass's apply_modes lookup.
+    let schema_registry = if let Some(path) = schema_path {
+        Some(SchemaRegistry::from_auto_detect(Path::new(path))?)
+    } else {
+        Some(SchemaRegistry::embedded()?)
+    };
+
     // Schema validation if requested
     let schema_result = if schema {
-        let registry = if let Some(path) = schema_path {
-            SchemaRegistry::from_auto_detect(Path::new(path))?
-        } else {
-            SchemaRegistry::embedded()?
-        };
+        let registry = schema_registry.as_ref().expect("registry was just built");
 
         let options = if strict {
             ValidationOptions::strict()
@@ -662,7 +699,7 @@ fn handle_validate_single(
             ValidationOptions::default_checks()
         };
 
-        let mut validator = SchemaValidator::with_options(&registry, options);
+        let mut validator = SchemaValidator::with_options(registry, options);
         if let Some(known) = known_ids {
             validator = validator.with_known_identifiers(known);
         }
@@ -678,8 +715,14 @@ fn handle_validate_single(
     let mut lint_errors: Vec<String> = Vec::new();
     let mut lint_warnings: Vec<String> = Vec::new();
     if let Ok(raw_value) = plist::from_file::<_, plist::Value>(file) {
-        let registry = MigrationRegistry::new();
-        for finding in lint::lint_profile_with_options(&raw_value, &registry, lint_options) {
+        let migration_registry = MigrationRegistry::new();
+        let mut lint_options_with_modes = lint_options.clone();
+        lint_options_with_modes.apply_modes = apply_modes_from_registry(schema_registry.as_ref());
+        for finding in lint::lint_profile_with_options(
+            &raw_value,
+            &migration_registry,
+            &lint_options_with_modes,
+        ) {
             let severity = match finding.severity {
                 lint::LintSeverity::Error => "error",
                 lint::LintSeverity::Warning => "warning",

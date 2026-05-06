@@ -1475,6 +1475,38 @@ fn trap_46_lint_clean_baseline_has_no_findings() {
 }
 
 #[test]
+fn trap_67_single_instance_payload_repeated_fires_on_real_apply_mode_single() {
+    // End-to-end: per-violation fixture has com.apple.NetworkBrowser
+    // (apply_mode=single in the embedded parquet) listed twice. The
+    // lint must fire at warning severity. If apply_mode parsing breaks
+    // upstream or the registry stops carrying single-mode payloads,
+    // this trap fails first.
+    let findings = lint_findings_for("single-instance-payload-repeated");
+    let names: Vec<&str> = findings
+        .iter()
+        .filter_map(|f| f["check"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"single-instance-payload-repeated"),
+        "expected single-instance-payload-repeated; got {names:?}"
+    );
+    let sev = findings
+        .iter()
+        .find(|f| f["check"] == "single-instance-payload-repeated")
+        .and_then(|f| f["severity"].as_str());
+    assert_eq!(sev, Some("warning"), "must be warning severity");
+
+    // Clean baseline never trips the new check.
+    let clean = lint_findings_for("clean");
+    assert!(
+        !clean
+            .iter()
+            .any(|f| f["check"] == "single-instance-payload-repeated"),
+        "clean baseline must not trip single-instance-payload-repeated"
+    );
+}
+
+#[test]
 fn trap_52_lint_nested_missing_payload_version_fires_only_on_its_fixture() {
     // Tier-1 default-on check: a nested payload missing the literal
     // PayloadVersion key fires `nested-missing-payload-version` at
@@ -2045,6 +2077,76 @@ fn trap_64_info_field_carries_combinetype_when_present() {
     assert!(
         !with_combine.is_empty(),
         "expected at least one field with combinetype on a DDM payload; found 0"
+    );
+}
+
+#[test]
+fn trap_66_info_field_introduced_by_platform_is_per_os_map() {
+    // Per-OS field-level introduced/deprecated (Gap #3): the embedded
+    // parquet has rows keyed by (payload_type, platform, key). The
+    // reader now merges into a per-platform map so agents can answer
+    // "when did this key land on iOS vs macOS?" without losing data.
+    //
+    // Without --os: introduced_by_platform is a JSON object keyed by
+    // platform name with > 1 entries for any cross-platform key.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["info", "com.apple.applicationaccess", "--full", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let safari = parsed["fields"]
+        .as_array()
+        .expect("fields array")
+        .iter()
+        .find(|f| f["name"] == "safariAcceptCookies")
+        .expect("safariAcceptCookies must exist");
+
+    let intro = safari["introduced_by_platform"]
+        .as_object()
+        .expect("introduced_by_platform is a map (no --os)");
+    assert!(
+        intro.len() > 1,
+        "safariAcceptCookies is on multiple platforms; expected >1 entries, got {intro:?}"
+    );
+    assert!(
+        intro.contains_key("iOS"),
+        "must include iOS entry; got {intro:?}"
+    );
+    assert!(
+        intro.contains_key("macOS"),
+        "must include macOS entry; got {intro:?}"
+    );
+
+    // With --os iOS: the map collapses to a flat string so jq
+    // .fields[].introduced_by_platform reads the version directly.
+    let scoped = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "info",
+            "com.apple.applicationaccess",
+            "--os",
+            "iOS",
+            "--full",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let scoped_parsed: Value = serde_json::from_slice(&scoped.stdout).expect("JSON");
+    let scoped_safari = scoped_parsed["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "safariAcceptCookies")
+        .expect("safariAcceptCookies in --os iOS output");
+    let scoped_intro = scoped_safari["introduced_by_platform"]
+        .as_str()
+        .expect("--os scope flattens introduced_by_platform to a string");
+    assert_eq!(
+        scoped_intro,
+        intro["iOS"].as_str().unwrap(),
+        "scoped flat value must equal the iOS entry from the unscoped map"
     );
 }
 

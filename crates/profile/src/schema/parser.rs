@@ -124,6 +124,7 @@ fn parse_ddm_declaration_line(line: &str) -> Result<PayloadManifest> {
         platforms,
         min_versions: std::collections::HashMap::new(),
         os_support: std::collections::HashMap::new(),
+        apply_mode: None,
         category,
         fields: std::collections::HashMap::new(),
         field_order: Vec::new(),
@@ -181,6 +182,8 @@ fn parse_ddm_key_line(line: &str) -> Result<FieldDefinition> {
         platforms: Vec::new(),
         min_version: None,
         deprecated_in: None,
+        introduced_by_platform: HashMap::new(),
+        deprecated_by_platform: HashMap::new(),
         combinetype: None,
     })
 }
@@ -210,6 +213,7 @@ fn parse_manifest_line(line: &str) -> Result<PayloadManifest> {
         platforms,
         min_versions,
         os_support: HashMap::new(),
+        apply_mode: None,
         category,
         fields: HashMap::new(),
         field_order: Vec::new(),
@@ -328,6 +332,8 @@ fn parse_key_line(line: &str) -> Result<FieldDefinition> {
         platforms,
         min_version,
         deprecated_in: None,
+        introduced_by_platform: HashMap::new(),
+        deprecated_by_platform: HashMap::new(),
         combinetype: None,
     })
 }

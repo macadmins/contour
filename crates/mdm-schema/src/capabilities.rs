@@ -39,6 +39,11 @@ pub fn schema() -> Schema {
         Field::new("supervised", DataType::Boolean, true),
         Field::new("user_channel", DataType::Boolean, true),
         Field::new("device_channel", DataType::Boolean, true),
+        Field::new("requires_dep", DataType::Boolean, true),
+        Field::new("user_approved_mdm", DataType::Boolean, true),
+        Field::new("allow_manual_install", DataType::Boolean, true),
+        Field::new("shared_ipad_mode", DataType::Utf8, true),
+        Field::new("user_enrollment_mode", DataType::Utf8, true),
         // Key identity
         Field::new("key_name", DataType::Utf8, false),
         Field::new("key_data_type", DataType::Utf8, false),
@@ -97,6 +102,11 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         let supervised = col(&batch, "supervised")?.as_boolean();
         let user_ch = col(&batch, "user_channel")?.as_boolean();
         let device_ch = col(&batch, "device_channel")?.as_boolean();
+        let requires_dep_col = col(&batch, "requires_dep")?.as_boolean();
+        let user_approved_mdm_col = col(&batch, "user_approved_mdm")?.as_boolean();
+        let allow_manual_install_col = col(&batch, "allow_manual_install")?.as_boolean();
+        let shared_ipad_col = col(&batch, "shared_ipad_mode")?.as_string::<i32>();
+        let user_enrollment_col = col(&batch, "user_enrollment_mode")?.as_string::<i32>();
         let key_names = col(&batch, "key_name")?.as_string::<i32>();
         let key_types = col(&batch, "key_data_type")?.as_string::<i32>();
         let key_presences = col(&batch, "key_presence")?.as_string::<i32>();
@@ -216,9 +226,21 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                     } else {
                         Some(supervised.value(row))
                     },
-                    requires_dep: None,
-                    user_approved_mdm: None,
-                    allow_manual_install: None,
+                    requires_dep: if requires_dep_col.is_null(row) {
+                        None
+                    } else {
+                        Some(requires_dep_col.value(row))
+                    },
+                    user_approved_mdm: if user_approved_mdm_col.is_null(row) {
+                        None
+                    } else {
+                        Some(user_approved_mdm_col.value(row))
+                    },
+                    allow_manual_install: if allow_manual_install_col.is_null(row) {
+                        None
+                    } else {
+                        Some(allow_manual_install_col.value(row))
+                    },
                     device_channel: if device_ch.is_null(row) {
                         None
                     } else {
@@ -229,14 +251,67 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                     } else {
                         Some(user_ch.value(row))
                     },
+                    shared_ipad_mode: if shared_ipad_col.is_null(row) {
+                        None
+                    } else {
+                        Some(shared_ipad_col.value(row).to_string())
+                    },
+                    user_enrollment_mode: if user_enrollment_col.is_null(row) {
+                        None
+                    } else {
+                        Some(user_enrollment_col.value(row).to_string())
+                    },
                     multiple: None,
                     beta: None,
                 });
             }
 
-            // Add PayloadKey
+            // Merge PayloadKey across the parquet's per-(payload_type,
+            // platform, key) rows. The first sighting seeds the entry;
+            // subsequent rows accumulate introduced/deprecated into
+            // per-platform maps so callers can answer "when did this key
+            // land on iOS vs macOS?".
+            let key_name = key_names.value(row).to_string();
+            let row_platform = match platform_str {
+                "macOS" => Platform::MacOS,
+                "iOS" => Platform::IOS,
+                "tvOS" => Platform::TvOS,
+                "visionOS" => Platform::VisionOS,
+                "watchOS" => Platform::WatchOS,
+                _ => Platform::MacOS,
+            };
+            let row_introduced = if introduced.is_null(row) {
+                None
+            } else {
+                Some(introduced.value(row).to_string())
+            };
+            let row_deprecated = if deprecated.is_null(row) {
+                None
+            } else {
+                Some(deprecated.value(row).to_string())
+            };
+
+            if let Some(existing) = cap.keys.iter_mut().find(|k| k.name == key_name) {
+                if let Some(v) = row_introduced {
+                    existing.introduced.entry(row_platform).or_insert(v);
+                }
+                if let Some(v) = row_deprecated {
+                    existing.deprecated.entry(row_platform).or_insert(v);
+                }
+                continue;
+            }
+
+            let mut introduced_map = std::collections::HashMap::new();
+            if let Some(v) = row_introduced {
+                introduced_map.insert(row_platform, v);
+            }
+            let mut deprecated_map = std::collections::HashMap::new();
+            if let Some(v) = row_deprecated {
+                deprecated_map.insert(row_platform, v);
+            }
+
             cap.keys.push(PayloadKey {
-                name: key_names.value(row).to_string(),
+                name: key_name,
                 data_type: key_types.value(row).to_string(),
                 presence: if key_presences.is_null(row) {
                     String::new()
@@ -261,16 +336,8 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                     Some(range_maxs.value(row))
                 },
                 range_list: None,
-                introduced: if introduced.is_null(row) {
-                    None
-                } else {
-                    Some(introduced.value(row).to_string())
-                },
-                deprecated: if deprecated.is_null(row) {
-                    None
-                } else {
-                    Some(deprecated.value(row).to_string())
-                },
+                introduced: introduced_map,
+                deprecated: deprecated_map,
                 parent_key: if parent_keys.is_null(row) {
                     None
                 } else {

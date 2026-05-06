@@ -929,6 +929,8 @@ mod tests {
                     platforms: Vec::new(),
                     min_version: None,
                     deprecated_in: None,
+                    introduced_by_platform: std::collections::HashMap::new(),
+                    deprecated_by_platform: std::collections::HashMap::new(),
                     combinetype: None,
                 },
             );
@@ -941,6 +943,7 @@ mod tests {
             platforms: Platforms::default(),
             min_versions: HashMap::new(),
             os_support: HashMap::new(),
+            apply_mode: None,
             category: "apple".to_string(),
             fields,
             field_order,
@@ -1143,6 +1146,8 @@ mod tests {
                     platforms: Vec::new(),
                     min_version: None,
                     deprecated_in: None,
+                    introduced_by_platform: std::collections::HashMap::new(),
+                    deprecated_by_platform: std::collections::HashMap::new(),
                     combinetype: None,
                 },
             );
@@ -1186,6 +1191,7 @@ mod tests {
             platforms: Platforms::default(),
             min_versions: HashMap::new(),
             os_support: HashMap::new(),
+            apply_mode: None,
             category: "apple".to_string(),
             fields,
             field_order,

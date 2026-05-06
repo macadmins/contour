@@ -685,6 +685,8 @@ mod tests {
             platforms: vec![],
             min_version: None,
             deprecated_in: None,
+            introduced_by_platform: std::collections::HashMap::new(),
+            deprecated_by_platform: std::collections::HashMap::new(),
             combinetype: None,
         }
     }
@@ -703,6 +705,7 @@ mod tests {
             platforms: Platforms::parse("*"),
             min_versions: HashMap::new(),
             os_support: HashMap::new(),
+            apply_mode: None,
             category: if payload_type.contains(".asset.") {
                 "ddm-asset"
             } else if payload_type.contains(".configuration.") {
