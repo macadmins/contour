@@ -56,44 +56,55 @@ pub fn load_recipe(name: &str, recipe_path: Option<&str>) -> Result<Recipe> {
     }
 }
 
-/// List all available recipes (embedded + external).
+/// List all available recipes (external + embedded).
+///
+/// External recipes win when names collide with built-ins — symmetric
+/// with `load_recipe`'s precedence (explicit path → `~/.contour/recipes/`
+/// → embedded). When an external recipe shadows a built-in, its
+/// `source` label includes `"(overrides embedded)"` so the override is
+/// visible.
+///
+/// Output is sorted by recipe name for deterministic listing.
 pub fn list_recipes(recipe_path: Option<&str>) -> Vec<RecipeSummary> {
-    let mut recipes = Vec::new();
+    let mut recipes: Vec<RecipeSummary> = Vec::new();
+    let embedded_names: std::collections::HashSet<&str> =
+        ["okta", "entra-psso", "santa"].into_iter().collect();
 
-    // Embedded recipes
-    for (toml_str, label) in [
-        (EMBEDDED_OKTA, "embedded"),
-        (EMBEDDED_ENTRA_PSSO, "embedded"),
-        (EMBEDDED_SANTA, "embedded"),
-    ] {
-        if let Ok(r) = parse_recipe_toml(toml_str, label) {
-            let placeholders = recipe_placeholders(&r);
-            let secrets = r.recipe.secrets.clone().unwrap_or_default();
-            recipes.push(RecipeSummary {
-                name: r.recipe.name,
-                description: r.recipe.description,
-                vendor: r.recipe.vendor,
-                profile_count: r.profiles.len(),
-                source: "embedded".to_string(),
-                placeholders,
-                secrets,
-            });
-        }
-    }
-
-    // External recipes from explicit path
+    // 1. External from explicit --recipe-path (highest precedence)
     if let Some(rp) = recipe_path {
-        collect_external_recipes(Path::new(rp), &mut recipes);
+        collect_external_recipes(Path::new(rp), &mut recipes, &embedded_names);
     }
 
-    // External recipes from ~/.contour/recipes/
+    // 2. External from ~/.contour/recipes/ — skip names already in #1
     if let Some(home) = dirs::home_dir() {
         let user_dir = home.join(".contour/recipes");
         if user_dir.is_dir() {
-            collect_external_recipes(&user_dir, &mut recipes);
+            collect_external_recipes(&user_dir, &mut recipes, &embedded_names);
         }
     }
 
+    // 3. Embedded — only when no external entry has shadowed the name.
+    for toml_str in [EMBEDDED_OKTA, EMBEDDED_ENTRA_PSSO, EMBEDDED_SANTA] {
+        let Ok(r) = parse_recipe_toml(toml_str, "embedded") else {
+            continue;
+        };
+        if recipes.iter().any(|x| x.name == r.recipe.name) {
+            continue;
+        }
+        let placeholders = recipe_placeholders(&r);
+        let secrets = r.recipe.secrets.clone().unwrap_or_default();
+        recipes.push(RecipeSummary {
+            name: r.recipe.name,
+            description: r.recipe.description,
+            vendor: r.recipe.vendor,
+            profile_count: r.profiles.len(),
+            source: "embedded".to_string(),
+            placeholders,
+            secrets,
+        });
+    }
+
+    recipes.sort_by(|a, b| a.name.cmp(&b.name));
     recipes
 }
 
@@ -139,7 +150,85 @@ fn parse_recipe_toml(content: &str, source: &str) -> Result<Recipe> {
     toml::from_str(content).with_context(|| format!("Failed to parse recipe from {source}"))
 }
 
-fn collect_external_recipes(dir: &Path, recipes: &mut Vec<RecipeSummary>) {
+/// Walk a directory of `.toml` recipes, appending each to `recipes`.
+///
+/// Skips names already present in `recipes` (so the explicit
+/// `--recipe-path` wins over `~/.contour/recipes/`).
+///
+/// When a recipe's name matches a built-in, the source label flags
+/// the override so listings make the shadowing obvious.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listing_with_no_external_returns_only_embedded() {
+        let recipes = list_recipes(None);
+        // Built-ins: okta, entra-psso, santa
+        assert_eq!(recipes.len(), 3);
+        for r in &recipes {
+            assert_eq!(r.source, "embedded");
+        }
+        // Sorted alphabetically — entra-psso, okta, santa
+        let names: Vec<&str> = recipes.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["entra-psso", "okta", "santa"]);
+    }
+
+    /// Minimal but well-formed Recipe TOML matching the `[[profile]]`
+    /// shape — see `crates/profile/recipes/okta.toml` for reference.
+    fn override_okta_body() -> &'static str {
+        r#"
+[recipe]
+name = "okta"
+description = "user-overridden okta recipe"
+vendor = "MyOrg"
+
+[[profile]]
+filename = "custom-okta.mobileconfig"
+payload_type = "com.apple.extensiblesso"
+display_name = "Custom Okta"
+description = "User override"
+
+[profile.fields]
+Type = "Redirect"
+TeamIdentifier = "DEADBEEF"
+ExtensionIdentifier = "com.okta.mobile.auth-service-extension"
+"#
+    }
+
+    #[test]
+    fn external_recipe_overrides_embedded_in_listing() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("okta.toml"), override_okta_body()).unwrap();
+        let listed = list_recipes(Some(tmp.path().to_str().unwrap()));
+        let okta = listed.iter().find(|r| r.name == "okta").unwrap();
+        assert!(
+            okta.source.contains("overrides embedded"),
+            "external recipe must claim override label; source={}",
+            okta.source
+        );
+        assert_eq!(okta.description, "user-overridden okta recipe");
+        assert_eq!(
+            listed.iter().filter(|r| r.name == "okta").count(),
+            1,
+            "exactly one okta entry — external must shadow embedded"
+        );
+    }
+
+    #[test]
+    fn external_recipe_loads_from_explicit_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("okta.toml"), override_okta_body()).unwrap();
+        let r = load_recipe("okta", Some(tmp.path().to_str().unwrap())).unwrap();
+        assert_eq!(r.recipe.description, "user-overridden okta recipe");
+    }
+}
+
+fn collect_external_recipes(
+    dir: &Path,
+    recipes: &mut Vec<RecipeSummary>,
+    embedded_names: &std::collections::HashSet<&str>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -152,25 +241,27 @@ fn collect_external_recipes(dir: &Path, recipes: &mut Vec<RecipeSummary>) {
     paths.sort();
 
     for path in paths {
-        if let Ok(r) = load_recipe_file(&path) {
-            // Skip if already present (embedded takes precedence for same name)
-            if recipes
-                .iter()
-                .any(|existing| existing.name == r.recipe.name)
-            {
-                continue;
-            }
-            let placeholders = recipe_placeholders(&r);
-            let secrets = r.recipe.secrets.clone().unwrap_or_default();
-            recipes.push(RecipeSummary {
-                name: r.recipe.name,
-                description: r.recipe.description,
-                vendor: r.recipe.vendor,
-                profile_count: r.profiles.len(),
-                source: path.display().to_string(),
-                placeholders,
-                secrets,
-            });
+        let Ok(r) = load_recipe_file(&path) else {
+            continue;
+        };
+        // Higher-priority external entry already claimed this name.
+        if recipes.iter().any(|x| x.name == r.recipe.name) {
+            continue;
         }
+        let mut source = path.display().to_string();
+        if embedded_names.contains(r.recipe.name.as_str()) {
+            source.push_str("  (overrides embedded)");
+        }
+        let placeholders = recipe_placeholders(&r);
+        let secrets = r.recipe.secrets.clone().unwrap_or_default();
+        recipes.push(RecipeSummary {
+            name: r.recipe.name,
+            description: r.recipe.description,
+            vendor: r.recipe.vendor,
+            profile_count: r.profiles.len(),
+            source,
+            placeholders,
+            secrets,
+        });
     }
 }

@@ -645,6 +645,7 @@ fn run(cli: Cli) -> Result<()> {
                 allow_orphans,
                 org,
                 preset,
+                preset_path,
                 list_presets,
             } => {
                 cli::ddm::handle_ddm_compose(
@@ -654,6 +655,7 @@ fn run(cli: Cli) -> Result<()> {
                     allow_orphans,
                     org.as_deref(),
                     preset.as_deref(),
+                    preset_path.as_deref(),
                     list_presets,
                     config.as_ref(),
                     output_mode,

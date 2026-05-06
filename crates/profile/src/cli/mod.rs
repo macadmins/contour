@@ -884,10 +884,11 @@ pub enum DdmAction {
             long,
             value_name = "NAME",
             conflicts_with_all = ["bundle", "list_presets"],
-            help = "Compose a built-in preset by name (run --list-presets to see available)",
-            long_help = "Compose a built-in preset bundle by name instead of a path.\n\
-                         End users without the source tree reach common DDM\n\
-                         intents by name — e.g.:\n\
+            help = "Compose a preset by name — embedded or from --preset-path",
+            long_help = "Compose a preset bundle by name instead of supplying a\n\
+                         path. Resolution: --preset-path (file or directory)\n\
+                         → ~/.contour/presets/ → embedded. External presets\n\
+                         win on name collisions.\n\
                          \n  \
                          contour profile ddm compose \\\n    \
                            --preset disable-apple-intelligence-macos \\\n    \
@@ -899,7 +900,25 @@ pub enum DdmAction {
 
         #[arg(
             long,
-            help = "List built-in presets available via --preset",
+            value_name = "DIR_OR_FILE",
+            help = "External preset library (directory of .toml or single file). Builds a preset library by name.",
+            long_help = "Path to an external preset library — either a directory\n\
+                         of `.toml` bundle files (filename = preset name) or a\n\
+                         single bundle file. Used by --preset and --list-presets.\n\
+                         \n\
+                         Library convention: one .toml per preset, alphabetic\n\
+                         filenames. The repo can be a simple github clone,\n\
+                         e.g. `git clone https://github.com/yourorg/contour-presets`.\n\
+                         \n\
+                         Resolution: --preset-path → ~/.contour/presets/ →\n\
+                         embedded. External wins on name collisions; listings\n\
+                         flag overrides via the `source` field."
+        )]
+        preset_path: Option<String>,
+
+        #[arg(
+            long,
+            help = "List presets available via --preset (embedded + external)",
             conflicts_with_all = ["bundle", "preset", "output"]
         )]
         list_presets: bool,

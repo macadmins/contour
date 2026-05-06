@@ -868,25 +868,33 @@ pub fn handle_ddm_generate(
 /// (same fallback chain `handle_ddm_generate` uses) and threaded into
 /// [`compose`]. Failures emit the standard `{success:false, error, error_code}`
 /// envelope on stderr when `--json` is set.
-/// Print built-in DDM presets — JSON for agents, table for humans.
-fn list_presets_action(output_mode: OutputMode) -> Result<()> {
-    let entries: Vec<(&'static str, &'static str)> = crate::ddm::presets::list().collect();
+/// Print available DDM presets (embedded + external from `--preset-path`
+/// and `~/.contour/presets/`). JSON for agents, table for humans.
+fn list_presets_action(preset_path: Option<&str>, output_mode: OutputMode) -> Result<()> {
+    let entries = crate::ddm::presets::list(preset_path);
     if output_mode == OutputMode::Json {
         let json: Vec<serde_json::Value> = entries
             .iter()
-            .map(|(name, desc)| serde_json::json!({"name": name, "description": desc}))
+            .map(|p| {
+                serde_json::json!({
+                    "name": p.name,
+                    "description": p.description,
+                    "source": p.source,
+                })
+            })
             .collect();
         println!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
     if entries.is_empty() {
-        println!("No built-in presets available.");
+        println!("No presets available.");
         return Ok(());
     }
-    println!("Built-in DDM presets:\n");
-    for (name, desc) in entries {
-        println!("  {name}");
-        println!("    {desc}");
+    println!("DDM presets:\n");
+    for p in &entries {
+        println!("  {}", p.name);
+        println!("    {}", p.description);
+        println!("    source: {}", p.source);
     }
     println!("\nUse: contour profile ddm compose --preset <NAME> --org <ORG> -o ./out/");
     Ok(())
@@ -894,7 +902,7 @@ fn list_presets_action(output_mode: OutputMode) -> Result<()> {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "ddm compose threads many CLI flags including new --preset / --list-presets"
+    reason = "ddm compose threads many CLI flags including --preset / --preset-path / --list-presets"
 )]
 pub fn handle_ddm_compose(
     bundle_path: Option<&str>,
@@ -903,13 +911,14 @@ pub fn handle_ddm_compose(
     allow_orphans: bool,
     org_flag: Option<&str>,
     preset: Option<&str>,
+    preset_path: Option<&str>,
     list_presets: bool,
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
 ) -> Result<()> {
     // --list-presets short-circuits — no schema/registry/output needed.
     if list_presets {
-        return list_presets_action(output_mode);
+        return list_presets_action(preset_path, output_mode);
     }
 
     let registry = load_registry(schema_path)?;
@@ -917,8 +926,11 @@ pub fn handle_ddm_compose(
     // 1. Read + parse the bundle TOML — either from disk (positional
     //    argument) or from an embedded preset (--preset <name>).
     let (bundle_text, source_label): (String, String) = if let Some(name) = preset {
-        let body = crate::ddm::presets::body(name).ok_or_else(|| {
-            let valid: Vec<&str> = crate::ddm::presets::list().map(|(n, _)| n).collect();
+        let body = crate::ddm::presets::load(name, preset_path).ok_or_else(|| {
+            let valid: Vec<String> = crate::ddm::presets::list(preset_path)
+                .into_iter()
+                .map(|p| p.name)
+                .collect();
             let msg = format!(
                 "Unknown --preset '{name}'. Valid: {}\nRun `contour profile ddm compose --list-presets` for descriptions.",
                 valid.join(", ")
@@ -928,7 +940,7 @@ pub fn handle_ddm_compose(
             }
             anyhow::anyhow!(msg)
         })?;
-        (body.to_string(), format!("preset:{name}"))
+        (body, format!("preset:{name}"))
     } else {
         let path =
             bundle_path.expect("clap enforces bundle when neither preset nor list-presets is set");
