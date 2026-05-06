@@ -210,7 +210,8 @@ fn dispatch_trainer(tool: &TrainerTool, cli: &Cli) -> Result<()> {
 fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) -> Result<()> {
     use colored::Colorize;
     use profile::cli::{
-        CommandAction, Commands, DdmAction, DocsAction, EnrollmentAction, PayloadAction,
+        CommandAction, Commands, DdmAction, DocsAction, EnrollmentAction, LibraryAction,
+        PayloadAction,
     };
     use profile::output::OutputMode;
 
@@ -741,6 +742,24 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 output_mode,
             )?;
         }
+        Commands::Library { action } => match action {
+            LibraryAction::New {
+                path,
+                no_presets,
+                no_recipes,
+                force,
+            } => {
+                profile::cli::library::handle_library_new(
+                    profile::cli::library::LibraryNewOptions {
+                        path: std::path::Path::new(&path),
+                        include_presets: !no_presets,
+                        include_recipes: !no_recipes,
+                        force,
+                    },
+                    output_mode,
+                )?;
+            }
+        },
         Commands::Ddm { action } => match action {
             DdmAction::Parse {
                 paths,

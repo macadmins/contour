@@ -58,3 +58,6 @@ crates/osquery-schema/data/*.parquet
 
 # Local mSCP source clone (used by `contour mscp generate` / `list-baselines`)
 /macos_security/
+
+# Local preset library template (scaffold for an external repo, not part of contour)
+/contour-presets/
