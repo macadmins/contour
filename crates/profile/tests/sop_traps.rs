@@ -2793,3 +2793,170 @@ fn trap_75_library_normalize_round_trips_and_preserves_semantics() {
         "DDM payload must survive the round-trip"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 76: `profile library import <FILE.mobileconfig>` produces a
+// loadable recipe + sidecar. Validates the inverse-of-synthesize path
+// end-to-end on a real-world MCX-style profile (SAP Privileges).
+// Catches regressions where:
+//   - The plist→toml converter loses or corrupts nested dicts
+//   - Envelope keys leak into [profile.fields]
+//   - The emitted TOML doesn't round-trip through `recipe::loader`
+//   - The .meaning.md sidecar isn't written
+//   - Re-running without --force silently overwrites
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_76_library_import_round_trips_real_mobileconfig() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/import/Privileges.mobileconfig");
+    assert!(
+        fixture.exists(),
+        "fixture must exist at {}",
+        fixture.display()
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = tmp.path().join("lib");
+
+    // Scaffold a fresh library so recipes/ exists.
+    let scaffold = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(scaffold.status.success());
+
+    // Import the fixture.
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            fixture.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "library import must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&result.stdout).expect("JSON envelope");
+    assert_eq!(parsed["success"], true);
+    assert_eq!(parsed["payload_count"], 1);
+    let pts = parsed["payload_types"].as_array().expect("payload_types");
+    assert_eq!(
+        pts.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>(),
+        vec!["com.apple.ManagedClient.preferences"]
+    );
+
+    // Both files were written.
+    let recipe_path = lib.join("recipes/privileges.toml");
+    let meaning_path = lib.join("recipes/privileges.meaning.md");
+    assert!(recipe_path.exists(), "recipe TOML missing");
+    assert!(meaning_path.exists(), ".meaning.md sidecar missing");
+    let meaning_body = fs::read_to_string(&meaning_path).unwrap();
+    assert!(
+        meaning_body.contains("## Intent"),
+        ".meaning.md must include the Intent section"
+    );
+    // Schema enrichment: the Payloads section pulls the schema title
+    // ("Managed Preferences") and the Apple description ("…configures
+    // managed preferences."). A regression that drops the registry
+    // lookup or breaks the section emitter would land here first.
+    assert!(
+        meaning_body.contains("## Payloads"),
+        ".meaning.md must include the schema-enriched Payloads section"
+    );
+    assert!(
+        meaning_body.contains("Managed Preferences"),
+        "schema title must appear in the payload heading; got: {meaning_body}"
+    );
+    assert!(
+        meaning_body.contains("**Platforms:**"),
+        "Platforms line (with per-OS introduced versions) must appear"
+    );
+    assert!(
+        meaning_body.contains("apple schema"),
+        "schema source label must appear ('Source: apple schema')"
+    );
+
+    // The imported recipe round-trips through --list-recipes.
+    let listed = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "generate",
+            "--list-recipes",
+            "--recipe-path",
+            lib.join("recipes").to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(listed.status.success());
+    let list_json: Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let recipes = list_json["recipes"].as_array().unwrap();
+    let priv_entry = recipes
+        .iter()
+        .find(|r| r["name"] == "privileges")
+        .expect("imported recipe must appear in listing");
+    assert_eq!(
+        priv_entry["description"].as_str(),
+        Some("Privileges configuration"),
+        "PayloadDisplayName must propagate to recipe.description"
+    );
+    assert_eq!(
+        priv_entry["vendor"].as_str(),
+        Some("SAP SE"),
+        "PayloadOrganization must propagate to recipe.vendor"
+    );
+    assert_eq!(
+        priv_entry["profile_count"].as_u64(),
+        Some(1),
+        "single inner payload → single [[profile]] block"
+    );
+
+    // Re-running without --force must refuse.
+    let refused = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            fixture.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !refused.status.success(),
+        "second import without --force must fail"
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("already exists") && stderr.contains("--force"),
+        "refusal must mention --force; got: {stderr}"
+    );
+
+    // --force succeeds and overwrites in place.
+    let forced = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            fixture.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        forced.status.success(),
+        "import --force must succeed; stderr: {}",
+        String::from_utf8_lossy(&forced.stderr)
+    );
+}

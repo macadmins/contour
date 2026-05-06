@@ -759,6 +759,22 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output_mode,
                 )?;
             }
+            LibraryAction::Import {
+                input,
+                into,
+                name,
+                force,
+            } => {
+                profile::cli::import_recipe::handle_library_import(
+                    profile::cli::import_recipe::LibraryImportOptions {
+                        input: std::path::Path::new(&input),
+                        into: std::path::Path::new(&into),
+                        name: name.as_deref(),
+                        force,
+                    },
+                    output_mode,
+                )?;
+            }
             LibraryAction::Normalize { path, style } => {
                 let mapped = match style {
                     profile::cli::LibraryStyle::Flat => profile::cli::library::LibraryStyle::Flat,

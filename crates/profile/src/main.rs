@@ -603,6 +603,22 @@ fn run(cli: Cli) -> Result<()> {
                     output_mode,
                 )?;
             }
+            LibraryAction::Import {
+                input,
+                into,
+                name,
+                force,
+            } => {
+                cli::import_recipe::handle_library_import(
+                    cli::import_recipe::LibraryImportOptions {
+                        input: std::path::Path::new(&input),
+                        into: std::path::Path::new(&into),
+                        name: name.as_deref(),
+                        force,
+                    },
+                    output_mode,
+                )?;
+            }
             LibraryAction::Normalize { path, style } => {
                 let mapped = match style {
                     cli::LibraryStyle::Flat => cli::library::LibraryStyle::Flat,
