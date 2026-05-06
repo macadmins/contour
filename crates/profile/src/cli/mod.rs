@@ -13,6 +13,7 @@ pub mod enrollment;
 pub mod generate;
 pub mod glob_utils;
 pub mod import;
+pub mod import_recipe;
 pub mod info;
 pub mod init;
 pub mod jamf_import;
@@ -1072,6 +1073,44 @@ pub enum LibraryAction {
         no_recipes: bool,
 
         /// Overwrite files in a non-empty target directory
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    #[command(
+        about = "Import an existing .mobileconfig as a recipe in a library",
+        long_about = "Parses an existing `.mobileconfig` (signed or\n\
+                      unsigned, XML or binary plist) and writes a TOML\n\
+                      recipe at <INTO>/recipes/<NAME>.toml plus a stub\n\
+                      `<NAME>.meaning.md` sidecar. The recipe round-trips\n\
+                      through `contour profile generate --recipe <NAME>`\n\
+                      to reproduce the same payload structure.\n\
+                      \n\
+                      MCX-style profiles (com.apple.ManagedClient.preferences)\n\
+                      pass through faithfully — the deep nesting becomes\n\
+                      nested TOML sub-tables. No payload-type-specific\n\
+                      unwrapping.\n\
+                      \n\
+                      Refuses to overwrite an existing recipe unless\n\
+                      --force is passed.\n\
+                      \n\
+                      Example:\n  \
+                      contour profile library import ./Privileges.mobileconfig --into ./contour-presets"
+    )]
+    Import {
+        /// Path to the `.mobileconfig` to ingest
+        #[arg(value_name = "FILE")]
+        input: String,
+
+        /// Library root (the `recipes/` subdirectory is created if missing)
+        #[arg(long, value_name = "DIR")]
+        into: String,
+
+        /// Override the derived recipe name (default: snake-cased input file stem)
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+
+        /// Overwrite an existing recipe of the same name
         #[arg(short, long)]
         force: bool,
     },
