@@ -231,12 +231,14 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             payload_type,
             schema_path,
             full,
+            os,
         } => {
             if let Some(t) = payload_type {
                 profile::cli::info::handle_payload_info(
                     &t,
                     schema_path.as_deref(),
                     full,
+                    os.as_deref(),
                     output_mode,
                 )?;
             } else {
