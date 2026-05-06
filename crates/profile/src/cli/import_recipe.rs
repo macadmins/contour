@@ -66,15 +66,34 @@ pub fn handle_library_import(
     if !opts.input.is_file() {
         anyhow::bail!("Input not found: {}", opts.input.display());
     }
-    let report = import_one(opts.input, opts.into, opts.name, opts.force)?;
+    let report = import_any_file(opts.input, opts.into, opts.name, opts.force)?;
     emit_single_report(&report, output_mode);
     Ok(())
 }
 
-/// Walk `<INPUT>` recursively for `*.mobileconfig` and import each.
+/// Dispatch a single file to the right importer based on extension.
+/// `.mobileconfig` → MDM recipe; `.json` → DDM bundle.
+fn import_any_file(
+    input: &Path,
+    into: &Path,
+    name_override: Option<&str>,
+    force: bool,
+) -> Result<SingleImportReport> {
+    match input.extension().and_then(|s| s.to_str()) {
+        Some("mobileconfig") => import_one(input, into, name_override, force),
+        Some("json") => import_ddm_json(input, into, name_override, force),
+        Some(other) => {
+            anyhow::bail!("unsupported extension '.{other}' — expected .mobileconfig or .json")
+        }
+        None => anyhow::bail!("input file has no extension; expected .mobileconfig or .json"),
+    }
+}
+
+/// Walk `<INPUT>` recursively for `*.mobileconfig` and `*.json`
+/// (DDM declarations) and import each.
 fn handle_directory_import(opts: LibraryImportOptions<'_>, output_mode: OutputMode) -> Result<()> {
     let mut files: Vec<PathBuf> = Vec::new();
-    collect_mobileconfigs(opts.input, &mut files)?;
+    collect_importable_files(opts.input, &mut files)?;
     files.sort();
 
     let mut succeeded: Vec<SingleImportReport> = Vec::new();
@@ -88,7 +107,7 @@ fn handle_directory_import(opts: LibraryImportOptions<'_>, output_mode: OutputMo
     for file in &files {
         let name = bulk_recipe_name(file, &claimed);
         claimed.insert(name.clone());
-        match import_one(file, opts.into, Some(&name), opts.force) {
+        match import_any_file(file, opts.into, Some(&name), opts.force) {
             Ok(report) => succeeded.push(report),
             Err(e) => failed.push((file.clone(), format!("{e:#}"))),
         }
@@ -229,13 +248,42 @@ fn import_one(
             fields.insert(k.clone(), tv);
         }
 
+        // Inner payloads can carry their own `PayloadRemovalDisallowed`
+        // (rare — usually only the top-level envelope sets it), but the
+        // top-level envelope is the authoritative source for whether
+        // an end user can rip the profile back off. Surface it on
+        // every `[[profile]]` so a regenerate-from-recipe round-trip
+        // matches the source's intent.
+        let removal_disallowed = inner
+            .content
+            .get("PayloadRemovalDisallowed")
+            .and_then(|v| v.as_boolean())
+            .unwrap_or_else(|| {
+                profile
+                    .additional_fields
+                    .get("PayloadRemovalDisallowed")
+                    .and_then(|v| v.as_boolean())
+                    .unwrap_or(false)
+            });
+
+        // MCX auto-unwrap: profiles of type
+        // `com.apple.ManagedClient.preferences` carry settings deeply
+        // nested under PayloadContent.<domain>.Forced[0].mcx_preference_settings.
+        // Detect and flatten so the recipe TOML reads naturally;
+        // `mcx_domain` is set so `generate --recipe` re-wraps on the
+        // way out. When the structure doesn't match the canonical
+        // shape (e.g. multiple Forced entries, multiple domains), we
+        // fall back to faithful pass-through.
+        let (mcx_domain, fields) = unwrap_mcx_if_canonical(&inner.payload_type, fields);
+
         payload_types.push(inner.payload_type.clone());
         profiles.push(ProfileSpec {
             filename,
             payload_type: inner.payload_type.clone(),
             display_name,
             description: String::new(),
-            removal_disallowed: false,
+            removal_disallowed,
+            mcx_domain,
             fields,
             extra_fields: BTreeMap::new(),
         });
@@ -356,20 +404,244 @@ fn snake_case_slug(s: &str) -> Option<String> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-/// Recursively collect every `*.mobileconfig` under `root`.
-fn collect_mobileconfigs(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+/// Recursively collect every importable file under `root` —
+/// `*.mobileconfig` (MDM profiles) and `*.json` (DDM declarations).
+fn collect_importable_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in
         std::fs::read_dir(root).with_context(|| format!("Failed to read {}", root.display()))?
     {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            collect_mobileconfigs(&path, out)?;
-        } else if path.extension().and_then(|s| s.to_str()) == Some("mobileconfig") {
+            collect_importable_files(&path, out)?;
+            continue;
+        }
+        let ext = path.extension().and_then(|s| s.to_str());
+        if matches!(ext, Some("mobileconfig") | Some("json")) {
             out.push(path);
         }
     }
     Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────
+// DDM declaration import — `.json` → `<lib>/ddm/<name>.toml` Bundle.
+// ────────────────────────────────────────────────────────────────────
+
+/// Import a single DDM declaration JSON into the library's `ddm/`
+/// directory as a Bundle TOML. Only `com.apple.configuration.*`
+/// declarations are accepted as bundle roots — activations, assets,
+/// and subscriptions live alongside their configuration and don't
+/// import standalone.
+fn import_ddm_json(
+    input: &Path,
+    into: &Path,
+    name_override: Option<&str>,
+    force: bool,
+) -> Result<SingleImportReport> {
+    let body = std::fs::read_to_string(input)
+        .with_context(|| format!("Failed to read {}", input.display()))?;
+    let decl: serde_json::Value = serde_json::from_str(&body)
+        .with_context(|| format!("Failed to parse {} as JSON", input.display()))?;
+
+    let decl_obj = decl
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("DDM declaration must be a JSON object"))?;
+
+    let decl_type = decl_obj
+        .get("Type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("DDM declaration missing required `Type` field"))?
+        .to_string();
+
+    if !decl_type.starts_with("com.apple.configuration.") {
+        anyhow::bail!(
+            "only `com.apple.configuration.*` declarations import as bundles; got `{decl_type}`. Activations, assets, and status-subscriptions are referenced from the configuration's bundle — import the configuration JSON instead."
+        );
+    }
+
+    // Pull the (optional) Identifier so we can record it in a comment
+    // header. The bundle's `intent_name` drives the regenerated
+    // identifier under `--org`, so we don't preserve the raw value.
+    let original_identifier = decl_obj
+        .get("Identifier")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let payload_obj = decl_obj
+        .get("Payload")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| anyhow::anyhow!("DDM declaration missing required `Payload` object"))?;
+
+    // intent_name from override > snake-cased filename stem.
+    let intent_name = name_override
+        .map(str::to_string)
+        .unwrap_or_else(|| recipe_name_from_path(input).unwrap_or_else(|| "imported".to_string()));
+
+    // Output path under the library's `ddm/` subdir.
+    let ddm_dir = into.join("ddm");
+    std::fs::create_dir_all(&ddm_dir)
+        .with_context(|| format!("Failed to create {}", ddm_dir.display()))?;
+    let bundle_path = ddm_dir.join(format!("{intent_name}.toml"));
+    let meaning_path = ddm_dir.join(format!("{intent_name}.meaning.md"));
+    if bundle_path.exists() && !force {
+        anyhow::bail!(
+            "{} already exists. Re-run with --force to overwrite, or pass --name <NAME> to write a different file.",
+            bundle_path.display()
+        );
+    }
+
+    // Convert JSON payload → TOML table.
+    let mut payload_table = toml::map::Map::new();
+    for (k, v) in payload_obj {
+        payload_table.insert(k.clone(), serde_json_to_toml(v)?);
+    }
+
+    // Hand-emit the bundle TOML so we can lead with a comment header
+    // documenting the source. The Bundle struct serializes cleanly,
+    // but `toml::to_string(&bundle)` doesn't preserve a leading
+    // comment — so we render manually.
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# DDM bundle imported from {} via `contour profile library import`.",
+        input.display()
+    );
+    if !original_identifier.is_empty() {
+        let _ = writeln!(out, "# Original Identifier: {original_identifier}");
+    }
+    let _ = writeln!(
+        out,
+        "# Compose with: contour profile ddm compose --preset-path <DIR> --preset {intent_name} --org <YOUR_ORG> -o ./out"
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "intent_name = \"{intent_name}\"");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "[configuration]");
+    let _ = writeln!(out, "type = \"{decl_type}\"");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "[configuration.payload]");
+    // Emit payload via the toml serializer to handle nested tables /
+    // arrays / strings correctly. We feed a one-key wrapper and strip
+    // the wrapper header.
+    let payload_value = toml::Value::Table(payload_table.clone());
+    let payload_only = toml::Value::Table({
+        let mut m = toml::map::Map::new();
+        m.insert("__payload__".to_string(), payload_value);
+        m
+    });
+    let serialized = toml::to_string(&payload_only)?;
+    // Re-anchor under [configuration.payload] by rewriting the
+    // section path on every header that came out of the wrapper.
+    for line in serialized.lines() {
+        let rewritten = if let Some(rest) = line.strip_prefix("[__payload__") {
+            // [__payload__]                  -> (skip — already wrote [configuration.payload])
+            // [__payload__.<sub>]            -> [configuration.payload.<sub>]
+            // [[__payload__.<sub>]]          -> [[configuration.payload.<sub>]]
+            if rest == "]" {
+                continue;
+            }
+            format!("[configuration.payload{rest}")
+        } else if let Some(rest) = line.strip_prefix("[[__payload__") {
+            format!("[[configuration.payload{rest}")
+        } else {
+            line.to_string()
+        };
+        let _ = writeln!(out, "{rewritten}");
+    }
+    let _ = writeln!(out);
+    // Default activation — operators can edit if they need a predicate
+    // or a referenced asset.
+    let _ = writeln!(out, "[activation]");
+    let _ = writeln!(out, "type = \"com.apple.activation.simple\"");
+
+    std::fs::write(&bundle_path, &out)
+        .with_context(|| format!("Failed to write {}", bundle_path.display()))?;
+
+    // Write a stub `.meaning.md` mirroring the recipe-side pattern.
+    let registry = load_registry(None).ok();
+    let manifest = registry.as_ref().and_then(|r| r.get_by_name(&decl_type));
+    let mut meaning = String::new();
+    let _ = writeln!(&mut meaning, "# {intent_name}\n");
+    let _ = writeln!(
+        &mut meaning,
+        "DDM bundle imported from `{}` via `contour profile library import`.\n",
+        input.display()
+    );
+    if !original_identifier.is_empty() {
+        let _ = writeln!(&mut meaning, "## Source\n");
+        let _ = writeln!(
+            &mut meaning,
+            "- Original Identifier: `{original_identifier}`\n"
+        );
+    }
+    let _ = writeln!(&mut meaning, "## Configuration\n");
+    if let Some(m) = manifest {
+        if !m.title.is_empty() {
+            let _ = writeln!(&mut meaning, "**{}** — `{decl_type}`\n", m.title);
+        } else {
+            let _ = writeln!(&mut meaning, "`{decl_type}`\n");
+        }
+        if !m.description.trim().is_empty() {
+            let _ = writeln!(&mut meaning, "{}\n", m.description.trim());
+        }
+    } else {
+        let _ = writeln!(&mut meaning, "`{decl_type}` _(not in embedded schema)_\n");
+    }
+    let _ = writeln!(&mut meaning, "## References\n");
+    let _ = writeln!(
+        &mut meaning,
+        "- Apple device-management spec: <https://developer.apple.com/documentation/devicemanagement>"
+    );
+    let _ = writeln!(
+        &mut meaning,
+        "- contour schema lookup: `contour profile ddm info {decl_type}`"
+    );
+    std::fs::write(&meaning_path, meaning)
+        .with_context(|| format!("Failed to write {}", meaning_path.display()))?;
+
+    Ok(SingleImportReport {
+        input: input.to_path_buf(),
+        recipe_path: bundle_path,
+        meaning_path,
+        payload_types: vec![decl_type],
+    })
+}
+
+/// JSON → TOML value converter. Null is rejected because TOML has no
+/// null type — operators should drop unset keys before importing.
+fn serde_json_to_toml(v: &serde_json::Value) -> Result<toml::Value> {
+    Ok(match v {
+        serde_json::Value::Null => {
+            anyhow::bail!("DDM payload contains a null value — TOML has no null type")
+        }
+        serde_json::Value::Bool(b) => toml::Value::Boolean(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                toml::Value::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                toml::Value::Float(f)
+            } else {
+                anyhow::bail!("number {n} not representable as TOML i64/f64")
+            }
+        }
+        serde_json::Value::String(s) => toml::Value::String(s.clone()),
+        serde_json::Value::Array(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for item in arr {
+                out.push(serde_json_to_toml(item)?);
+            }
+            toml::Value::Array(out)
+        }
+        serde_json::Value::Object(obj) => {
+            let mut tbl = toml::map::Map::new();
+            for (k, v) in obj {
+                tbl.insert(k.clone(), serde_json_to_toml(v)?);
+            }
+            toml::Value::Table(tbl)
+        }
+    })
 }
 
 /// Inverse of `cli::generate::toml_to_plist_resolved`.
@@ -474,6 +746,74 @@ fn lookup_data_sentinel(decoded: &str, mapping: &[(String, String)]) -> Option<S
 
 /// Snake-case the file stem so `Privileges.mobileconfig` →
 /// `privileges`, `My Org-Wifi.mobileconfig` → `my_org_wifi`.
+/// MCX (Managed Client for X) preferences ship the actual settings
+/// deeply nested under
+/// `PayloadContent.<domain>.Forced[0].mcx_preference_settings`. When
+/// the source profile follows that *exact* canonical shape (one
+/// domain, one `Forced` entry, only the `mcx_preference_settings`
+/// key inside), we flatten the nested settings to top-level
+/// `[profile.fields]` and record the domain in `mcx_domain` so
+/// `generate --recipe` can re-wrap on the way out.
+///
+/// Anything non-canonical (multiple domains, multiple Forced entries,
+/// extra peer keys) falls back to faithful pass-through — better an
+/// ugly recipe that round-trips than silent data loss.
+fn unwrap_mcx_if_canonical(
+    payload_type: &str,
+    fields: BTreeMap<String, toml::Value>,
+) -> (Option<String>, BTreeMap<String, toml::Value>) {
+    if payload_type != "com.apple.ManagedClient.preferences" {
+        return (None, fields);
+    }
+    // Shape check 1: only `PayloadContent` at top level.
+    if fields.len() != 1 {
+        return (None, fields);
+    }
+    let Some(payload_content) = fields
+        .get("PayloadContent")
+        .and_then(|v| v.as_table())
+        .cloned()
+    else {
+        return (None, fields);
+    };
+    // Shape check 2: exactly one preference domain.
+    if payload_content.len() != 1 {
+        return (None, fields);
+    }
+    let (domain, domain_value) = payload_content
+        .into_iter()
+        .next()
+        .expect("len 1 verified above");
+    let Some(domain_table) = domain_value.as_table() else {
+        return (None, fields);
+    };
+    // Shape check 3: domain dict has at least a `Forced` array.
+    let Some(forced) = domain_table.get("Forced").and_then(|v| v.as_array()) else {
+        return (None, fields);
+    };
+    if forced.len() != 1 {
+        return (None, fields);
+    }
+    let Some(forced_entry) = forced[0].as_table() else {
+        return (None, fields);
+    };
+    // Shape check 4: forced entry's only key is `mcx_preference_settings`.
+    if forced_entry.len() != 1 {
+        return (None, fields);
+    }
+    let Some(settings) = forced_entry
+        .get("mcx_preference_settings")
+        .and_then(|v| v.as_table())
+        .cloned()
+    else {
+        return (None, fields);
+    };
+
+    // Materialize as BTreeMap so the recipe stays byte-stable.
+    let flat: BTreeMap<String, toml::Value> = settings.into_iter().collect();
+    (Some(domain), flat)
+}
+
 fn recipe_name_from_path(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     let mut out = String::with_capacity(stem.len());

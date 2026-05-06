@@ -2920,6 +2920,15 @@ fn trap_76_library_import_round_trips_real_mobileconfig() {
         "single inner payload → single [[profile]] block"
     );
 
+    // PayloadRemovalDisallowed from the source envelope must propagate
+    // to the imported recipe — the SAP fixture sets it true. Read the
+    // TOML directly since --list-recipes only surfaces summary fields.
+    let recipe_toml = fs::read_to_string(&recipe_path).unwrap();
+    assert!(
+        recipe_toml.contains("removal_disallowed = true"),
+        "PayloadRemovalDisallowed=true must propagate to the recipe; got: {recipe_toml}"
+    );
+
     // Re-running without --force must refuse.
     let refused = Command::cargo_bin("profile")
         .unwrap()
@@ -3228,5 +3237,253 @@ type = "com.apple.activation.simple"
         ddm_unknown["severity"].as_str(),
         Some("error"),
         "DDM compose failure must be an error, not a warning"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 79: `profile library import` accepts DDM declaration JSON.
+//
+// Catches:
+//   - `.json` not routed to the DDM importer
+//   - configuration declarations not landing under `<lib>/ddm/`
+//   - `--name` override not flowing through to intent_name (so the
+//     regenerated identifier doesn't match the source)
+//   - activation/asset declarations silently importing as bundles
+//     (they should bail with a clear error pointing at the
+//     configuration JSON instead)
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_79_library_import_handles_ddm_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = tmp.path().join("lib");
+
+    let scaffold = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(scaffold.status.success());
+
+    // Synthetic DDM configuration JSON (a real-world shape).
+    let cfg_json = r#"{
+        "Type": "com.apple.configuration.softwareupdate.settings",
+        "Identifier": "com.acme.config.softwareupdate-settings",
+        "Payload": {
+            "Notifications": true,
+            "AllowStandardUserOSUpdates": false,
+            "AutomaticActions": {
+                "Download": "AlwaysOn",
+                "InstallOSUpdates": "AlwaysOn"
+            }
+        }
+    }"#;
+    let cfg_path = tmp.path().join("configuration.json");
+    fs::write(&cfg_path, cfg_json).unwrap();
+
+    // 1. Single-file import with --name override.
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            cfg_path.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+            "--name",
+            "softwareupdate-settings",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "DDM JSON import must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&result.stdout).expect("JSON envelope");
+    assert_eq!(parsed["payload_count"], 1);
+    let pts = parsed["payload_types"].as_array().unwrap();
+    assert_eq!(
+        pts[0].as_str(),
+        Some("com.apple.configuration.softwareupdate.settings")
+    );
+    let bundle_path = lib.join("ddm/softwareupdate-settings.toml");
+    let meaning_path = lib.join("ddm/softwareupdate-settings.meaning.md");
+    assert!(
+        bundle_path.exists(),
+        "DDM bundle must land under <lib>/ddm/"
+    );
+    assert!(
+        meaning_path.exists(),
+        "DDM .meaning.md sidecar must accompany it"
+    );
+
+    // 2. The imported bundle must compose round-trip.
+    let out = tempfile::tempdir().unwrap();
+    let composed = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "ddm",
+            "compose",
+            "--preset-path",
+            lib.join("ddm").to_str().unwrap(),
+            "--preset",
+            "softwareupdate-settings",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        composed.status.success(),
+        "imported DDM bundle must compose; stderr: {}",
+        String::from_utf8_lossy(&composed.stderr)
+    );
+
+    // 3. Regenerated configuration JSON matches the source semantics.
+    let regen: Value =
+        serde_json::from_slice(&fs::read(out.path().join("configuration.json")).unwrap()).unwrap();
+    assert_eq!(
+        regen["Type"].as_str(),
+        Some("com.apple.configuration.softwareupdate.settings")
+    );
+    assert_eq!(
+        regen["Identifier"].as_str(),
+        Some("com.acme.config.softwareupdate-settings"),
+        "with --name override, the regenerated Identifier must match the source"
+    );
+    assert_eq!(
+        regen["Payload"]["AutomaticActions"]["InstallOSUpdates"].as_str(),
+        Some("AlwaysOn"),
+        "nested payload keys must round-trip"
+    );
+
+    // 4. Activation declarations are rejected with the documented error.
+    let act_json = r#"{
+        "Type": "com.apple.activation.simple",
+        "Identifier": "com.acme.activation.x",
+        "Payload": {"StandardConfigurations": ["com.acme.config.x"]}
+    }"#;
+    let act_path = tmp.path().join("activation.json");
+    fs::write(&act_path, act_json).unwrap();
+    let refused = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            act_path.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !refused.status.success(),
+        "activation declarations must NOT import as bundles"
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("com.apple.configuration.") && stderr.contains("import the configuration"),
+        "refusal must point at the configuration JSON; got: {stderr}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 80: MCX-style profiles auto-unwrap on import and re-wrap on
+// generate. The Privileges fixture is the canonical case:
+//   PayloadContent[0].PayloadContent['corp.sap.privileges']
+//     .Forced[0].mcx_preference_settings.<settings>
+// becomes a flat `[profile.fields]` plus `mcx_domain = "corp.sap.privileges"`.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_80_mcx_profile_unwraps_on_import_and_rewraps_on_generate() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/import/Privileges.mobileconfig");
+    assert!(fixture.exists());
+
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = tmp.path().join("lib");
+    let scaffold = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(scaffold.status.success());
+
+    let imported = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            fixture.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        imported.status.success(),
+        "import must succeed; stderr: {}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+
+    // 1. Imported recipe is FLAT — fields live at top of [profile.fields],
+    //    `mcx_domain` records the source preference domain.
+    let recipe_path = lib.join("recipes/privileges.toml");
+    let recipe_toml = fs::read_to_string(&recipe_path).unwrap();
+    assert!(
+        recipe_toml.contains("mcx_domain = \"corp.sap.privileges\""),
+        "mcx_domain must propagate from the source preference domain; got: {recipe_toml}"
+    );
+    assert!(
+        recipe_toml.contains("EnforcePrivileges = \"user\""),
+        "MCX inner settings must surface flat under [profile.fields]; got: {recipe_toml}"
+    );
+    assert!(
+        !recipe_toml.contains("[profile.fields.PayloadContent"),
+        "MCX envelope must be unwrapped, not preserved as nested sub-tables; got: {recipe_toml}"
+    );
+
+    // 2. Re-generating the recipe re-wraps the canonical envelope.
+    let out = tempfile::tempdir().unwrap();
+    let regen = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe-path",
+            lib.join("recipes").to_str().unwrap(),
+            "--recipe",
+            "privileges",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        regen.status.success(),
+        "generate from MCX recipe must succeed; stderr: {}",
+        String::from_utf8_lossy(&regen.stderr)
+    );
+    let regen_xml = fs::read_to_string(out.path().join("preferences.mobileconfig")).unwrap();
+    assert!(
+        regen_xml.contains("corp.sap.privileges"),
+        "regenerated MCX mobileconfig must carry the preference domain"
+    );
+    assert!(
+        regen_xml.contains("mcx_preference_settings"),
+        "regenerated MCX mobileconfig must wrap settings under mcx_preference_settings"
+    );
+    assert!(
+        regen_xml.contains("<key>EnforcePrivileges</key>")
+            && regen_xml.contains("<string>user</string>"),
+        "EnforcePrivileges=\"user\" must survive flatten→regen round-trip"
     );
 }
