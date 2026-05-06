@@ -790,6 +790,14 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output_mode,
                 )?;
             }
+            LibraryAction::Validate { path } => {
+                profile::cli::library_validate::handle_library_validate(
+                    profile::cli::library_validate::LibraryValidateOptions {
+                        path: std::path::Path::new(&path),
+                    },
+                    output_mode,
+                )?;
+            }
         },
         Commands::Ddm { action } => match action {
             DdmAction::Parse {

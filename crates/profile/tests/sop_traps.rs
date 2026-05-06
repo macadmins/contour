@@ -3141,3 +3141,92 @@ fn trap_77_library_import_directory_with_data_and_placeholders() {
         "MDM placeholder in <string> must round-trip back into TOML; got: {ios_toml}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 78: `profile library validate <PATH>` catches compose-time
+// breakage. Catches regressions where:
+//   - clean library produces zero findings
+//   - unknown payload types fall through to a hard error instead of a
+//     warning (severity drift hurts CI gating)
+//   - DDM bundles with bogus configuration types pass validation
+//   - exit code doesn't reflect error severity
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_78_library_validate_flags_unknown_types_and_compose_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = tmp.path().join("lib");
+
+    // Scaffold a fresh library — embedded recipes are known-good.
+    let scaffold = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(scaffold.status.success());
+
+    // 1. Clean library validates with zero findings.
+    let clean = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "validate", lib.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        clean.status.success(),
+        "clean library must validate with exit 0; stderr: {}",
+        String::from_utf8_lossy(&clean.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&clean.stdout).expect("clean JSON");
+    assert_eq!(parsed["errors"], 0);
+    assert_eq!(parsed["warnings"], 0);
+    assert_eq!(parsed["success"], true);
+
+    // 2. Drop a deliberately broken recipe in: bogus payload_type
+    //    (warning) + bogus DDM configuration type (error).
+    let broken = r#"[recipe]
+name = "_broken"
+description = "trap fixture"
+
+[[profile]]
+filename = "x.mobileconfig"
+payload_type = "com.example.totally.bogus"
+display_name = "Bogus"
+
+[[ddm]]
+intent_name = "broken-bundle"
+
+[ddm.configuration]
+type = "com.apple.configuration.totally.bogus"
+
+[ddm.activation]
+type = "com.apple.activation.simple"
+"#;
+    fs::write(lib.join("recipes/_broken.toml"), broken).unwrap();
+
+    let dirty = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "validate", lib.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        !dirty.status.success(),
+        "library with errors must exit non-zero"
+    );
+    let dirty_parsed: Value = serde_json::from_slice(&dirty.stdout).expect("dirty JSON");
+    let findings = dirty_parsed["findings"].as_array().expect("findings array");
+
+    let unknown = findings
+        .iter()
+        .find(|f| f["check"] == "unknown-payload-type")
+        .expect("must flag the bogus payload_type as unknown");
+    assert_eq!(unknown["severity"].as_str(), Some("warning"));
+
+    let ddm_unknown = findings
+        .iter()
+        .find(|f| f["check"] == "ddm-unknown-type")
+        .expect("must flag the bogus DDM configuration type");
+    assert_eq!(
+        ddm_unknown["severity"].as_str(),
+        Some("error"),
+        "DDM compose failure must be an error, not a warning"
+    );
+}

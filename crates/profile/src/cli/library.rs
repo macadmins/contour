@@ -206,20 +206,28 @@ pub fn handle_library_new(opts: LibraryNewOptions<'_>, output_mode: OutputMode) 
         }
     }
 
-    // MDM recipes — same sibling `.meaning.md` pattern.
+    // MDM recipes — schema-enriched sidecar via the import path's
+    // generator. Falls back to the simpler `meaning_md_for` if the
+    // TOML doesn't parse as a Recipe (defensive — embedded recipes
+    // always parse).
     if opts.include_recipes {
         let recipes_dir = root.join("recipes");
         std::fs::create_dir_all(&recipes_dir)
             .with_context(|| format!("Failed to create {}", recipes_dir.display()))?;
+        let registry = crate::cli::generate::load_registry(None).ok();
         for (name, body) in recipe::loader::EMBEDDED_RECIPES {
             let toml_target = recipes_dir.join(format!("{name}.toml"));
             write_file(&toml_target, body.as_bytes(), &mut written)?;
             let meaning_target = recipes_dir.join(format!("{name}.meaning.md"));
-            write_file(
-                &meaning_target,
-                meaning_md_for(name, "", body, "MDM recipe").as_bytes(),
-                &mut written,
-            )?;
+            let meaning_body = match toml::from_str::<crate::recipe::Recipe>(body) {
+                Ok(parsed) => crate::cli::import_recipe::build_meaning_md(
+                    &parsed,
+                    &toml_target,
+                    registry.as_ref(),
+                ),
+                Err(_) => meaning_md_for(name, "", body, "MDM recipe"),
+            };
+            write_file(&meaning_target, meaning_body.as_bytes(), &mut written)?;
         }
     }
 

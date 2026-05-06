@@ -525,7 +525,11 @@ fn unique_filename(payload_type: &str, seen: &mut HashSet<String>) -> String {
 /// Payloads not in the schema (custom prefs, vendor envelopes whose
 /// inner keys aren't documented) get a "no schema match" note so the
 /// reader knows where docs stop being authoritative.
-fn build_meaning_md(recipe: &Recipe, source: &Path, registry: Option<&SchemaRegistry>) -> String {
+pub fn build_meaning_md(
+    recipe: &Recipe,
+    source: &Path,
+    registry: Option<&SchemaRegistry>,
+) -> String {
     let name = &recipe.recipe.name;
     let description = &recipe.recipe.description;
     let intent = if description.is_empty() {
@@ -569,9 +573,22 @@ fn build_meaning_md(recipe: &Recipe, source: &Path, registry: Option<&SchemaRegi
     let _ = writeln!(out);
 
     // ── Schema-enriched payload sections ──────────────────────────────
-    let _ = writeln!(out, "## Payloads\n");
-    for spec in &recipe.profiles {
-        append_payload_section(&mut out, spec, registry);
+    if !recipe.profiles.is_empty() {
+        let _ = writeln!(out, "## Payloads\n");
+        for spec in &recipe.profiles {
+            append_payload_section(&mut out, spec, registry);
+        }
+    }
+
+    // DDM bundles in the recipe (parallel to mobileconfig payloads —
+    // hardening-macos-baseline ships both). Same enrichment shape:
+    // schema title from the configuration type, platforms/OS support,
+    // and a one-line summary of activation/asset/subscriptions.
+    if !recipe.ddm.is_empty() {
+        let _ = writeln!(out, "## DDM declarations\n");
+        for bundle in &recipe.ddm {
+            append_ddm_section(&mut out, bundle, registry);
+        }
     }
 
     let _ = writeln!(out, "## References\n");
@@ -717,6 +734,124 @@ fn append_recipe_keys_only(out: &mut String, spec: &ProfileSpec) {
         let _ = writeln!(out, "- `{key}`");
     }
     let _ = writeln!(out);
+}
+
+/// Render one `### <intent_name>` block per `[[ddm]]` bundle, pulling
+/// schema docs for the configuration type when known. Mirror of
+/// `append_payload_section` — same shape, DDM-flavoured fields.
+fn append_ddm_section(
+    out: &mut String,
+    bundle: &crate::ddm::compose::Bundle,
+    registry: Option<&SchemaRegistry>,
+) {
+    let cfg_type = &bundle.configuration.type_name;
+    let manifest = registry.and_then(|r| r.get_by_name(cfg_type));
+
+    let heading = match manifest {
+        Some(m) if !m.title.is_empty() => {
+            format!("{} — `{}` (`{}`)", m.title, bundle.intent_name, cfg_type)
+        }
+        _ => format!("`{}` (`{}`)", bundle.intent_name, cfg_type),
+    };
+    let _ = writeln!(out, "### {heading}\n");
+
+    if let Some(m) = manifest
+        && !m.description.trim().is_empty()
+    {
+        let _ = writeln!(out, "{}\n", m.description.trim());
+    }
+
+    // Platforms + OS support (DDM types live in the same registry as
+    // mobileconfig payloads, so reuse the same lookup).
+    if let Some(m) = manifest {
+        let plats: Vec<(Platform, &'static str, bool)> = vec![
+            (Platform::MacOS, "macOS", m.platforms.macos),
+            (Platform::Ios, "iOS", m.platforms.ios),
+            (Platform::TvOS, "tvOS", m.platforms.tvos),
+            (Platform::WatchOS, "watchOS", m.platforms.watchos),
+            (Platform::VisionOS, "visionOS", m.platforms.visionos),
+        ];
+        let parts: Vec<String> = plats
+            .iter()
+            .filter(|(_, _, supported)| *supported)
+            .map(|(p, label, _)| {
+                if let Some(detail) = m.os_support.get(p)
+                    && let Some(intro) = &detail.introduced
+                {
+                    format!("{label} (introduced {intro})")
+                } else {
+                    (*label).to_string()
+                }
+            })
+            .collect();
+        if !parts.is_empty() {
+            let _ = writeln!(out, "**Platforms:** {}\n", parts.join(", "));
+        }
+    }
+
+    // Bundle-shape summary: activation type, asset, subscriptions.
+    let mut shape: Vec<String> = Vec::new();
+    if let Some(activation) = &bundle.activation {
+        let act_type = activation
+            .type_name
+            .as_deref()
+            .unwrap_or("com.apple.activation.simple");
+        if let Some(predicate) = &activation.predicate {
+            shape.push(format!(
+                "activation: `{act_type}` (predicate: `{predicate}`)"
+            ));
+        } else {
+            shape.push(format!("activation: `{act_type}`"));
+        }
+    }
+    if let Some(asset) = &bundle.asset {
+        shape.push(format!("asset: `{}`", asset.type_name));
+    }
+    if let Some(subs) = &bundle.subscriptions {
+        shape.push(format!(
+            "status subscriptions: {}",
+            subs.keys
+                .iter()
+                .map(|k| format!("`{k}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !shape.is_empty() {
+        let _ = writeln!(out, "**Bundle shape:**\n");
+        for line in shape {
+            let _ = writeln!(out, "- {line}");
+        }
+        let _ = writeln!(out);
+    }
+
+    // Configured payload keys — same per-key documentation as the
+    // mobileconfig path (DDM uses the same FieldDefinition shape).
+    let configured_keys: Vec<&String> = bundle.configuration.payload.keys().collect();
+    if !configured_keys.is_empty() {
+        let _ = writeln!(out, "**Configuration payload keys:**\n");
+        if let Some(m) = manifest {
+            for key in &configured_keys {
+                match m.fields.get(*key) {
+                    Some(field) => {
+                        let mut line = format!("- **`{}`**", field.name);
+                        if !field.description.trim().is_empty() {
+                            let _ = write!(line, " — {}", first_sentence(&field.description));
+                        }
+                        let _ = writeln!(out, "{line}");
+                    }
+                    None => {
+                        let _ = writeln!(out, "- `{key}` _(nested or vendor-specific)_");
+                    }
+                }
+            }
+        } else {
+            for key in &configured_keys {
+                let _ = writeln!(out, "- `{key}`");
+            }
+        }
+        let _ = writeln!(out);
+    }
 }
 
 /// Schema descriptions are full sentences/paragraphs. Trim to the first
