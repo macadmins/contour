@@ -27,14 +27,23 @@ fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
 
 /// Resolve the organization domain for DDM generation/compose.
 ///
-/// Resolution order matches `contour_core::config::resolve_org`:
-///   1. `profile.toml` (`config.organization.domain`)
-///   2. `CONTOUR_ORG` env var (ideal for CI / GitHub Actions)
-///   3. `.contour/config.toml` walked up from cwd
+/// Resolution order:
+///   1. Explicit `--org <ORG>` flag (highest priority)
+///   2. `profile.toml` (`config.organization.domain`)
+///   3. `CONTOUR_ORG` env var (ideal for CI / GitHub Actions)
+///   4. `.contour/config.toml` walked up from cwd
 ///
 /// Returns `None` only when no source provides a value; the caller emits
 /// the typed error envelope.
-fn resolve_ddm_org_domain(config: Option<&ProfileConfig>) -> Option<String> {
+fn resolve_ddm_org_domain(
+    cli_flag: Option<&str>,
+    config: Option<&ProfileConfig>,
+) -> Option<String> {
+    if let Some(s) = cli_flag {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
     if let Some(cfg) = config {
         return Some(cfg.organization.domain.clone());
     }
@@ -747,7 +756,7 @@ pub fn handle_ddm_generate(
         .split('.')
         .next_back()
         .unwrap_or("declaration");
-    let domain = resolve_ddm_org_domain(config).ok_or_else(|| {
+    let domain = resolve_ddm_org_domain(None, config).ok_or_else(|| {
         anyhow::anyhow!(
             "organization domain is required for DDM generation\n\
              Set it via:\n  \
@@ -859,31 +868,85 @@ pub fn handle_ddm_generate(
 /// (same fallback chain `handle_ddm_generate` uses) and threaded into
 /// [`compose`]. Failures emit the standard `{success:false, error, error_code}`
 /// envelope on stderr when `--json` is set.
+/// Print built-in DDM presets — JSON for agents, table for humans.
+fn list_presets_action(output_mode: OutputMode) -> Result<()> {
+    let entries: Vec<(&'static str, &'static str)> = crate::ddm::presets::list().collect();
+    if output_mode == OutputMode::Json {
+        let json: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(name, desc)| serde_json::json!({"name": name, "description": desc}))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
+    }
+    if entries.is_empty() {
+        println!("No built-in presets available.");
+        return Ok(());
+    }
+    println!("Built-in DDM presets:\n");
+    for (name, desc) in entries {
+        println!("  {name}");
+        println!("    {desc}");
+    }
+    println!("\nUse: contour profile ddm compose --preset <NAME> --org <ORG> -o ./out/");
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "ddm compose threads many CLI flags including new --preset / --list-presets"
+)]
 pub fn handle_ddm_compose(
-    bundle_path: &str,
-    output_dir: &str,
+    bundle_path: Option<&str>,
+    output_dir: Option<&str>,
     schema_path: Option<&str>,
     allow_orphans: bool,
+    org_flag: Option<&str>,
+    preset: Option<&str>,
+    list_presets: bool,
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
 ) -> Result<()> {
+    // --list-presets short-circuits — no schema/registry/output needed.
+    if list_presets {
+        return list_presets_action(output_mode);
+    }
+
     let registry = load_registry(schema_path)?;
 
-    // 1. Read + parse the bundle TOML.
-    let bundle_text = match std::fs::read_to_string(bundle_path) {
-        Ok(s) => s,
-        Err(e) => {
-            let msg = format!("Failed to read {bundle_path}: {e}");
+    // 1. Read + parse the bundle TOML — either from disk (positional
+    //    argument) or from an embedded preset (--preset <name>).
+    let (bundle_text, source_label): (String, String) = if let Some(name) = preset {
+        let body = crate::ddm::presets::body(name).ok_or_else(|| {
+            let valid: Vec<&str> = crate::ddm::presets::list().map(|(n, _)| n).collect();
+            let msg = format!(
+                "Unknown --preset '{name}'. Valid: {}\nRun `contour profile ddm compose --list-presets` for descriptions.",
+                valid.join(", ")
+            );
             if output_mode == OutputMode::Json {
-                contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
+                contour_core::output::print_error_json(&msg, Some("UNKNOWN"));
             }
-            anyhow::bail!(msg);
+            anyhow::anyhow!(msg)
+        })?;
+        (body.to_string(), format!("preset:{name}"))
+    } else {
+        let path =
+            bundle_path.expect("clap enforces bundle when neither preset nor list-presets is set");
+        match std::fs::read_to_string(path) {
+            Ok(s) => (s, path.to_string()),
+            Err(e) => {
+                let msg = format!("Failed to read {path}: {e}");
+                if output_mode == OutputMode::Json {
+                    contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
+                }
+                anyhow::bail!(msg);
+            }
         }
     };
     let bundle: Bundle = match toml::from_str(&bundle_text) {
         Ok(b) => b,
         Err(e) => {
-            let msg = format!("Failed to parse bundle TOML from {bundle_path}: {e}");
+            let msg = format!("Failed to parse bundle TOML from {source_label}: {e}");
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&msg, Some("INVALID_FORMAT"));
             }
@@ -892,7 +955,7 @@ pub fn handle_ddm_compose(
     };
 
     // 2. Resolve org domain (shared resolution: profile.toml → CONTOUR_ORG → .contour/config.toml).
-    let Some(domain) = resolve_ddm_org_domain(config) else {
+    let Some(domain) = resolve_ddm_org_domain(org_flag, config) else {
         let msg = "organization domain is required for DDM compose\n\
                    Set it via:\n  \
                    • organization.domain in profile.toml\n  \
@@ -918,6 +981,7 @@ pub fn handle_ddm_compose(
     };
 
     // 4. Ensure output directory exists, then write declarations in BUILD ORDER.
+    let output_dir = output_dir.expect("clap enforces --output when not in --list-presets mode");
     let out = Path::new(output_dir);
     if !out.exists() {
         std::fs::create_dir_all(out)?;
