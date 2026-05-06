@@ -1,0 +1,49 @@
+# Disable Apple Intelligence on macOS.
+#
+# DDM bundle that flips every Apple Intelligence toggle to false in
+# `com.apple.configuration.intelligence.settings` plus the nested
+# Mail/Notes summary toggles. Apple's defaults are all `true`, so
+# this declaration has to set each one explicitly.
+#
+# Compose with:
+#   contour profile ddm compose \
+#       crates/profile/recipes/ddm/disable-apple-intelligence-macos.toml \
+#       -o ./declarations/disable-apple-intelligence-macos
+#
+# Output: configuration.json (the declaration) + activation.json
+# (a simple activation that targets it). The activation has no
+# predicate — scope it via your MDM's group/team assignment.
+#
+# Schema source: Apple device-management
+# (declaration-configuration-intelligence.settings.yaml).
+# Verified against contour's embedded schema:
+# `contour profile info com.apple.configuration.intelligence.settings --full`.
+
+intent_name = "disable-apple-intelligence-macos"
+
+[configuration]
+type = "com.apple.configuration.intelligence.settings"
+
+  [configuration.payload]
+  # Top-level Apple Intelligence toggles. Default: true.
+  AllowAppleIntelligenceReport = false
+  AllowGenmoji = false
+  AllowImagePlayground = false
+  AllowImageWand = false                       # Apple Pencil hover; macOS-irrelevant but harmless
+  AllowPersonalizedHandwritingResults = false  # iPad / Pencil; harmless on macOS
+  AllowVisualIntelligenceSummary = false
+  AllowWritingTools = false
+
+  # Nested Mail summary controls. Default: true.
+  [configuration.payload.Mail]
+  AllowSmartReplies = false
+  AllowSummary = false
+
+  # Nested Notes transcription controls. Default: true.
+  [configuration.payload.Notes]
+  AllowTranscription = false
+  AllowTranscriptionSummary = false
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"
