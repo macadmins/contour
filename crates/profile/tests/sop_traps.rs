@@ -32,6 +32,7 @@
 //! A regression that drops any of these will fail this suite.
 
 use assert_cmd::Command;
+use base64::Engine;
 use serde_json::Value;
 use std::fs;
 
@@ -2958,5 +2959,185 @@ fn trap_76_library_import_round_trips_real_mobileconfig() {
         forced.status.success(),
         "import --force must succeed; stderr: {}",
         String::from_utf8_lossy(&forced.stderr)
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 77: bulk `library import <DIR>` walks a directory, disambiguates
+// same-stem files via parent-dir prefix, and round-trips MDM placeholders
+// through `<data>` and `<string>` channels.
+//
+// Catches regressions where:
+//   - Directory mode regresses to single-file-only
+//   - `<data>$VAR</data>` placeholders fail strict plist parse
+//   - Real `<data>` blobs break the importer instead of being base64-encoded
+//   - Same-stem files in different subdirs collide on output
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_77_library_import_directory_with_data_and_placeholders() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Build a tiny directory tree with three .mobileconfig files:
+    //   ios/lock-screen.mobileconfig         (envelope text)
+    //   ipados/lock-screen.mobileconfig      (envelope text — same stem!)
+    //   shared/cert.mobileconfig             (real <data> + $VAR placeholder)
+    let src = tmp.path().join("src");
+    let ios_dir = src.join("ios");
+    let ipados_dir = src.join("ipados");
+    let shared_dir = src.join("shared");
+    fs::create_dir_all(&ios_dir).unwrap();
+    fs::create_dir_all(&ipados_dir).unwrap();
+    fs::create_dir_all(&shared_dir).unwrap();
+
+    // Two files with identical stems → must disambiguate by parent
+    // directory in bulk mode.
+    let envelope = |display: &str, ident: &str, uuid: &str| -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>PayloadContent</key><array><dict>
+<key>PayloadType</key><string>com.apple.shareddeviceconfiguration</string>
+<key>PayloadIdentifier</key><string>{ident}.inner</string>
+<key>PayloadUUID</key><string>{uuid}</string>
+<key>PayloadVersion</key><integer>1</integer>
+<key>LockScreenFootnote</key><string>Property of $ORG_NAME</string>
+</dict></array>
+<key>PayloadDisplayName</key><string>{display}</string>
+<key>PayloadIdentifier</key><string>{ident}</string>
+<key>PayloadType</key><string>Configuration</string>
+<key>PayloadUUID</key><string>{uuid}</string>
+<key>PayloadVersion</key><integer>1</integer>
+</dict></plist>"#
+        )
+    };
+    fs::write(
+        ios_dir.join("lock-screen.mobileconfig"),
+        envelope(
+            "Lock screen iOS",
+            "com.example.ios.lock",
+            "11111111-1111-1111-1111-111111111111",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        ipados_dir.join("lock-screen.mobileconfig"),
+        envelope(
+            "Lock screen iPadOS",
+            "com.example.ipados.lock",
+            "22222222-2222-2222-2222-222222222222",
+        ),
+    )
+    .unwrap();
+
+    // <data>$VAR</data> placeholder + real <data> blob in one profile.
+    // The lenient parser substitutes the $VAR before plist parsing;
+    // the importer must restore the original placeholder and base64-
+    // encode the real binary blob.
+    let real_data_b64 = base64::engine::general_purpose::STANDARD.encode(b"hello");
+    let cert_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>PayloadContent</key><array><dict>
+<key>PayloadType</key><string>com.apple.security.pkcs1</string>
+<key>PayloadIdentifier</key><string>com.example.cert.inner</string>
+<key>PayloadUUID</key><string>33333333-3333-3333-3333-333333333333</string>
+<key>PayloadVersion</key><integer>1</integer>
+<key>PayloadCertificateFileName</key><string>ca.der</string>
+<key>PayloadContent</key><data>$DOGFOOD_OKTA_CA_CERTIFICATE</data>
+<key>RealBlob</key><data>{real_data_b64}</data>
+</dict></array>
+<key>PayloadDisplayName</key><string>Certificate</string>
+<key>PayloadIdentifier</key><string>com.example.cert</string>
+<key>PayloadType</key><string>Configuration</string>
+<key>PayloadUUID</key><string>44444444-4444-4444-4444-444444444444</string>
+<key>PayloadVersion</key><integer>1</integer>
+</dict></plist>"#
+    );
+    fs::write(shared_dir.join("cert.mobileconfig"), cert_xml).unwrap();
+
+    let lib = tmp.path().join("lib");
+    let scaffold = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(scaffold.status.success());
+
+    // Run bulk import.
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            src.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "bulk import must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&result.stdout).expect("JSON envelope");
+    assert_eq!(parsed["scanned"], 3);
+    assert_eq!(parsed["imported"], 3);
+    assert_eq!(parsed["failed"], 0);
+
+    // Both lock-screen files exist under disambiguated names.
+    let recipes_dir = lib.join("recipes");
+    let lock_recipes: Vec<_> = std::fs::read_dir(&recipes_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.ends_with(".toml") && n.contains("lock-screen"))
+        .collect();
+    assert_eq!(
+        lock_recipes.len(),
+        2,
+        "both ios + ipados lock-screen recipes must coexist via parent-dir disambiguation; got: {lock_recipes:?}"
+    );
+    assert!(
+        lock_recipes.iter().any(|n| n.starts_with("ios-")
+            || n.starts_with("ipados-")
+            || n.contains("ios")
+            || n.contains("ipados")),
+        "at least one disambiguated recipe must carry a parent-dir prefix; got: {lock_recipes:?}"
+    );
+
+    // The cert recipe restored the $VAR placeholder and base64-encoded
+    // the real blob.
+    let cert_toml = std::fs::read_to_string(recipes_dir.join("cert.toml")).unwrap();
+    assert!(
+        cert_toml.contains("$DOGFOOD_OKTA_CA_CERTIFICATE"),
+        "MDM placeholder in <data> must round-trip back into TOML; got: {cert_toml}"
+    );
+    assert!(
+        cert_toml.contains("base64:"),
+        "real <data> blob must be encoded with the base64: prefix; got: {cert_toml}"
+    );
+
+    // String-channel placeholder (`$ORG_NAME` inside a <string>) also
+    // round-trips through the sentinel mapping.
+    let ios_recipe_path = recipes_dir
+        .read_dir()
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|n| n.ends_with(".toml") && n.contains("lock-screen"))
+                .unwrap_or(false)
+        })
+        .expect("at least one lock-screen recipe");
+    let ios_toml = std::fs::read_to_string(&ios_recipe_path).unwrap();
+    assert!(
+        ios_toml.contains("$ORG_NAME"),
+        "MDM placeholder in <string> must round-trip back into TOML; got: {ios_toml}"
     );
 }

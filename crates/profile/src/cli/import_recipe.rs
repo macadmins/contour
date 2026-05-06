@@ -11,10 +11,11 @@
 use crate::cli::generate::load_registry;
 use crate::cli::info::plist_tag_for;
 use crate::output::OutputMode;
-use crate::profile::parser::parse_profile_auto_unsign;
+use crate::profile::parser::parse_profile_lenient;
 use crate::recipe::{ProfileSpec, Recipe, RecipeMeta};
 use crate::schema::{PayloadManifest, Platform, SchemaRegistry};
 use anyhow::{Context, Result};
+use base64::Engine;
 use colored::Colorize;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
@@ -50,41 +51,156 @@ pub fn handle_library_import(
     opts: LibraryImportOptions<'_>,
     output_mode: OutputMode,
 ) -> Result<()> {
+    // Directory mode: walk the tree, import each .mobileconfig with
+    // `--name` derived from the filename (the `--name` override is
+    // only meaningful for single-file imports). Failures don't abort
+    // the run — they're collected and reported.
+    if opts.input.is_dir() {
+        if opts.name.is_some() {
+            anyhow::bail!(
+                "--name cannot be combined with a directory input — names are derived from each file's stem in bulk mode."
+            );
+        }
+        return handle_directory_import(opts, output_mode);
+    }
     if !opts.input.is_file() {
-        anyhow::bail!("Input file not found: {}", opts.input.display());
+        anyhow::bail!("Input not found: {}", opts.input.display());
+    }
+    let report = import_one(opts.input, opts.into, opts.name, opts.force)?;
+    emit_single_report(&report, output_mode);
+    Ok(())
+}
+
+/// Walk `<INPUT>` recursively for `*.mobileconfig` and import each.
+fn handle_directory_import(opts: LibraryImportOptions<'_>, output_mode: OutputMode) -> Result<()> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_mobileconfigs(opts.input, &mut files)?;
+    files.sort();
+
+    let mut succeeded: Vec<SingleImportReport> = Vec::new();
+    let mut failed: Vec<(PathBuf, String)> = Vec::new();
+    // Track names claimed in *this* run so two source files with the
+    // same stem (e.g. `ios/lock-screen-message.mobileconfig` and
+    // `ipados/lock-screen-message.mobileconfig`) get disambiguated by
+    // their parent directory name rather than colliding.
+    let mut claimed: HashSet<String> = HashSet::new();
+
+    for file in &files {
+        let name = bulk_recipe_name(file, &claimed);
+        claimed.insert(name.clone());
+        match import_one(file, opts.into, Some(&name), opts.force) {
+            Ok(report) => succeeded.push(report),
+            Err(e) => failed.push((file.clone(), format!("{e:#}"))),
+        }
     }
 
-    // 1. Parse the mobileconfig (auto-unsigns if needed).
-    let path_str = opts
-        .input
+    match output_mode {
+        OutputMode::Json => {
+            let payload = serde_json::json!({
+                "success": failed.is_empty(),
+                "scanned": files.len(),
+                "imported": succeeded.len(),
+                "failed": failed.len(),
+                "imports": succeeded.iter().map(|r| serde_json::json!({
+                    "input": r.input.display().to_string(),
+                    "recipe_path": r.recipe_path.display().to_string(),
+                    "meaning_path": r.meaning_path.display().to_string(),
+                    "payload_count": r.payload_types.len(),
+                    "payload_types": r.payload_types,
+                })).collect::<Vec<_>>(),
+                "failures": failed.iter().map(|(p, e)| serde_json::json!({
+                    "input": p.display().to_string(),
+                    "error": e,
+                })).collect::<Vec<_>>(),
+            });
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+        OutputMode::Human => {
+            println!(
+                "{} Bulk import: {} succeeded, {} failed (of {} scanned)",
+                if failed.is_empty() {
+                    "✓".green()
+                } else {
+                    "!".yellow()
+                },
+                succeeded.len(),
+                failed.len(),
+                files.len(),
+            );
+            for r in &succeeded {
+                println!(
+                    "  {} {} → {}",
+                    "→".green(),
+                    r.input.display(),
+                    r.recipe_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default()
+                );
+            }
+            for (p, err) in &failed {
+                println!("  {} {}: {}", "✗".red(), p.display(), err);
+            }
+        }
+    }
+
+    if !failed.is_empty() {
+        // Non-fatal exit for bulk imports — partial success is the
+        // common case. JSON consumers gate on `success` / `failed`.
+        anyhow::bail!("{} of {} imports failed", failed.len(), files.len());
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct SingleImportReport {
+    input: PathBuf,
+    recipe_path: PathBuf,
+    meaning_path: PathBuf,
+    payload_types: Vec<String>,
+}
+
+fn import_one(
+    input: &Path,
+    into: &Path,
+    name_override: Option<&str>,
+    force: bool,
+) -> Result<SingleImportReport> {
+    // 1. Lenient parse — handles signed/unsigned + MDM placeholder
+    //    sentinels. The placeholder mapping flows through to the value
+    //    converter so `<data>$VAR</data>` round-trips back to the
+    //    original placeholder string in TOML.
+    let path_str = input
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Input path is not valid UTF-8"))?;
-    let profile = parse_profile_auto_unsign(path_str).with_context(|| {
+    let fixup = parse_profile_lenient(path_str).with_context(|| {
         format!(
             "Failed to parse {} as a configuration profile",
-            opts.input.display()
+            input.display()
         )
     })?;
+    let profile = fixup.profile;
+    let placeholder_mapping = fixup.placeholder_mapping;
 
-    // 2. Derive the recipe name (override > snake-cased file stem).
-    let recipe_name = opts.name.map(str::to_string).unwrap_or_else(|| {
-        recipe_name_from_path(opts.input).unwrap_or_else(|| "imported".to_string())
-    });
+    // 2. Recipe name.
+    let recipe_name = name_override
+        .map(str::to_string)
+        .unwrap_or_else(|| recipe_name_from_path(input).unwrap_or_else(|| "imported".to_string()));
 
-    // 3. Compute output paths and refuse to overwrite without --force.
-    let recipes_dir = opts.into.join("recipes");
+    // 3. Output paths.
+    let recipes_dir = into.join("recipes");
     std::fs::create_dir_all(&recipes_dir)
         .with_context(|| format!("Failed to create {}", recipes_dir.display()))?;
     let recipe_path = recipes_dir.join(format!("{recipe_name}.toml"));
     let meaning_path = recipes_dir.join(format!("{recipe_name}.meaning.md"));
-    if recipe_path.exists() && !opts.force {
+    if recipe_path.exists() && !force {
         anyhow::bail!(
             "{} already exists. Re-run with --force to overwrite, or pass --name <NAME> to write a different file.",
             recipe_path.display()
         );
     }
 
-    // 4. Build the Recipe struct from the parsed profile.
+    // 4. Build the Recipe.
     let description = if profile.payload_display_name.trim().is_empty() {
         profile.payload_description().unwrap_or_default()
     } else {
@@ -107,19 +223,10 @@ pub fn handle_library_import(
             if MANAGEMENT_KEYS.contains(&k.as_str()) {
                 continue;
             }
-            match plist_value_to_toml(v) {
-                Ok(tv) => {
-                    fields.insert(k.clone(), tv);
-                }
-                Err(e) => {
-                    anyhow::bail!(
-                        "Cannot convert key '{}' on payload '{}': {}",
-                        k,
-                        inner.payload_type,
-                        e
-                    );
-                }
-            }
+            let tv = plist_value_to_toml(v, &placeholder_mapping).with_context(|| {
+                format!("converting key '{k}' on payload '{}'", inner.payload_type)
+            })?;
+            fields.insert(k.clone(), tv);
         }
 
         payload_types.push(inner.payload_type.clone());
@@ -146,64 +253,143 @@ pub fn handle_library_import(
         ddm: Vec::new(),
     };
 
-    // 5. Serialize and write the TOML + sidecar.
+    // 5. Write TOML + enriched sidecar.
     let toml_body =
         toml::to_string(&recipe).with_context(|| "Failed to serialize imported recipe to TOML")?;
     std::fs::write(&recipe_path, &toml_body)
         .with_context(|| format!("Failed to write {}", recipe_path.display()))?;
-
-    // Schema-enrich the sidecar: pull title/description/platforms/OS
-    // support from the embedded schema for each payload, plus per-field
-    // docs for the keys this recipe sets. Best-effort — payloads not in
-    // the schema (custom prefs, unknown vendor keys) get a "no schema
-    // match" note rather than an empty section.
     let registry = load_registry(None).ok();
-    let sidecar_body = build_meaning_md(&recipe, opts.input, registry.as_ref());
+    let sidecar_body = build_meaning_md(&recipe, input, registry.as_ref());
     std::fs::write(&meaning_path, sidecar_body)
         .with_context(|| format!("Failed to write {}", meaning_path.display()))?;
 
-    // 6. Emit report.
+    Ok(SingleImportReport {
+        input: input.to_path_buf(),
+        recipe_path,
+        meaning_path,
+        payload_types,
+    })
+}
+
+fn emit_single_report(report: &SingleImportReport, output_mode: OutputMode) {
     match output_mode {
         OutputMode::Json => {
             let payload = serde_json::json!({
                 "success": true,
-                "recipe_path": recipe_path.display().to_string(),
-                "meaning_path": meaning_path.display().to_string(),
-                "payload_count": payload_types.len(),
-                "payload_types": payload_types,
+                "recipe_path": report.recipe_path.display().to_string(),
+                "meaning_path": report.meaning_path.display().to_string(),
+                "payload_count": report.payload_types.len(),
+                "payload_types": report.payload_types,
             });
-            println!("{}", serde_json::to_string_pretty(&payload)?);
+            if let Ok(s) = serde_json::to_string_pretty(&payload) {
+                println!("{s}");
+            }
         }
         OutputMode::Human => {
+            let recipe_name = report
+                .recipe_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("imported");
             println!(
                 "{} Imported {} payload(s) into {}",
                 "✓".green(),
-                payload_types.len(),
+                report.payload_types.len(),
                 recipe_name.bold()
             );
-            println!("  {} {}", "→".green(), recipe_path.display());
-            println!("  {} {}", "→".green(), meaning_path.display());
-            for pt in &payload_types {
+            println!("  {} {}", "→".green(), report.recipe_path.display());
+            println!("  {} {}", "→".green(), report.meaning_path.display());
+            for pt in &report.payload_types {
                 println!("    {} {}", "•".dimmed(), pt.dimmed());
             }
-            println!();
-            println!(
-                "Next: contour profile generate --recipe-path {} --recipe {} --org com.acme -o ./out",
-                opts.into.join("recipes").display(),
-                recipe_name
-            );
         }
     }
+}
 
+/// Pick a recipe name for a bulk-mode file, disambiguating collisions
+/// with names already claimed in the same run by prefixing the parent
+/// directory (e.g. `ios-lock-screen-message`).
+fn bulk_recipe_name(file: &Path, claimed: &HashSet<String>) -> String {
+    let base = recipe_name_from_path(file).unwrap_or_else(|| "imported".to_string());
+    if !claimed.contains(&base) {
+        return base;
+    }
+    // First disambiguator: parent directory name (snake-cased).
+    if let Some(parent) = file
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        && let Some(parent_slug) = snake_case_slug(parent)
+    {
+        let prefixed = format!("{parent_slug}-{base}");
+        if !claimed.contains(&prefixed) {
+            return prefixed;
+        }
+    }
+    // Last resort: numeric suffix.
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if !claimed.contains(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Snake-case a path component so it's safe as a recipe name prefix.
+fn snake_case_slug(s: &str) -> Option<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_alnum = false;
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.extend(ch.to_lowercase());
+            prev_alnum = true;
+        } else if prev_alnum {
+            out.push('-');
+            prev_alnum = false;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// Recursively collect every `*.mobileconfig` under `root`.
+fn collect_mobileconfigs(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in
+        std::fs::read_dir(root).with_context(|| format!("Failed to read {}", root.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_mobileconfigs(&path, out)?;
+        } else if path.extension().and_then(|s| s.to_str()) == Some("mobileconfig") {
+            out.push(path);
+        }
+    }
     Ok(())
 }
 
-/// Inverse of `cli::generate::toml_to_plist`. `plist::Value::Data` is
-/// rejected explicitly (round-tripping binary blobs through TOML
-/// needs a sentinel scheme — out of scope for the MVP).
-pub fn plist_value_to_toml(v: &plist::Value) -> Result<toml::Value> {
+/// Inverse of `cli::generate::toml_to_plist_resolved`.
+///
+/// `placeholder_mapping` is the (sentinel, original) list produced
+/// by `parse_profile_lenient` — when a `<string>` value contains a
+/// sentinel, swap it back to the original placeholder. When a
+/// `<data>` payload's bytes UTF-8-decode to a `CONTOUR_DATA_PH_*`
+/// sentinel, swap to the original placeholder string. Real `<data>`
+/// blobs are encoded as `base64:<b64>` strings — matching the
+/// `toml_to_plist_resolved` round-trip path used at recipe-generation
+/// time.
+pub fn plist_value_to_toml(
+    v: &plist::Value,
+    placeholder_mapping: &[(String, String)],
+) -> Result<toml::Value> {
     Ok(match v {
-        plist::Value::String(s) => toml::Value::String(s.clone()),
+        plist::Value::String(s) => {
+            toml::Value::String(restore_string_placeholders(s, placeholder_mapping))
+        }
         plist::Value::Boolean(b) => toml::Value::Boolean(*b),
         plist::Value::Integer(i) => i
             .as_signed()
@@ -215,8 +401,6 @@ pub fn plist_value_to_toml(v: &plist::Value) -> Result<toml::Value> {
             .ok_or_else(|| anyhow::anyhow!("integer out of i64 range"))?,
         plist::Value::Real(f) => toml::Value::Float(*f),
         plist::Value::Date(d) => {
-            // Apple plist dates serialize as RFC 3339 — TOML datetimes
-            // accept the same shape.
             let text: String = d.to_xml_format();
             text.parse::<toml::value::Datetime>()
                 .map(toml::Value::Datetime)
@@ -227,25 +411,65 @@ pub fn plist_value_to_toml(v: &plist::Value) -> Result<toml::Value> {
         plist::Value::Array(arr) => {
             let mut out = Vec::with_capacity(arr.len());
             for item in arr {
-                out.push(plist_value_to_toml(item)?);
+                out.push(plist_value_to_toml(item, placeholder_mapping)?);
             }
             toml::Value::Array(out)
         }
         plist::Value::Dictionary(dict) => {
             let mut tbl = toml::map::Map::new();
             for (k, v) in dict {
-                tbl.insert(k.clone(), plist_value_to_toml(v)?);
+                tbl.insert(k.clone(), plist_value_to_toml(v, placeholder_mapping)?);
             }
             toml::Value::Table(tbl)
         }
-        plist::Value::Data(_) => {
-            anyhow::bail!(
-                "<data> binary value not supported on import yet — strip the binary key from the source profile, or open an issue if you need this."
-            );
+        plist::Value::Data(bytes) => {
+            // <data>$VAR</data> was rewritten by the lenient parser
+            // into a base64-of-sentinel; the parsed bytes are the
+            // *decoded* sentinel string. If we can match it, swap
+            // back to the original placeholder.
+            if let Ok(s) = std::str::from_utf8(bytes)
+                && let Some(original) = lookup_data_sentinel(s, placeholder_mapping)
+            {
+                toml::Value::String(original)
+            } else {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                toml::Value::String(format!("base64:{b64}"))
+            }
         }
         // Future-proofing: plist::Value is non-exhaustive.
         _ => anyhow::bail!("unsupported plist value variant"),
     })
+}
+
+/// Replace every sentinel substring in `s` with its original
+/// placeholder. Operates in mapping order so a later sentinel can't
+/// alias an earlier one.
+fn restore_string_placeholders(s: &str, mapping: &[(String, String)]) -> String {
+    if mapping.is_empty() || !s.contains("CONTOUR_") {
+        return s.to_string();
+    }
+    let mut out = s.to_string();
+    for (sentinel, original) in mapping {
+        if sentinel.starts_with("CONTOUR_PH_") && out.contains(sentinel) {
+            out = out.replace(sentinel.as_str(), original.as_str());
+        }
+    }
+    out
+}
+
+/// Resolve a `<data>` payload's decoded bytes to the original
+/// placeholder string when they came from a `CONTOUR_DATA_PH_*`
+/// sentinel. The mapping stores `(b64-of-sentinel, original)` for
+/// data-channel placeholders, so we re-encode and look it up.
+fn lookup_data_sentinel(decoded: &str, mapping: &[(String, String)]) -> Option<String> {
+    if !decoded.starts_with("CONTOUR_DATA_PH_") {
+        return None;
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(decoded);
+    mapping
+        .iter()
+        .find(|(s, _)| s == &b64)
+        .map(|(_, original)| original.clone())
 }
 
 /// Snake-case the file stem so `Privileges.mobileconfig` →
@@ -572,7 +796,7 @@ mod tests {
         nested.insert("inner".into(), plist::Value::String("y".into()));
         dict.insert("d".into(), plist::Value::Dictionary(nested));
 
-        let toml_value = plist_value_to_toml(&plist::Value::Dictionary(dict)).unwrap();
+        let toml_value = plist_value_to_toml(&plist::Value::Dictionary(dict), &[]).unwrap();
         let tbl = toml_value.as_table().unwrap();
         assert_eq!(tbl["s"].as_str(), Some("x"));
         assert_eq!(tbl["b"].as_bool(), Some(true));
@@ -583,12 +807,48 @@ mod tests {
     }
 
     #[test]
-    fn plist_to_toml_rejects_data_blobs() {
+    fn plist_to_toml_encodes_data_as_base64_string() {
+        // Real <data> payload (no sentinel match) → `base64:<>` string.
         let v = plist::Value::Data(vec![1, 2, 3]);
-        let err = plist_value_to_toml(&v).unwrap_err();
+        let result = plist_value_to_toml(&v, &[]).unwrap();
+        let s = result.as_str().expect("string");
         assert!(
-            err.to_string().contains("<data>"),
-            "error must mention <data>; got: {err}"
+            s.starts_with("base64:"),
+            "data must be encoded with the base64: sentinel; got {s}"
         );
+        // Round-trip via the `toml_to_plist_resolved` decoder shape:
+        // strip prefix and base64-decode → original bytes.
+        let b64 = s.strip_prefix("base64:").unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        assert_eq!(bytes, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn plist_to_toml_swaps_data_sentinel_to_original_placeholder() {
+        // Simulate what `parse_profile_lenient` produces for
+        // `<data>$DOGFOOD_OKTA_CA_CERTIFICATE</data>`: the bytes are
+        // the decoded sentinel string; the mapping stores
+        // (b64-of-sentinel, original).
+        let sentinel = "CONTOUR_DATA_PH_0";
+        let b64_of_sentinel = base64::engine::general_purpose::STANDARD.encode(sentinel);
+        let mapping = vec![(b64_of_sentinel, "$DOGFOOD_OKTA_CA_CERTIFICATE".to_string())];
+        let v = plist::Value::Data(sentinel.as_bytes().to_vec());
+
+        let result = plist_value_to_toml(&v, &mapping).unwrap();
+        assert_eq!(
+            result.as_str(),
+            Some("$DOGFOOD_OKTA_CA_CERTIFICATE"),
+            "data sentinel must round-trip to the original MDM placeholder"
+        );
+    }
+
+    #[test]
+    fn plist_to_toml_swaps_string_sentinel_back_to_placeholder() {
+        let mapping = vec![("CONTOUR_PH_0".to_string(), "$DOMAIN".to_string())];
+        let v = plist::Value::String("auth.CONTOUR_PH_0/sso".into());
+        let result = plist_value_to_toml(&v, &mapping).unwrap();
+        assert_eq!(result.as_str(), Some("auth.$DOMAIN/sso"));
     }
 }
