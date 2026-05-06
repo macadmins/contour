@@ -1,6 +1,6 @@
 [package]
 name = "contour"
-version = "0.2.0"
+version = "0.2.1"
 description = "Unified macOS MDM configuration toolkit"
 edition.workspace = true
 authors.workspace = true
