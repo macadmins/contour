@@ -80,6 +80,23 @@ pub enum Commands {
 
         #[arg(long, help = "Include all fields (not just required + top-level)")]
         full: bool,
+
+        #[arg(
+            long,
+            value_name = "NAME",
+            help = "Restrict output to one OS (macOS|iOS|tvOS|watchOS|visionOS)",
+            long_help = "Restrict output to a single platform.\n\
+                         \n\
+                         When set, `os_support` is scoped to that platform's\n\
+                         metadata, and the call fails fast if the payload is\n\
+                         not supported on that OS at all — preventing agents\n\
+                         from generating profiles that won't install on the\n\
+                         target.\n\
+                         \n\
+                         Accepts: macOS|mac, iOS|ipad|ipados, tvOS|tv,\n\
+                         watchOS|watch, visionOS|vision (case-insensitive)."
+        )]
+        os: Option<String>,
     },
 
     #[command(about = "Initialize a new profile.toml configuration file")]

@@ -83,9 +83,16 @@ fn run(cli: Cli) -> Result<()> {
             payload_type,
             schema_path,
             full,
+            os,
         } => {
             if let Some(t) = payload_type {
-                cli::info::handle_payload_info(&t, schema_path.as_deref(), full, output_mode)?;
+                cli::info::handle_payload_info(
+                    &t,
+                    schema_path.as_deref(),
+                    full,
+                    os.as_deref(),
+                    output_mode,
+                )?;
             } else {
                 cli::info::handle_info(config.as_ref(), output_mode)?;
             }

@@ -19,7 +19,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub use loader::SchemaFormat;
-pub use types::{FieldDefinition, FieldType, PayloadManifest};
+pub use types::{FieldDefinition, FieldType, OsSupportDetail, PayloadManifest, Platform};
 
 /// Schema source indicator
 #[derive(Debug, Clone)]

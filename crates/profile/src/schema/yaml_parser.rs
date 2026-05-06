@@ -188,6 +188,7 @@ pub fn parse_yaml_manifest(content: &str) -> Result<PayloadManifest> {
         description: manifest.description.unwrap_or_default(),
         platforms,
         min_versions,
+        os_support: std::collections::HashMap::new(),
         category,
         fields,
         field_order,
@@ -289,6 +290,8 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
                 parent_key: None,
                 platforms: Vec::new(),
                 min_version: None,
+                deprecated_in: None,
+                combinetype: None,
             };
             field_order.push(def.name.clone());
             fields.insert(def.name.clone(), def);
@@ -301,6 +304,7 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
         description: manifest.description.unwrap_or_default(),
         platforms,
         min_versions,
+        os_support: std::collections::HashMap::new(),
         category,
         fields,
         field_order,
@@ -588,6 +592,8 @@ fn parse_apple_field(field: &AppleField, depth: usize) -> FieldDefinition {
         parent_key: None,
         platforms: Vec::new(),
         min_version: None,
+        deprecated_in: None,
+        combinetype: None,
     }
 }
 

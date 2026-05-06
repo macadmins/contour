@@ -20,6 +20,14 @@ pub struct PayloadManifest {
     pub platforms: Platforms,
     /// Minimum OS versions per platform
     pub min_versions: HashMap<Platform, String>,
+    /// Per-OS support detail — rich metadata Apple's YAML carries for
+    /// each platform: introduced/deprecated/removed versions, allowed
+    /// enrollment types, supervision/DEP requirements, channel modes,
+    /// `multiple` flag, etc. Used by agents picking the right keys for
+    /// "supervised iPad", "user-enrollment iOS", or filtering output
+    /// to a target OS. May be empty for payloads that don't carry the
+    /// metadata (older schemas, custom prefs).
+    pub os_support: HashMap<Platform, OsSupportDetail>,
     /// Category: "apple", "apps", "prefs"
     pub category: String,
     /// Field definitions keyed by field name
@@ -28,6 +36,44 @@ pub struct PayloadManifest {
     pub field_order: Vec<String>,
     /// Segments grouping field names by category (from pfm_segments)
     pub segments: Vec<Segment>,
+}
+
+/// Per-platform support detail for a payload — exposes the rich Apple
+/// metadata that the structural validator and the lint pass don't see.
+///
+/// Agents use this to answer questions like: "is this payload available
+/// on the user channel?" or "does it require DEP enrollment on iOS?"
+/// Picking the wrong combination produces a profile that silently fails
+/// to install.
+#[derive(Debug, Clone, Default)]
+pub struct OsSupportDetail {
+    /// OS version when the payload became available on this platform.
+    pub introduced: Option<String>,
+    /// OS version when the payload was deprecated (still works, but
+    /// flagged by Apple).
+    pub deprecated: Option<String>,
+    /// OS version when the payload was removed (no longer works).
+    pub removed: Option<String>,
+    /// Allowed enrollment types (DDM): e.g. ["supervised", "device", "user"].
+    pub allowed_enrollments: Option<Vec<String>>,
+    /// Allowed scopes (DDM): e.g. ["system", "user"].
+    pub allowed_scopes: Option<Vec<String>>,
+    /// Whether supervision is required.
+    pub supervised: Option<bool>,
+    /// Whether DEP (Automated Device Enrollment) is required.
+    pub requires_dep: Option<bool>,
+    /// Whether user-approved MDM is required.
+    pub user_approved_mdm: Option<bool>,
+    /// Whether manual install (drag-and-drop / user double-click) is allowed.
+    pub allow_manual_install: Option<bool>,
+    /// Whether the payload is delivered on the device channel.
+    pub device_channel: Option<bool>,
+    /// Whether the payload is delivered on the user channel.
+    pub user_channel: Option<bool>,
+    /// Whether multiple instances of the same payload type are allowed.
+    pub multiple: Option<bool>,
+    /// Whether the payload is currently in beta.
+    pub beta: Option<bool>,
 }
 
 /// Platform support flags
@@ -41,7 +87,7 @@ pub struct Platforms {
 }
 
 /// Platform identifier
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Platform {
     MacOS,
     Ios,
@@ -71,6 +117,19 @@ impl Platform {
             Platform::VisionOS => "visionOS",
         }
     }
+
+    /// Parse a CLI-friendly OS name (case-insensitive — `macos`, `Macos`,
+    /// `macOS`, `MAC` all map to `Platform::MacOS`). Unknown names → None.
+    pub fn from_cli_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "macos" | "mac" | "osx" => Some(Platform::MacOS),
+            "ios" | "iphone" | "ipad" | "ipados" => Some(Platform::Ios),
+            "tvos" | "tv" => Some(Platform::TvOS),
+            "watchos" | "watch" => Some(Platform::WatchOS),
+            "visionos" | "vision" => Some(Platform::VisionOS),
+            _ => None,
+        }
+    }
 }
 
 /// Field definition within a payload
@@ -96,8 +155,16 @@ pub struct FieldDefinition {
     pub parent_key: Option<String>,
     /// Platform-specific (empty = all platforms)
     pub platforms: Vec<Platform>,
-    /// Minimum version requirement
+    /// Minimum version requirement (earliest `introduced` across platforms)
     pub min_version: Option<String>,
+    /// OS version when this key was deprecated by Apple. Field still
+    /// works for now but is flagged in Apple's schema as scheduled for
+    /// removal. Authoring tools should warn.
+    pub deprecated_in: Option<String>,
+    /// DDM merge strategy when multiple declarations carry this key —
+    /// e.g. `boolean-or`, `number-min`, `set-union`. Only meaningful for
+    /// declaration types; `None` for plain MDM profile keys.
+    pub combinetype: Option<String>,
 }
 
 /// Field type enumeration
@@ -472,6 +539,8 @@ mod tests {
                 parent_key: None,
                 platforms: vec![],
                 min_version: None,
+                deprecated_in: None,
+                combinetype: None,
             },
         );
 
@@ -495,6 +564,8 @@ mod tests {
                 parent_key: None,
                 platforms: vec![],
                 min_version: None,
+                deprecated_in: None,
+                combinetype: None,
             },
         );
 
@@ -514,6 +585,8 @@ mod tests {
                 parent_key: None,
                 platforms: vec![],
                 min_version: None,
+                deprecated_in: None,
+                combinetype: None,
             },
         );
 
@@ -523,6 +596,7 @@ mod tests {
             description: "Configure WiFi networks".to_string(),
             platforms: Platforms::parse("m,i,t"),
             min_versions: HashMap::new(),
+            os_support: HashMap::new(),
             category: "apple".to_string(),
             fields,
             field_order,
