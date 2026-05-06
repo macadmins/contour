@@ -1,10 +1,19 @@
 //! `profile library new` — scaffold an external preset/recipe library.
+//! `profile library normalize` — restyle TOML files in a library.
 //!
 //! Creates the directory tree and writes a starter README, validate
 //! workflow, and a copy of every embedded DDM preset + MDM recipe.
 //! End users point contour at the resulting directory via
 //! `--preset-path` / `--recipe-path` (or drop into
 //! `~/.contour/{presets,recipes}/`).
+//!
+//! ## Normalize
+//!
+//! `library normalize <PATH> --style {flat,nested}` rewrites every
+//! `.toml` file under `<PATH>/ddm/` and `<PATH>/recipes/` so headers
+//! and key/value lines line up with the chosen style. Indentation in
+//! TOML is purely cosmetic — semantics are preserved bit-for-bit.
+//! Comments and blank lines pass through verbatim.
 
 use crate::ddm::presets;
 use crate::output::OutputMode;
@@ -349,6 +358,192 @@ fn emit_human(root: &Path, written: &[PathBuf], opts: &LibraryNewOptions<'_>) {
     println!("  contour profile generate    --recipe-path ./recipes --list-recipes");
 }
 
+// ────────────────────────────────────────────────────────────────────
+// `library normalize` — restyle TOML files in a library.
+// ────────────────────────────────────────────────────────────────────
+
+/// Indentation style for normalize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibraryStyle {
+    /// All headers and values flush left.
+    Flat,
+    /// Headers indented by `2 * dot-depth`; values match parent header.
+    Nested,
+}
+
+/// Options for `library normalize`.
+#[derive(Debug)]
+pub struct LibraryNormalizeOptions<'a> {
+    pub path: &'a Path,
+    pub style: LibraryStyle,
+}
+
+/// Restyle every `.toml` under `<path>/ddm/` and `<path>/recipes/`.
+///
+/// Idempotent: running twice produces byte-identical output. Comments
+/// and blank lines pass through verbatim. Only header indentation and
+/// key/value indentation are touched.
+pub fn handle_library_normalize(
+    opts: LibraryNormalizeOptions<'_>,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let mut touched: Vec<PathBuf> = Vec::new();
+    let mut unchanged: Vec<PathBuf> = Vec::new();
+
+    for sub in ["ddm", "recipes"] {
+        let dir = opts.path.join(sub);
+        if !dir.is_dir() {
+            continue;
+        }
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .with_context(|| format!("Failed to read {}", dir.display()))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("toml"))
+            .collect();
+        entries.sort();
+        for path in entries {
+            let original = std::fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read {}", path.display()))?;
+            let restyled = normalize_toml_body(&original, opts.style);
+            if restyled == original {
+                unchanged.push(path);
+            } else {
+                std::fs::write(&path, &restyled)
+                    .with_context(|| format!("Failed to write {}", path.display()))?;
+                touched.push(path);
+            }
+        }
+    }
+
+    match output_mode {
+        OutputMode::Json => {
+            let payload = serde_json::json!({
+                "success": true,
+                "style": match opts.style {
+                    LibraryStyle::Flat => "flat",
+                    LibraryStyle::Nested => "nested",
+                },
+                "rewritten": touched.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                "unchanged": unchanged.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            });
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+        OutputMode::Human => {
+            let style_label = match opts.style {
+                LibraryStyle::Flat => "flat",
+                LibraryStyle::Nested => "nested",
+            };
+            println!("{} Normalized to {} style", "✓".green(), style_label.bold());
+            println!(
+                "  {} rewritten, {} unchanged",
+                touched.len(),
+                unchanged.len()
+            );
+            for p in &touched {
+                println!("  {} {}", "→".green(), p.display());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Pure restyler — line-based, preserves comments and blank lines.
+///
+/// Header indentation is set to `2 * dot-depth` (nested) or `0`
+/// (flat). Values under a header inherit that header's indent.
+/// Triple-quoted strings (`"""…"""` / `'''…'''`) are left untouched
+/// so multi-line values aren't corrupted.
+pub fn normalize_toml_body(input: &str, style: LibraryStyle) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut current_indent = 0usize;
+    let mut in_triple_double = false;
+    let mut in_triple_single = false;
+
+    for line in input.split_inclusive('\n') {
+        // Inside a triple-quoted string — pass through verbatim and
+        // toggle state on closing fence.
+        if in_triple_double || in_triple_single {
+            out.push_str(line);
+            if in_triple_double && line.contains("\"\"\"") {
+                in_triple_double = false;
+            }
+            if in_triple_single && line.contains("'''") {
+                in_triple_single = false;
+            }
+            continue;
+        }
+
+        let body = strip_trailing_newline(line);
+        let trimmed = body.trim_start();
+
+        // Blank lines and full-line comments → preserve verbatim.
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push_str(line);
+            continue;
+        }
+
+        // Header line — count dots and set the active indent.
+        if trimmed.starts_with('[') {
+            let header = trimmed.trim_end();
+            let dots = count_header_dots(header);
+            current_indent = match style {
+                LibraryStyle::Flat => 0,
+                LibraryStyle::Nested => dots * 2,
+            };
+            push_indented(&mut out, current_indent, header);
+            push_newline_if_needed(&mut out, line);
+            continue;
+        }
+
+        // Value line — re-indent to match active header.
+        push_indented(&mut out, current_indent, trimmed.trim_end());
+        push_newline_if_needed(&mut out, line);
+
+        // Detect opening triple-quoted string with no close on the same line.
+        let opens_double = trimmed.matches("\"\"\"").count() % 2 == 1;
+        let opens_single = trimmed.matches("'''").count() % 2 == 1;
+        if opens_double {
+            in_triple_double = true;
+        }
+        if opens_single {
+            in_triple_single = true;
+        }
+    }
+
+    out
+}
+
+fn strip_trailing_newline(s: &str) -> &str {
+    s.strip_suffix('\n')
+        .map(|s| s.strip_suffix('\r').unwrap_or(s))
+        .unwrap_or(s)
+}
+
+fn push_newline_if_needed(out: &mut String, original: &str) {
+    if original.ends_with('\n') {
+        out.push('\n');
+    }
+}
+
+fn push_indented(out: &mut String, indent: usize, content: &str) {
+    for _ in 0..indent {
+        out.push(' ');
+    }
+    out.push_str(content);
+}
+
+/// Count dots in a TOML header. `[a.b.c]` → 2; `[[a.b]]` → 1; `[x]` → 0.
+fn count_header_dots(header: &str) -> usize {
+    let inner = header
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    inner.matches('.').count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,6 +671,130 @@ mod tests {
         assert!(
             !root.join("recipes").exists(),
             "recipes dir must be skipped"
+        );
+    }
+
+    // ── normalize_toml_body — pure restyler tests ──────────────────────
+
+    const SAMPLE_NESTED: &str = "\
+[recipe]
+name = \"x\"
+
+[[ddm]]
+intent_name = \"i\"
+
+  [ddm.configuration]
+  type = \"t\"
+
+    [ddm.configuration.payload]
+    Notifications = true
+";
+
+    const SAMPLE_FLAT: &str = "\
+[recipe]
+name = \"x\"
+
+[[ddm]]
+intent_name = \"i\"
+
+[ddm.configuration]
+type = \"t\"
+
+[ddm.configuration.payload]
+Notifications = true
+";
+
+    #[test]
+    fn normalize_flat_strips_indentation() {
+        let out = normalize_toml_body(SAMPLE_NESTED, LibraryStyle::Flat);
+        assert_eq!(out, SAMPLE_FLAT);
+    }
+
+    #[test]
+    fn normalize_nested_indents_by_dot_depth() {
+        let out = normalize_toml_body(SAMPLE_FLAT, LibraryStyle::Nested);
+        assert_eq!(out, SAMPLE_NESTED);
+    }
+
+    #[test]
+    fn normalize_is_idempotent() {
+        for style in [LibraryStyle::Flat, LibraryStyle::Nested] {
+            for sample in [SAMPLE_NESTED, SAMPLE_FLAT] {
+                let once = normalize_toml_body(sample, style);
+                let twice = normalize_toml_body(&once, style);
+                assert_eq!(once, twice, "normalize must be idempotent");
+            }
+        }
+    }
+
+    #[test]
+    fn normalize_preserves_comments_and_blank_lines() {
+        let input = "\
+# top-level comment
+[recipe]
+# inline comment
+
+name = \"x\"
+";
+        let out = normalize_toml_body(input, LibraryStyle::Flat);
+        assert!(out.contains("# top-level comment"));
+        assert!(out.contains("# inline comment"));
+        assert_eq!(out.matches('\n').count(), input.matches('\n').count());
+    }
+
+    #[test]
+    fn normalize_does_not_corrupt_triple_quoted_strings() {
+        let input = "\
+[recipe]
+description = \"\"\"
+    pre-indented
+      content
+\"\"\"
+name = \"x\"
+";
+        let out = normalize_toml_body(input, LibraryStyle::Nested);
+        // Inner indentation of the triple-quoted block must survive.
+        assert!(out.contains("    pre-indented"));
+        assert!(out.contains("      content"));
+    }
+
+    #[test]
+    fn normalize_handles_double_bracket_arrays() {
+        let input = "[[profile]]\nkey = 1\n";
+        let nested = normalize_toml_body(input, LibraryStyle::Nested);
+        // [[profile]] has 0 dots → 0 indent.
+        assert_eq!(nested, input);
+    }
+
+    // ── handle_library_normalize — directory walker ────────────────────
+
+    #[test]
+    fn library_normalize_rewrites_only_changed_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("ddm")).unwrap();
+        std::fs::create_dir_all(root.join("recipes")).unwrap();
+        std::fs::write(root.join("ddm/already-flat.toml"), SAMPLE_FLAT).unwrap();
+        std::fs::write(root.join("recipes/will-flatten.toml"), SAMPLE_NESTED).unwrap();
+
+        handle_library_normalize(
+            LibraryNormalizeOptions {
+                path: root,
+                style: LibraryStyle::Flat,
+            },
+            OutputMode::Json,
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("ddm/already-flat.toml")).unwrap(),
+            SAMPLE_FLAT,
+            "already-flat file must remain byte-identical"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("recipes/will-flatten.toml")).unwrap(),
+            SAMPLE_FLAT,
+            "nested file must be flattened in place"
         );
     }
 }

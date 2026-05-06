@@ -759,6 +759,21 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output_mode,
                 )?;
             }
+            LibraryAction::Normalize { path, style } => {
+                let mapped = match style {
+                    profile::cli::LibraryStyle::Flat => profile::cli::library::LibraryStyle::Flat,
+                    profile::cli::LibraryStyle::Nested => {
+                        profile::cli::library::LibraryStyle::Nested
+                    }
+                };
+                profile::cli::library::handle_library_normalize(
+                    profile::cli::library::LibraryNormalizeOptions {
+                        path: std::path::Path::new(&path),
+                        style: mapped,
+                    },
+                    output_mode,
+                )?;
+            }
         },
         Commands::Ddm { action } => match action {
             DdmAction::Parse {

@@ -256,6 +256,13 @@ fn substitute_placeholders(content: &[u8], vars: &HashMap<String, String>) -> Ve
 }
 
 /// Scan a string for `{{...}}` placeholder patterns and return them.
+/// Apple-side runtime template markers that the password-policy
+/// evaluator substitutes at enforcement time — NOT user-fillable.
+/// Surfacing them as recipe placeholders is noise. Anchored here (not
+/// in the recipe loader) because they only appear in rendered XML
+/// pulled from the embedded schema, never in recipe TOML bodies.
+const APPLE_RUNTIME_TEMPLATES: &[&str] = &["{{key}}", "{{value}}"];
+
 fn find_placeholders(content: &str) -> Vec<String> {
     let mut placeholders = Vec::new();
     let mut pos = 0;
@@ -264,7 +271,9 @@ fn find_placeholders(content: &str) -> Vec<String> {
         if bytes[pos] == b'{' && bytes[pos + 1] == b'{' {
             if let Some(end) = content[pos + 2..].find("}}") {
                 let placeholder = &content[pos..pos + 2 + end + 2];
-                if !placeholders.contains(&placeholder.to_string()) {
+                if !APPLE_RUNTIME_TEMPLATES.contains(&placeholder)
+                    && !placeholders.contains(&placeholder.to_string())
+                {
                     placeholders.push(placeholder.to_string());
                 }
                 pos += 2 + end + 2;
@@ -546,6 +555,51 @@ pub fn handle_generate_recipe(
         generated.push((output_path, spec.display_name.clone()));
     }
 
+    // DDM bundles emitted under <out_dir>/<intent_name>/ — same compose
+    // path the standalone preset compose uses, so the cross-references
+    // and identifier shape stay consistent.
+    let mut ddm_emitted: Vec<(String, String)> = Vec::new();
+    for bundle in &r.ddm {
+        let composed = crate::ddm::compose::compose(
+            bundle,
+            &domain,
+            &registry,
+            &crate::ddm::compose::ComposeOptions::default(),
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "DDM bundle '{}' failed to compose: {}",
+                bundle.intent_name,
+                e
+            )
+        })?;
+
+        let bundle_dir = Path::new(out_dir).join(&bundle.intent_name);
+        std::fs::create_dir_all(&bundle_dir)
+            .with_context(|| format!("Failed to create DDM output dir {}", bundle_dir.display()))?;
+        if let Some(subs) = &composed.subscriptions {
+            let p = bundle_dir.join("status-subscriptions.json");
+            std::fs::write(&p, crate::ddm::write_declaration(subs)?)?;
+            ddm_emitted.push((p.display().to_string(), "status-subscriptions".into()));
+        }
+        if let Some(asset) = &composed.asset {
+            let p = bundle_dir.join("asset.json");
+            std::fs::write(&p, crate::ddm::write_declaration(asset)?)?;
+            ddm_emitted.push((p.display().to_string(), "asset".into()));
+        }
+        let cfg_path = bundle_dir.join("configuration.json");
+        std::fs::write(
+            &cfg_path,
+            crate::ddm::write_declaration(&composed.configuration)?,
+        )?;
+        ddm_emitted.push((cfg_path.display().to_string(), "configuration".into()));
+        if let Some(act) = &composed.activation {
+            let p = bundle_dir.join("activation.json");
+            std::fs::write(&p, crate::ddm::write_declaration(act)?)?;
+            ddm_emitted.push((p.display().to_string(), "activation".into()));
+        }
+    }
+
     if output_mode == OutputMode::Json {
         let result = serde_json::json!({
             "success": true,
@@ -554,6 +608,9 @@ pub fn handle_generate_recipe(
             "output_dir": out_dir,
             "profiles": generated.iter().map(|(path, name)| {
                 serde_json::json!({"path": path, "display_name": name})
+            }).collect::<Vec<_>>(),
+            "ddm": ddm_emitted.iter().map(|(path, kind)| {
+                serde_json::json!({"path": path, "kind": kind})
             }).collect::<Vec<_>>(),
             "placeholders": all_placeholders,
         });
@@ -573,6 +630,13 @@ pub fn handle_generate_recipe(
         for (path, name) in &generated {
             println!("  {} {}", "→".green(), path);
             println!("    {}", name.dimmed());
+        }
+        if !ddm_emitted.is_empty() {
+            println!("\n  {}", "DDM declarations:".bold());
+            for (path, kind) in &ddm_emitted {
+                println!("  {} {}", "→".green(), path);
+                println!("    {}", kind.dimmed());
+            }
         }
 
         if !all_placeholders.is_empty() {
@@ -1329,6 +1393,21 @@ mod tests {
     fn test_find_placeholders_none() {
         let placeholders = find_placeholders("no placeholders here");
         assert!(placeholders.is_empty());
+    }
+
+    #[test]
+    fn test_find_placeholders_filters_apple_runtime_templates() {
+        // The password-policy schema embeds {{key}}/{{value}} from
+        // Apple's policy-evaluator template — these are NOT
+        // user-fillable. Real recipe placeholders coexisting with them
+        // must still surface.
+        let content = "<key>{{key}}</key><string>{{OKTA_DOMAIN}}</string><key>{{value}}</key>";
+        let placeholders = find_placeholders(content);
+        assert_eq!(
+            placeholders,
+            vec!["{{OKTA_DOMAIN}}".to_string()],
+            "Apple runtime markers must be filtered; real placeholder must remain"
+        );
     }
 
     #[test]

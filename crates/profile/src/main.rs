@@ -603,6 +603,19 @@ fn run(cli: Cli) -> Result<()> {
                     output_mode,
                 )?;
             }
+            LibraryAction::Normalize { path, style } => {
+                let mapped = match style {
+                    cli::LibraryStyle::Flat => cli::library::LibraryStyle::Flat,
+                    cli::LibraryStyle::Nested => cli::library::LibraryStyle::Nested,
+                };
+                cli::library::handle_library_normalize(
+                    cli::library::LibraryNormalizeOptions {
+                        path: std::path::Path::new(&path),
+                        style: mapped,
+                    },
+                    output_mode,
+                )?;
+            }
         },
         Commands::Ddm { action } => match action {
             DdmAction::Parse {

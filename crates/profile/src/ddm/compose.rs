@@ -15,7 +15,7 @@
 
 use crate::ddm::types::{Declaration, DeclarationPayload, DeclarationType};
 use crate::schema::SchemaRegistry;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// Default activation type when [activation].type is omitted.
@@ -26,7 +26,7 @@ pub const DEFAULT_ACTIVATION_TYPE: &str = "com.apple.activation.simple";
 
 /// A bundle describing one DDM intent (asset + configuration + activation
 /// + optional status-subscriptions).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Bundle {
     /// Used as the `{tail}` segment in computed identifiers
     /// (`{org}.{kind}.{intent_name}`).
@@ -55,7 +55,7 @@ pub struct Bundle {
 }
 
 /// Bundle [asset] section.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BundleAsset {
     #[serde(rename = "type")]
     pub type_name: String,
@@ -70,7 +70,7 @@ pub struct BundleAsset {
 }
 
 /// Bundle [configuration] section.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BundleConfiguration {
     #[serde(rename = "type")]
     pub type_name: String,
@@ -94,7 +94,7 @@ pub struct BundleConfiguration {
 /// the manifest of status items the device is willing to report. The
 /// activation's predicate (and any other declarations on the device)
 /// can only `@status('key')` reference keys present here.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BundleSubscriptions {
     /// Status keys the device should subscribe to (e.g.
     /// `passcode.is-compliant`, `softwareupdate.install-state`).
@@ -107,7 +107,7 @@ pub struct BundleSubscriptions {
 }
 
 /// Bundle [activation] section.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct BundleActivation {
     /// Defaults to `com.apple.activation.simple` when omitted.
     #[serde(rename = "type", default)]
