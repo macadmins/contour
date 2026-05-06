@@ -928,6 +928,8 @@ mod tests {
                     parent_key: None,
                     platforms: Vec::new(),
                     min_version: None,
+                    deprecated_in: None,
+                    combinetype: None,
                 },
             );
             field_order.push(name.to_string());
@@ -938,6 +940,7 @@ mod tests {
             description: String::new(),
             platforms: Platforms::default(),
             min_versions: HashMap::new(),
+            os_support: HashMap::new(),
             category: "apple".to_string(),
             fields,
             field_order,
@@ -1139,6 +1142,8 @@ mod tests {
                     parent_key: parent.map(String::from),
                     platforms: Vec::new(),
                     min_version: None,
+                    deprecated_in: None,
+                    combinetype: None,
                 },
             );
             order.push(name.to_string());
@@ -1180,6 +1185,7 @@ mod tests {
             description: String::new(),
             platforms: Platforms::default(),
             min_versions: HashMap::new(),
+            os_support: HashMap::new(),
             category: "apple".to_string(),
             fields,
             field_order,

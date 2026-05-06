@@ -57,6 +57,7 @@ pub fn parse_plist_manifest(content: &[u8]) -> Result<PayloadManifest> {
         description,
         platforms,
         min_versions: HashMap::new(),
+        os_support: HashMap::new(),
         category,
         fields,
         field_order,
@@ -323,6 +324,8 @@ fn parse_field(dict: &plist::Dictionary, depth: usize) -> Option<FieldDefinition
         parent_key: None,
         platforms: Vec::new(),
         min_version: None,
+        deprecated_in: None,
+        combinetype: None,
     })
 }
 

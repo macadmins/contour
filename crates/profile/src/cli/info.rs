@@ -14,7 +14,7 @@ use colored::Colorize;
 
 use crate::config::ProfileConfig;
 use crate::output::OutputMode;
-use crate::schema::{FieldType, PayloadManifest, SchemaRegistry};
+use crate::schema::{FieldType, OsSupportDetail, PayloadManifest, Platform, SchemaRegistry};
 
 /// Handle the `info` command
 pub fn handle_info(config: Option<&ProfileConfig>, output_mode: OutputMode) -> Result<()> {
@@ -160,14 +160,18 @@ fn output_human(
 /// payload type.
 ///
 /// Mirrors `profile ddm info <name>`: returns title, description, platforms,
-/// and every field with its type, plist tag (`<real>`, `<integer>`, …),
-/// required flag, default, and allowed values. Designed so an agent can
-/// answer "what type does Apple expect for `<key>` in `<payload>`?" with
-/// one CLI call and a single jq filter.
+/// per-OS support detail (introduced/deprecated/removed/allowed_enrollments/
+/// scopes/supervised/requires_dep/user_approved_mdm/device_channel/
+/// user_channel/multiple/beta), and every field with its type, plist tag
+/// (`<real>`, `<integer>`, …), required flag, default, and allowed values.
+///
+/// `os_filter` (the `--os <NAME>` flag) restricts output to fields supported
+/// on that platform — fails fast if the payload itself isn't supported there.
 pub fn handle_payload_info(
     payload_type: &str,
     schema_path: Option<&str>,
     full: bool,
+    os_filter: Option<&str>,
     output_mode: OutputMode,
 ) -> Result<()> {
     let registry = if let Some(p) = schema_path {
@@ -191,12 +195,87 @@ pub fn handle_payload_info(
         anyhow::anyhow!("Payload type '{payload_type}' not found.\n{hint}")
     })?;
 
+    // Resolve --os flag against the payload's supported platforms.
+    // Errors fast on unsupported OS so an agent can't accidentally
+    // generate a profile that won't install on the target.
+    let os = match os_filter {
+        Some(s) => {
+            let p = Platform::from_cli_str(s).ok_or_else(|| {
+                anyhow::anyhow!("Unknown --os '{s}'. Valid: macOS, iOS, tvOS, watchOS, visionOS")
+            })?;
+            if !manifest_supports_platform(manifest, p) {
+                anyhow::bail!(
+                    "Payload '{}' is not supported on {} — supported platforms: {}",
+                    manifest.payload_type,
+                    p.as_str(),
+                    supported_platform_list(manifest)
+                );
+            }
+            Some(p)
+        }
+        None => None,
+    };
+
     if output_mode == OutputMode::Json {
-        emit_payload_info_json(manifest, full)?;
+        emit_payload_info_json(manifest, full, os)?;
     } else {
-        emit_payload_info_human(manifest, full);
+        emit_payload_info_human(manifest, full, os);
     }
     Ok(())
+}
+
+fn manifest_supports_platform(m: &PayloadManifest, p: Platform) -> bool {
+    match p {
+        Platform::MacOS => m.platforms.macos,
+        Platform::Ios => m.platforms.ios,
+        Platform::TvOS => m.platforms.tvos,
+        Platform::WatchOS => m.platforms.watchos,
+        Platform::VisionOS => m.platforms.visionos,
+    }
+}
+
+fn supported_platform_list(m: &PayloadManifest) -> String {
+    let mut p = Vec::new();
+    if m.platforms.macos {
+        p.push("macOS");
+    }
+    if m.platforms.ios {
+        p.push("iOS");
+    }
+    if m.platforms.tvos {
+        p.push("tvOS");
+    }
+    if m.platforms.watchos {
+        p.push("watchOS");
+    }
+    if m.platforms.visionos {
+        p.push("visionOS");
+    }
+    if p.is_empty() {
+        "(none)".into()
+    } else {
+        p.join(", ")
+    }
+}
+
+/// Serialize an `OsSupportDetail` to a JSON object — same shape across
+/// every consumer (`info`, future search, etc.).
+fn os_support_to_json(detail: &OsSupportDetail) -> serde_json::Value {
+    serde_json::json!({
+        "introduced": detail.introduced,
+        "deprecated": detail.deprecated,
+        "removed": detail.removed,
+        "allowed_enrollments": detail.allowed_enrollments,
+        "allowed_scopes": detail.allowed_scopes,
+        "supervised": detail.supervised,
+        "requires_dep": detail.requires_dep,
+        "user_approved_mdm": detail.user_approved_mdm,
+        "allow_manual_install": detail.allow_manual_install,
+        "device_channel": detail.device_channel,
+        "user_channel": detail.user_channel,
+        "multiple": detail.multiple,
+        "beta": detail.beta,
+    })
 }
 
 /// Map a `FieldType` to the plist XML tag agents see in `.mobileconfig`
@@ -215,23 +294,12 @@ pub fn plist_tag_for(t: &FieldType) -> &'static str {
     }
 }
 
-fn emit_payload_info_json(manifest: &PayloadManifest, full: bool) -> Result<()> {
-    let mut platforms = Vec::new();
-    if manifest.platforms.macos {
-        platforms.push("macOS");
-    }
-    if manifest.platforms.ios {
-        platforms.push("iOS");
-    }
-    if manifest.platforms.tvos {
-        platforms.push("tvOS");
-    }
-    if manifest.platforms.watchos {
-        platforms.push("watchOS");
-    }
-    if manifest.platforms.visionos {
-        platforms.push("visionOS");
-    }
+fn emit_payload_info_json(
+    manifest: &PayloadManifest,
+    full: bool,
+    os: Option<Platform>,
+) -> Result<()> {
+    let platforms = supported_platform_vec(manifest, os);
 
     let fields: Vec<_> = manifest
         .field_order
@@ -249,6 +317,8 @@ fn emit_payload_info_json(manifest: &PayloadManifest, full: bool) -> Result<()> 
                 "default": f.default,
                 "allowed_values": f.allowed_values,
                 "min_version": f.min_version,
+                "deprecated_in": f.deprecated_in,
+                "combinetype": f.combinetype,
                 "depth": f.depth,
                 "parent_key": f.parent_key,
                 "title": f.title,
@@ -257,12 +327,44 @@ fn emit_payload_info_json(manifest: &PayloadManifest, full: bool) -> Result<()> 
         })
         .collect();
 
+    // Emit the os_support map keyed by platform name. When `--os` is
+    // set, scope to that single platform so jq filters stay simple.
+    let mut os_support = serde_json::Map::new();
+    let entries: Vec<(Platform, &OsSupportDetail)> = match os {
+        Some(p) => manifest
+            .os_support
+            .get(&p)
+            .map(|d| vec![(p, d)])
+            .unwrap_or_default(),
+        None => {
+            // Stable order: macOS, iOS, tvOS, watchOS, visionOS.
+            let mut v = Vec::new();
+            for p in [
+                Platform::MacOS,
+                Platform::Ios,
+                Platform::TvOS,
+                Platform::WatchOS,
+                Platform::VisionOS,
+            ] {
+                if let Some(d) = manifest.os_support.get(&p) {
+                    v.push((p, d));
+                }
+            }
+            v
+        }
+    };
+    for (p, d) in entries {
+        os_support.insert(p.as_str().to_string(), os_support_to_json(d));
+    }
+
     let info = serde_json::json!({
         "payload_type": manifest.payload_type,
         "title": manifest.title,
         "description": manifest.description,
         "category": manifest.category,
         "platforms": platforms,
+        "os_filter": os.map(|p| p.as_str()),
+        "os_support": os_support,
         "field_count": manifest.fields.len(),
         "fields_returned": fields.len(),
         "fields": fields,
@@ -271,28 +373,112 @@ fn emit_payload_info_json(manifest: &PayloadManifest, full: bool) -> Result<()> 
     Ok(())
 }
 
-fn emit_payload_info_human(manifest: &PayloadManifest, full: bool) {
+fn supported_platform_vec(m: &PayloadManifest, os: Option<Platform>) -> Vec<&'static str> {
+    if let Some(p) = os {
+        return vec![p.as_str()];
+    }
+    let mut v = Vec::new();
+    if m.platforms.macos {
+        v.push("macOS");
+    }
+    if m.platforms.ios {
+        v.push("iOS");
+    }
+    if m.platforms.tvos {
+        v.push("tvOS");
+    }
+    if m.platforms.watchos {
+        v.push("watchOS");
+    }
+    if m.platforms.visionos {
+        v.push("visionOS");
+    }
+    v
+}
+
+fn emit_payload_info_human(manifest: &PayloadManifest, full: bool, os: Option<Platform>) {
     println!("{}\n", manifest.title.bold());
     println!("{}: {}", "Payload Type".cyan(), manifest.payload_type);
     println!("{}: {}", "Category".cyan(), manifest.category.magenta());
 
-    let mut platforms = Vec::new();
-    if manifest.platforms.macos {
-        platforms.push("macOS");
-    }
-    if manifest.platforms.ios {
-        platforms.push("iOS");
-    }
-    if manifest.platforms.tvos {
-        platforms.push("tvOS");
-    }
-    if manifest.platforms.watchos {
-        platforms.push("watchOS");
-    }
-    if manifest.platforms.visionos {
-        platforms.push("visionOS");
-    }
+    let platforms = supported_platform_vec(manifest, os);
     println!("{}: {}", "Platforms".cyan(), platforms.join(", "));
+
+    // Per-OS support detail — show only if requested OS or if any platform has data.
+    let to_show: Vec<(Platform, &OsSupportDetail)> = match os {
+        Some(p) => manifest
+            .os_support
+            .get(&p)
+            .map(|d| vec![(p, d)])
+            .unwrap_or_default(),
+        None => {
+            let mut v = Vec::new();
+            for p in [
+                Platform::MacOS,
+                Platform::Ios,
+                Platform::TvOS,
+                Platform::WatchOS,
+                Platform::VisionOS,
+            ] {
+                if let Some(d) = manifest.os_support.get(&p) {
+                    v.push((p, d));
+                }
+            }
+            v
+        }
+    };
+    if !to_show.is_empty() {
+        println!("\n{}", "OS Support:".cyan().bold());
+        for (p, d) in &to_show {
+            let mut bits: Vec<String> = Vec::new();
+            if let Some(v) = &d.introduced {
+                bits.push(format!("introduced {v}"));
+            }
+            if let Some(v) = &d.deprecated {
+                bits.push(format!("deprecated {v}").yellow().to_string());
+            }
+            if let Some(v) = &d.removed {
+                bits.push(format!("removed {v}").red().to_string());
+            }
+            if d.supervised == Some(true) {
+                bits.push("supervised".yellow().to_string());
+            }
+            if d.requires_dep == Some(true) {
+                bits.push("requires DEP".yellow().to_string());
+            }
+            if d.user_approved_mdm == Some(true) {
+                bits.push("UAMDM".yellow().to_string());
+            }
+            if d.device_channel == Some(true) {
+                bits.push("device-channel".to_string());
+            }
+            if d.user_channel == Some(true) {
+                bits.push("user-channel".to_string());
+            }
+            if d.multiple == Some(true) {
+                bits.push("multiple-allowed".to_string());
+            }
+            if d.beta == Some(true) {
+                bits.push("beta".magenta().to_string());
+            }
+            if let Some(e) = &d.allowed_enrollments
+                && !e.is_empty()
+            {
+                bits.push(format!("enrollments=[{}]", e.join(",")));
+            }
+            if let Some(s) = &d.allowed_scopes
+                && !s.is_empty()
+            {
+                bits.push(format!("scopes=[{}]", s.join(",")));
+            }
+            let summary = if bits.is_empty() {
+                "(no per-OS detail)".dimmed().to_string()
+            } else {
+                bits.join("  ")
+            };
+            println!("  {}: {summary}", p.as_str().green());
+        }
+    }
 
     if !manifest.description.is_empty() {
         println!("\n{}", "Description:".cyan());

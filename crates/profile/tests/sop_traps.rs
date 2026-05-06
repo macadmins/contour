@@ -1857,6 +1857,198 @@ fn trap_59_search_include_fields_returns_categorized_shape() {
 }
 
 #[test]
+fn trap_65_disable_apple_intelligence_bundles_compose_clean() {
+    // Built-in DDM bundles for disabling Apple Intelligence (macOS + iOS).
+    // Drift signal: schema renamed a key, removed the declaration, or
+    // changed the activation contract — bundle stops composing or the
+    // composed JSON stops validating against Apple's schema.
+    use std::path::PathBuf;
+    let recipes_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("recipes")
+        .join("ddm");
+
+    for preset in [
+        "disable-apple-intelligence-macos",
+        "disable-apple-intelligence-ios",
+    ] {
+        let bundle = recipes_dir.join(format!("{preset}.toml"));
+        assert!(
+            bundle.exists(),
+            "built-in DDM bundle '{preset}' missing — recipes/ddm/ moved or renamed?"
+        );
+        let out = tempfile::tempdir().unwrap();
+
+        let output = Command::cargo_bin("profile")
+            .unwrap()
+            .env("CONTOUR_ORG", "com.acme")
+            .args([
+                "ddm",
+                "compose",
+                bundle.to_str().unwrap(),
+                "-o",
+                out.path().to_str().unwrap(),
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "ddm compose '{preset}' must succeed; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // Confirm both files emitted + content set the AI toggles to false.
+        let config_path = out.path().join("configuration.json");
+        let activation_path = out.path().join("activation.json");
+        assert!(config_path.exists(), "{preset}: configuration.json missing");
+        assert!(
+            activation_path.exists(),
+            "{preset}: activation.json missing"
+        );
+
+        let config: Value =
+            serde_json::from_slice(&fs::read(&config_path).unwrap()).expect("valid JSON");
+        assert_eq!(
+            config["Type"], "com.apple.configuration.intelligence.settings",
+            "{preset}: declaration type mismatch"
+        );
+        let payload = &config["Payload"];
+        for key in [
+            "AllowAppleIntelligenceReport",
+            "AllowGenmoji",
+            "AllowImagePlayground",
+            "AllowImageWand",
+            "AllowPersonalizedHandwritingResults",
+            "AllowVisualIntelligenceSummary",
+            "AllowWritingTools",
+        ] {
+            assert_eq!(
+                payload[key], false,
+                "{preset}: top-level {key} must be false"
+            );
+        }
+        for (sub, key) in [
+            ("Mail", "AllowSmartReplies"),
+            ("Mail", "AllowSummary"),
+            ("Notes", "AllowTranscription"),
+            ("Notes", "AllowTranscriptionSummary"),
+        ] {
+            assert_eq!(
+                payload[sub][key], false,
+                "{preset}: nested {sub}.{key} must be false"
+            );
+        }
+
+        // ddm verify the whole directory passes.
+        let verify = Command::cargo_bin("profile")
+            .unwrap()
+            .args(["ddm", "verify", out.path().to_str().unwrap(), "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            verify.status.success(),
+            "{preset}: ddm verify must pass; stderr: {}",
+            String::from_utf8_lossy(&verify.stderr)
+        );
+    }
+}
+
+#[test]
+fn trap_61_info_exposes_os_support_metadata() {
+    // info <type> --json must surface the per-OS support map for any
+    // payload that has it (introduced/deprecated/removed/supervised/
+    // device_channel/user_channel/...). Wifi has macOS + iOS detail
+    // available in the embedded parquet — verify a stable subset.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["info", "com.apple.wifi.managed", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "info wifi must succeed");
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let os_support = parsed["os_support"].as_object().expect("os_support is map");
+    assert!(
+        os_support.contains_key("macOS"),
+        "wifi must expose macOS support detail; got keys {:?}",
+        os_support.keys().collect::<Vec<_>>()
+    );
+    let mac = &os_support["macOS"];
+    assert_eq!(
+        mac["introduced"], "10.7",
+        "macOS introduced version must surface from upstream parquet"
+    );
+    assert_eq!(
+        mac["device_channel"], true,
+        "macOS device_channel flag must surface"
+    );
+}
+
+#[test]
+fn trap_62_info_os_filter_scopes_output() {
+    // --os macOS scopes platforms to only that OS and sets os_filter,
+    // so jq filters can branch on the focus.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["info", "com.apple.wifi.managed", "--os", "macOS", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(parsed["os_filter"], "macOS");
+    let platforms = parsed["platforms"].as_array().expect("platforms array");
+    assert_eq!(platforms.len(), 1, "platforms scoped to single OS");
+    assert_eq!(platforms[0], "macOS");
+    assert!(parsed["os_support"]["macOS"].is_object());
+    assert!(
+        parsed["os_support"].get("iOS").is_none(),
+        "iOS detail must be absent in --os macOS output"
+    );
+}
+
+#[test]
+fn trap_63_info_unknown_os_errors() {
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["info", "com.apple.wifi.managed", "--os", "mars"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "unknown --os must exit non-zero");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Unknown --os 'mars'"),
+        "stderr must name the contract; got: {stderr}"
+    );
+    assert!(stderr.contains("macOS"), "stderr must list valid platforms");
+}
+
+#[test]
+fn trap_64_info_field_carries_combinetype_when_present() {
+    // DDM declarations carry `combinetype` on most fields. Verify a
+    // known DDM payload exposes the new key on at least one field.
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "info",
+            "com.apple.configuration.softwareupdate.settings",
+            "--full",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parsed: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let fields = parsed["fields"].as_array().expect("fields array");
+    let with_combine: Vec<&Value> = fields
+        .iter()
+        .filter(|f| f["combinetype"].as_str().is_some())
+        .collect();
+    assert!(
+        !with_combine.is_empty(),
+        "expected at least one field with combinetype on a DDM payload; found 0"
+    );
+}
+
+#[test]
 fn trap_60_search_include_fields_requires_query() {
     // --include-fields is a polymorphic substring widening — there's
     // no substring without a query, so clap rejects.

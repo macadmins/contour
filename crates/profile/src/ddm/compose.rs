@@ -684,6 +684,8 @@ mod tests {
             parent_key: None,
             platforms: vec![],
             min_version: None,
+            deprecated_in: None,
+            combinetype: None,
         }
     }
 
@@ -700,6 +702,7 @@ mod tests {
             description: String::new(),
             platforms: Platforms::parse("*"),
             min_versions: HashMap::new(),
+            os_support: HashMap::new(),
             category: if payload_type.contains(".asset.") {
                 "ddm-asset"
             } else if payload_type.contains(".configuration.") {
