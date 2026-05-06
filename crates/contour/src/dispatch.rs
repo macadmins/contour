@@ -809,6 +809,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 allow_orphans,
                 org,
                 preset,
+                preset_path,
                 list_presets,
             } => {
                 profile::cli::ddm::handle_ddm_compose(
@@ -818,6 +819,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     allow_orphans,
                     org.as_deref(),
                     preset.as_deref(),
+                    preset_path.as_deref(),
                     list_presets,
                     config.as_ref(),
                     output_mode,
