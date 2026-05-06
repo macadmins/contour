@@ -408,6 +408,8 @@ mod tests {
             platforms: vec![],
             min_version: None,
             deprecated_in: None,
+            introduced_by_platform: std::collections::HashMap::new(),
+            deprecated_by_platform: std::collections::HashMap::new(),
             combinetype: None,
         };
         let schema = field_to_json_schema(&string_field);
@@ -428,6 +430,8 @@ mod tests {
             platforms: vec![],
             min_version: None,
             deprecated_in: None,
+            introduced_by_platform: std::collections::HashMap::new(),
+            deprecated_by_platform: std::collections::HashMap::new(),
             combinetype: None,
         };
         let schema = field_to_json_schema(&data_field);
@@ -448,6 +452,8 @@ mod tests {
             platforms: vec![],
             min_version: None,
             deprecated_in: None,
+            introduced_by_platform: std::collections::HashMap::new(),
+            deprecated_by_platform: std::collections::HashMap::new(),
             combinetype: None,
         };
         let schema = field_to_json_schema(&date_field);

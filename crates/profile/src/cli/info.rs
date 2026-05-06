@@ -275,7 +275,43 @@ fn os_support_to_json(detail: &OsSupportDetail) -> serde_json::Value {
         "user_channel": detail.user_channel,
         "multiple": detail.multiple,
         "beta": detail.beta,
+        "shared_ipad_mode": detail.shared_ipad_mode,
+        "user_enrollment_mode": detail.user_enrollment_mode,
     })
+}
+
+/// Serialize a per-OS map for JSON output, scoping when `--os` is set.
+///
+/// - `os = None` → emit the full map keyed by platform name as the
+///   value of the field. Empty maps serialize to `{}`.
+/// - `os = Some(p)` → emit just that platform's value as a JSON string,
+///   or `null` if the map has no entry for `p`. This collapses the jq
+///   path so `--os iOS` callers can use
+///   `.fields[].introduced_by_platform` directly without a nested
+///   key access.
+fn serialize_per_os_field(
+    map: &std::collections::HashMap<Platform, String>,
+    os: Option<Platform>,
+) -> serde_json::Value {
+    if let Some(p) = os {
+        return match map.get(&p) {
+            Some(v) => serde_json::Value::String(v.clone()),
+            None => serde_json::Value::Null,
+        };
+    }
+    let mut out = serde_json::Map::new();
+    for p in [
+        Platform::MacOS,
+        Platform::Ios,
+        Platform::TvOS,
+        Platform::WatchOS,
+        Platform::VisionOS,
+    ] {
+        if let Some(v) = map.get(&p) {
+            out.insert(p.as_str().to_string(), serde_json::Value::String(v.clone()));
+        }
+    }
+    serde_json::Value::Object(out)
 }
 
 /// Map a `FieldType` to the plist XML tag agents see in `.mobileconfig`
@@ -307,6 +343,14 @@ fn emit_payload_info_json(
         .filter_map(|name| manifest.fields.get(name))
         .filter(|f| full || f.flags.required || f.depth == 0)
         .map(|f| {
+            // Scope per-OS maps when --os is set:
+            //   none → emit the full map (`{macOS: ..., iOS: ...}`)
+            //   some → emit a flat string (just that OS's value), so
+            //          `jq '.fields[].introduced_by_platform'` reads a
+            //          string instead of forcing the agent to drill
+            //          another level.
+            let intro_by_os = serialize_per_os_field(&f.introduced_by_platform, os);
+            let dep_by_os = serialize_per_os_field(&f.deprecated_by_platform, os);
             serde_json::json!({
                 "name": f.name,
                 "type": f.field_type.as_str(),
@@ -318,6 +362,8 @@ fn emit_payload_info_json(
                 "allowed_values": f.allowed_values,
                 "min_version": f.min_version,
                 "deprecated_in": f.deprecated_in,
+                "introduced_by_platform": intro_by_os,
+                "deprecated_by_platform": dep_by_os,
                 "combinetype": f.combinetype,
                 "depth": f.depth,
                 "parent_key": f.parent_key,
@@ -362,6 +408,7 @@ fn emit_payload_info_json(
         "title": manifest.title,
         "description": manifest.description,
         "category": manifest.category,
+        "apply_mode": manifest.apply_mode,
         "platforms": platforms,
         "os_filter": os.map(|p| p.as_str()),
         "os_support": os_support,

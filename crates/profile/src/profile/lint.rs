@@ -94,6 +94,7 @@ pub const TIER_1_CHECKS: &[&str] = &[
     "nested-missing-payload-version",
     "placeholder-payload-uuid",
     "deprecated-payload-type",
+    "single-instance-payload-repeated",
 ];
 
 /// Tier-2 (org-policy) check names — opt-in via
@@ -122,6 +123,11 @@ pub struct LintOptions {
     /// Opt into specific checks by name. `Some(set)` runs only the
     /// listed checks; `None` runs the Tier-1 defaults.
     pub selected_checks: Option<std::collections::HashSet<String>>,
+    /// Map of `payload_type → apply_mode` used by the
+    /// `single-instance-payload-repeated` check to resolve schema
+    /// constraints. Empty map = check is a no-op (no schema data
+    /// available).
+    pub apply_modes: std::collections::HashMap<String, String>,
 }
 
 impl LintOptions {
@@ -139,6 +145,7 @@ impl LintOptions {
                     | "nested-missing-payload-version"
                     | "placeholder-payload-uuid"
                     | "deprecated-payload-type"
+                    | "single-instance-payload-repeated"
             ),
         }
     }
@@ -200,6 +207,12 @@ pub fn lint_profile_with_options(
     }
     if options.includes("deprecated-payload-type") {
         all.extend(check_deprecated_payload_types(value, registry));
+    }
+    if options.includes("single-instance-payload-repeated") {
+        all.extend(check_single_instance_payload_repeated(
+            value,
+            &options.apply_modes,
+        ));
     }
     if options.includes("payload-identifier-reverse-dns") {
         all.extend(check_payload_identifier_reverse_dns(value));
@@ -482,6 +495,66 @@ fn walk_check_payload_type(
             walk_check_payload_type(item, Some(i), registry, findings);
         }
     }
+}
+
+// ── 1e. Single-instance payload repeated ──────────────────────────────
+
+/// Apple's schema declares some payload types as `apply_mode = "single"`
+/// — only one instance of that type is supposed to appear in a profile.
+/// A profile listing the same single-instance type twice in
+/// `PayloadContent` produces undefined MDM behaviour: the server may
+/// apply one and silently drop the other, or fail the install entirely.
+///
+/// `apply_modes` is the per-payload-type lookup map built by `validate`
+/// at lint-time. An empty map turns the check into a no-op (consistent
+/// with the other registry-backed checks). Currently warning severity:
+/// schemas occasionally mislabel multi-instance configs as `"single"`,
+/// so the agent should see the signal without being blocked.
+pub fn check_single_instance_payload_repeated(
+    value: &Value,
+    apply_modes: &std::collections::HashMap<String, String>,
+) -> Vec<LintFinding> {
+    use std::collections::HashMap;
+    let mut findings = Vec::new();
+    let Value::Dictionary(top) = value else {
+        return findings;
+    };
+    let Some(Value::Array(items)) = top.get("PayloadContent") else {
+        return findings;
+    };
+    // Count occurrences of each PayloadType across the nested entries.
+    let mut counts: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (idx, item) in items.iter().enumerate() {
+        let Value::Dictionary(child) = item else {
+            continue;
+        };
+        if let Some(payload_type) = child.get("PayloadType").and_then(Value::as_string) {
+            counts.entry(payload_type).or_default().push(idx);
+        }
+    }
+    for (payload_type, indices) in counts {
+        if indices.len() < 2 {
+            continue;
+        }
+        let Some(mode) = apply_modes.get(payload_type) else {
+            continue; // unknown apply_mode — no signal either way
+        };
+        if mode != "single" {
+            continue;
+        }
+        findings.push(LintFinding::warn(
+            "single-instance-payload-repeated",
+            format!(
+                "PayloadType {payload_type:?} is declared apply_mode=\"single\" \
+                 in Apple's schema but appears {n} times in PayloadContent \
+                 (at indices {indices:?}). Single-instance payloads should \
+                 only appear once; deploying multiple copies produces \
+                 undefined MDM behaviour.",
+                n = indices.len()
+            ),
+        ));
+    }
+    findings
 }
 
 // ── 2a. payload-identifier-reverse-dns ─────────────────────────────────
@@ -885,6 +958,82 @@ mod tests {
         assert!(check_deprecated_payload_types(&profile, &registry).is_empty());
     }
 
+    // ── 1e single-instance payload repeated ──
+
+    #[test]
+    fn single_instance_payload_repeated_flagged() {
+        // Two nested payloads sharing the same single-instance PayloadType.
+        let mut a = Dictionary::new();
+        a.insert("PayloadType".into(), s("com.apple.demo.single"));
+        a.insert(
+            "PayloadUUID".into(),
+            s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"),
+        );
+        let mut b = Dictionary::new();
+        b.insert("PayloadType".into(), s("com.apple.demo.single"));
+        b.insert(
+            "PayloadUUID".into(),
+            s("B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E"),
+        );
+        let profile = build_profile(
+            "11111111-2222-3333-4444-555555555555",
+            vec![Value::Dictionary(a), Value::Dictionary(b)],
+        );
+        let mut apply_modes = std::collections::HashMap::new();
+        apply_modes.insert("com.apple.demo.single".to_string(), "single".to_string());
+        let findings = check_single_instance_payload_repeated(&profile, &apply_modes);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].check, "single-instance-payload-repeated");
+        assert_eq!(findings[0].severity, LintSeverity::Warning);
+    }
+
+    #[test]
+    fn multiple_apply_mode_does_not_flag_duplicates() {
+        // Same shape as above but apply_mode is "multiple" — no finding.
+        let mut a = Dictionary::new();
+        a.insert("PayloadType".into(), s("com.apple.demo.multi"));
+        a.insert(
+            "PayloadUUID".into(),
+            s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"),
+        );
+        let mut b = Dictionary::new();
+        b.insert("PayloadType".into(), s("com.apple.demo.multi"));
+        b.insert(
+            "PayloadUUID".into(),
+            s("B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E"),
+        );
+        let profile = build_profile(
+            "11111111-2222-3333-4444-555555555555",
+            vec![Value::Dictionary(a), Value::Dictionary(b)],
+        );
+        let mut apply_modes = std::collections::HashMap::new();
+        apply_modes.insert("com.apple.demo.multi".to_string(), "multiple".to_string());
+        assert!(check_single_instance_payload_repeated(&profile, &apply_modes).is_empty());
+    }
+
+    #[test]
+    fn missing_apply_mode_is_silent() {
+        // No apply_mode entry → no signal either way.
+        let mut a = Dictionary::new();
+        a.insert("PayloadType".into(), s("com.apple.demo.unknown"));
+        a.insert(
+            "PayloadUUID".into(),
+            s("A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D"),
+        );
+        let mut b = Dictionary::new();
+        b.insert("PayloadType".into(), s("com.apple.demo.unknown"));
+        b.insert(
+            "PayloadUUID".into(),
+            s("B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E"),
+        );
+        let profile = build_profile(
+            "11111111-2222-3333-4444-555555555555",
+            vec![Value::Dictionary(a), Value::Dictionary(b)],
+        );
+        let apply_modes = std::collections::HashMap::new();
+        assert!(check_single_instance_payload_repeated(&profile, &apply_modes).is_empty());
+    }
+
     // ── full lint pass smoke ──
 
     #[test]
@@ -1066,6 +1215,7 @@ mod tests {
             &LintOptions {
                 strict: false,
                 selected_checks: Some(tier_2.clone()),
+                apply_modes: std::collections::HashMap::new(),
             },
         );
         let opted_in_strict = lint_profile_with_options(
@@ -1074,6 +1224,7 @@ mod tests {
             &LintOptions {
                 strict: true,
                 selected_checks: Some(tier_2),
+                apply_modes: std::collections::HashMap::new(),
             },
         );
 
@@ -1122,6 +1273,7 @@ mod tests {
             &LintOptions {
                 strict: true,
                 selected_checks: None,
+                apply_modes: std::collections::HashMap::new(),
             },
         );
         assert!(
@@ -1140,6 +1292,7 @@ mod tests {
             &LintOptions {
                 strict: false,
                 selected_checks: Some(tier_2),
+                apply_modes: std::collections::HashMap::new(),
             },
         );
         assert!(
@@ -1173,6 +1326,7 @@ mod tests {
             &LintOptions {
                 strict: false,
                 selected_checks: Some(only),
+                apply_modes: std::collections::HashMap::new(),
             },
         );
         let names: std::collections::HashSet<&str> = result.iter().map(|f| f.check).collect();

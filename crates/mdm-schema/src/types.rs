@@ -159,6 +159,13 @@ pub struct OsSupport {
     pub multiple: Option<bool>,
     /// Whether this is a beta feature.
     pub beta: Option<bool>,
+    /// Shared iPad mode constraint (DDM) — e.g. "allowed",
+    /// "required", "forbidden". `None` means the schema didn't declare
+    /// a constraint.
+    pub shared_ipad_mode: Option<String>,
+    /// User-enrollment mode constraint (DDM) — e.g. "allowed",
+    /// "required", "forbidden". `None` means no constraint.
+    pub user_enrollment_mode: Option<String>,
 }
 
 /// A single key within a payload type.
@@ -178,10 +185,12 @@ pub struct PayloadKey {
     pub range_max: Option<f64>,
     /// Allowed values for enumerated types.
     pub range_list: Option<Vec<String>>,
-    /// OS version when this key was introduced.
-    pub introduced: Option<String>,
-    /// OS version when this key was deprecated.
-    pub deprecated: Option<String>,
+    /// OS version when this key was introduced, per platform.
+    /// Empty map means the parquet had no per-OS introduced data for any
+    /// row touching this key.
+    pub introduced: std::collections::HashMap<Platform, String>,
+    /// OS version when this key was deprecated, per platform.
+    pub deprecated: std::collections::HashMap<Platform, String>,
     /// Dot-path to parent key, `None` for top-level keys.
     pub parent_key: Option<String>,
     /// Nesting depth: 0 for top-level, 1+ for subkeys.
@@ -198,6 +207,23 @@ pub struct PayloadKey {
     pub asset_types: Option<Vec<String>>,
     /// Regex validation pattern from the `format` field.
     pub format: Option<String>,
+}
+
+impl PayloadKey {
+    /// Earliest OS version where this key appears across any platform —
+    /// the lexicographically-smallest entry in `introduced`. Returns
+    /// `None` if no platform recorded an introduced version.
+    ///
+    /// Useful for callers that want a single "min version" and don't
+    /// care which platform it came from. Lexicographic ordering on
+    /// version strings happens to match numeric ordering for the
+    /// version shapes Apple emits (e.g. "10.7" < "10.10" lexicographic
+    /// is wrong, but Apple is on macOS 11+ now, so "11" / "12" / etc.
+    /// sort correctly; for legacy macOS-pre-11 keys callers should
+    /// inspect the map directly).
+    pub fn earliest_introduced(&self) -> Option<String> {
+        self.introduced.values().min().cloned()
+    }
 }
 
 /// Setup Assistant skip key with platform and version gating.
@@ -262,11 +288,33 @@ impl Capability {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PayloadSchema {
     pub payload_type: String,
+    /// Capability classification: `"MdmProfile"` / `"MdmConfig"` /
+    /// `"DdmDeclaration"` etc. 100% populated in current data;
+    /// `None` only when reading older parquets.
+    pub kind: Option<String>,
+    /// Provenance label — which upstream feed this row originated from
+    /// (e.g. `"profilecreator"`, `"apple"`).
+    pub manifest_source: Option<String>,
+    /// `pfm_interaction` / Apple `apply` mode (`"single"` / `"multiple"`
+    /// / `"combined"`). Sparse — only declarations that explicitly
+    /// declare an apply mode populate it.
+    pub apply_mode: Option<String>,
     pub category: String,
     pub title: String,
     pub description: String,
     pub platforms: PlatformFlags,
     pub min_versions: MinVersions,
+    /// macOS-only deprecation marker (sourced from
+    /// `pfm_macos_deprecated`). Other platforms lack the equivalent in
+    /// ProfileCreator's source data; for full per-OS deprecation
+    /// coverage consult `Capability.supported_os` from
+    /// `capabilities.parquet`.
+    pub deprecated_macos: Option<String>,
+    /// Whether this payload deploys on the device channel (derived
+    /// from `pfm_targets`).
+    pub device_channel: Option<bool>,
+    /// Whether this payload deploys on the user channel.
+    pub user_channel: Option<bool>,
     pub fields: Vec<ManifestField>,
 }
 
@@ -299,10 +347,21 @@ pub struct ManifestField {
     pub description: String,
     pub required: bool,
     pub supervised: bool,
+    /// Now sourced from `pfm_sensitive` (default `false`) instead of
+    /// hardcoded `false`. ~7 keys flip to `true` in the current parquet.
     pub sensitive: bool,
     pub default_value: Option<String>,
     pub allowed_values: Option<String>,
     pub depth: u8,
+    /// Dot-path to parent key, `None` for top-level keys. Mirrors the
+    /// `parent_key` shape on `PayloadKey` in `capabilities.parquet`.
+    pub parent_key: Option<String>,
     pub platforms: Option<String>,
     pub min_version: Option<String>,
+    /// Subtype hint — `"url"`, `"hostname"`, `"email"`, etc. (sourced
+    /// from `pfm_value_unit`). Used as a validation hint by downstream
+    /// generators.
+    pub subtype: Option<String>,
+    /// Regex validation pattern (sourced from `pfm_format`).
+    pub format: Option<String>,
 }

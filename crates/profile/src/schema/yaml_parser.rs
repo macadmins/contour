@@ -189,6 +189,7 @@ pub fn parse_yaml_manifest(content: &str) -> Result<PayloadManifest> {
         platforms,
         min_versions,
         os_support: std::collections::HashMap::new(),
+        apply_mode: None,
         category,
         fields,
         field_order,
@@ -291,6 +292,8 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
                 platforms: Vec::new(),
                 min_version: None,
                 deprecated_in: None,
+                introduced_by_platform: HashMap::new(),
+                deprecated_by_platform: HashMap::new(),
                 combinetype: None,
             };
             field_order.push(def.name.clone());
@@ -305,6 +308,7 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
         platforms,
         min_versions,
         os_support: std::collections::HashMap::new(),
+        apply_mode: None,
         category,
         fields,
         field_order,
@@ -593,6 +597,8 @@ fn parse_apple_field(field: &AppleField, depth: usize) -> FieldDefinition {
         platforms: Vec::new(),
         min_version: None,
         deprecated_in: None,
+        introduced_by_platform: HashMap::new(),
+        deprecated_by_platform: HashMap::new(),
         combinetype: None,
     }
 }

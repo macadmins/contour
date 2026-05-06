@@ -67,7 +67,7 @@ pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
                             })
                             .unwrap_or_default(),
                         depth: f.depth,
-                        parent_key: None,
+                        parent_key: f.parent_key.clone(),
                         platforms: f
                             .platforms
                             .as_ref()
@@ -75,6 +75,8 @@ pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
                             .unwrap_or_default(),
                         min_version: f.min_version.clone(),
                         deprecated_in: None,
+                        introduced_by_platform: HashMap::new(),
+                        deprecated_by_platform: HashMap::new(),
                         combinetype: None,
                     },
                 );
@@ -97,6 +99,67 @@ pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
                 min_versions.insert(Platform::VisionOS, v.clone());
             }
 
+            // Synthesize partial per-OS support detail from ProfileCreator's
+            // flat columns. ProfileCreator only carries platform-wide
+            // channel booleans + min_version per OS + macOS-only
+            // deprecation, so the resulting OsSupportDetail has fewer
+            // populated slots than capabilities.parquet would. The empty
+            // slots stay None; an agent that reads `requires_dep: None`
+            // can't tell whether Apple says "not required" or
+            // "ProfileCreator never knew" — the gap-honest tradeoff.
+            let mut os_support: HashMap<Platform, OsSupportDetail> = HashMap::new();
+            let backfill_for = |platform: Platform,
+                                enabled: bool,
+                                min_v: &Option<String>,
+                                dep: Option<&str>|
+             -> Option<(Platform, OsSupportDetail)> {
+                if !enabled {
+                    return None;
+                }
+                Some((
+                    platform,
+                    OsSupportDetail {
+                        introduced: min_v.clone(),
+                        deprecated: dep.map(str::to_string),
+                        device_channel: pm.device_channel,
+                        user_channel: pm.user_channel,
+                        ..Default::default()
+                    },
+                ))
+            };
+            for entry in [
+                backfill_for(
+                    Platform::MacOS,
+                    pm.platforms.macos,
+                    &pm.min_versions.macos,
+                    pm.deprecated_macos.as_deref(),
+                ),
+                backfill_for(Platform::Ios, pm.platforms.ios, &pm.min_versions.ios, None),
+                backfill_for(
+                    Platform::TvOS,
+                    pm.platforms.tvos,
+                    &pm.min_versions.tvos,
+                    None,
+                ),
+                backfill_for(
+                    Platform::WatchOS,
+                    pm.platforms.watchos,
+                    &pm.min_versions.watchos,
+                    None,
+                ),
+                backfill_for(
+                    Platform::VisionOS,
+                    pm.platforms.visionos,
+                    &pm.min_versions.visionos,
+                    None,
+                ),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                os_support.insert(entry.0, entry.1);
+            }
+
             PayloadManifest {
                 payload_type: pm.payload_type,
                 title: pm.title,
@@ -109,7 +172,8 @@ pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
                     visionos: pm.platforms.visionos,
                 },
                 min_versions,
-                os_support: HashMap::new(),
+                os_support,
+                apply_mode: pm.apply_mode.clone(),
                 category: pm.category,
                 fields,
                 field_order,
@@ -154,6 +218,11 @@ pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
                 // ProfileCreator never carried `os_support`, so this
                 // doesn't lose any pre-existing data.
                 existing.os_support = apple.os_support;
+                // Apple's apply_mode wins when present; otherwise keep
+                // the ProfileCreator value already on `existing`.
+                if apple.apply_mode.is_some() {
+                    existing.apply_mode = apple.apply_mode;
+                }
                 if existing.min_versions.is_empty() {
                     existing.min_versions = apple.min_versions;
                 }
@@ -222,6 +291,8 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
                     platforms: vec![Platform::MacOS],
                     min_version: None,
                     deprecated_in: None,
+                    introduced_by_platform: HashMap::new(),
+                    deprecated_by_platform: HashMap::new(),
                     combinetype: None,
                 },
             );
@@ -236,6 +307,7 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
             },
             min_versions: HashMap::new(),
             os_support: HashMap::new(),
+            apply_mode: None,
             category: "prefs".to_string(),
             fields,
             field_order,
@@ -300,6 +372,25 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
     ]
 }
 
+/// Translate mdm_schema's per-platform map to contour's `Platform` enum.
+/// Both enums are 5-variant; this is a 1:1 isomorphism.
+fn convert_platform_map(
+    src: &std::collections::HashMap<mdm_schema::Platform, String>,
+) -> std::collections::HashMap<Platform, String> {
+    src.iter()
+        .map(|(p, v)| {
+            let mapped = match p {
+                mdm_schema::Platform::MacOS => Platform::MacOS,
+                mdm_schema::Platform::IOS => Platform::Ios,
+                mdm_schema::Platform::TvOS => Platform::TvOS,
+                mdm_schema::Platform::WatchOS => Platform::WatchOS,
+                mdm_schema::Platform::VisionOS => Platform::VisionOS,
+            };
+            (mapped, v.clone())
+        })
+        .collect()
+}
+
 /// Convert an Apple `Capability` (MDM profile or DDM declaration) to a contour `PayloadManifest`.
 fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
     let mut fields = std::collections::HashMap::new();
@@ -335,8 +426,13 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             depth: key.depth as u8,
             parent_key: key.parent_key.clone(),
             platforms: Vec::new(),
-            min_version: key.introduced.clone(),
-            deprecated_in: key.deprecated.clone(),
+            // Single-value summaries: lexicographic min across the
+            // per-platform map. Backwards-compat for callers that don't
+            // care which OS the value came from.
+            min_version: key.earliest_introduced(),
+            deprecated_in: key.deprecated.values().min().cloned(),
+            introduced_by_platform: convert_platform_map(&key.introduced),
+            deprecated_by_platform: convert_platform_map(&key.deprecated),
             combinetype: key.combinetype.clone(),
         };
         field_order.push(key.name.clone());
@@ -400,6 +496,8 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
                 user_channel: os.user_channel,
                 multiple: os.multiple,
                 beta: os.beta,
+                shared_ipad_mode: os.shared_ipad_mode.clone(),
+                user_enrollment_mode: os.user_enrollment_mode.clone(),
             },
         );
     }
@@ -411,6 +509,7 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
         platforms,
         min_versions,
         os_support,
+        apply_mode: cap.apply_mode.map(|m| m.as_str().to_string()),
         category,
         fields,
         field_order,

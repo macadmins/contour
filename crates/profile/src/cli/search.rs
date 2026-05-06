@@ -18,7 +18,27 @@ use colored::Colorize;
 
 use crate::cli::info::plist_tag_for;
 use crate::output::OutputMode;
-use crate::schema::{FieldDefinition, PayloadManifest, SchemaRegistry};
+use crate::schema::{FieldDefinition, PayloadManifest, Platform, SchemaRegistry};
+
+/// JSON-serialize a per-OS map keyed by `Platform`. Empty maps become
+/// `{}`; non-empty ones use stable platform order (macOS, iOS, …) for
+/// byte-stable output. Search has no `--os` flag, so it never collapses
+/// to a flat string the way `info` does.
+fn serialize_per_os_map(map: &std::collections::HashMap<Platform, String>) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for p in [
+        Platform::MacOS,
+        Platform::Ios,
+        Platform::TvOS,
+        Platform::WatchOS,
+        Platform::VisionOS,
+    ] {
+        if let Some(v) = map.get(&p) {
+            out.insert(p.as_str().to_string(), serde_json::Value::String(v.clone()));
+        }
+    }
+    serde_json::Value::Object(out)
+}
 
 /// Handle the `search` command.
 pub fn handle_search(
@@ -142,6 +162,8 @@ fn handle_polymorphic_search(
                         "allowed_values": f.allowed_values,
                         "min_version": f.min_version,
                         "deprecated_in": f.deprecated_in,
+                        "introduced_by_platform": serialize_per_os_map(&f.introduced_by_platform),
+                        "deprecated_by_platform": serialize_per_os_map(&f.deprecated_by_platform),
                         "combinetype": f.combinetype,
                         "depth": f.depth,
                         "parent_key": f.parent_key,
@@ -268,6 +290,8 @@ fn handle_field_lookup(
                         "allowed_values": f.allowed_values,
                         "min_version": f.min_version,
                         "deprecated_in": f.deprecated_in,
+                        "introduced_by_platform": serialize_per_os_map(&f.introduced_by_platform),
+                        "deprecated_by_platform": serialize_per_os_map(&f.deprecated_by_platform),
                         "combinetype": f.combinetype,
                         "depth": f.depth,
                         "parent_key": f.parent_key,

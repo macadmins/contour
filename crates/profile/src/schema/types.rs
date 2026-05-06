@@ -28,6 +28,11 @@ pub struct PayloadManifest {
     /// to a target OS. May be empty for payloads that don't carry the
     /// metadata (older schemas, custom prefs).
     pub os_support: HashMap<Platform, OsSupportDetail>,
+    /// Apple/DDM `apply` mode — `"single"`, `"multiple"`, or
+    /// `"combined"`. `None` when the source schema doesn't declare one
+    /// (older parquet, prefs, etc.). Drives the
+    /// `single-instance-payload-repeated` lint check.
+    pub apply_mode: Option<String>,
     /// Category: "apple", "apps", "prefs"
     pub category: String,
     /// Field definitions keyed by field name
@@ -74,6 +79,13 @@ pub struct OsSupportDetail {
     pub multiple: Option<bool>,
     /// Whether the payload is currently in beta.
     pub beta: Option<bool>,
+    /// Shared iPad mode (DDM constraint) — string from Apple's schema,
+    /// typically "allowed" / "required" / "forbidden". `None` means no
+    /// constraint declared.
+    pub shared_ipad_mode: Option<String>,
+    /// User-enrollment mode (DDM constraint) — same shape as
+    /// `shared_ipad_mode`.
+    pub user_enrollment_mode: Option<String>,
 }
 
 /// Platform support flags
@@ -155,12 +167,23 @@ pub struct FieldDefinition {
     pub parent_key: Option<String>,
     /// Platform-specific (empty = all platforms)
     pub platforms: Vec<Platform>,
-    /// Minimum version requirement (earliest `introduced` across platforms)
+    /// Minimum version requirement (earliest `introduced` across platforms).
+    /// Single-value summary derived from `introduced_by_platform` —
+    /// kept for callers that don't care which OS.
     pub min_version: Option<String>,
     /// OS version when this key was deprecated by Apple. Field still
     /// works for now but is flagged in Apple's schema as scheduled for
     /// removal. Authoring tools should warn.
+    ///
+    /// Single-value summary; per-OS detail in `deprecated_by_platform`.
     pub deprecated_in: Option<String>,
+    /// Per-OS `introduced` version — empty for keys without per-OS data
+    /// (legacy parquet rows or non-embedded schema sources). Lets agents
+    /// answer "when did this key land on iOS vs macOS?" without
+    /// collapsing to a single value.
+    pub introduced_by_platform: HashMap<Platform, String>,
+    /// Per-OS `deprecated` version. Same shape as `introduced_by_platform`.
+    pub deprecated_by_platform: HashMap<Platform, String>,
     /// DDM merge strategy when multiple declarations carry this key —
     /// e.g. `boolean-or`, `number-min`, `set-union`. Only meaningful for
     /// declaration types; `None` for plain MDM profile keys.
@@ -540,6 +563,8 @@ mod tests {
                 platforms: vec![],
                 min_version: None,
                 deprecated_in: None,
+                introduced_by_platform: std::collections::HashMap::new(),
+                deprecated_by_platform: std::collections::HashMap::new(),
                 combinetype: None,
             },
         );
@@ -565,6 +590,8 @@ mod tests {
                 platforms: vec![],
                 min_version: None,
                 deprecated_in: None,
+                introduced_by_platform: std::collections::HashMap::new(),
+                deprecated_by_platform: std::collections::HashMap::new(),
                 combinetype: None,
             },
         );
@@ -586,6 +613,8 @@ mod tests {
                 platforms: vec![],
                 min_version: None,
                 deprecated_in: None,
+                introduced_by_platform: std::collections::HashMap::new(),
+                deprecated_by_platform: std::collections::HashMap::new(),
                 combinetype: None,
             },
         );
@@ -597,6 +626,7 @@ mod tests {
             platforms: Platforms::parse("m,i,t"),
             min_versions: HashMap::new(),
             os_support: HashMap::new(),
+            apply_mode: None,
             category: "apple".to_string(),
             fields,
             field_order,

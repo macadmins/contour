@@ -20,10 +20,24 @@ fn col<'a>(
 /// Arrow schema for `profilecreator.parquet`.
 ///
 /// One row per (payload_type, key) combination.
+///
+/// **Schema version 2026.05.06.1** added 9 nullable columns
+/// (`kind`, `manifest_source`, `apply_mode`, `deprecated_macos`,
+/// `parent_key`, `subtype`, `format`, `device_channel`,
+/// `user_channel`) drawn from the upstream pfm_* metadata that the
+/// older 26-column schema discarded. All additions are nullable so
+/// older parquets without these columns won't fail compat-check —
+/// readers must `is_null(row)` defensively.
 pub fn schema() -> Schema {
     Schema::new(vec![
         // Manifest identity
         Field::new("payload_type", DataType::Utf8, false),
+        // `kind` is 100% populated in current data ("MdmProfile" /
+        // "MdmConfig") but kept nullable for compat-check tolerance
+        // when consumers pin to older schemas.
+        Field::new("kind", DataType::Utf8, true),
+        Field::new("manifest_source", DataType::Utf8, true),
+        Field::new("apply_mode", DataType::Utf8, true),
         Field::new("category", DataType::Utf8, false),
         Field::new("title", DataType::Utf8, false),
         Field::new("description", DataType::Utf8, true),
@@ -39,6 +53,13 @@ pub fn schema() -> Schema {
         Field::new("min_version_tvos", DataType::Utf8, true),
         Field::new("min_version_watchos", DataType::Utf8, true),
         Field::new("min_version_visionos", DataType::Utf8, true),
+        // macOS-only deprecation marker — extracted from
+        // pfm_macos_deprecated. Other OSes lack the equivalent in
+        // ProfileCreator's source data so only macOS is tracked here.
+        Field::new("deprecated_macos", DataType::Utf8, true),
+        // MDM channel (derived from pfm_targets).
+        Field::new("device_channel", DataType::Boolean, true),
+        Field::new("user_channel", DataType::Boolean, true),
         // Key identity
         Field::new("key_name", DataType::Utf8, false),
         Field::new("key_type", DataType::Utf8, false),
@@ -47,13 +68,19 @@ pub fn schema() -> Schema {
         // Key flags
         Field::new("required", DataType::Boolean, false),
         Field::new("supervised", DataType::Boolean, false),
+        // `sensitive` is non-nullable to preserve schema compat with
+        // pre-2026.05.06.1 consumers; the producer now reads
+        // pfm_sensitive (default false) instead of hardcoding false.
         Field::new("sensitive", DataType::Boolean, false),
         // Key metadata
         Field::new("default_value", DataType::Utf8, true),
         Field::new("allowed_values", DataType::Utf8, true),
         Field::new("depth", DataType::UInt8, false),
+        Field::new("parent_key", DataType::Utf8, true),
         Field::new("key_platforms", DataType::Utf8, true),
         Field::new("key_min_version", DataType::Utf8, true),
+        Field::new("subtype", DataType::Utf8, true),
+        Field::new("format", DataType::Utf8, true),
     ])
 }
 
@@ -73,6 +100,9 @@ pub fn read(bytes: &[u8]) -> Result<Vec<PayloadSchema>> {
         let num_rows = batch.num_rows();
 
         let payload_types = col(&batch, "payload_type")?.as_string::<i32>();
+        let kinds = col(&batch, "kind")?.as_string::<i32>();
+        let manifest_sources = col(&batch, "manifest_source")?.as_string::<i32>();
+        let apply_modes = col(&batch, "apply_mode")?.as_string::<i32>();
         let categories = col(&batch, "category")?.as_string::<i32>();
         let titles = col(&batch, "title")?.as_string::<i32>();
         let descriptions = col(&batch, "description")?.as_string::<i32>();
@@ -86,6 +116,9 @@ pub fn read(bytes: &[u8]) -> Result<Vec<PayloadSchema>> {
         let mv_tvos = col(&batch, "min_version_tvos")?.as_string::<i32>();
         let mv_watchos = col(&batch, "min_version_watchos")?.as_string::<i32>();
         let mv_visionos = col(&batch, "min_version_visionos")?.as_string::<i32>();
+        let deprecated_macos_col = col(&batch, "deprecated_macos")?.as_string::<i32>();
+        let device_ch_col = col(&batch, "device_channel")?.as_boolean();
+        let user_ch_col = col(&batch, "user_channel")?.as_boolean();
         let key_names = col(&batch, "key_name")?.as_string::<i32>();
         let key_types = col(&batch, "key_type")?.as_string::<i32>();
         let key_titles = col(&batch, "key_title")?.as_string::<i32>();
@@ -96,8 +129,11 @@ pub fn read(bytes: &[u8]) -> Result<Vec<PayloadSchema>> {
         let defaults = col(&batch, "default_value")?.as_string::<i32>();
         let allowed = col(&batch, "allowed_values")?.as_string::<i32>();
         let depths = col(&batch, "depth")?.as_primitive::<UInt8Type>();
+        let parent_keys = col(&batch, "parent_key")?.as_string::<i32>();
         let key_platforms = col(&batch, "key_platforms")?.as_string::<i32>();
         let key_min_vers = col(&batch, "key_min_version")?.as_string::<i32>();
+        let subtypes = col(&batch, "subtype")?.as_string::<i32>();
+        let formats = col(&batch, "format")?.as_string::<i32>();
 
         for row in 0..num_rows {
             let pt = payload_types.value(row);
@@ -106,6 +142,21 @@ pub fn read(bytes: &[u8]) -> Result<Vec<PayloadSchema>> {
                 .entry(pt.to_string())
                 .or_insert_with(|| PayloadSchema {
                     payload_type: pt.to_string(),
+                    kind: if kinds.is_null(row) {
+                        None
+                    } else {
+                        Some(kinds.value(row).to_string())
+                    },
+                    manifest_source: if manifest_sources.is_null(row) {
+                        None
+                    } else {
+                        Some(manifest_sources.value(row).to_string())
+                    },
+                    apply_mode: if apply_modes.is_null(row) {
+                        None
+                    } else {
+                        Some(apply_modes.value(row).to_string())
+                    },
                     category: categories.value(row).to_string(),
                     title: titles.value(row).to_string(),
                     description: if descriptions.is_null(row) {
@@ -119,6 +170,21 @@ pub fn read(bytes: &[u8]) -> Result<Vec<PayloadSchema>> {
                         tvos: tvos_col.value(row),
                         watchos: watchos_col.value(row),
                         visionos: visionos_col.value(row),
+                    },
+                    deprecated_macos: if deprecated_macos_col.is_null(row) {
+                        None
+                    } else {
+                        Some(deprecated_macos_col.value(row).to_string())
+                    },
+                    device_channel: if device_ch_col.is_null(row) {
+                        None
+                    } else {
+                        Some(device_ch_col.value(row))
+                    },
+                    user_channel: if user_ch_col.is_null(row) {
+                        None
+                    } else {
+                        Some(user_ch_col.value(row))
                     },
                     min_versions: MinVersions {
                         macos: if mv_macos.is_null(row) {
@@ -177,6 +243,11 @@ pub fn read(bytes: &[u8]) -> Result<Vec<PayloadSchema>> {
                     Some(allowed.value(row).to_string())
                 },
                 depth: depths.value(row),
+                parent_key: if parent_keys.is_null(row) {
+                    None
+                } else {
+                    Some(parent_keys.value(row).to_string())
+                },
                 platforms: if key_platforms.is_null(row) {
                     None
                 } else {
@@ -186,6 +257,16 @@ pub fn read(bytes: &[u8]) -> Result<Vec<PayloadSchema>> {
                     None
                 } else {
                     Some(key_min_vers.value(row).to_string())
+                },
+                subtype: if subtypes.is_null(row) {
+                    None
+                } else {
+                    Some(subtypes.value(row).to_string())
+                },
+                format: if formats.is_null(row) {
+                    None
+                } else {
+                    Some(formats.value(row).to_string())
                 },
             });
         }
@@ -206,6 +287,18 @@ mod tests {
         assert!(s.field_with_name("key_name").is_ok());
         assert!(s.field_with_name("sensitive").is_ok());
         assert!(s.field_with_name("allowed_values").is_ok());
-        assert_eq!(s.fields().len(), 26);
+        // 2026.05.06.1 schema additions — assert each one so a future
+        // accidental drop fails the test loudly instead of silently
+        // breaking downstream consumers.
+        assert!(s.field_with_name("kind").is_ok());
+        assert!(s.field_with_name("manifest_source").is_ok());
+        assert!(s.field_with_name("apply_mode").is_ok());
+        assert!(s.field_with_name("deprecated_macos").is_ok());
+        assert!(s.field_with_name("parent_key").is_ok());
+        assert!(s.field_with_name("subtype").is_ok());
+        assert!(s.field_with_name("format").is_ok());
+        assert!(s.field_with_name("device_channel").is_ok());
+        assert!(s.field_with_name("user_channel").is_ok());
+        assert_eq!(s.fields().len(), 35);
     }
 }
