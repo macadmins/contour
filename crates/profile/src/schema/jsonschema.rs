@@ -407,6 +407,8 @@ mod tests {
             parent_key: None,
             platforms: vec![],
             min_version: None,
+            deprecated_in: None,
+            combinetype: None,
         };
         let schema = field_to_json_schema(&string_field);
         assert_eq!(schema["type"], "string");
@@ -425,6 +427,8 @@ mod tests {
             parent_key: None,
             platforms: vec![],
             min_version: None,
+            deprecated_in: None,
+            combinetype: None,
         };
         let schema = field_to_json_schema(&data_field);
         assert_eq!(schema["type"], "string");
@@ -443,6 +447,8 @@ mod tests {
             parent_key: None,
             platforms: vec![],
             min_version: None,
+            deprecated_in: None,
+            combinetype: None,
         };
         let schema = field_to_json_schema(&date_field);
         assert_eq!(schema["type"], "string");
