@@ -42,6 +42,28 @@ pub struct RecipeMeta {
     /// Advisory — shown in `--list-recipes` with `op://` hints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<String>>,
+    /// Optional output-shape knob. Default emission is one
+    /// `.mobileconfig` per `[[profile]]` block. Setting
+    /// `output.combined = true` (or passing `--combined` at generate
+    /// time) emits one `.mobileconfig` carrying every profile as inner
+    /// `PayloadContent` entries — useful for vendor bundles like
+    /// CrowdStrike that ship pieces independently but install together.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<RecipeOutput>,
+}
+
+/// Output-shape knob for `[recipe]`. See `RecipeMeta::output`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipeOutput {
+    /// When true, all `[[profile]]` blocks render into ONE
+    /// `.mobileconfig` with N inner `PayloadContent` entries. When
+    /// false (default), each `[[profile]]` writes to its own file.
+    #[serde(default)]
+    pub combined: bool,
+    /// Override for the combined output filename. Defaults to
+    /// `<recipe.name>.mobileconfig`. Ignored when `combined = false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combined_filename: Option<String>,
 }
 
 /// Specification for a single profile within a recipe.

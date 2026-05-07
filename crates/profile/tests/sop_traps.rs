@@ -3713,3 +3713,222 @@ fn trap_82_library_import_preserves_xml_comments_as_toml_comments() {
         String::from_utf8_lossy(&regen.stderr)
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 83: `library import --combine --name X` folds N source files into
+// one recipe with N `[[profile]]` blocks, and `generate --combined`
+// emits ONE multi-payload .mobileconfig instead of N. Catches:
+//   - Multi-input CLI dropped the new `Vec<String>` shape
+//   - --combine without --name silently picks a default (loses
+//     disambiguation guarantee)
+//   - Combined emission writes N files instead of one
+//   - Outer envelope identifier doesn't include `--org` prefix
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_83_library_import_combine_and_generate_combined() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = tmp.path().join("lib");
+    let scaffold = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["library", "new", lib.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(scaffold.status.success());
+
+    let envelope = |display: &str,
+                    ident: &str,
+                    uuid: &str,
+                    payload_type: &str,
+                    key: &str|
+     -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>PayloadContent</key><array><dict>
+<key>PayloadType</key><string>{payload_type}</string>
+<key>PayloadIdentifier</key><string>{ident}.inner</string>
+<key>PayloadUUID</key><string>{uuid}</string>
+<key>PayloadVersion</key><integer>1</integer>
+<key>{key}</key><true/>
+</dict></array>
+<key>PayloadDisplayName</key><string>{display}</string>
+<key>PayloadIdentifier</key><string>{ident}</string>
+<key>PayloadType</key><string>Configuration</string>
+<key>PayloadUUID</key><string>{uuid}</string>
+<key>PayloadVersion</key><integer>1</integer>
+</dict></plist>"#
+        )
+    };
+    let f1 = tmp.path().join("cs-firewall.mobileconfig");
+    let f2 = tmp.path().join("cs-gatekeeper.mobileconfig");
+    let f3 = tmp.path().join("cs-content.mobileconfig");
+    fs::write(
+        &f1,
+        envelope(
+            "FW",
+            "com.example.fw",
+            "11111111-1111-1111-1111-111111111111",
+            "com.apple.security.firewall",
+            "EnableFirewall",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &f2,
+        envelope(
+            "GK",
+            "com.example.gk",
+            "22222222-2222-2222-2222-222222222222",
+            "com.apple.systempolicy.control",
+            "EnableAssessment",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &f3,
+        envelope(
+            "CC",
+            "com.example.cc",
+            "33333333-3333-3333-3333-333333333333",
+            "com.apple.applicationaccess",
+            "allowContentCaching",
+        ),
+    )
+    .unwrap();
+
+    // --combine without --name must refuse.
+    let no_name = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            f1.to_str().unwrap(),
+            f2.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+            "--combine",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !no_name.status.success(),
+        "--combine without --name must fail"
+    );
+    let stderr = String::from_utf8_lossy(&no_name.stderr);
+    assert!(
+        stderr.contains("--name"),
+        "refusal must point at --name; got: {stderr}"
+    );
+
+    // Combine 3 sources into one recipe.
+    let combined = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            f1.to_str().unwrap(),
+            f2.to_str().unwrap(),
+            f3.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+            "--combine",
+            "--name",
+            "crowdstrike",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        combined.status.success(),
+        "combined import must succeed; stderr: {}",
+        String::from_utf8_lossy(&combined.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&combined.stdout).expect("JSON");
+    assert_eq!(parsed["payload_count"], 3);
+    let recipe_path = lib.join("recipes/crowdstrike.toml");
+    let recipe_toml = fs::read_to_string(&recipe_path).unwrap();
+    assert_eq!(
+        recipe_toml.matches("\n[[profile]]\n").count(),
+        3,
+        "combined recipe must carry 3 [[profile]] blocks; got: {recipe_toml}"
+    );
+
+    // Default emission: 3 files, none called crowdstrike.mobileconfig.
+    let out_default = tempfile::tempdir().unwrap();
+    let gen_default = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe-path",
+            lib.join("recipes").to_str().unwrap(),
+            "--recipe",
+            "crowdstrike",
+            "--org",
+            "com.acme",
+            "-o",
+            out_default.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(gen_default.status.success());
+    let default_count = std::fs::read_dir(out_default.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s == "mobileconfig")
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(default_count, 3, "default emission must write 3 files");
+    assert!(
+        !out_default.path().join("crowdstrike.mobileconfig").exists(),
+        "default emission must NOT produce a combined file"
+    );
+
+    // --combined emission: ONE file with 3 inner payloads.
+    let out_combined = tempfile::tempdir().unwrap();
+    let gen_combined = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe-path",
+            lib.join("recipes").to_str().unwrap(),
+            "--recipe",
+            "crowdstrike",
+            "--org",
+            "com.acme",
+            "-o",
+            out_combined.path().to_str().unwrap(),
+            "--combined",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        gen_combined.status.success(),
+        "--combined emission must succeed; stderr: {}",
+        String::from_utf8_lossy(&gen_combined.stderr)
+    );
+    let combined_path = out_combined.path().join("crowdstrike.mobileconfig");
+    assert!(
+        combined_path.exists(),
+        "combined output must land at <recipe-name>.mobileconfig"
+    );
+    let combined_xml = fs::read_to_string(&combined_path).unwrap();
+    // Outer envelope + 3 inner payloads = 4 PayloadType keys.
+    assert_eq!(
+        combined_xml.matches("<key>PayloadType</key>").count(),
+        4,
+        "combined .mobileconfig must have 1 outer + 3 inner PayloadType keys"
+    );
+    // Outer identifier carries `--org` prefix + recipe name.
+    assert!(
+        combined_xml.contains("<string>com.acme.crowdstrike</string>"),
+        "combined output's outer identifier must be com.acme.<recipe-name>"
+    );
+}

@@ -591,6 +591,12 @@ pub enum Commands {
             help = "Output format: mobileconfig (full profile) or plist (raw payload dict for WS1)"
         )]
         format: String,
+
+        #[arg(
+            long,
+            help = "Bundle every [[profile]] in the recipe into ONE .mobileconfig with N inner payloads (overrides recipe.output.combined)"
+        )]
+        combined: bool,
     },
 
     #[command(about = "Work with Declarative Device Management (DDM) declarations")]
@@ -1121,9 +1127,11 @@ pub enum LibraryAction {
                       contour profile library import ./Privileges.mobileconfig --into ./contour-presets"
     )]
     Import {
-        /// Path to the `.mobileconfig` to ingest
-        #[arg(value_name = "FILE")]
-        input: String,
+        /// One or more paths to ingest. Accepts `.mobileconfig` files,
+        /// `.json` DDM declarations, directories (walked recursively),
+        /// or shell-expanded globs (`crowdstrike-*.mobileconfig`).
+        #[arg(value_name = "INPUT", num_args = 1..)]
+        inputs: Vec<String>,
 
         /// Library root (the `recipes/` subdirectory is created if missing)
         #[arg(long, value_name = "DIR")]
@@ -1132,6 +1140,12 @@ pub enum LibraryAction {
         /// Override the derived recipe name (default: snake-cased input file stem)
         #[arg(long, value_name = "NAME")]
         name: Option<String>,
+
+        /// Bundle all inputs into ONE recipe with N `[[profile]]` blocks
+        /// (instead of one recipe per source file). Requires `--name`
+        /// to disambiguate the combined recipe.
+        #[arg(long)]
+        combine: bool,
 
         /// Overwrite an existing recipe of the same name
         #[arg(short, long)]

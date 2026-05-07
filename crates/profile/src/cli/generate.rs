@@ -45,6 +45,113 @@ fn toml_to_plist(val: &toml::Value) -> Value {
     }
 }
 
+/// Build a multi-payload `.mobileconfig` containing every entry of
+/// `inner_payloads` under one outer Configuration envelope. Mirror
+/// of `contour_profiles::ProfileBuilder::build` but for the bundle
+/// case — used by recipes whose `[recipe.output]` has `combined =
+/// true` (or the `--combined` CLI override).
+///
+/// Each tuple entry: `(payload_type, payload_content, display_name,
+/// description, removal_disallowed_at_inner_level)`. The bundle's
+/// outer `PayloadRemovalDisallowed` is the OR of every inner spec's
+/// flag — keeping the union prevents users from setting a bundle to
+/// removable when a constituent declared itself locked.
+fn build_combined_profile_bytes(
+    org: &str,
+    outer_identifier: &str,
+    outer_display_name: &str,
+    outer_description: &str,
+    outer_removal_disallowed: bool,
+    inner_payloads: &[(String, Dictionary, String, String, bool)],
+) -> Result<Vec<u8>> {
+    use contour_profiles::uuid::deterministic_uuid;
+
+    let mut payload_array: Vec<Value> = Vec::with_capacity(inner_payloads.len());
+    for (payload_type, content, display_name, description, _inner_removal) in inner_payloads {
+        let inner_id = format!("{outer_identifier}.{}", payload_type_tail(payload_type));
+        let inner_payload_id = format!("{inner_id}.payload");
+        let inner_uuid = deterministic_uuid(&inner_payload_id);
+
+        let mut payload = Dictionary::new();
+        for (k, v) in content {
+            payload.insert(k.clone(), v.clone());
+        }
+        payload.insert(
+            "PayloadType".to_string(),
+            Value::String(payload_type.clone()),
+        );
+        payload.insert("PayloadEnabled".to_string(), Value::Boolean(true));
+        payload.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
+        payload.insert(
+            "PayloadIdentifier".to_string(),
+            Value::String(inner_payload_id),
+        );
+        payload.insert("PayloadUUID".to_string(), Value::String(inner_uuid));
+        payload.insert(
+            "PayloadDisplayName".to_string(),
+            Value::String(display_name.clone()),
+        );
+        if !description.is_empty() {
+            payload.insert(
+                "PayloadDescription".to_string(),
+                Value::String(description.clone()),
+            );
+        }
+        payload.insert(
+            "PayloadOrganization".to_string(),
+            Value::String(org.to_string()),
+        );
+
+        payload_array.push(Value::Dictionary(payload));
+    }
+
+    let outer_uuid = deterministic_uuid(outer_identifier);
+
+    let mut profile = Dictionary::new();
+    profile.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
+    profile.insert(
+        "PayloadDescription".to_string(),
+        Value::String(outer_description.to_string()),
+    );
+    profile.insert(
+        "PayloadScope".to_string(),
+        Value::String("System".to_string()),
+    );
+    profile.insert(
+        "PayloadType".to_string(),
+        Value::String("Configuration".to_string()),
+    );
+    profile.insert("PayloadContent".to_string(), Value::Array(payload_array));
+    profile.insert(
+        "PayloadOrganization".to_string(),
+        Value::String(org.to_string()),
+    );
+    profile.insert("PayloadUUID".to_string(), Value::String(outer_uuid));
+    profile.insert(
+        "PayloadDisplayName".to_string(),
+        Value::String(outer_display_name.to_string()),
+    );
+    profile.insert(
+        "PayloadIdentifier".to_string(),
+        Value::String(outer_identifier.to_string()),
+    );
+    profile.insert(
+        "PayloadRemovalDisallowed".to_string(),
+        Value::Boolean(outer_removal_disallowed),
+    );
+    profile.insert("PayloadEnabled".to_string(), Value::Boolean(true));
+
+    let mut buffer = Vec::new();
+    plist::to_writer_xml(&mut buffer, &Value::Dictionary(profile))
+        .context("Failed to serialize combined profile")?;
+    Ok(buffer)
+}
+
+/// `com.apple.security.firewall` → `firewall`.
+fn payload_type_tail(payload_type: &str) -> &str {
+    payload_type.rsplit('.').next().unwrap_or(payload_type)
+}
+
 /// Wrap a flat preferences dict into the legacy MCX (Managed Client
 /// for X) envelope:
 ///
@@ -478,9 +585,17 @@ pub fn handle_generate_recipe(
     vars: &[String],
     output_mode: OutputMode,
     format: &str,
+    cli_combined: bool,
 ) -> Result<()> {
     let var_map = parse_vars(vars)?;
     let mut r = recipe::loader::load_recipe(recipe_name, recipe_path)?;
+    // Combined emission is opt-in: CLI flag wins over recipe TOML.
+    let combined_emit = cli_combined
+        || r.recipe
+            .output
+            .as_ref()
+            .map(|o| o.combined)
+            .unwrap_or(false);
     let registry = load_registry(schema_path)?;
 
     // Resolve op://, env:, file: references in recipe field values
@@ -510,6 +625,9 @@ pub fn handle_generate_recipe(
 
     let mut generated = Vec::new();
     let mut all_placeholders = Vec::new();
+    // Combined-mode buffer: holds each inner payload's content +
+    // metadata until the end of the loop, then we emit one .mobileconfig.
+    let mut combined_buffer: Vec<(String, Dictionary, String, String, bool)> = Vec::new();
 
     for spec in &r.profiles {
         let manifest = registry.get_by_name(&spec.payload_type);
@@ -552,6 +670,22 @@ pub fn handle_generate_recipe(
         }
 
         let is_plist = format == "plist";
+
+        // Combined mode: stash the inner payload + metadata; the
+        // multi-payload mobileconfig assembles after the loop.
+        // `--combined` is incompatible with `format = plist` since
+        // there's no plist analogue to a multi-payload Configuration
+        // envelope.
+        if combined_emit && !is_plist {
+            combined_buffer.push((
+                spec.payload_type.clone(),
+                payload_content,
+                spec.display_name.clone(),
+                spec.description.clone(),
+                spec.removal_disallowed,
+            ));
+            continue;
+        }
 
         let profile_bytes = if is_plist {
             let mut buf = Vec::new();
@@ -602,6 +736,54 @@ pub fn handle_generate_recipe(
         }
 
         generated.push((output_path, spec.display_name.clone()));
+    }
+
+    // Combined mode: emit ONE mobileconfig with all inner payloads.
+    if combined_emit && !combined_buffer.is_empty() {
+        let combined_filename = r
+            .recipe
+            .output
+            .as_ref()
+            .and_then(|o| o.combined_filename.clone())
+            .unwrap_or_else(|| format!("{}.mobileconfig", r.recipe.name));
+        let output_path = Path::new(out_dir)
+            .join(&combined_filename)
+            .display()
+            .to_string();
+
+        // Per-bundle outer envelope keyed by the recipe name.
+        let outer_identifier = format!("{domain}.{}", r.recipe.name);
+        // Removal_disallowed at the bundle level: set if any inner asked for it.
+        let any_removal_locked = combined_buffer.iter().any(|(_, _, _, _, rd)| *rd);
+        let bytes = build_combined_profile_bytes(
+            &domain,
+            &outer_identifier,
+            &r.recipe.name,
+            &r.recipe.description,
+            any_removal_locked,
+            &combined_buffer,
+        )?;
+
+        let final_bytes = substitute_placeholders(&bytes, &var_map);
+        std::fs::write(&output_path, &final_bytes)?;
+        let _ =
+            super::post_generate::validate_generated_profile(Path::new(&output_path), output_mode);
+
+        let xml = String::from_utf8_lossy(&final_bytes);
+        for p in find_placeholders(&xml) {
+            if !all_placeholders.contains(&p) {
+                all_placeholders.push(p);
+            }
+        }
+
+        generated.push((
+            output_path,
+            format!(
+                "{} (combined: {} payloads)",
+                r.recipe.description,
+                combined_buffer.len()
+            ),
+        ));
     }
 
     // DDM bundles emitted under <out_dir>/<intent_name>/ — same compose
