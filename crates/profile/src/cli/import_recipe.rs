@@ -445,7 +445,6 @@ fn import_combined(
     let mut seen_filenames: HashSet<String> = HashSet::new();
     let mut combined_placeholder_mapping: Vec<(String, String)> = Vec::new();
     let mut combined_xml_comments: Vec<XmlComment> = Vec::new();
-    let mut combined_stats = CommentInjectionStats::default();
     let mut first_description: Option<String> = None;
     let mut first_vendor: Option<String> = None;
     let mut vendor_warnings: Vec<String> = Vec::new();
@@ -566,8 +565,7 @@ fn import_combined(
     // Serialize + comment-inject + write.
     let raw_toml =
         toml::to_string(&recipe).with_context(|| "Failed to serialize combined recipe to TOML")?;
-    let (toml_body, stats) = inject_xml_comments(&raw_toml, &combined_xml_comments);
-    combined_stats = stats;
+    let (toml_body, combined_stats) = inject_xml_comments(&raw_toml, &combined_xml_comments);
     std::fs::write(&recipe_path, &toml_body)
         .with_context(|| format!("Failed to write {}", recipe_path.display()))?;
 
