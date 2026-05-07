@@ -1,6 +1,6 @@
 [package]
 name = "mscp"
-version = "0.2.1"
+version = "0.2.2"
 description = "Post-process mSCP output into MDM-ready configurations"
 edition.workspace = true
 authors.workspace = true
