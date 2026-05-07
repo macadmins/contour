@@ -41,9 +41,15 @@ const MANAGEMENT_KEYS: &[&str] = &[
 /// Options for `library import`.
 #[derive(Debug)]
 pub struct LibraryImportOptions<'a> {
-    pub input: &'a Path,
+    /// One or more input paths. Each entry can be a `.mobileconfig`
+    /// file, a `.json` DDM declaration, a directory (walked
+    /// recursively for both extensions), or a shell-expanded glob.
+    pub inputs: &'a [PathBuf],
     pub into: &'a Path,
     pub name: Option<&'a str>,
+    /// When true, fold every source's payloads into ONE recipe TOML
+    /// with N `[[profile]]` blocks. Requires `--name`.
+    pub combine: bool,
     pub force: bool,
 }
 
@@ -51,24 +57,72 @@ pub fn handle_library_import(
     opts: LibraryImportOptions<'_>,
     output_mode: OutputMode,
 ) -> Result<()> {
-    // Directory mode: walk the tree, import each .mobileconfig with
-    // `--name` derived from the filename (the `--name` override is
-    // only meaningful for single-file imports). Failures don't abort
-    // the run — they're collected and reported.
-    if opts.input.is_dir() {
-        if opts.name.is_some() {
-            anyhow::bail!(
-                "--name cannot be combined with a directory input — names are derived from each file's stem in bulk mode."
-            );
+    if opts.inputs.is_empty() {
+        anyhow::bail!("at least one input is required");
+    }
+
+    // ── Combine mode: fold every source into a single recipe ───────
+    if opts.combine {
+        let name = opts.name.ok_or_else(|| {
+            anyhow::anyhow!("--combine requires --name <NAME> to disambiguate the bundled recipe")
+        })?;
+        // Expand directories so a `--combine ./vendor-bundle/` works.
+        let mut files: Vec<PathBuf> = Vec::new();
+        for input in opts.inputs {
+            if input.is_dir() {
+                collect_importable_files(input, &mut files)?;
+            } else if input.is_file() {
+                files.push(input.clone());
+            } else {
+                anyhow::bail!("Input not found: {}", input.display());
+            }
         }
-        return handle_directory_import(opts, output_mode);
+        files.sort();
+        if files.is_empty() {
+            anyhow::bail!("no .mobileconfig or .json files matched the input(s)");
+        }
+        let report = import_combined(&files, opts.into, name, opts.force)?;
+        emit_single_report(&report, output_mode);
+        return Ok(());
     }
-    if !opts.input.is_file() {
-        anyhow::bail!("Input not found: {}", opts.input.display());
+
+    // ── Single input + name override ───────────────────────────────
+    if opts.inputs.len() == 1 {
+        let input = &opts.inputs[0];
+        if input.is_dir() {
+            if opts.name.is_some() {
+                anyhow::bail!(
+                    "--name cannot be combined with a directory input — names are derived from each file's stem in bulk mode. Pass --combine to fold the directory into one recipe."
+                );
+            }
+            return handle_directory_import_one(input, opts.into, opts.force, output_mode);
+        }
+        if !input.is_file() {
+            anyhow::bail!("Input not found: {}", input.display());
+        }
+        let report = import_any_file(input, opts.into, opts.name, opts.force)?;
+        emit_single_report(&report, output_mode);
+        return Ok(());
     }
-    let report = import_any_file(opts.input, opts.into, opts.name, opts.force)?;
-    emit_single_report(&report, output_mode);
-    Ok(())
+
+    // ── Multiple inputs without --combine: import each independently ─
+    if opts.name.is_some() {
+        anyhow::bail!(
+            "--name cannot be combined with multiple inputs unless --combine is also set"
+        );
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    for input in opts.inputs {
+        if input.is_dir() {
+            collect_importable_files(input, &mut files)?;
+        } else if input.is_file() {
+            files.push(input.clone());
+        } else {
+            anyhow::bail!("Input not found: {}", input.display());
+        }
+    }
+    files.sort();
+    handle_directory_import_files(&files, opts.into, opts.force, output_mode)
 }
 
 /// Dispatch a single file to the right importer based on extension.
@@ -89,13 +143,30 @@ fn import_any_file(
     }
 }
 
-/// Walk `<INPUT>` recursively for `*.mobileconfig` and `*.json`
-/// (DDM declarations) and import each.
-fn handle_directory_import(opts: LibraryImportOptions<'_>, output_mode: OutputMode) -> Result<()> {
+/// Walk a single directory for importable files, then delegate to
+/// the shared file-list importer. Kept as a thin shim so the
+/// single-input directory path doesn't drag the multi-input plumbing.
+fn handle_directory_import_one(
+    input: &Path,
+    into: &Path,
+    force: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
     let mut files: Vec<PathBuf> = Vec::new();
-    collect_importable_files(opts.input, &mut files)?;
+    collect_importable_files(input, &mut files)?;
     files.sort();
+    handle_directory_import_files(&files, into, force, output_mode)
+}
 
+/// Import each file in `files` independently, then emit the bulk
+/// summary report. Used by both the multi-input non-`--combine` path
+/// and the single-directory path.
+fn handle_directory_import_files(
+    files: &[PathBuf],
+    into: &Path,
+    force: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
     let mut succeeded: Vec<SingleImportReport> = Vec::new();
     let mut failed: Vec<(PathBuf, String)> = Vec::new();
     // Track names claimed in *this* run so two source files with the
@@ -104,10 +175,10 @@ fn handle_directory_import(opts: LibraryImportOptions<'_>, output_mode: OutputMo
     // their parent directory name rather than colliding.
     let mut claimed: HashSet<String> = HashSet::new();
 
-    for file in &files {
+    for file in files {
         let name = bulk_recipe_name(file, &claimed);
         claimed.insert(name.clone());
-        match import_any_file(file, opts.into, Some(&name), opts.force) {
+        match import_any_file(file, into, Some(&name), force) {
             Ok(report) => succeeded.push(report),
             Err(e) => failed.push((file.clone(), format!("{e:#}"))),
         }
@@ -305,6 +376,7 @@ fn import_one(
             vendor,
             variables: None,
             secrets: None,
+            output: None,
         },
         profiles,
         ddm: Vec::new(),
@@ -331,6 +403,202 @@ fn import_one(
         meaning_path,
         payload_types,
         comment_stats,
+    })
+}
+
+/// Combine N source files into ONE recipe TOML. Each source's inner
+/// payloads become `[[profile]]` blocks under the same `[recipe]`
+/// header. Recipe metadata is taken from the first source whose
+/// envelope sets the field — common with vendor bundles where a
+/// "primary" file carries display name and organization while
+/// supporting files leave them empty.
+///
+/// MCX unwrap, XML comment injection, placeholder restoration, and
+/// `removal_disallowed` propagation all run per-source so the
+/// combined output preserves the same fidelity guarantees as a
+/// single-file import.
+fn import_combined(
+    inputs: &[PathBuf],
+    into: &Path,
+    name: &str,
+    force: bool,
+) -> Result<SingleImportReport> {
+    if inputs.is_empty() {
+        anyhow::bail!("import_combined called with no inputs");
+    }
+
+    let recipes_dir = into.join("recipes");
+    std::fs::create_dir_all(&recipes_dir)
+        .with_context(|| format!("Failed to create {}", recipes_dir.display()))?;
+    let recipe_path = recipes_dir.join(format!("{name}.toml"));
+    let meaning_path = recipes_dir.join(format!("{name}.meaning.md"));
+    if recipe_path.exists() && !force {
+        anyhow::bail!(
+            "{} already exists. Re-run with --force to overwrite, or pass --name <NAME> to write a different file.",
+            recipe_path.display()
+        );
+    }
+
+    // Aggregate state across all sources.
+    let mut all_profiles: Vec<ProfileSpec> = Vec::new();
+    let mut all_payload_types: Vec<String> = Vec::new();
+    let mut seen_filenames: HashSet<String> = HashSet::new();
+    let mut combined_placeholder_mapping: Vec<(String, String)> = Vec::new();
+    let mut combined_xml_comments: Vec<XmlComment> = Vec::new();
+    let mut combined_stats = CommentInjectionStats::default();
+    let mut first_description: Option<String> = None;
+    let mut first_vendor: Option<String> = None;
+    let mut vendor_warnings: Vec<String> = Vec::new();
+
+    for input in inputs {
+        // Only `.mobileconfig` makes sense in combined mode; `.json` DDM
+        // declarations are a different wire format and stay one-file-per
+        // -declaration.
+        if input.extension().and_then(|s| s.to_str()) != Some("mobileconfig") {
+            anyhow::bail!(
+                "--combine only accepts .mobileconfig sources; got {}. DDM declarations stay one-file-per-bundle.",
+                input.display()
+            );
+        }
+        let path_str = input
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Input path is not valid UTF-8: {}", input.display()))?;
+        let fixup = parse_profile_lenient(path_str).with_context(|| {
+            format!(
+                "Failed to parse {} as a configuration profile",
+                input.display()
+            )
+        })?;
+        let profile = fixup.profile;
+
+        // Take recipe-level fields from the first source that has them.
+        if first_description.is_none() && !profile.payload_display_name.trim().is_empty() {
+            first_description = Some(profile.payload_display_name.clone());
+        } else if first_description.is_none()
+            && let Some(desc) = profile.payload_description()
+            && !desc.is_empty()
+        {
+            first_description = Some(desc);
+        }
+        if let Some(org) = profile.payload_organization() {
+            if first_vendor.is_none() {
+                first_vendor = Some(org);
+            } else if first_vendor.as_deref() != Some(org.as_str()) {
+                vendor_warnings.push(format!(
+                    "{} has PayloadOrganization='{}', differs from first source's '{}'",
+                    input.display(),
+                    org,
+                    first_vendor.as_deref().unwrap_or("")
+                ));
+            }
+        }
+
+        combined_placeholder_mapping.extend(fixup.placeholder_mapping.iter().cloned());
+        combined_xml_comments.extend(fixup.comments.iter().cloned());
+
+        for inner in &profile.payload_content {
+            let display_name = inner
+                .payload_display_name()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| payload_type_tail(&inner.payload_type).to_string());
+            let filename = unique_filename(&inner.payload_type, &mut seen_filenames);
+
+            let mut fields: BTreeMap<String, toml::Value> = BTreeMap::new();
+            for (k, v) in &inner.content {
+                if MANAGEMENT_KEYS.contains(&k.as_str()) {
+                    continue;
+                }
+                let tv =
+                    plist_value_to_toml(v, &combined_placeholder_mapping).with_context(|| {
+                        format!(
+                            "converting key '{k}' on payload '{}' (source {})",
+                            inner.payload_type,
+                            input.display()
+                        )
+                    })?;
+                fields.insert(k.clone(), tv);
+            }
+
+            let removal_disallowed = inner
+                .content
+                .get("PayloadRemovalDisallowed")
+                .and_then(|v| v.as_boolean())
+                .unwrap_or_else(|| {
+                    profile
+                        .additional_fields
+                        .get("PayloadRemovalDisallowed")
+                        .and_then(|v| v.as_boolean())
+                        .unwrap_or(false)
+                });
+
+            let (mcx_domain, fields) = unwrap_mcx_if_canonical(&inner.payload_type, fields);
+
+            all_payload_types.push(inner.payload_type.clone());
+            all_profiles.push(ProfileSpec {
+                filename,
+                payload_type: inner.payload_type.clone(),
+                display_name,
+                description: String::new(),
+                removal_disallowed,
+                mcx_domain,
+                fields,
+                extra_fields: BTreeMap::new(),
+            });
+        }
+    }
+
+    let description = first_description
+        .unwrap_or_else(|| format!("Combined recipe from {} source(s)", inputs.len()));
+
+    let recipe = Recipe {
+        recipe: RecipeMeta {
+            name: name.to_string(),
+            description,
+            vendor: first_vendor,
+            variables: None,
+            secrets: None,
+            output: None,
+        },
+        profiles: all_profiles,
+        ddm: Vec::new(),
+    };
+
+    // Serialize + comment-inject + write.
+    let raw_toml =
+        toml::to_string(&recipe).with_context(|| "Failed to serialize combined recipe to TOML")?;
+    let (toml_body, stats) = inject_xml_comments(&raw_toml, &combined_xml_comments);
+    combined_stats = stats;
+    std::fs::write(&recipe_path, &toml_body)
+        .with_context(|| format!("Failed to write {}", recipe_path.display()))?;
+
+    let registry = load_registry(None).ok();
+    let sidecar_body = build_meaning_md(&recipe, &inputs[0], registry.as_ref());
+    std::fs::write(&meaning_path, sidecar_body)
+        .with_context(|| format!("Failed to write {}", meaning_path.display()))?;
+
+    // Surface vendor mismatches as a one-line stderr warning so
+    // operators notice, but don't block the import.
+    if !vendor_warnings.is_empty() {
+        eprintln!(
+            "{} {} source(s) had a different PayloadOrganization than the first; using '{}' on the combined recipe. Mismatches:",
+            "!".yellow(),
+            vendor_warnings.len(),
+            recipe.recipe.vendor.as_deref().unwrap_or("(none)")
+        );
+        for w in &vendor_warnings {
+            eprintln!("  - {w}");
+        }
+    }
+
+    Ok(SingleImportReport {
+        // Use the first source as the "input" for the report — the
+        // others are listed inline in the JSON envelope's
+        // `payload_types` array.
+        input: inputs[0].clone(),
+        recipe_path,
+        meaning_path,
+        payload_types: all_payload_types,
+        comment_stats: combined_stats,
     })
 }
 

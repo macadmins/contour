@@ -409,6 +409,7 @@ fn run(cli: Cli) -> Result<()> {
             create_recipe,
             interactive,
             format,
+            combined,
         } => {
             if let Some(recipe_name) = create_recipe {
                 cli::generate::handle_create_recipe(
@@ -431,6 +432,7 @@ fn run(cli: Cli) -> Result<()> {
                     &vars,
                     output_mode,
                     &format,
+                    combined,
                 )?;
             } else if interactive {
                 if let Some(pt) = payload_type.first() {
@@ -604,16 +606,20 @@ fn run(cli: Cli) -> Result<()> {
                 )?;
             }
             LibraryAction::Import {
-                input,
+                inputs,
                 into,
                 name,
+                combine,
                 force,
             } => {
+                let input_paths: Vec<std::path::PathBuf> =
+                    inputs.iter().map(std::path::PathBuf::from).collect();
                 cli::import_recipe::handle_library_import(
                     cli::import_recipe::LibraryImportOptions {
-                        input: std::path::Path::new(&input),
+                        inputs: &input_paths,
                         into: std::path::Path::new(&into),
                         name: name.as_deref(),
+                        combine,
                         force,
                     },
                     output_mode,

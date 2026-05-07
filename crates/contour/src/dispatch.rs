@@ -555,6 +555,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             create_recipe,
             interactive,
             format,
+            combined,
         } => {
             if let Some(recipe_name) = create_recipe {
                 profile::cli::generate::handle_create_recipe(
@@ -577,6 +578,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     &vars,
                     output_mode,
                     &format,
+                    combined,
                 )?;
             } else if interactive {
                 if let Some(pt) = payload_type.first() {
@@ -760,16 +762,20 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 )?;
             }
             LibraryAction::Import {
-                input,
+                inputs,
                 into,
                 name,
+                combine,
                 force,
             } => {
+                let input_paths: Vec<std::path::PathBuf> =
+                    inputs.iter().map(std::path::PathBuf::from).collect();
                 profile::cli::import_recipe::handle_library_import(
                     profile::cli::import_recipe::LibraryImportOptions {
-                        input: std::path::Path::new(&input),
+                        inputs: &input_paths,
                         into: std::path::Path::new(&into),
                         name: name.as_deref(),
+                        combine,
                         force,
                     },
                     output_mode,
