@@ -421,19 +421,24 @@ fn run(cli: Cli) -> Result<()> {
                 )?;
             } else if list_recipes {
                 cli::generate::handle_list_recipes(recipe_path.as_deref(), output_mode)?;
-            } else if let Some(recipe_name) = recipe {
-                cli::generate::handle_generate_recipe(
-                    &recipe_name,
-                    recipe_path.as_deref(),
-                    output.as_deref(),
-                    org.as_deref(),
-                    schema_path.as_deref(),
-                    config.as_ref(),
-                    &vars,
-                    output_mode,
-                    &format,
-                    combined,
-                )?;
+            } else if !recipe.is_empty() {
+                // Multi-recipe: each --recipe value runs through the
+                // generator independently. Shared --org / --output /
+                // --combined / --vars apply to each.
+                for selector in &recipe {
+                    cli::generate::handle_generate_recipe(
+                        selector,
+                        recipe_path.as_deref(),
+                        output.as_deref(),
+                        org.as_deref(),
+                        schema_path.as_deref(),
+                        config.as_ref(),
+                        &vars,
+                        output_mode,
+                        &format,
+                        combined,
+                    )?;
+                }
             } else if interactive {
                 if let Some(pt) = payload_type.first() {
                     cli::generate::handle_generate_interactive(

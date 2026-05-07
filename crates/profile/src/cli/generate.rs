@@ -588,7 +588,12 @@ pub fn handle_generate_recipe(
     cli_combined: bool,
 ) -> Result<()> {
     let var_map = parse_vars(vars)?;
-    let mut r = recipe::loader::load_recipe(recipe_name, recipe_path)?;
+    // Smart resolution: `recipe_name` may be either a bare name or a
+    // direct path to a .toml file. The latter sidesteps the
+    // `--recipe-path` round-trip when an operator already has the
+    // file path in hand.
+    let (resolved_name, mut r) = recipe::loader::load_recipe_smart(recipe_name, recipe_path)?;
+    let recipe_name = resolved_name.as_str();
     // Combined emission is opt-in: CLI flag wins over recipe TOML.
     let combined_emit = cli_combined
         || r.recipe

@@ -567,19 +567,21 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 )?;
             } else if list_recipes {
                 profile::cli::generate::handle_list_recipes(recipe_path.as_deref(), output_mode)?;
-            } else if let Some(recipe_name) = recipe {
-                profile::cli::generate::handle_generate_recipe(
-                    &recipe_name,
-                    recipe_path.as_deref(),
-                    output.as_deref(),
-                    org.as_deref(),
-                    schema_path.as_deref(),
-                    config.as_ref(),
-                    &vars,
-                    output_mode,
-                    &format,
-                    combined,
-                )?;
+            } else if !recipe.is_empty() {
+                for selector in &recipe {
+                    profile::cli::generate::handle_generate_recipe(
+                        selector,
+                        recipe_path.as_deref(),
+                        output.as_deref(),
+                        org.as_deref(),
+                        schema_path.as_deref(),
+                        config.as_ref(),
+                        &vars,
+                        output_mode,
+                        &format,
+                        combined,
+                    )?;
+                }
             } else if interactive {
                 if let Some(pt) = payload_type.first() {
                     profile::cli::generate::handle_generate_interactive(

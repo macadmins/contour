@@ -3939,3 +3939,106 @@ fn trap_83_library_import_combine_and_generate_combined() {
         "combined output's outer identifier must be com.acme.<recipe-name>"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 84: `generate --recipe` accepts a direct path to a TOML file
+// (no --recipe-path round-trip) AND multiple --recipe values for
+// batch generation. Catches:
+//   - Path-like values fall through the bare-name lookup and 404
+//   - Multiple --recipe values silently use only the first
+//   - Recipe name mismatch between filename stem and `[recipe].name`
+//     surfaces wrong files in the output dir
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_84_generate_accepts_path_and_multiple_recipes() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Two recipe TOMLs in arbitrary locations (NOT in a library).
+    let r1 = tmp.path().join("recipe-one.toml");
+    let r2 = tmp.path().join("recipe-two.toml");
+    fs::write(
+        &r1,
+        r#"[recipe]
+name = "alpha"
+description = "first"
+
+[[profile]]
+filename = "fw.mobileconfig"
+payload_type = "com.apple.security.firewall"
+display_name = "FW"
+[profile.fields]
+EnableFirewall = true
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &r2,
+        r#"[recipe]
+name = "beta"
+description = "second"
+
+[[profile]]
+filename = "gk.mobileconfig"
+payload_type = "com.apple.systempolicy.control"
+display_name = "GK"
+[profile.fields]
+EnableAssessment = true
+"#,
+    )
+    .unwrap();
+
+    // Direct path, single recipe — no --recipe-path used.
+    let out_single = tempfile::tempdir().unwrap();
+    let single = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe",
+            r1.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "-o",
+            out_single.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        single.status.success(),
+        "direct-path --recipe must succeed without --recipe-path; stderr: {}",
+        String::from_utf8_lossy(&single.stderr)
+    );
+    assert!(out_single.path().join("fw.mobileconfig").exists());
+
+    // Two --recipe values — batch generation. Filenames from each
+    // recipe should both land in the shared output dir.
+    let out_multi = tempfile::tempdir().unwrap();
+    let multi = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe",
+            r1.to_str().unwrap(),
+            r2.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "-o",
+            out_multi.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        multi.status.success(),
+        "multiple --recipe values must succeed; stderr: {}",
+        String::from_utf8_lossy(&multi.stderr)
+    );
+    assert!(
+        out_multi.path().join("fw.mobileconfig").exists(),
+        "first recipe's profile must land"
+    );
+    assert!(
+        out_multi.path().join("gk.mobileconfig").exists(),
+        "second recipe's profile must land — multi-recipe loop ran for both"
+    );
+}
