@@ -1406,13 +1406,36 @@ pub fn build_meaning_md(
 /// Render one `### <Title>` block per `[[profile]]`, pulling docs from
 /// the schema when the payload is recognized.
 fn append_payload_section(out: &mut String, spec: &ProfileSpec, registry: Option<&SchemaRegistry>) {
-    let manifest = registry.and_then(|r| r.get_by_name(&spec.payload_type));
+    // For MCX profiles (`mcx_domain` set), look up the *domain* in the
+    // registry first — ProfileCreator's manifest catalog is keyed by
+    // preference domain (e.g. `corp.sap.privileges`), so it can
+    // describe vendor-specific inner keys that the envelope's
+    // `com.apple.ManagedClient.preferences` schema can't reach. Fall
+    // back to the envelope manifest when no domain-keyed manifest
+    // exists, so the section never goes empty.
+    let domain_manifest = spec
+        .mcx_domain
+        .as_deref()
+        .and_then(|d| registry.and_then(|r| r.get_by_name(d)));
+    let envelope_manifest = registry.and_then(|r| r.get_by_name(&spec.payload_type));
+    let manifest = domain_manifest.or(envelope_manifest);
 
     let heading = match manifest {
         Some(m) if !m.title.is_empty() => format!("{} (`{}`)", m.title, spec.payload_type),
         _ => format!("`{}`", spec.payload_type),
     };
     let _ = writeln!(out, "### {heading}\n");
+
+    // Surface the lookup origin so reviewers know which layer of the
+    // schema (envelope vs vendor-domain) is documenting these fields.
+    if let Some(domain) = &spec.mcx_domain
+        && domain_manifest.is_some()
+    {
+        let _ = writeln!(
+            out,
+            "_MCX preference domain `{domain}` matched in the schema — fields below come from that vendor manifest, not the `com.apple.ManagedClient.preferences` envelope._\n"
+        );
+    }
 
     match manifest {
         Some(m) => append_known_payload(out, spec, m),
@@ -1472,31 +1495,7 @@ fn append_known_payload(out: &mut String, spec: &ProfileSpec, manifest: &Payload
     for key in spec.fields.keys() {
         match manifest.fields.get(key) {
             Some(field) => {
-                let tag = plist_tag_for(&field.field_type);
-                let plist_tag = if tag.is_empty() {
-                    String::new()
-                } else {
-                    format!(" *(`<{tag}>`)*")
-                };
-                let required = if field.flags.required {
-                    ", required"
-                } else {
-                    ""
-                };
-                let mut line = format!("- **`{}`**{plist_tag}{required}", field.name);
-                if !field.description.trim().is_empty() {
-                    let _ = write!(line, " — {}", first_sentence(&field.description));
-                }
-                if !field.allowed_values.is_empty() {
-                    let _ = write!(line, " (allowed: {})", field.allowed_values.join(", "));
-                }
-                if let Some(default) = &field.default {
-                    let _ = write!(line, " (default: `{default}`)");
-                }
-                if let Some(dep) = &field.deprecated_in {
-                    let _ = write!(line, " *(deprecated in {dep})*");
-                }
-                let _ = writeln!(out, "{line}");
+                let _ = writeln!(out, "{}", render_field_line(field, /*configured=*/ true));
                 documented += 1;
             }
             None => undocumented.push(key),
@@ -1508,6 +1507,46 @@ fn append_known_payload(out: &mut String, spec: &ProfileSpec, manifest: &Payload
             "- _(no top-level recipe fields matched documented schema keys — likely a vendor envelope wrapping nested settings)_"
         );
     }
+
+    // Available-but-not-configured fields. Required ones get a ⚠
+    // marker so reviewers see what would be missing if this recipe
+    // ran as-is. Deprecated ones get a normal marker (no warning —
+    // not setting a deprecated key is the *safer* choice).
+    let configured: HashSet<&String> = spec.fields.keys().collect();
+    let unset: Vec<&String> = manifest
+        .field_order
+        .iter()
+        .filter(|k| !configured.contains(k))
+        // Only top-level fields (depth 0) — nested ones get docs in
+        // their parent table; listing them flat would mislead.
+        .filter(|k| {
+            manifest
+                .fields
+                .get(*k)
+                .map(|f| f.depth == 0)
+                .unwrap_or(false)
+        })
+        .collect();
+    if !unset.is_empty() {
+        let _ = writeln!(out, "\n**Schema fields available but not configured:**\n");
+        let mut shown = 0usize;
+        const MAX_LISTED: usize = 25;
+        for key in unset.iter().take(MAX_LISTED) {
+            if let Some(field) = manifest.fields.get(*key) {
+                let _ = writeln!(out, "{}", render_field_line(field, /*configured=*/ false));
+                shown += 1;
+            }
+        }
+        if unset.len() > shown {
+            let _ = writeln!(
+                out,
+                "- _… {} more available — see `contour profile info {}` for the full list_",
+                unset.len() - shown,
+                manifest.payload_type
+            );
+        }
+    }
+
     if !undocumented.is_empty() {
         let _ = writeln!(
             out,
@@ -1518,6 +1557,50 @@ fn append_known_payload(out: &mut String, spec: &ProfileSpec, manifest: &Payload
         }
     }
     let _ = writeln!(out);
+}
+
+/// Render one bullet line for a `FieldDefinition` in the meaning.md
+/// payload section. `configured` controls the prefix marker:
+/// configured fields lead with `-`, unset fields lead with `○`,
+/// required-and-unset get a ⚠, deprecated get an inline marker.
+fn render_field_line(field: &crate::schema::FieldDefinition, configured: bool) -> String {
+    let tag = plist_tag_for(&field.field_type);
+    let plist_tag = if tag.is_empty() {
+        String::new()
+    } else {
+        format!(" *(`<{tag}>`)*")
+    };
+
+    // Required-but-unset is the load-bearing warning: a recipe that
+    // doesn't set a required field will produce a profile that
+    // installs but doesn't behave per Apple's spec.
+    let marker = match (configured, field.flags.required) {
+        (true, _) => "-",
+        (false, true) => "- ⚠",
+        (false, false) => "- ○",
+    };
+    let req_suffix = if !configured && field.flags.required {
+        " **REQUIRED — not configured**"
+    } else if field.flags.required {
+        ", required"
+    } else {
+        ""
+    };
+
+    let mut line = format!("{marker} **`{}`**{plist_tag}{req_suffix}", field.name);
+    if !field.description.trim().is_empty() {
+        let _ = write!(line, " — {}", first_sentence(&field.description));
+    }
+    if !field.allowed_values.is_empty() {
+        let _ = write!(line, " (allowed: {})", field.allowed_values.join(", "));
+    }
+    if let Some(default) = &field.default {
+        let _ = write!(line, " (default: `{default}`)");
+    }
+    if let Some(dep) = &field.deprecated_in {
+        let _ = write!(line, " *(deprecated in {dep})*");
+    }
+    line
 }
 
 fn append_recipe_keys_only(out: &mut String, spec: &ProfileSpec) {

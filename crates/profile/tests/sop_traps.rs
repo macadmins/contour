@@ -2872,16 +2872,23 @@ fn trap_76_library_import_round_trips_real_mobileconfig() {
         meaning_body.contains("## Payloads"),
         ".meaning.md must include the schema-enriched Payloads section"
     );
+    // Title can come from either the envelope schema ("Managed
+    // Preferences") OR — preferred when we have it — the MCX preference
+    // domain match in ProfileCreator ("SAP Privileges"). Either is a
+    // valid schema match; the test just requires *some* title above
+    // the bare payload-type fallback.
     assert!(
-        meaning_body.contains("Managed Preferences"),
+        meaning_body.contains("Managed Preferences") || meaning_body.contains("SAP Privileges"),
         "schema title must appear in the payload heading; got: {meaning_body}"
     );
     assert!(
         meaning_body.contains("**Platforms:**"),
         "Platforms line (with per-OS introduced versions) must appear"
     );
+    // Source label is `apple schema` for the envelope path, `apps schema`
+    // for the ProfileCreator MCX-domain path. Both are valid.
     assert!(
-        meaning_body.contains("apple schema"),
+        meaning_body.contains("apple schema") || meaning_body.contains("apps schema"),
         "schema source label must appear ('Source: apple schema')"
     );
 
