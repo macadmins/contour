@@ -558,8 +558,13 @@ pub enum Commands {
         #[arg(long, help = "External schema directory")]
         schema_path: Option<String>,
 
-        #[arg(long, help = "Generate from a named recipe")]
-        recipe: Option<String>,
+        #[arg(
+            long,
+            num_args = 1..,
+            value_name = "RECIPE",
+            help = "Recipe to generate. Accepts either a bare name (looked up via --recipe-path → ~/.contour/recipes/ → embedded) OR a path to a .toml file. Repeat or pass multiple to generate from several recipes in one run (shell glob supported: `--recipe ./recipes/crowdstrike-*.toml`)."
+        )]
+        recipe: Vec<String>,
 
         #[arg(long, help = "Path to recipe file or directory")]
         recipe_path: Option<String>,

@@ -34,6 +34,37 @@ pub struct RecipeSummary {
 }
 
 /// Load a recipe by name, checking external paths first, then embedded.
+/// Resolve a CLI `--recipe` value to a loaded recipe and its
+/// canonical name. Accepts either:
+///
+/// - a **file path** (`./recipes/crowdstrike.toml`,
+///   `/abs/path/to.toml`) — loaded directly, name taken from
+///   `[recipe].name`
+/// - a **bare name** (`crowdstrike`) — resolved through the standard
+///   3-tier lookup (`--recipe-path` → `~/.contour/recipes/` →
+///   embedded)
+///
+/// The selector is treated as a path when it contains a `/`, ends
+/// with `.toml`, or `Path::is_file()` returns true. Names that
+/// happen to share characters with paths still resolve correctly
+/// because the bare-name path is a fallback.
+pub fn load_recipe_smart(selector: &str, recipe_path: Option<&str>) -> Result<(String, Recipe)> {
+    let p = Path::new(selector);
+    let looks_path = selector.contains('/') || selector.ends_with(".toml") || p.is_file();
+    if looks_path {
+        if !p.is_file() {
+            anyhow::bail!(
+                "Recipe path '{selector}' is not a file. Pass a `.toml` path or a bare recipe name (use `--list-recipes` to see options)."
+            );
+        }
+        let recipe = load_recipe_file(p)?;
+        let name = recipe.recipe.name.clone();
+        return Ok((name, recipe));
+    }
+    let recipe = load_recipe(selector, recipe_path)?;
+    Ok((selector.to_string(), recipe))
+}
+
 pub fn load_recipe(name: &str, recipe_path: Option<&str>) -> Result<Recipe> {
     // 1. Explicit path (file or directory)
     if let Some(rp) = recipe_path {
