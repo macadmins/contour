@@ -50,6 +50,22 @@ pub struct MscpRule {
     #[serde(default)]
     pub mobileconfig_info: Option<yaml_serde::Value>,
 
+    /// DDM (Declarative Device Management) information
+    ///
+    /// When present, declares the rule's setting via Apple's DDM
+    /// channel. Shape:
+    /// ```yaml
+    /// ddm_info:
+    ///   declarationtype: com.apple.configuration.softwareupdate.settings
+    ///   ddm_key: AutomaticActions
+    ///   ddm_value: { Download: AlwaysOn }
+    /// ```
+    /// Each rule contributes one `(ddm_key, ddm_value)` pair to the
+    /// payload of its `declarationtype`; multiple rules sharing a type
+    /// merge into a single configuration declaration.
+    #[serde(default)]
+    pub ddm_info: Option<yaml_serde::Value>,
+
     /// ODV (Organization Defined Values)
     #[serde(default)]
     pub odv: Option<yaml_serde::Value>,
@@ -174,6 +190,7 @@ mod tests {
             severity: None,
             mobileconfig: false,
             mobileconfig_info: None,
+            ddm_info: None,
             odv: None,
         };
 
@@ -195,6 +212,7 @@ mod tests {
             severity: None,
             mobileconfig: false,
             mobileconfig_info: None,
+            ddm_info: None,
             odv: None,
         };
 
@@ -224,6 +242,7 @@ mod tests {
             severity: None,
             mobileconfig: false,
             mobileconfig_info: None,
+            ddm_info: None,
             odv: None,
         };
         assert_eq!(rule.get_expected_result(), Some("0".to_string()));
@@ -245,6 +264,7 @@ mod tests {
             severity: None,
             mobileconfig: false,
             mobileconfig_info: None,
+            ddm_info: None,
             odv: None,
         };
         assert_eq!(rule.get_expected_result(), Some("true".to_string()));
@@ -266,6 +286,7 @@ mod tests {
             severity: None,
             mobileconfig: false,
             mobileconfig_info: None,
+            ddm_info: None,
             odv: None,
         };
         assert_eq!(rule.get_expected_result(), Some("0".to_string()));
@@ -287,6 +308,7 @@ mod tests {
             severity: None,
             mobileconfig: false,
             mobileconfig_info: None,
+            ddm_info: None,
             odv: None,
         };
         assert_eq!(rule.get_expected_result(), Some("$ODV".to_string()));
@@ -309,6 +331,7 @@ mod tests {
             severity: None,
             mobileconfig: false,
             mobileconfig_info: None,
+            ddm_info: None,
             odv: None,
         };
         assert_eq!(rule.get_expected_result(), Some("$ODV".to_string()));
@@ -331,6 +354,7 @@ mod tests {
             severity: None,
             mobileconfig: false,
             mobileconfig_info: None,
+            ddm_info: None,
             odv: None,
         };
         assert_eq!(rule.get_expected_result(), None);

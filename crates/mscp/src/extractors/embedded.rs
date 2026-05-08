@@ -149,6 +149,7 @@ pub fn rules_from_embedded(baseline: &str, platform: &str) -> Result<Vec<MscpRul
             severity: meta.severity.clone(),
             mobileconfig: meta.mobileconfig,
             mobileconfig_info,
+            ddm_info: None,
             odv,
         });
     }

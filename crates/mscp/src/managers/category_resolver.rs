@@ -455,6 +455,7 @@ mod tests {
             severity: None,
             mobileconfig: false,
             mobileconfig_info: None,
+            ddm_info: None,
             odv: None,
         }
     }

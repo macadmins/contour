@@ -430,3 +430,151 @@ mobileconfig: false
         "stderr must surface the collision; got: {stderr}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 20: `mscp recipe` emits `[[ddm]]` blocks for rules with `ddm_info`,
+// alongside the `[[profile]]` blocks for mobileconfig rules. Rules sharing
+// a `declarationtype` merge into one bundle. Catches:
+//   - aggregator dropping ddm-only rules on the floor
+//   - intent_name not stripping the Apple `com.apple.configuration.` prefix
+//   - configuration payload missing the merged ddm_key/ddm_value pairs
+//   - round-trip via `profile generate --recipe` failing on the new shape
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_20_mscp_recipe_emits_ddm_blocks_alongside_profiles() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules_dir = tmp.path().join("rules");
+    fs::create_dir_all(&rules_dir).unwrap();
+
+    // One mobileconfig rule (firewall) plus two DDM rules sharing
+    // a declarationtype. Aggregated output must carry one
+    // `[[profile]]` and one `[[ddm]]` block.
+    fs::write(
+        rules_dir.join("fw.yaml"),
+        r#"id: fw
+title: Enable firewall
+discussion: ""
+tags:
+  - tinybase
+mobileconfig: true
+mobileconfig_info:
+  com.apple.security.firewall:
+    EnableFirewall: true
+"#,
+    )
+    .unwrap();
+    fs::write(
+        rules_dir.join("su_download.yaml"),
+        r#"id: su_download
+title: Software update download
+discussion: ""
+tags:
+  - tinybase
+mobileconfig: false
+ddm_info:
+  declarationtype: com.apple.configuration.softwareupdate.settings
+  ddm_key: AutomaticActions
+  ddm_value:
+    Download: AlwaysOn
+"#,
+    )
+    .unwrap();
+    fs::write(
+        rules_dir.join("su_notify.yaml"),
+        r#"id: su_notify
+title: Software update notifications
+discussion: ""
+tags:
+  - tinybase
+mobileconfig: false
+ddm_info:
+  declarationtype: com.apple.configuration.softwareupdate.settings
+  ddm_key: Notifications
+  ddm_value: true
+"#,
+    )
+    .unwrap();
+
+    let recipe_out = tmp.path().join("tinybase.toml");
+    let output = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "recipe",
+            "--mscp-repo",
+            tmp.path().to_str().unwrap(),
+            "--baseline",
+            "tinybase",
+            "-o",
+            recipe_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "mscp recipe must succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = fs::read_to_string(&recipe_out).expect("recipe TOML must exist at -o path");
+
+    // 1. Both kinds of blocks are present, exactly once.
+    assert_eq!(
+        body.matches("[[profile]]").count(),
+        1,
+        "expected one profile block; got: {body}"
+    );
+    assert_eq!(
+        body.matches("[[ddm]]").count(),
+        1,
+        "expected one ddm block; got: {body}"
+    );
+
+    // 2. The DDM block has the canonical shape — intent_name comes
+    //    from stripping `com.apple.configuration.`, configuration
+    //    type is preserved verbatim, and both ddm_keys merged.
+    assert!(body.contains(r#"intent_name = "softwareupdate-settings""#));
+    assert!(body.contains(r#"type = "com.apple.configuration.softwareupdate.settings""#));
+    assert!(body.contains("Notifications = true"));
+    assert!(body.contains("[ddm.configuration.payload.AutomaticActions]"));
+    assert!(body.contains(r#"Download = "AlwaysOn""#));
+
+    // 3. Round-trip: profile generate --recipe must accept the new
+    //    shape and emit both a mobileconfig and DDM declaration JSON
+    //    files in the intent_name subdirectory.
+    let render_out = tmp.path().join("rendered");
+    let render = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "generate",
+            "--recipe",
+            recipe_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "-o",
+            render_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        render.status.success(),
+        "profile generate --recipe must accept ddm-bearing recipe; stderr: {}",
+        String::from_utf8_lossy(&render.stderr)
+    );
+
+    assert!(
+        render_out.join("firewall.mobileconfig").exists(),
+        "mobileconfig must render at expected name"
+    );
+    let intent_dir = render_out.join("softwareupdate-settings");
+    assert!(
+        intent_dir.exists() && intent_dir.is_dir(),
+        "DDM intent directory must exist at {}",
+        intent_dir.display()
+    );
+    assert!(
+        intent_dir.join("configuration.json").exists(),
+        "DDM configuration declaration must be emitted"
+    );
+}

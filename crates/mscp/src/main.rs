@@ -863,7 +863,7 @@ fn run_recipe_command(
         None => resolve_org(None),
     };
 
-    let (body, warnings) =
+    let (body, warnings, stats) =
         baseline_to_recipe::baseline_to_recipe(baseline, resolved_org.as_deref(), &rules)?;
 
     for w in &warnings {
@@ -881,11 +881,13 @@ fn run_recipe_command(
     std::fs::write(&output_path, &body)
         .with_context(|| format!("writing recipe to {}", output_path.display()))?;
 
-    let profile_count = body.matches("[[profile]]").count();
-    let mc_rules = rules.iter().filter(|r| r.mobileconfig).count();
     println!(
-        "{} Aggregated {profile_count} profile(s) from {mc_rules} mobileconfig rule(s) into {}",
+        "{} Aggregated {} profile(s) + {} ddm bundle(s) from {} mobileconfig + {} ddm rule(s) into {}",
         "✓".green(),
+        stats.profile_count,
+        stats.ddm_count,
+        stats.mobileconfig_rule_count,
+        stats.ddm_rule_count,
         output_path.display()
     );
     if !warnings.is_empty() {
