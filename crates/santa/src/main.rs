@@ -58,6 +58,7 @@ fn main() -> Result<()> {
             display_name,
             deterministic_uuids,
             format,
+            full_bundle,
             dry_run,
             fragment,
         } => {
@@ -70,6 +71,7 @@ fn main() -> Result<()> {
                 display_name.as_deref(),
                 deterministic_uuids,
                 format,
+                full_bundle,
                 dry_run,
                 fragment,
                 output_mode,

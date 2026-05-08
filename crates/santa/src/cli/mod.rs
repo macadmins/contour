@@ -41,6 +41,8 @@ pub enum OutputFormat {
     Plist,
     /// Plist payload with XML header (Jamf custom schema compatible)
     PlistFull,
+    /// Recipe TOML for the contour preset/recipe library workflow
+    Recipe,
 }
 
 /// Output format for scan command
@@ -121,6 +123,14 @@ pub enum Commands {
         /// Output format
         #[arg(long, value_enum, default_value = "mobileconfig")]
         format: OutputFormat,
+
+        /// When `--format=recipe`, also bundle TCC (Full Disk Access),
+        /// system-extension, and notification profiles for a complete
+        /// Santa deployment in one recipe TOML. Identities default to
+        /// Northpole's published Team ID and bundle. Ignored for
+        /// non-recipe formats.
+        #[arg(long)]
+        full_bundle: bool,
 
         /// Preview without writing
         #[arg(long)]

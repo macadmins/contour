@@ -64,6 +64,20 @@ impl GeneratorOptions {
     }
 }
 
+/// Build the inner `com.northpolesec.santa` payload content
+/// (the `Rules` array, no envelope keys). Used by the
+/// mobileconfig generator and by the recipe-TOML emitter.
+///
+/// Returns a `plist::Dictionary` so callers can either drop it into
+/// `ProfileBuilder::build` or hand it to `contour_profiles::write_recipe_toml`
+/// without re-translating types.
+pub fn build_santa_payload(rules: &RuleSet) -> plist::Dictionary {
+    let santa_rules: Vec<Value> = rules.rules().iter().map(rule_to_plist).collect();
+    let mut payload_content = plist::Dictionary::new();
+    payload_content.insert("Rules".to_string(), Value::Array(santa_rules));
+    payload_content
+}
+
 /// Generate mobileconfig from rules
 pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> {
     let profile_uuid = generate_uuid(options.deterministic_uuids, &options.identifier);
@@ -73,11 +87,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     );
 
     // Build Santa rules array
-    let santa_rules: Vec<Value> = rules.rules().iter().map(rule_to_plist).collect();
-
-    // Build payload content
-    let mut payload_content: HashMap<String, Value> = HashMap::new();
-    payload_content.insert("Rules".to_string(), Value::Array(santa_rules));
+    let payload_content_dict = build_santa_payload(rules);
 
     // Build payload
     let mut payload: HashMap<String, Value> = HashMap::new();
@@ -100,7 +110,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     );
     payload.insert(
         "PayloadContent".to_string(),
-        Value::Dictionary(payload_content.into_iter().collect()),
+        Value::Dictionary(payload_content_dict),
     );
 
     // Build profile
