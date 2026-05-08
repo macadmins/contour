@@ -380,6 +380,7 @@ fn import_one(
         },
         profiles,
         ddm: Vec::new(),
+        odv: std::collections::BTreeMap::new(),
     };
 
     // 5. Write TOML + enriched sidecar.
@@ -560,6 +561,7 @@ fn import_combined(
         },
         profiles: all_profiles,
         ddm: Vec::new(),
+        odv: std::collections::BTreeMap::new(),
     };
 
     // Serialize + comment-inject + write.
