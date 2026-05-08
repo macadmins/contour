@@ -578,3 +578,130 @@ ddm_info:
         "DDM configuration declaration must be emitted"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 21: `mscp recipe --odv-mode variable` keeps `"$ODV"` placeholders in
+// every field that originally carried one and emits resolved defaults under a
+// top-level `[odv]` table. Editing the [odv] entry then regenerating the
+// profile via `profile generate --recipe` propagates the new value end-to-end.
+// Catches:
+//   - aggregator failing to emit [odv] / mixing modes
+//   - profile loader not running resolve_odv before payload build (would
+//     produce a literal "$ODV" string in the rendered profile)
+//   - operator edits to [odv] not reaching the rendered mobileconfig
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_21_mscp_recipe_variable_mode_round_trips_through_odv_edits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules_dir = tmp.path().join("rules");
+    fs::create_dir_all(&rules_dir).unwrap();
+
+    fs::write(
+        rules_dir.join("ts.yaml"),
+        r#"id: ts
+title: Time server
+discussion: ""
+tags:
+  - tinybase
+mobileconfig: true
+mobileconfig_info:
+  com.apple.MCX:
+    timeServer: $ODV
+odv:
+  recommended: time.nist.gov
+  tinybase: time.apple.com
+"#,
+    )
+    .unwrap();
+
+    let recipe_out = tmp.path().join("tinybase.toml");
+    let r = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "recipe",
+            "--mscp-repo",
+            tmp.path().to_str().unwrap(),
+            "--baseline",
+            "tinybase",
+            "--odv-mode",
+            "variable",
+            "-o",
+            recipe_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        r.status.success(),
+        "variable mode must succeed; stderr: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+
+    // 1. Field still carries the literal "$ODV"; defaults live under [odv].
+    let body = fs::read_to_string(&recipe_out).unwrap();
+    assert!(body.contains(r#"timeServer = "$ODV""#));
+    assert!(body.contains("[odv]"));
+    assert!(body.contains(r#"timeServer = "time.apple.com""#));
+
+    // 2. Round-trip with the default value: rendered MCX profile carries
+    //    "time.apple.com" (resolve_odv runs at load time).
+    let rt_default = tmp.path().join("rt-default");
+    let r = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "generate",
+            "--recipe",
+            recipe_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "-o",
+            rt_default.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        r.status.success(),
+        "variable-mode round-trip must succeed; stderr: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let mcx = fs::read_to_string(rt_default.join("MCX.mobileconfig")).unwrap();
+    assert!(
+        mcx.contains("<string>time.apple.com</string>"),
+        "default [odv].timeServer must reach rendered profile; got: {mcx}"
+    );
+    assert!(
+        !mcx.contains("$ODV"),
+        "no literal $ODV must remain in rendered profile"
+    );
+
+    // 3. Operator-edit workflow: change [odv] to a new value, regenerate,
+    //    and confirm the new value reaches the rendered profile.
+    let edited = body.replace(
+        r#"timeServer = "time.apple.com""#,
+        r#"timeServer = "pool.ntp.org""#,
+    );
+    let edited_path = tmp.path().join("tinybase-edited.toml");
+    fs::write(&edited_path, edited).unwrap();
+
+    let rt_edited = tmp.path().join("rt-edited");
+    let r = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "generate",
+            "--recipe",
+            edited_path.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "-o",
+            rt_edited.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(r.status.success());
+    let mcx_edited = fs::read_to_string(rt_edited.join("MCX.mobileconfig")).unwrap();
+    assert!(
+        mcx_edited.contains("<string>pool.ntp.org</string>"),
+        "edited [odv] value must reach rendered profile; got: {mcx_edited}"
+    );
+}

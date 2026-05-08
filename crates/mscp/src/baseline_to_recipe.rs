@@ -351,7 +351,15 @@ fn aggregate_ddm(
         let ddm_value_yaml = info
             .get("ddm_value")
             .ok_or_else(|| anyhow::anyhow!("rule '{}' ddm_info missing `ddm_value`", rule.id))?;
-        let resolved = substitute_odv(ddm_value_yaml, rule, baseline_name, stats);
+        let resolved = substitute_odv(
+            &ddm_key,
+            ddm_value_yaml,
+            rule,
+            baseline_name,
+            mode,
+            stats,
+            odv_defaults,
+        );
         let ddm_value = yaml_to_plist(&resolved)
             .with_context(|| format!("converting ddm_value of rule '{}'", rule.id))?;
 
@@ -658,15 +666,7 @@ fn substitute_odv(
                 let next_key = k.as_str().unwrap_or(parent_key).to_string();
                 out.insert(
                     k.clone(),
-                    substitute_odv(
-                        &next_key,
-                        v,
-                        rule,
-                        baseline_name,
-                        mode,
-                        stats,
-                        odv_defaults,
-                    ),
+                    substitute_odv(&next_key, v, rule, baseline_name, mode, stats, odv_defaults),
                 );
             }
             yaml_serde::Value::Mapping(out)
@@ -838,7 +838,8 @@ mod tests {
                 .unwrap();
         let rules = vec![rule("fw_on", info_a), rule("fw_log", info_b)];
 
-        let (toml, warnings, stats) = baseline_to_recipe("test", Some("com.acme"), &rules).unwrap();
+        let (toml, warnings, stats) =
+            baseline_to_recipe("test", Some("com.acme"), &rules, OdvMode::Inline).unwrap();
         assert!(warnings.is_empty());
         assert_eq!(toml.matches("[[profile]]").count(), 1);
         assert_eq!(stats.profile_count, 1);
@@ -855,7 +856,8 @@ mod tests {
             yaml_serde::from_str("com.apple.screensaver:\n  idleTime: 300\n").unwrap();
         let rules = vec![rule("fw", info_a), rule("ss", info_b)];
 
-        let (toml, warnings, stats) = baseline_to_recipe("two", None, &rules).unwrap();
+        let (toml, warnings, stats) =
+            baseline_to_recipe("two", None, &rules, OdvMode::Inline).unwrap();
         assert!(warnings.is_empty());
         assert_eq!(toml.matches("[[profile]]").count(), 2);
         assert_eq!(stats.profile_count, 2);
@@ -870,7 +872,8 @@ mod tests {
             yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: true\n").unwrap();
         let rules = vec![rule("fw_off", info_a), rule("fw_on", info_b)];
 
-        let (toml, warnings, _stats) = baseline_to_recipe("c", None, &rules).unwrap();
+        let (toml, warnings, _stats) =
+            baseline_to_recipe("c", None, &rules, OdvMode::Inline).unwrap();
         assert_eq!(warnings.len(), 1);
         let w = &warnings[0];
         assert_eq!(w.key, "EnableFirewall");
@@ -885,7 +888,7 @@ mod tests {
             yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: true\n").unwrap();
         let mut r = rule("fw", info);
         r.mobileconfig = false;
-        let (toml, _, stats) = baseline_to_recipe("none", None, &[r]).unwrap();
+        let (toml, _, stats) = baseline_to_recipe("none", None, &[r], OdvMode::Inline).unwrap();
         assert_eq!(toml.matches("[[profile]]").count(), 0);
         assert_eq!(stats.profile_count, 0);
     }
@@ -916,7 +919,8 @@ mod tests {
              ddm_key: AutomaticActions\n\
              ddm_value:\n  Download: AlwaysOn\n",
         );
-        let (toml, warnings, stats) = baseline_to_recipe("ddm", Some("com.acme"), &[r]).unwrap();
+        let (toml, warnings, stats) =
+            baseline_to_recipe("ddm", Some("com.acme"), &[r], OdvMode::Inline).unwrap();
         assert!(warnings.is_empty(), "no collisions for a single rule");
         assert_eq!(stats.profile_count, 0);
         assert_eq!(stats.ddm_count, 1);
@@ -946,7 +950,8 @@ mod tests {
              ddm_key: Notifications\n\
              ddm_value: true\n",
         );
-        let (toml, warnings, stats) = baseline_to_recipe("ddm", None, &[a, b]).unwrap();
+        let (toml, warnings, stats) =
+            baseline_to_recipe("ddm", None, &[a, b], OdvMode::Inline).unwrap();
         assert!(warnings.is_empty());
         assert_eq!(stats.ddm_count, 1);
         assert_eq!(toml.matches("[[ddm]]").count(), 1);
@@ -968,7 +973,8 @@ mod tests {
              ddm_key: Notifications\n\
              ddm_value: true\n",
         );
-        let (toml, warnings, _stats) = baseline_to_recipe("ddm", None, &[a, b]).unwrap();
+        let (toml, warnings, _stats) =
+            baseline_to_recipe("ddm", None, &[a, b], OdvMode::Inline).unwrap();
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].previous_rule, "su_off");
         assert_eq!(warnings[0].winning_rule, "su_on");
@@ -995,7 +1001,8 @@ mod tests {
             info,
             "recommended: time.nist.gov\ncis_lvl1: time.apple.com\n",
         );
-        let (toml, warnings, stats) = baseline_to_recipe("cis_lvl1", None, &[r]).unwrap();
+        let (toml, warnings, stats) =
+            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Inline).unwrap();
         assert!(warnings.is_empty());
         assert_eq!(stats.odv_resolved, 1);
         assert_eq!(stats.odv_unresolved, 0);
@@ -1013,7 +1020,8 @@ mod tests {
             info,
             "recommended: time.nist.gov\nstig: time.usno.navy.mil\n",
         );
-        let (toml, _warnings, stats) = baseline_to_recipe("cis_lvl1", None, &[r]).unwrap();
+        let (toml, _warnings, stats) =
+            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Inline).unwrap();
         assert_eq!(stats.odv_resolved, 1);
         assert_eq!(stats.odv_unresolved, 0);
         assert!(toml.contains(r#"timeServer = "time.nist.gov""#));
@@ -1024,7 +1032,8 @@ mod tests {
         let info: yaml_serde::Value =
             yaml_serde::from_str("com.apple.MCX:\n  timeServer: $ODV\n").unwrap();
         let r = rule("ts", info); // no odv block
-        let (toml, _warnings, stats) = baseline_to_recipe("cis_lvl1", None, &[r]).unwrap();
+        let (toml, _warnings, stats) =
+            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Inline).unwrap();
         assert_eq!(stats.odv_resolved, 0);
         assert_eq!(stats.odv_unresolved, 1);
         // $ODV passes through verbatim — the operator must edit before generate.
@@ -1038,7 +1047,8 @@ mod tests {
             yaml_serde::from_str("com.apple.MCX:\n  passcode:\n    MaximumFailedAttempts: $ODV\n")
                 .unwrap();
         let r = rule_with_odv("p", info, "recommended: 5\ncis_lvl1: 4\n");
-        let (toml, _warnings, stats) = baseline_to_recipe("cis_lvl1", None, &[r]).unwrap();
+        let (toml, _warnings, stats) =
+            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Inline).unwrap();
         assert_eq!(stats.odv_resolved, 1);
         assert!(toml.contains("MaximumFailedAttempts = 4"));
     }
@@ -1068,7 +1078,8 @@ mod tests {
             ),
             odv: Some(yaml_serde::from_str("recommended: 8\ncis_lvl2: 12\n").unwrap()),
         };
-        let (toml, _warnings, stats) = baseline_to_recipe("cis_lvl2", None, &[r]).unwrap();
+        let (toml, _warnings, stats) =
+            baseline_to_recipe("cis_lvl2", None, &[r], OdvMode::Inline).unwrap();
         assert_eq!(stats.odv_resolved, 1);
         assert!(toml.contains("MinimumLength = 12"));
     }
@@ -1084,11 +1095,77 @@ mod tests {
              ddm_key: AutomaticActions\n\
              ddm_value:\n  Download: AlwaysOn\n",
         );
-        let (toml, warnings, stats) = baseline_to_recipe("mix", None, &[mc, dd]).unwrap();
+        let (toml, warnings, stats) =
+            baseline_to_recipe("mix", None, &[mc, dd], OdvMode::Inline).unwrap();
         assert!(warnings.is_empty());
         assert_eq!(stats.profile_count, 1);
         assert_eq!(stats.ddm_count, 1);
         assert_eq!(toml.matches("[[profile]]").count(), 1);
         assert_eq!(toml.matches("[[ddm]]").count(), 1);
     }
+
+    // ── Variable mode: $ODV stays + [odv] table emitted ─────────────
+
+    #[test]
+    fn variable_mode_emits_odv_table_and_keeps_placeholder() {
+        // Profile $ODV and DDM $ODV both contribute to the [odv] table.
+        let info: yaml_serde::Value =
+            yaml_serde::from_str("com.apple.MCX:\n  timeServer: $ODV\n").unwrap();
+        let mc = rule_with_odv(
+            "ts",
+            info,
+            "recommended: time.nist.gov\ncis_lvl1: time.apple.com\n",
+        );
+        let dd = MscpRule {
+            id: "p".to_string(),
+            title: "p".to_string(),
+            discussion: String::new(),
+            check: None,
+            result: None,
+            fix: None,
+            references: std::collections::HashMap::default(),
+            macos: Vec::new(),
+            tags: Vec::new(),
+            severity: None,
+            mobileconfig: false,
+            mobileconfig_info: None,
+            ddm_info: Some(
+                yaml_serde::from_str(
+                    "declarationtype: com.apple.configuration.passcode.settings\n\
+                     ddm_key: MinimumLength\n\
+                     ddm_value: $ODV\n",
+                )
+                .unwrap(),
+            ),
+            odv: Some(yaml_serde::from_str("recommended: 8\ncis_lvl1: 15\n").unwrap()),
+        };
+
+        let (toml, warnings, stats) =
+            baseline_to_recipe("cis_lvl1", None, &[mc, dd], OdvMode::Variable).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(stats.odv_resolved, 2);
+        assert_eq!(stats.odv_unresolved, 0);
+
+        // Field keeps the literal "$ODV"; defaults live in [odv].
+        assert!(toml.contains(r#"timeServer = "$ODV""#));
+        assert!(toml.contains(r#"MinimumLength = "$ODV""#));
+        assert!(toml.contains("[odv]"));
+        assert!(toml.contains(r#"timeServer = "time.apple.com""#));
+        assert!(toml.contains("MinimumLength = 15"));
+    }
+
+    #[test]
+    fn variable_mode_omits_odv_table_when_no_placeholders() {
+        // No $ODV in the field — [odv] should NOT appear at all.
+        let info: yaml_serde::Value =
+            yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: true\n").unwrap();
+        let r = rule("fw", info);
+        let (toml, _w, stats) =
+            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Variable).unwrap();
+        assert_eq!(stats.odv_resolved, 0);
+        assert!(!toml.contains("[odv]"));
+    }
+
+    // Round-trip through profile crate's `Recipe::resolve_odv` is
+    // exercised end-to-end by sop_traps_mscp::trap_21.
 }

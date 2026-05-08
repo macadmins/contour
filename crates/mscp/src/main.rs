@@ -832,8 +832,15 @@ fn main() -> Result<()> {
             baseline,
             output,
             org,
+            odv_mode,
         } => {
-            run_recipe_command(&mscp_repo, &baseline, output.as_deref(), org.as_deref())?;
+            run_recipe_command(
+                &mscp_repo,
+                &baseline,
+                output.as_deref(),
+                org.as_deref(),
+                odv_mode,
+            )?;
         }
     }
 
@@ -850,6 +857,7 @@ fn run_recipe_command(
     baseline: &str,
     output: Option<&std::path::Path>,
     org: Option<&str>,
+    mode: baseline_to_recipe::OdvMode,
 ) -> Result<()> {
     use anyhow::Context;
 
@@ -864,7 +872,7 @@ fn run_recipe_command(
     };
 
     let (body, warnings, stats) =
-        baseline_to_recipe::baseline_to_recipe(baseline, resolved_org.as_deref(), &rules)?;
+        baseline_to_recipe::baseline_to_recipe(baseline, resolved_org.as_deref(), &rules, mode)?;
 
     for w in &warnings {
         eprintln!("warning: {w}");

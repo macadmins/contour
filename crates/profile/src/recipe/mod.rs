@@ -135,20 +135,13 @@ impl Recipe {
     /// path). When `[odv]` is empty, this is a no-op.
     pub fn resolve_odv(&mut self) -> OdvResolveStats {
         let mut stats = OdvResolveStats::default();
-        if self.odv.is_empty() {
-            return stats;
-        }
 
         for profile in &mut self.profiles {
             substitute_odv_in_toml_map(&mut profile.fields, &self.odv, &mut stats);
             substitute_odv_in_toml_map(&mut profile.extra_fields, &self.odv, &mut stats);
         }
         for bundle in &mut self.ddm {
-            substitute_odv_in_json_map(
-                &mut bundle.configuration.payload,
-                &self.odv,
-                &mut stats,
-            );
+            substitute_odv_in_json_map(&mut bundle.configuration.payload, &self.odv, &mut stats);
             if let Some(asset) = bundle.asset.as_mut() {
                 substitute_odv_in_json_map(&mut asset.payload, &self.odv, &mut stats);
             }
@@ -232,6 +225,155 @@ fn substitute_odv_in_json_value(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod odv_tests {
+    use super::*;
+
+    fn parse_recipe(toml_str: &str) -> Recipe {
+        toml::from_str(toml_str).expect("recipe must parse")
+    }
+
+    #[test]
+    fn resolve_odv_replaces_field_string_with_table_value() {
+        let mut r = parse_recipe(
+            r#"[recipe]
+name = "test"
+description = "test"
+
+[odv]
+timeServer = "time.apple.com"
+
+[[profile]]
+filename = "x.mobileconfig"
+payload_type = "com.apple.MCX"
+display_name = "MCX"
+[profile.fields]
+timeServer = "$ODV"
+otherField = "untouched"
+"#,
+        );
+        let stats = r.resolve_odv();
+        assert_eq!(stats.resolved, 1);
+        assert_eq!(stats.unresolved, 0);
+        assert_eq!(
+            r.profiles[0].fields.get("timeServer").unwrap().as_str(),
+            Some("time.apple.com")
+        );
+        assert_eq!(
+            r.profiles[0].fields.get("otherField").unwrap().as_str(),
+            Some("untouched")
+        );
+    }
+
+    #[test]
+    fn resolve_odv_preserves_integer_type() {
+        let mut r = parse_recipe(
+            r#"[recipe]
+name = "test"
+description = "test"
+
+[odv]
+MaximumFailedAttempts = 5
+
+[[profile]]
+filename = "x.mobileconfig"
+payload_type = "com.apple.MCX"
+display_name = "MCX"
+[profile.fields]
+MaximumFailedAttempts = "$ODV"
+"#,
+        );
+        let stats = r.resolve_odv();
+        assert_eq!(stats.resolved, 1);
+        // Integer landed as integer, not as a string.
+        assert_eq!(
+            r.profiles[0]
+                .fields
+                .get("MaximumFailedAttempts")
+                .unwrap()
+                .as_integer(),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn resolve_odv_unresolved_when_key_missing() {
+        let mut r = parse_recipe(
+            r#"[recipe]
+name = "test"
+description = "test"
+
+[odv]
+otherKey = "value"
+
+[[profile]]
+filename = "x.mobileconfig"
+payload_type = "com.apple.MCX"
+display_name = "MCX"
+[profile.fields]
+timeServer = "$ODV"
+"#,
+        );
+        let stats = r.resolve_odv();
+        assert_eq!(stats.resolved, 0);
+        assert_eq!(stats.unresolved, 1);
+        // Placeholder flows through unchanged.
+        assert_eq!(
+            r.profiles[0].fields.get("timeServer").unwrap().as_str(),
+            Some("$ODV")
+        );
+    }
+
+    #[test]
+    fn resolve_odv_walks_nested_table_fields() {
+        let mut r = parse_recipe(
+            r#"[recipe]
+name = "test"
+description = "test"
+
+[odv]
+Download = "AlwaysOn"
+
+[[profile]]
+filename = "x.mobileconfig"
+payload_type = "com.apple.MCX"
+display_name = "MCX"
+[profile.fields]
+[profile.fields.AutomaticActions]
+Download = "$ODV"
+"#,
+        );
+        let stats = r.resolve_odv();
+        assert_eq!(stats.resolved, 1);
+        let auto = r.profiles[0].fields.get("AutomaticActions").unwrap();
+        let auto_table = auto.as_table().expect("nested table");
+        assert_eq!(
+            auto_table.get("Download").unwrap().as_str(),
+            Some("AlwaysOn")
+        );
+    }
+
+    #[test]
+    fn resolve_odv_no_op_when_table_empty() {
+        let mut r = parse_recipe(
+            r#"[recipe]
+name = "test"
+description = "test"
+
+[[profile]]
+filename = "x.mobileconfig"
+payload_type = "com.apple.MCX"
+display_name = "MCX"
+[profile.fields]
+timeServer = "$ODV"
+"#,
+        );
+        let stats = r.resolve_odv();
+        assert_eq!(stats.resolved, 0);
+        assert_eq!(stats.unresolved, 1);
     }
 }
 
