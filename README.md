@@ -2,18 +2,19 @@
   <img src="images/contour.png" alt="Contour" width="200">
 </p>
 
-# Contour
+# Contour - Reshape the way Apple device configurations are managed
 
-**The Swiss Army Knife for Apple Device Management tasks**
+CLI for control, AI for intent — ship consistent, declarative Apple configurations at scale
+
+**A Swiss Army Knife for Apple Device Management tasks**
 
 > **Status: Preview** — almost feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-One signed binary that makes common device management tasks simpler. It normalizes device management configs consistently and surfaces errors clearly — so output diffs cleanly every time.
+One signed binary that makes common device management tasks simpler. Contour validates, normalizes, and processes Apple device management artifacts using embedded Apple schemas — producing clean diffs, clear errors, and predictable output every time. Designed for terminal workflows, CI pipelines, and AI agents, it brings consistency and reliability to modern device management operations.
 
-Contour works with profiles and DDM config payloads — whether you, your MDM vendor, or an AI agent wrote them.
+Contour works primarily with your existing profiles and DDM configuration payloads — whether created by you, your MDM vendor, or an AI agent. It can also generate new configurations from scratch, reverse-engineer existing plists on mdm managed devices, and transform everything into a clean, consistent format optimized for modern Git-driven device management workflows.
 
-Use it to prepare and process configuration files for migration, GitOps workflows, or day-to-day config work. Run it from the terminal, in CI, or let an AI agent call it directly. Two modes, same core — every artifact is validated against the embedded Apple schema.
-
+Two modes, same core — every artifact is validated against the embedded Apple schema.
 
 ## Why
 
