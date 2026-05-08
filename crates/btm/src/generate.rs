@@ -14,10 +14,11 @@ fn parse_btm_rule_type(s: &str) -> Result<contour_profiles::BtmRuleType> {
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-/// Generate a service management (managed login items) mobileconfig.
-pub fn generate_service_management_profile(app: &BtmAppEntry, org: &str) -> Result<Vec<u8>> {
-    let profile_id = format!("{}.service-management.{}", org, sanitize_id(&app.bundle_id));
-
+/// Build the inner `com.apple.servicemanagement` payload for one
+/// app. Used by both the mobileconfig generator and the recipe-TOML
+/// emitter (which wants the dict without the outer Configuration
+/// envelope).
+pub fn build_service_management_payload(app: &BtmAppEntry) -> Result<Dictionary> {
     let rules: Vec<Value> = if !app.rules.is_empty() {
         app.rules
             .iter()
@@ -49,6 +50,13 @@ pub fn generate_service_management_profile(app: &BtmAppEntry, org: &str) -> Resu
 
     let mut payload_content = Dictionary::new();
     payload_content.insert("Rules".to_string(), Value::Array(rules));
+    Ok(payload_content)
+}
+
+/// Generate a service management (managed login items) mobileconfig.
+pub fn generate_service_management_profile(app: &BtmAppEntry, org: &str) -> Result<Vec<u8>> {
+    let profile_id = format!("{}.service-management.{}", org, sanitize_id(&app.bundle_id));
+    let payload_content = build_service_management_payload(app)?;
 
     ProfileBuilder::new(org, &profile_id)
         .display_name(&format!("{} Service Management", app.name))
@@ -57,18 +65,10 @@ pub fn generate_service_management_profile(app: &BtmAppEntry, org: &str) -> Resu
         .build("com.apple.servicemanagement", payload_content)
 }
 
-/// Generate a combined service management mobileconfig with rules from all apps.
-///
-/// Merges all BTM rules from every app into a single `com.apple.servicemanagement`
-/// payload. This is the typical deployment model — one profile governs all
-/// managed login items.
-pub fn generate_combined_service_management_profile(
-    apps: &[BtmAppEntry],
-    org: &str,
-    display_name: Option<&str>,
-) -> Result<Vec<u8>> {
-    let profile_id = format!("{org}.service-management");
-
+/// Build the inner `com.apple.servicemanagement` payload that
+/// aggregates rules across every app. Returns `Err` if no rules could
+/// be built (mirrors the existing combined-profile error path).
+pub fn build_combined_service_management_payload(apps: &[BtmAppEntry]) -> Result<Dictionary> {
     let mut all_rules: Vec<Value> = Vec::new();
 
     for app in apps {
@@ -101,7 +101,21 @@ pub fn generate_combined_service_management_profile(
 
     let mut payload_content = Dictionary::new();
     payload_content.insert("Rules".to_string(), Value::Array(all_rules));
+    Ok(payload_content)
+}
 
+/// Generate a combined service management mobileconfig with rules from all apps.
+///
+/// Merges all BTM rules from every app into a single `com.apple.servicemanagement`
+/// payload. This is the typical deployment model — one profile governs all
+/// managed login items.
+pub fn generate_combined_service_management_profile(
+    apps: &[BtmAppEntry],
+    org: &str,
+    display_name: Option<&str>,
+) -> Result<Vec<u8>> {
+    let profile_id = format!("{org}.service-management");
+    let payload_content = build_combined_service_management_payload(apps)?;
     let name = display_name.unwrap_or("Service Management");
 
     ProfileBuilder::new(org, &profile_id)

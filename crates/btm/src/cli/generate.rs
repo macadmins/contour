@@ -3,6 +3,7 @@
 use crate::cli::{OutputMode, print_info, print_kv, print_success, print_warning};
 use crate::config::{BtmAppEntry, BtmConfig};
 use crate::generate::{
+    build_combined_service_management_payload, build_service_management_payload,
     generate_btm_declaration, generate_combined_service_management_profile,
     generate_service_management_profile, resolve_output_dir, sanitize_filename,
 };
@@ -13,6 +14,7 @@ use contour_core::fragment::{
     DefaultYmlEntries, FleetEntries, FragmentManifest, FragmentMeta, LibFiles, ProfileEntry,
     ScriptEntries,
 };
+use contour_profiles::{RecipeProfile, write_recipe_toml};
 use std::path::{Path, PathBuf};
 
 /// Run the BTM generate command.
@@ -26,6 +28,7 @@ pub fn run(
     fragment: bool,
     ddm: bool,
     per_app: bool,
+    format: &str,
     output_mode: OutputMode,
 ) -> Result<()> {
     if fragment {
@@ -44,6 +47,18 @@ pub fn run(
             print_warning("No apps with BTM rules found");
         }
         return Ok(());
+    }
+
+    // Recipe-TOML output: bundle every app's service-management
+    // payload into one combined recipe TOML that drops into
+    // `./recipes/<name>.toml` of a contour preset library.
+    if format == "recipe" {
+        if ddm {
+            anyhow::bail!(
+                "--format recipe is incompatible with --ddm; DDM declarations stay one-file-per-bundle. Use --format mobileconfig with --ddm, or import the resulting JSON via `contour profile library import`."
+            );
+        }
+        return run_recipe(&config, output, per_app, output_mode);
     }
 
     if output_mode == OutputMode::Human {
@@ -281,6 +296,92 @@ fn print_btm_dry_run(apps: &[&BtmAppEntry], ddm: bool, per_app: bool, output_mod
             );
         }
     }
+}
+
+/// Emit a combined recipe TOML from every BTM app's payload.
+///
+/// `per_app = true` produces N `[[profile]]` blocks (one per app).
+/// `per_app = false` (default) collapses every app's rules into one
+/// combined `com.apple.servicemanagement` payload — matches the
+/// existing combined-mobileconfig deployment model.
+fn run_recipe(
+    config: &BtmConfig,
+    output: Option<&Path>,
+    per_app: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let recipe_name = config
+        .settings
+        .display_name
+        .clone()
+        .map(|s| sanitize_filename(&s))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "btm".to_string());
+
+    let profiles: Vec<RecipeProfile> = if per_app {
+        let mut out = Vec::with_capacity(config.apps.len());
+        for app in &config.apps {
+            let payload = build_service_management_payload(app)?;
+            out.push(RecipeProfile {
+                filename: format!(
+                    "{}-service-management.mobileconfig",
+                    sanitize_filename(&app.name)
+                ),
+                payload_type: "com.apple.servicemanagement".to_string(),
+                display_name: format!("{} Service Management", app.name),
+                description: format!("Managed login items for {}", app.name),
+                removal_disallowed: true,
+                fields: payload,
+            });
+        }
+        out
+    } else {
+        let payload = build_combined_service_management_payload(&config.apps)?;
+        vec![RecipeProfile {
+            filename: "service-management.mobileconfig".to_string(),
+            payload_type: "com.apple.servicemanagement".to_string(),
+            display_name: config
+                .settings
+                .display_name
+                .clone()
+                .unwrap_or_else(|| "Service Management".to_string()),
+            description: "Managed login items and background tasks".to_string(),
+            removal_disallowed: true,
+            fields: payload,
+        }]
+    };
+
+    let body = write_recipe_toml(
+        &recipe_name,
+        "Service management profile generated from a BTM scan",
+        Some(&config.settings.org),
+        &profiles,
+    )?;
+
+    let output_dir = resolve_output_dir(output, Path::new("."))?;
+    let output_path = output_dir.join(format!("{recipe_name}.toml"));
+    std::fs::write(&output_path, &body)
+        .with_context(|| format!("Failed to write recipe TOML to {}", output_path.display()))?;
+
+    if output_mode == OutputMode::Human {
+        println!();
+        print_success(&format!(
+            "Generated recipe TOML with {} profile(s)",
+            profiles.len()
+        ));
+        print_kv("Recipe", &output_path.display().to_string());
+        print_info(&format!(
+            "Render with: contour profile generate --recipe {} --org <YOUR_ORG> -o ./out",
+            output_path.display()
+        ));
+    } else {
+        println!(
+            r#"{{"format":"recipe","output":{:?},"profile_count":{}}}"#,
+            output_path.display().to_string(),
+            profiles.len()
+        );
+    }
+    Ok(())
 }
 
 /// Generate a Fleet fragment directory for BTM profiles.

@@ -1,11 +1,13 @@
 pub mod builder;
 pub mod notifications;
+pub mod recipe_writer;
 pub mod service_management;
 pub mod tcc;
 pub mod uuid;
 
 pub use builder::ProfileBuilder;
 pub use notifications::build_notification_entry;
+pub use recipe_writer::{RecipeProfile, write_recipe_toml};
 pub use service_management::{
     BtmRuleType, ParseBtmRuleTypeError, build_btm_rule, build_service_management_rule,
 };

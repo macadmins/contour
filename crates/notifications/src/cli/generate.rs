@@ -7,8 +7,8 @@
 use crate::cli::{OutputMode, print_info, print_kv, print_success, print_warning};
 use crate::config::NotificationConfig;
 use crate::generate::{
-    generate_combined_notification_profile, generate_notification_profile, resolve_output_dir,
-    sanitize_filename,
+    build_notification_entry_from_config, generate_combined_notification_profile,
+    generate_notification_profile, resolve_output_dir, sanitize_filename,
 };
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -17,6 +17,8 @@ use contour_core::fragment::{
     DefaultYmlEntries, FleetEntries, FragmentManifest, FragmentMeta, LibFiles, ProfileEntry,
     ScriptEntries,
 };
+use contour_profiles::{RecipeProfile, write_recipe_toml};
+use plist::{Dictionary, Value};
 use std::path::{Path, PathBuf};
 
 /// Run the notifications generate command.
@@ -30,6 +32,7 @@ pub fn run(
     combined: bool,
     dry_run: bool,
     fragment: bool,
+    format: &str,
     output_mode: OutputMode,
 ) -> Result<()> {
     // Delegate to Fleet fragment generation if requested
@@ -51,6 +54,10 @@ pub fn run(
             print_warning("No apps with notification settings found");
         }
         return Ok(());
+    }
+
+    if format == "recipe" {
+        return run_recipe(&config, output, combined, output_mode);
     }
 
     if output_mode == OutputMode::Human {
@@ -196,6 +203,93 @@ fn print_dry_run(config: &NotificationConfig, combined: bool, output_mode: Outpu
         "Total profiles to generate: {}",
         if combined { 1 } else { config.apps.len() }
     );
+}
+
+/// Emit a combined recipe TOML from every app's notification entry.
+///
+/// `combined = false` (default) → N `[[profile]]` blocks, one per app.
+/// `combined = true` → ONE `[[profile]]` block with every app's
+/// notification entry under `NotificationSettings`.
+fn run_recipe(
+    config: &NotificationConfig,
+    output: Option<&Path>,
+    combined: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let recipe_name = "notifications".to_string();
+
+    let profiles: Vec<RecipeProfile> = if combined {
+        let entries: Vec<Value> = config
+            .apps
+            .iter()
+            .map(|app| Value::Dictionary(build_notification_entry_from_config(app)))
+            .collect();
+        let mut payload = Dictionary::new();
+        payload.insert("NotificationSettings".to_string(), Value::Array(entries));
+        vec![RecipeProfile {
+            filename: "notifications.mobileconfig".to_string(),
+            payload_type: "com.apple.notificationsettings".to_string(),
+            display_name: "Notification Settings".to_string(),
+            description: "Managed notification settings".to_string(),
+            removal_disallowed: true,
+            fields: payload,
+        }]
+    } else {
+        let mut out = Vec::with_capacity(config.apps.len());
+        for app in &config.apps {
+            let mut payload = Dictionary::new();
+            payload.insert(
+                "NotificationSettings".to_string(),
+                Value::Array(vec![Value::Dictionary(
+                    build_notification_entry_from_config(app),
+                )]),
+            );
+            out.push(RecipeProfile {
+                filename: format!(
+                    "{}-notifications.mobileconfig",
+                    sanitize_filename(&app.name)
+                ),
+                payload_type: "com.apple.notificationsettings".to_string(),
+                display_name: format!("{} Notifications", app.name),
+                description: format!("Notification settings for {}", app.name),
+                removal_disallowed: true,
+                fields: payload,
+            });
+        }
+        out
+    };
+
+    let body = write_recipe_toml(
+        &recipe_name,
+        "Notification settings recipe",
+        Some(&config.settings.org),
+        &profiles,
+    )?;
+
+    let output_dir = resolve_output_dir(output, Path::new("."))?;
+    let output_path = output_dir.join(format!("{recipe_name}.toml"));
+    std::fs::write(&output_path, &body)
+        .with_context(|| format!("Failed to write recipe TOML to {}", output_path.display()))?;
+
+    if output_mode == OutputMode::Human {
+        println!();
+        print_success(&format!(
+            "Generated recipe TOML with {} profile(s)",
+            profiles.len()
+        ));
+        print_kv("Recipe", &output_path.display().to_string());
+        print_info(&format!(
+            "Render with: contour profile generate --recipe {} --org <YOUR_ORG> -o ./out",
+            output_path.display()
+        ));
+    } else {
+        println!(
+            r#"{{"format":"recipe","output":{:?},"profile_count":{}}}"#,
+            output_path.display().to_string(),
+            profiles.len()
+        );
+    }
+    Ok(())
 }
 
 /// Generate a Fleet fragment directory.

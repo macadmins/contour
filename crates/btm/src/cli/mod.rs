@@ -122,6 +122,17 @@ pub enum BtmCommands {
         /// Generate one profile per app instead of a single combined profile
         #[arg(long)]
         per_app: bool,
+
+        /// Output format. `mobileconfig` (default) writes one or more
+        /// .mobileconfig files. `recipe` writes a single combined
+        /// recipe TOML that drops into a `contour profile library`
+        /// (recipes/ subdir) for later `generate --recipe …` use.
+        #[arg(
+            long,
+            value_parser = ["mobileconfig", "recipe"],
+            default_value = "mobileconfig"
+        )]
+        format: String,
     },
 
     /// Validate BTM rules in a btm.toml

@@ -105,6 +105,7 @@ fn main() -> Result<()> {
             fragment,
             ddm,
             per_app,
+            format,
         }) => btm::cli::generate::run(
             &input,
             output.as_deref(),
@@ -112,6 +113,7 @@ fn main() -> Result<()> {
             fragment,
             ddm,
             per_app,
+            &format,
             output_mode,
         ),
         Some(BtmCommands::Validate { input, strict }) => {

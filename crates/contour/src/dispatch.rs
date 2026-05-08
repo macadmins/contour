@@ -1010,12 +1010,14 @@ fn dispatch_pppc(
             combined,
             dry_run,
             fragment,
+            format,
         }) => pppc::cli::generate::run(
             &input,
             output.as_deref(),
             combined,
             dry_run,
             fragment,
+            &format,
             output_mode,
         ),
 
@@ -1170,6 +1172,7 @@ fn dispatch_btm(
             fragment,
             ddm,
             per_app,
+            format,
         }) => btm::cli::generate::run(
             &input,
             output.as_deref(),
@@ -1177,6 +1180,7 @@ fn dispatch_btm(
             fragment,
             ddm,
             per_app,
+            &format,
             output_mode,
         ),
         Some(BtmCommands::Validate { input, strict }) => {
@@ -1261,12 +1265,14 @@ fn dispatch_notifications(
             combined,
             dry_run,
             fragment,
+            format,
         }) => notifications::cli::generate::run(
             &input,
             output.as_deref(),
             combined,
             dry_run,
             fragment,
+            &format,
             output_mode,
         ),
         Some(NotificationCommands::Validate { input, strict }) => {

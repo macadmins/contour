@@ -139,6 +139,16 @@ pub enum Commands {
         /// for merging into a Fleet GitOps repository.
         #[arg(long)]
         fragment: bool,
+
+        /// Output format. `mobileconfig` (default) writes
+        /// .mobileconfig files. `recipe` writes a single combined
+        /// recipe TOML for the contour library workflow.
+        #[arg(
+            long,
+            value_parser = ["mobileconfig", "recipe"],
+            default_value = "mobileconfig"
+        )]
+        format: String,
     },
 
     /// Interactively configure services in an existing policy file
