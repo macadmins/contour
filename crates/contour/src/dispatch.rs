@@ -2488,8 +2488,15 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             baseline,
             output,
             org,
+            odv_mode,
         } => {
-            dispatch_mscp_recipe(&mscp_repo, &baseline, output.as_deref(), org.as_deref())?;
+            dispatch_mscp_recipe(
+                &mscp_repo,
+                &baseline,
+                output.as_deref(),
+                org.as_deref(),
+                odv_mode,
+            )?;
         }
     }
 
@@ -2503,6 +2510,7 @@ fn dispatch_mscp_recipe(
     baseline: &str,
     output: Option<&std::path::Path>,
     org: Option<&str>,
+    mode: mscp::baseline_to_recipe::OdvMode,
 ) -> Result<()> {
     use anyhow::Context;
     use colored::Colorize;
@@ -2517,8 +2525,12 @@ fn dispatch_mscp_recipe(
         None => contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain),
     };
 
-    let (body, warnings, stats) =
-        mscp::baseline_to_recipe::baseline_to_recipe(baseline, resolved_org.as_deref(), &rules)?;
+    let (body, warnings, stats) = mscp::baseline_to_recipe::baseline_to_recipe(
+        baseline,
+        resolved_org.as_deref(),
+        &rules,
+        mode,
+    )?;
 
     for w in &warnings {
         eprintln!("warning: {w}");
