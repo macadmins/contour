@@ -35,6 +35,12 @@ pub struct DefaultsConfig {
     pub deterministic_uuids: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifests_path: Option<PathBuf>,
+    /// Default preset/recipe library directory. When set, commands
+    /// like `library import --into`, `library validate <PATH>`,
+    /// `library normalize <PATH>`, and `--recipe-path` resolution
+    /// fall back to this when no flag is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_path: Option<PathBuf>,
 }
 
 const CONFIG_DIR: &str = ".contour";
@@ -130,6 +136,27 @@ pub fn resolve_name(name: Option<String>) -> Option<String> {
         return Some(cfg.organization.name);
     }
     None
+}
+
+/// Resolve the preset/recipe library path from a CLI flag, falling
+/// back to `.contour/config.toml`'s `defaults.library_path`.
+///
+/// Lookup order:
+/// 1. Explicit CLI value (e.g. `--into <DIR>` or `--recipe-path <DIR>`)
+/// 2. `defaults.library_path` from `.contour/config.toml`
+/// 3. `None` — caller decides whether the missing value is fatal
+///
+/// Returns the resolved path as a `PathBuf` so callers don't have to
+/// re-parse the string.
+pub fn resolve_library_path(cli_value: Option<&str>) -> Option<PathBuf> {
+    if let Some(v) = cli_value
+        && !v.is_empty()
+    {
+        return Some(PathBuf::from(v));
+    }
+    ContourConfig::load_nearest()
+        .and_then(|cfg| cfg.defaults.library_path)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Shared `[settings]` section for domain config files (btm.toml, notifications.toml).

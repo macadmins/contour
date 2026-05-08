@@ -222,6 +222,12 @@ pub enum Commands {
         /// Use deterministic/predictable UUIDs (recommended for GitOps)
         #[arg(long)]
         deterministic_uuids: Option<bool>,
+        /// Default preset/recipe library path. Used as the fallback for
+        /// `--recipe-path`, `library import --into`, `library validate`,
+        /// `library normalize`. Run `contour profile library new <PATH>`
+        /// to scaffold a fresh library at this location.
+        #[arg(long, value_name = "DIR")]
+        library_path: Option<String>,
         /// Non-interactive mode (uses flags or defaults)
         #[arg(short, long)]
         yes: bool,

@@ -29,6 +29,19 @@ use cli::{
     PayloadAction,
 };
 
+/// Resolve a library-path argument: explicit CLI value wins,
+/// otherwise fall back to `defaults.library_path` from
+/// `.contour/config.toml`. Errors with a clear message naming the
+/// flag/argument when neither source produced a path.
+fn resolve_library_arg(cli_value: Option<&str>, flag_name: &str) -> Result<std::path::PathBuf> {
+    if let Some(p) = contour_core::config::resolve_library_path(cli_value) {
+        return Ok(p);
+    }
+    anyhow::bail!(
+        "{flag_name} is required (no path passed and no `defaults.library_path` set in .contour/config.toml). Run `contour init --library-path <DIR>` or pass the path explicitly."
+    )
+}
+
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
@@ -630,10 +643,11 @@ fn run(cli: Cli) -> Result<()> {
             } => {
                 let input_paths: Vec<std::path::PathBuf> =
                     inputs.iter().map(std::path::PathBuf::from).collect();
+                let resolved_into = resolve_library_arg(into.as_deref(), "library import --into")?;
                 cli::import_recipe::handle_library_import(
                     cli::import_recipe::LibraryImportOptions {
                         inputs: &input_paths,
-                        into: std::path::Path::new(&into),
+                        into: &resolved_into,
                         name: name.as_deref(),
                         combine,
                         force,
@@ -646,19 +660,19 @@ fn run(cli: Cli) -> Result<()> {
                     cli::LibraryStyle::Flat => cli::library::LibraryStyle::Flat,
                     cli::LibraryStyle::Nested => cli::library::LibraryStyle::Nested,
                 };
+                let resolved = resolve_library_arg(path.as_deref(), "library normalize <PATH>")?;
                 cli::library::handle_library_normalize(
                     cli::library::LibraryNormalizeOptions {
-                        path: std::path::Path::new(&path),
+                        path: &resolved,
                         style: mapped,
                     },
                     output_mode,
                 )?;
             }
             LibraryAction::Validate { path } => {
+                let resolved = resolve_library_arg(path.as_deref(), "library validate <PATH>")?;
                 cli::library_validate::handle_library_validate(
-                    cli::library_validate::LibraryValidateOptions {
-                        path: std::path::Path::new(&path),
-                    },
+                    cli::library_validate::LibraryValidateOptions { path: &resolved },
                     output_mode,
                 )?;
             }
