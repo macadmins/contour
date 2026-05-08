@@ -40,7 +40,7 @@ fn default_generator() -> String {
 
 /// Entries to append to target default.yml.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "field names match domain terminology"
 )]

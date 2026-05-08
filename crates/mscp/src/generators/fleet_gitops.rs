@@ -196,10 +196,7 @@ software:
 
     /// Deprecated: use `generate_unassigned_yml` instead.
     #[deprecated(note = "renamed to generate_unassigned_yml for Fleet v4.82+")]
-    #[allow(
-        dead_code,
-        reason = "kept as deprecated alias for backwards compatibility"
-    )]
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn generate_no_team_yml(&self) -> Result<PathBuf> {
         self.generate_unassigned_yml()
     }

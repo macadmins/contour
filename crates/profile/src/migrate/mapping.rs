@@ -15,10 +15,12 @@ pub enum MigrationStatus {
     /// Can use legacy profile declaration wrapper
     Legacy,
     /// No DDM support currently
+    #[allow(dead_code, reason = "reserved for future use")]
     None,
 }
 
 impl MigrationStatus {
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn as_str(&self) -> &'static str {
         match self {
             MigrationStatus::Available => "available",
@@ -28,6 +30,7 @@ impl MigrationStatus {
         }
     }
 
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn description(&self) -> &'static str {
         match self {
             MigrationStatus::Available => "Direct DDM equivalent exists",
@@ -326,11 +329,13 @@ impl MigrationRegistry {
     }
 
     /// List all mappings
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn all(&self) -> impl Iterator<Item = &MigrationMapping> {
         self.mappings.values()
     }
 
     /// List mappings filtered by status
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn by_status(&self, status: MigrationStatus) -> Vec<&MigrationMapping> {
         self.mappings
             .values()
@@ -339,6 +344,7 @@ impl MigrationRegistry {
     }
 
     /// Get coverage statistics
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn stats(&self) -> MigrationStats {
         let available = self
             .mappings
@@ -393,6 +399,7 @@ impl Default for MigrationRegistry {
 
 /// Statistics about migration coverage
 #[derive(Debug, Serialize)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub struct MigrationStats {
     pub total: usize,
     pub available: usize,
@@ -402,6 +409,7 @@ pub struct MigrationStats {
 }
 
 impl MigrationStats {
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn available_percentage(&self) -> f64 {
         if self.total == 0 {
             0.0
@@ -410,6 +418,7 @@ impl MigrationStats {
         }
     }
 
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn ddm_coverage(&self) -> f64 {
         if self.total == 0 {
             0.0

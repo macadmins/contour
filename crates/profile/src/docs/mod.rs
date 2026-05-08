@@ -7,7 +7,7 @@ pub mod generator;
 pub use generator::{generate_ddm_docs, generate_docs, generate_profile_doc};
 
 // Also export for tests
-#[allow(unused_imports, reason = "conditionally used")]
+#[allow(unused_imports, reason = "reserved for future use")]
 pub use generator::{
     generate_ddm_declaration_doc, generate_ddm_index, generate_index, generate_payload_doc,
 };

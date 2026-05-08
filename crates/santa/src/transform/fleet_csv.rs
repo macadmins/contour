@@ -34,14 +34,14 @@ pub fn parse_fleet_csv<R: Read>(reader: R) -> Result<RuleSet> {
 /// Column indices for Fleet CSV
 struct ColumnIndices {
     name: Option<usize>,
-    #[allow(dead_code, reason = "reserved for future use")]
+    #[expect(dead_code, reason = "reserved for future use")]
     version: Option<usize>,
     source: Option<usize>,
     bundle_identifier: Option<usize>,
     team_id: Option<usize>,
     vendor: Option<usize>,
     software_title: Option<usize>,
-    #[allow(dead_code, reason = "reserved for future use")]
+    #[expect(dead_code, reason = "reserved for future use")]
     host_count: Option<usize>,
 }
 
