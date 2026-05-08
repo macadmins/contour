@@ -629,6 +629,19 @@ pub fn handle_generate_recipe(
     // from `r.recipe.name`, so the resolved-name string is dropped.
     let (_resolved_name, mut r) =
         recipe::loader::load_recipe_smart(recipe_name, resolved_recipe_path_str)?;
+    // Resolve `[odv]` defaults inline: every `"$ODV"` placeholder
+    // inside profile fields and DDM payloads is replaced with the
+    // value from the top-level `[odv]` table keyed by the field's
+    // immediate parent name. This must run BEFORE the field is
+    // serialized into plist so non-string defaults (integers,
+    // booleans) keep their type.
+    let odv_stats = r.resolve_odv();
+    if odv_stats.unresolved > 0 {
+        eprintln!(
+            "warning: {} `$ODV` placeholder(s) had no entry in the [odv] table — they will render as literal \"$ODV\" strings",
+            odv_stats.unresolved
+        );
+    }
     // Combined emission precedence: --combined / --no-combined override
     // wins, otherwise fall back to the recipe TOML's
     // `[recipe.output] combined` (default false).

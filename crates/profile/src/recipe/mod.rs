@@ -15,6 +15,13 @@ use std::collections::BTreeMap;
 /// alongside its mobileconfig profiles — used for hardening/baseline
 /// intents that need both delivery channels (e.g. the embedded
 /// `hardening-macos-baseline`).
+///
+/// Optional `[odv]` table holds operator-editable defaults for any
+/// field whose value is the literal string `"$ODV"`. Substitution
+/// happens at load time via [`Recipe::resolve_odv`] keyed by the
+/// field's immediate parent name — lets mSCP-derived recipes carry
+/// per-baseline defaults inline (e.g. `timeServer = "time.apple.com"`)
+/// while keeping the reusable placeholder shape mSCP rules use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recipe {
     pub recipe: RecipeMeta,
@@ -24,6 +31,12 @@ pub struct Recipe {
     /// entry. Same shape as a standalone DDM preset bundle.
     #[serde(rename = "ddm", default, skip_serializing_if = "Vec::is_empty")]
     pub ddm: Vec<Bundle>,
+    /// Operator-editable defaults for `"$ODV"` placeholders. Keys are
+    /// the immediate parent field names (e.g. `timeServer`,
+    /// `MaximumFailedAttempts`). `BTreeMap` for byte-stable
+    /// serialization.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub odv: BTreeMap<String, toml::Value>,
 }
 
 /// Recipe metadata.
@@ -97,4 +110,149 @@ pub struct ProfileSpec {
     /// Same `BTreeMap` rationale as `fields`.
     #[serde(default)]
     pub extra_fields: BTreeMap<String, toml::Value>,
+}
+
+/// Stats collected by [`Recipe::resolve_odv`] so callers can report
+/// what happened.
+#[derive(Debug, Clone, Default)]
+pub struct OdvResolveStats {
+    /// `"$ODV"` placeholders replaced with a value from `recipe.odv`.
+    pub resolved: usize,
+    /// Placeholders left intact because `recipe.odv` had no entry
+    /// keyed by the parent field name — these flow through to the
+    /// rendered profile verbatim, signaling a missing default.
+    pub unresolved: usize,
+}
+
+impl Recipe {
+    /// Replace literal `"$ODV"` strings inside profile fields and
+    /// DDM payloads with values from the top-level `[odv]` table.
+    ///
+    /// Lookup uses the field's immediate parent key — the same name
+    /// the operator would use when editing the `[odv]` table. Nested
+    /// dictionaries are walked recursively; inside a nested dict the
+    /// key is the immediate property name (not the full dotted
+    /// path). When `[odv]` is empty, this is a no-op.
+    pub fn resolve_odv(&mut self) -> OdvResolveStats {
+        let mut stats = OdvResolveStats::default();
+        if self.odv.is_empty() {
+            return stats;
+        }
+
+        for profile in &mut self.profiles {
+            substitute_odv_in_toml_map(&mut profile.fields, &self.odv, &mut stats);
+            substitute_odv_in_toml_map(&mut profile.extra_fields, &self.odv, &mut stats);
+        }
+        for bundle in &mut self.ddm {
+            substitute_odv_in_json_map(
+                &mut bundle.configuration.payload,
+                &self.odv,
+                &mut stats,
+            );
+            if let Some(asset) = bundle.asset.as_mut() {
+                substitute_odv_in_json_map(&mut asset.payload, &self.odv, &mut stats);
+            }
+        }
+        stats
+    }
+}
+
+fn substitute_odv_in_toml_map(
+    map: &mut BTreeMap<String, toml::Value>,
+    odv: &BTreeMap<String, toml::Value>,
+    stats: &mut OdvResolveStats,
+) {
+    for (key, value) in map.iter_mut() {
+        substitute_odv_in_toml_value(key, value, odv, stats);
+    }
+}
+
+fn substitute_odv_in_toml_value(
+    key: &str,
+    value: &mut toml::Value,
+    odv: &BTreeMap<String, toml::Value>,
+    stats: &mut OdvResolveStats,
+) {
+    match value {
+        toml::Value::String(s) if s == "$ODV" => match odv.get(key) {
+            Some(replacement) => {
+                *value = replacement.clone();
+                stats.resolved += 1;
+            }
+            None => stats.unresolved += 1,
+        },
+        toml::Value::Table(t) => {
+            for (k, v) in t.iter_mut() {
+                substitute_odv_in_toml_value(k, v, odv, stats);
+            }
+        }
+        toml::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                // Arrays don't carry parent-key context — substitute
+                // by current key (rare but symmetric with mSCP shape).
+                substitute_odv_in_toml_value(key, v, odv, stats);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn substitute_odv_in_json_map(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    odv: &BTreeMap<String, toml::Value>,
+    stats: &mut OdvResolveStats,
+) {
+    for (key, value) in map.iter_mut() {
+        substitute_odv_in_json_value(key, value, odv, stats);
+    }
+}
+
+fn substitute_odv_in_json_value(
+    key: &str,
+    value: &mut serde_json::Value,
+    odv: &BTreeMap<String, toml::Value>,
+    stats: &mut OdvResolveStats,
+) {
+    match value {
+        serde_json::Value::String(s) if s == "$ODV" => match odv.get(key) {
+            Some(replacement) => {
+                *value = toml_to_json_value(replacement);
+                stats.resolved += 1;
+            }
+            None => stats.unresolved += 1,
+        },
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                substitute_odv_in_json_value(k, v, odv, stats);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                substitute_odv_in_json_value(key, v, odv, stats);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn toml_to_json_value(v: &toml::Value) -> serde_json::Value {
+    match v {
+        toml::Value::String(s) => serde_json::Value::String(s.clone()),
+        toml::Value::Integer(i) => serde_json::Value::Number((*i).into()),
+        toml::Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
+        toml::Value::Datetime(d) => serde_json::Value::String(d.to_string()),
+        toml::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(toml_to_json_value).collect())
+        }
+        toml::Value::Table(t) => {
+            let mut out = serde_json::Map::with_capacity(t.len());
+            for (k, val) in t {
+                out.insert(k.clone(), toml_to_json_value(val));
+            }
+            serde_json::Value::Object(out)
+        }
+    }
 }

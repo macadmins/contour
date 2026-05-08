@@ -2544,6 +2544,12 @@ fn dispatch_mscp_recipe(
         stats.ddm_rule_count,
         output_path.display()
     );
+    if stats.odv_resolved > 0 || stats.odv_unresolved > 0 {
+        println!(
+            "  ODVs: {} resolved from rule defaults, {} left as $ODV (edit the recipe to override)",
+            stats.odv_resolved, stats.odv_unresolved,
+        );
+    }
     if !warnings.is_empty() {
         println!(
             "{} {} key collision(s) — last writer won; review the warnings above",

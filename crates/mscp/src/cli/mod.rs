@@ -722,6 +722,20 @@ pub enum Commands {
         /// Organization vendor string written to the recipe header.
         #[arg(long)]
         org: Option<String>,
+
+        /// How to render mSCP `$ODV` placeholders.
+        ///
+        /// `inline` (default): bake the resolved per-baseline default
+        /// directly into the field, e.g. `timeServer = "time.apple.com"`.
+        /// Operators edit the value in place.
+        ///
+        /// `variable`: keep the literal `"$ODV"` placeholder and emit
+        /// the resolved defaults into a top-level `[odv]` table at the
+        /// top of the recipe. Operators edit the `[odv]` entry once
+        /// and every reference picks it up. `profile generate
+        /// --recipe` substitutes at load time.
+        #[arg(long, value_enum, default_value = "inline")]
+        odv_mode: crate::baseline_to_recipe::OdvMode,
     },
 }
 
