@@ -298,6 +298,7 @@ pub fn create_test_rule() -> MscpRule {
         severity: Some("medium".to_string()),
         mobileconfig: false,
         mobileconfig_info: None,
+        ddm_info: None,
         odv: None,
     }
 }

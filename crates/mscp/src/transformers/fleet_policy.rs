@@ -337,6 +337,7 @@ mod tests {
             severity: None,
             mobileconfig: mobileconfig_info.is_some(),
             mobileconfig_info,
+            ddm_info: None,
             odv: None,
         }
     }
