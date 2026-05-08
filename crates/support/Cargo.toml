@@ -1,6 +1,6 @@
 [package]
 name = "support"
-version = "0.2.2"
+version = "0.2.3"
 description = "Root3 Support App mobileconfig profile generator"
 edition.workspace = true
 authors.workspace = true
