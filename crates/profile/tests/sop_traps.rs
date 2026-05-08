@@ -4042,3 +4042,122 @@ EnableAssessment = true
         "second recipe's profile must land — multi-recipe loop ran for both"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 85: --combined / --no-combined are a tristate that overrides
+// the recipe's `[recipe.output] combined` value. Catches:
+//   - --no-combined missing entirely (no way to override a recipe
+//     authored as combined=true)
+//   - flags don't override: recipe TOML wins regardless
+//   - last-flag-wins broken (overrides_with not wired)
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_85_generate_combined_tristate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let recipe_path = tmp.path().join("combined-by-default.toml");
+    fs::write(
+        &recipe_path,
+        r#"[recipe]
+name = "tri"
+description = "combined-by-default"
+
+[recipe.output]
+combined = true
+
+[[profile]]
+filename = "fw.mobileconfig"
+payload_type = "com.apple.security.firewall"
+display_name = "FW"
+[profile.fields]
+EnableFirewall = true
+
+[[profile]]
+filename = "gk.mobileconfig"
+payload_type = "com.apple.systempolicy.control"
+display_name = "GK"
+[profile.fields]
+EnableAssessment = true
+"#,
+    )
+    .unwrap();
+
+    // 1. Recipe says combined=true, no CLI flag → ONE file.
+    let out_default = tempfile::tempdir().unwrap();
+    let r = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe",
+            recipe_path.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "-o",
+            out_default.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(r.status.success(), "default emission must succeed");
+    assert!(
+        out_default.path().join("tri.mobileconfig").exists(),
+        "recipe combined=true must produce one bundled file"
+    );
+    assert!(
+        !out_default.path().join("fw.mobileconfig").exists(),
+        "default emission must NOT split into separate files when recipe says combined"
+    );
+
+    // 2. --no-combined forces separate files.
+    let out_split = tempfile::tempdir().unwrap();
+    let r = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe",
+            recipe_path.to_str().unwrap(),
+            "--no-combined",
+            "--org",
+            "com.acme",
+            "-o",
+            out_split.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        r.status.success(),
+        "--no-combined must succeed; stderr: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    assert!(out_split.path().join("fw.mobileconfig").exists());
+    assert!(out_split.path().join("gk.mobileconfig").exists());
+    assert!(
+        !out_split.path().join("tri.mobileconfig").exists(),
+        "--no-combined must NOT produce a bundled file"
+    );
+
+    // 3. Last-flag-wins: --combined --no-combined → separate.
+    let out_last = tempfile::tempdir().unwrap();
+    let r = Command::cargo_bin("profile")
+        .unwrap()
+        .env_remove("CONTOUR_ORG")
+        .args([
+            "generate",
+            "--recipe",
+            recipe_path.to_str().unwrap(),
+            "--combined",
+            "--no-combined",
+            "--org",
+            "com.acme",
+            "-o",
+            out_last.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(r.status.success());
+    assert!(
+        out_last.path().join("fw.mobileconfig").exists()
+            && !out_last.path().join("tri.mobileconfig").exists(),
+        "--combined --no-combined: last flag (--no-combined) must win"
+    );
+}

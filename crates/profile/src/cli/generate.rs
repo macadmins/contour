@@ -585,7 +585,7 @@ pub fn handle_generate_recipe(
     vars: &[String],
     output_mode: OutputMode,
     format: &str,
-    cli_combined: bool,
+    cli_combined: Option<bool>,
 ) -> Result<()> {
     let var_map = parse_vars(vars)?;
     // Smart resolution: `recipe_name` may be either a bare name or a
@@ -594,13 +594,16 @@ pub fn handle_generate_recipe(
     // file path in hand. Downstream code reads the canonical name
     // from `r.recipe.name`, so the resolved-name string is dropped.
     let (_resolved_name, mut r) = recipe::loader::load_recipe_smart(recipe_name, recipe_path)?;
-    // Combined emission is opt-in: CLI flag wins over recipe TOML.
-    let combined_emit = cli_combined
-        || r.recipe
+    // Combined emission precedence: --combined / --no-combined override
+    // wins, otherwise fall back to the recipe TOML's
+    // `[recipe.output] combined` (default false).
+    let combined_emit = cli_combined.unwrap_or_else(|| {
+        r.recipe
             .output
             .as_ref()
             .map(|o| o.combined)
-            .unwrap_or(false);
+            .unwrap_or(false)
+    });
     let registry = load_registry(schema_path)?;
 
     // Resolve op://, env:, file: references in recipe field values
