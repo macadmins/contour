@@ -556,7 +556,18 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             interactive,
             format,
             combined,
+            no_combined,
         } => {
+            // Tristate: --combined wins true, --no-combined wins false,
+            // neither leaves the value as None so the recipe TOML
+            // controls.
+            let combined_override: Option<bool> = if combined {
+                Some(true)
+            } else if no_combined {
+                Some(false)
+            } else {
+                None
+            };
             if let Some(recipe_name) = create_recipe {
                 profile::cli::generate::handle_create_recipe(
                     &recipe_name,
@@ -579,7 +590,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                         &vars,
                         output_mode,
                         &format,
-                        combined,
+                        combined_override,
                     )?;
                 }
             } else if interactive {

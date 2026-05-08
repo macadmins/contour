@@ -599,9 +599,17 @@ pub enum Commands {
 
         #[arg(
             long,
-            help = "Bundle every [[profile]] in the recipe into ONE .mobileconfig with N inner payloads (overrides recipe.output.combined)"
+            overrides_with = "no_combined",
+            help = "Force combined emission: bundle every [[profile]] into ONE .mobileconfig (overrides recipe.output.combined)"
         )]
         combined: bool,
+
+        #[arg(
+            long = "no-combined",
+            overrides_with = "combined",
+            help = "Force separate emission: one .mobileconfig per [[profile]] (overrides recipe.output.combined)"
+        )]
+        no_combined: bool,
     },
 
     #[command(about = "Work with Declarative Device Management (DDM) declarations")]
