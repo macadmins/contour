@@ -1146,9 +1146,11 @@ pub enum LibraryAction {
         #[arg(value_name = "INPUT", num_args = 1..)]
         inputs: Vec<String>,
 
-        /// Library root (the `recipes/` subdirectory is created if missing)
+        /// Library root (the `recipes/` subdirectory is created if
+        /// missing). Falls back to `defaults.library_path` from
+        /// `.contour/config.toml` when omitted.
         #[arg(long, value_name = "DIR")]
-        into: String,
+        into: Option<String>,
 
         /// Override the derived recipe name (default: snake-cased input file stem)
         #[arg(long, value_name = "NAME")]
@@ -1182,9 +1184,11 @@ pub enum LibraryAction {
                       contour profile library normalize ./contour-presets --style nested"
     )]
     Normalize {
-        /// Library root (must contain `ddm/` and/or `recipes/`)
+        /// Library root (must contain `ddm/` and/or `recipes/`).
+        /// Falls back to `defaults.library_path` from
+        /// `.contour/config.toml` when omitted.
         #[arg(value_name = "PATH")]
-        path: String,
+        path: Option<String>,
 
         /// Indentation style: `flat` (no indent) or `nested` (2-space per dot-depth)
         #[arg(long, value_name = "STYLE", default_value = "nested")]
@@ -1210,9 +1214,11 @@ pub enum LibraryAction {
                       contour profile library validate ./contour-presets --json"
     )]
     Validate {
-        /// Library root (must contain `ddm/` and/or `recipes/`)
+        /// Library root (must contain `ddm/` and/or `recipes/`).
+        /// Falls back to `defaults.library_path` from
+        /// `.contour/config.toml` when omitted.
         #[arg(value_name = "PATH")]
-        path: String,
+        path: Option<String>,
     },
 
     #[command(

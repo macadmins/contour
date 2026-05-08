@@ -271,7 +271,14 @@ impl std::fmt::Display for ComposeError {
                  them from the predicate."
             ),
             Self::InvalidOrg { domain } => {
-                write!(f, "invalid organization domain '{domain}'")
+                write!(
+                    f,
+                    "invalid organization domain '{domain}' — DDM declaration identifiers \
+                     must be reverse-DNS (lowercase a-z 0-9 with at least one `.`). \
+                     Examples: `com.acme`, `io.macadmins`. The placeholder \
+                     `com.example` is also rejected because it produces colliding \
+                     identifiers across orgs."
+                )
             }
         }
     }

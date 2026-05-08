@@ -18,6 +18,7 @@ pub fn run(
     server_url: Option<String>,
     platforms: Option<Vec<String>>,
     deterministic_uuids: Option<bool>,
+    library_path: Option<String>,
     yes: bool,
     json: bool,
 ) -> Result<()> {
@@ -43,6 +44,7 @@ pub fn run(
             server_url,
             platforms,
             deterministic_uuids,
+            library_path,
             json,
         )
     } else {
@@ -54,6 +56,7 @@ pub fn run(
             server_url,
             platforms,
             deterministic_uuids,
+            library_path,
             json,
         )
     }
@@ -67,6 +70,7 @@ fn run_noninteractive(
     server_url: Option<String>,
     platforms: Option<Vec<String>>,
     deterministic_uuids: Option<bool>,
+    library_path: Option<String>,
     json: bool,
 ) -> Result<()> {
     // For non-interactive, name and domain must come from flags or existing config
@@ -94,6 +98,18 @@ fn run_noninteractive(
         })
         .or(Some(true)); // Default to true for non-interactive
 
+    let lib_path = library_path
+        .as_deref()
+        .map(|s| s.to_string())
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|c| c.defaults.library_path.as_ref())
+                .map(|p| p.display().to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from);
+
     let config = ContourConfig {
         organization: OrgConfig {
             name: org_name,
@@ -104,6 +120,7 @@ fn run_noninteractive(
             platforms: plat,
             deterministic_uuids: det_uuids,
             manifests_path: None,
+            library_path: lib_path,
         },
     };
 
@@ -121,6 +138,7 @@ fn run_interactive(
     cli_server_url: Option<String>,
     cli_platforms: Option<Vec<String>>,
     cli_deterministic_uuids: Option<bool>,
+    cli_library_path: Option<String>,
     json: bool,
 ) -> Result<()> {
     if !json {
@@ -237,6 +255,36 @@ fn run_interactive(
         Some(answer)
     };
 
+    // Library path (preset/recipe directory). Optional. When set,
+    // commands like `library import --into`, `library validate`,
+    // `library normalize`, and `--recipe-path` resolution fall back
+    // to this when no flag is given.
+    let lib_path: Option<std::path::PathBuf> = if let Some(p) = cli_library_path {
+        if p.trim().is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(p))
+        }
+    } else {
+        let default = existing
+            .as_ref()
+            .and_then(|c| c.defaults.library_path.as_ref())
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "./contour-presets".to_string());
+        let answer = inquire::Text::new("Preset/recipe library path (leave empty to skip):")
+            .with_default(&default)
+            .with_help_message(
+                "Default --recipe-path / --into / library validate target. Run `contour profile library new <PATH>` to scaffold one if it doesn't exist yet.",
+            )
+            .prompt()
+            .context("Cancelled")?;
+        if answer.trim().is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(answer))
+        }
+    };
+
     let config = ContourConfig {
         organization: OrgConfig {
             name: org_name,
@@ -247,6 +295,7 @@ fn run_interactive(
             platforms: plat,
             deterministic_uuids: det_uuids,
             manifests_path: None,
+            library_path: lib_path,
         },
     };
 

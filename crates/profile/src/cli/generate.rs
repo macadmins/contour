@@ -16,6 +16,33 @@ use plist::{Dictionary, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Resolve a `--recipe-path` value with config fallback.
+///
+/// Lookup order:
+/// 1. Explicit CLI flag value (returned as-is)
+/// 2. `defaults.library_path` from `.contour/config.toml`
+///    - When the path is a directory containing a `recipes/`
+///      subdirectory, the subdirectory is used (so `library new`
+///      output works directly as a `--recipe-path`)
+///    - Otherwise the path itself is used (operator may have pointed
+///      `library_path` at a flat recipes directory already)
+/// 3. `None` — `load_recipe` falls through to `~/.contour/recipes/`
+///    and embedded recipes
+pub fn resolve_recipe_path(cli_value: Option<&str>) -> Option<String> {
+    if let Some(v) = cli_value
+        && !v.is_empty()
+    {
+        return Some(v.to_string());
+    }
+    let lib = contour_core::config::resolve_library_path(None)?;
+    let recipes_subdir = lib.join("recipes");
+    if recipes_subdir.is_dir() {
+        Some(recipes_subdir.display().to_string())
+    } else {
+        Some(lib.display().to_string())
+    }
+}
+
 /// Load schema registry — embedded base, optionally merged with external schemas.
 pub fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
     let mut registry = SchemaRegistry::embedded()?;
@@ -588,12 +615,20 @@ pub fn handle_generate_recipe(
     cli_combined: Option<bool>,
 ) -> Result<()> {
     let var_map = parse_vars(vars)?;
+    // Resolve `--recipe-path`: explicit CLI flag wins, otherwise fall
+    // back to `defaults.library_path` from `.contour/config.toml`
+    // (with `recipes/` appended if the bare path doesn't already
+    // point at a recipes dir).
+    let resolved_recipe_path = resolve_recipe_path(recipe_path);
+    let resolved_recipe_path_str = resolved_recipe_path.as_deref();
+
     // Smart resolution: `recipe_name` may be either a bare name or a
     // direct path to a .toml file. The latter sidesteps the
     // `--recipe-path` round-trip when an operator already has the
     // file path in hand. Downstream code reads the canonical name
     // from `r.recipe.name`, so the resolved-name string is dropped.
-    let (_resolved_name, mut r) = recipe::loader::load_recipe_smart(recipe_name, recipe_path)?;
+    let (_resolved_name, mut r) =
+        recipe::loader::load_recipe_smart(recipe_name, resolved_recipe_path_str)?;
     // Combined emission precedence: --combined / --no-combined override
     // wins, otherwise fall back to the recipe TOML's
     // `[recipe.output] combined` (default false).
@@ -894,6 +929,8 @@ pub fn handle_generate_recipe(
 
 /// List available recipes.
 pub fn handle_list_recipes(recipe_path: Option<&str>, output_mode: OutputMode) -> Result<()> {
+    let resolved = resolve_recipe_path(recipe_path);
+    let recipe_path = resolved.as_deref();
     let recipes = recipe::loader::list_recipes(recipe_path);
 
     if output_mode == OutputMode::Json {
