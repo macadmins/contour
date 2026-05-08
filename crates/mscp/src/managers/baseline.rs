@@ -11,7 +11,6 @@ use crate::models::baseline_reference::BaselineReference;
 pub struct BaselineInfo {
     pub name: String,
     pub platform: String,
-    #[allow(dead_code, reason = "reserved for future use")]
     pub path: PathBuf,
     pub generated_at: Option<DateTime<Utc>>,
     pub profile_count: usize,

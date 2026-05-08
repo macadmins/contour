@@ -36,7 +36,7 @@ pub enum ContainerRuntime {
 pub const DEFAULT_MSCP_CONTAINER_IMAGE: &str = "ghcr.io/brodjieski/mscp_2.0:latest";
 
 /// Generate command - wrapper mode (calls mSCP then processes)
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "legacy signature shaped by CLI flags; refactoring is out of scope for the glob feature"
 )]

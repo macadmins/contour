@@ -16,7 +16,6 @@ use super::types::{
 /// Checks that:
 /// 1. All referenced UUIDs exist in some payload
 /// 2. Referenced payloads have the correct type for the reference field
-#[allow(dead_code, reason = "reserved for future use")]
 pub fn validate_cross_references(
     profiles: &[(impl AsRef<Path>, ConfigurationProfile)],
 ) -> LinkValidationResult {

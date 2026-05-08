@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Fleet labels file wrapper (used when labels need to be wrapped in a key)
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub struct FleetLabelsFile {
     pub labels: Vec<LabelSpec>,
 }

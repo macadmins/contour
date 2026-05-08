@@ -14,6 +14,7 @@ pub struct RollbackFilter {
     /// Restore PayloadUUID values only — never overwrite payload content.
     /// Almost always desired; the only common reason to disable is when
     /// the user wants a full revert.
+    #[allow(dead_code, reason = "reserved for future use")]
     pub uuids_only: bool,
     /// Restore only payloads whose `PayloadType` is in this list.
     /// Empty = no type filter.

@@ -15,4 +15,5 @@
 
 pub mod restorer;
 
+#[allow(unused_imports, reason = "reserved for future use")]
 pub use restorer::{RollbackFilter, RollbackOptions, RollbackResult, restore_uuids};

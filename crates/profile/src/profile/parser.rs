@@ -194,9 +194,9 @@ pub enum PlistFormat {
     Binary,
 }
 
-#[allow(dead_code, reason = "reserved for future use")]
 impl PlistFormat {
     /// Detect plist format from file
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn detect(path: &str) -> Result<Self> {
         let mut file = File::open(path).with_context(|| format!("Failed to open file: {path}"))?;
 
@@ -637,10 +637,7 @@ pub fn read_pasteboard_bytes() -> Result<Vec<u8>> {
 
 /// Read a configuration profile from the macOS pasteboard (clipboard).
 /// Shells out to `pbpaste` and parses the result as plist.
-#[allow(
-    dead_code,
-    reason = "utility for interactive macOS clipboard parsing, not yet wired into CLI"
-)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub fn parse_profile_from_pasteboard() -> Result<ConfigurationProfile> {
     if cfg!(not(target_os = "macos")) {
         anyhow::bail!("Pasteboard access requires macOS (uses `pbpaste` command)");
