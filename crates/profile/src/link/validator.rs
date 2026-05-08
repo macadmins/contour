@@ -1,6 +1,6 @@
 //! Validation of cross-references between profiles.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::profile::ConfigurationProfile;
@@ -30,7 +30,7 @@ pub fn validate_references(
     referenceables: &[ReferenceablePayload],
 ) -> LinkValidationResult {
     // Build lookup for available payloads
-    let available: HashMap<&str, &ReferenceablePayload> = referenceables
+    let available: BTreeMap<&str, &ReferenceablePayload> = referenceables
         .iter()
         .map(|r| (r.payload_uuid.as_str(), r))
         .collect();
@@ -69,7 +69,7 @@ pub fn validate_references(
     }
 
     // Check for duplicate UUIDs across profiles
-    let mut uuid_sources: HashMap<&str, Vec<&Path>> = HashMap::new();
+    let mut uuid_sources: BTreeMap<&str, Vec<&Path>> = BTreeMap::new();
     for refable in referenceables {
         uuid_sources
             .entry(refable.payload_uuid.as_str())
@@ -168,7 +168,7 @@ mod tests {
         payload_type: &str,
         uuid: &str,
         identifier: &str,
-        content: HashMap<String, plist::Value>,
+        content: BTreeMap<String, plist::Value>,
     ) -> PayloadContent {
         PayloadContent {
             payload_type: payload_type.to_string(),
@@ -186,11 +186,11 @@ mod tests {
             "com.apple.security.root",
             "CERT-UUID-123",
             "com.test.cert",
-            HashMap::new(),
+            BTreeMap::new(),
         );
 
         // Create a WiFi payload that references the certificate
-        let mut wifi_content = HashMap::new();
+        let mut wifi_content = BTreeMap::new();
         wifi_content.insert(
             "PayloadCertificateAnchorUUID".to_string(),
             plist::Value::Array(vec![plist::Value::String("CERT-UUID-123".to_string())]),
@@ -209,7 +209,7 @@ mod tests {
             payload_uuid: "PROFILE-UUID".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![cert_payload, wifi_payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let profiles = vec![(PathBuf::from("test.mobileconfig"), profile)];
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn test_missing_reference() {
         // Create a WiFi payload that references a non-existent certificate
-        let mut wifi_content = HashMap::new();
+        let mut wifi_content = BTreeMap::new();
         wifi_content.insert(
             "PayloadCertificateAnchorUUID".to_string(),
             plist::Value::Array(vec![plist::Value::String("MISSING-UUID".to_string())]),
@@ -241,7 +241,7 @@ mod tests {
             payload_uuid: "PROFILE-UUID".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![wifi_payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let profiles = vec![(PathBuf::from("test.mobileconfig"), profile)];
@@ -262,11 +262,11 @@ mod tests {
             "com.apple.security.scep",
             "SCEP-UUID",
             "com.test.scep",
-            HashMap::new(),
+            BTreeMap::new(),
         );
 
         // Create a WiFi payload that tries to use SCEP as a CA anchor (wrong type)
-        let mut wifi_content = HashMap::new();
+        let mut wifi_content = BTreeMap::new();
         wifi_content.insert(
             "PayloadCertificateAnchorUUID".to_string(),
             plist::Value::Array(vec![plist::Value::String("SCEP-UUID".to_string())]),
@@ -285,7 +285,7 @@ mod tests {
             payload_uuid: "PROFILE-UUID".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![scep_payload, wifi_payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let profiles = vec![(PathBuf::from("test.mobileconfig"), profile)];

@@ -271,13 +271,13 @@ pub fn merge_profiles_v2(
 mod tests {
     use super::*;
     use crate::profile::PayloadContent;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     fn create_test_payload(
         payload_type: &str,
         uuid: &str,
         identifier: &str,
-        content: HashMap<String, plist::Value>,
+        content: BTreeMap<String, plist::Value>,
     ) -> PayloadContent {
         PayloadContent {
             payload_type: payload_type.to_string(),
@@ -295,11 +295,11 @@ mod tests {
             "com.apple.security.root",
             "OLD-CERT-UUID",
             "com.test.cert",
-            HashMap::new(),
+            BTreeMap::new(),
         );
 
         // Create a WiFi payload that references the certificate
-        let mut wifi_content = HashMap::new();
+        let mut wifi_content = BTreeMap::new();
         wifi_content.insert(
             "PayloadCertificateAnchorUUID".to_string(),
             plist::Value::Array(vec![plist::Value::String("OLD-CERT-UUID".to_string())]),
@@ -318,7 +318,7 @@ mod tests {
             payload_uuid: "OLD-PROFILE-UUID".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![cert_payload, wifi_payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let profiles = vec![(PathBuf::from("test.mobileconfig"), profile)];
@@ -370,7 +370,7 @@ mod tests {
             "com.apple.security.root",
             "OLD-UUID",
             "com.test.cert",
-            HashMap::new(),
+            BTreeMap::new(),
         );
 
         let profile = ConfigurationProfile {
@@ -380,7 +380,7 @@ mod tests {
             payload_uuid: "OLD-PROFILE-UUID".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![cert_payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let profiles1 = vec![(PathBuf::from("test.mobileconfig"), profile.clone())];

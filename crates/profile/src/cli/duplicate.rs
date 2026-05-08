@@ -320,7 +320,7 @@ fn truncate_uuid(uuid: &str) -> String {
 mod tests {
     use super::*;
     use crate::profile::{ConfigurationProfile, PayloadContent};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use tempfile::TempDir;
 
     fn create_test_profile() -> ConfigurationProfile {
@@ -335,9 +335,9 @@ mod tests {
                 payload_version: 1,
                 payload_identifier: "com.example.santa-configuration.santa".to_string(),
                 payload_uuid: "E08BF479-AAAA-BBBB-CCCC-DDDDEEEEEEEE".to_string(),
-                content: HashMap::new(),
+                content: BTreeMap::new(),
             }],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         }
     }
 

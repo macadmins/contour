@@ -643,11 +643,11 @@ fn resolve_ancestor_path(field_name: &str, manifest: &PayloadManifest) -> Vec<St
 
 /// Walk into a plist payload along a key path.
 ///
-/// The root is a `HashMap<String, plist::Value>` (PayloadContent.content).
+/// The root is a `BTreeMap<String, plist::Value>` (PayloadContent.content).
 /// Nested levels are `plist::Value::Dictionary`. Returns the innermost
 /// dictionary if every key resolves, or `None` if any key is absent.
 fn walk_plist_path<'a>(
-    root: &'a std::collections::HashMap<String, plist::Value>,
+    root: &'a std::collections::BTreeMap<String, plist::Value>,
     path: &[String],
 ) -> Option<&'a plist::Dictionary> {
     let (first, rest) = path.split_first()?;
@@ -768,11 +768,11 @@ fn is_standard_payload_key(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
     fn create_test_payload(
         payload_type: &str,
-        mut content: HashMap<String, plist::Value>,
+        mut content: BTreeMap<String, plist::Value>,
     ) -> PayloadContent {
         content.insert(
             "PayloadDisplayName".to_string(),
@@ -963,7 +963,7 @@ mod tests {
         let registry = registry_from_manifest(manifest);
         let validator = SchemaValidator::new(&registry);
 
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert("Tilesize".to_string(), plist::Value::Integer(48.into()));
         let payload = create_test_payload("com.apple.dock", content);
         let profile = ConfigurationProfile {
@@ -973,7 +973,7 @@ mod tests {
             payload_uuid: "TEST".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let result = validator.validate(&profile);
@@ -995,7 +995,7 @@ mod tests {
         let registry = registry_from_manifest(manifest);
         let validator = SchemaValidator::new(&registry);
 
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert("AllowMailDrop".to_string(), plist::Value::Boolean(true));
         let payload = create_test_payload("com.apple.airplay", content);
         let profile = ConfigurationProfile {
@@ -1005,7 +1005,7 @@ mod tests {
             payload_uuid: "TEST".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let result = validator.validate(&profile);
@@ -1030,7 +1030,7 @@ mod tests {
         let registry = registry_from_manifest(manifest);
         let validator = SchemaValidator::with_options(&registry, ValidationOptions::strict());
 
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert(
             "VendorCustomField".to_string(),
             plist::Value::String("value".to_string()),
@@ -1043,7 +1043,7 @@ mod tests {
             payload_uuid: "TEST".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let result = validator.validate(&profile);
@@ -1068,7 +1068,7 @@ mod tests {
         let registry = registry_from_manifest(manifest);
         let validator = SchemaValidator::new(&registry);
 
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert(
             "VendorCustomField".to_string(),
             plist::Value::String("value".to_string()),
@@ -1081,7 +1081,7 @@ mod tests {
             payload_uuid: "TEST".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let result = validator.validate(&profile);
@@ -1219,7 +1219,7 @@ mod tests {
                     .map(|(k, v)| (k.to_string(), v))
                     .collect(),
             }],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         }
     }
 
@@ -1360,7 +1360,7 @@ mod tests {
         let mut inner = plist::Dictionary::new();
         inner.insert("Regex".to_string(), plist::Value::String(".*".to_string()));
 
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert("CustomRegex".to_string(), plist::Value::Dictionary(inner));
 
         let result = walk_plist_path(&content, &["CustomRegex".to_string()]);
@@ -1370,7 +1370,7 @@ mod tests {
 
     #[test]
     fn test_walk_plist_path_absent() {
-        let content: HashMap<String, plist::Value> = HashMap::new();
+        let content: BTreeMap<String, plist::Value> = BTreeMap::new();
         let result = walk_plist_path(&content, &["CustomRegex".to_string()]);
         assert!(result.is_none());
     }

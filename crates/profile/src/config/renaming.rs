@@ -135,7 +135,7 @@ mod tests {
     use super::*;
     use crate::config::{OrganizationConfig, OutputConfig, RenamingConfig, UuidConfig};
     use crate::profile::PayloadContent;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     fn create_test_config(scheme: &str, template: &str) -> ProfileConfig {
         ProfileConfig {
@@ -166,9 +166,9 @@ mod tests {
                 payload_version: 1,
                 payload_identifier: "test.content".to_string(),
                 payload_uuid: "87654321-4321-4321-4321-210987654321".to_string(),
-                content: HashMap::new(),
+                content: BTreeMap::new(),
             }],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         }
     }
 

@@ -142,9 +142,10 @@ without re-parsing potentially-empty `failure_categories[]`.
 | `SOP_FLEET_MIGRATE` | ✅ Migrated (numbered playbook) | `sop-fleet-migrate.md`. **Different shape** from procedural: numbered playbook with manual diff-checkpoints between steps. Validated against fleetctl v4.84.2 `it-and-security` scaffold + `yaml-files.md`. Canonical v4.84+ form is `paths:` globs; per-file `path:` + `labels_include_*` is the targeted alternative |
 | `SOP_CI` | ✅ Migrated (hybrid) | `sop-ci.md`. Hybrid: `configure_ci` PROCEDURE for the `gh variable set` / `gh secret set` bootstrap + workflow-recipe reference for the YAML patterns. Procedural where contracts are sharp; recipes where they're configuration |
 | `SOP_SCHEMA_DATA` | ✅ Migrated (hybrid) | `sop-schema-data.md`. Hybrid: data inventory + three-layer versioning reference + `update_schema_data` PROCEDURE for the happy-path refresh from posture. Internal contour-dev SOP |
+| `SOP_PROFILE_CHANGES` | ✅ Migrated (procedural) | `sop-profile-changes.md`. Three procedures (`plan_profile_changes`, `rollback_profile_changes`, `review_bulk_profile_pr`) covering bulk-edit risk: PayloadUUID churn, orphaned cross-refs, plist type-shape errors, ACL scope broadening. Forward-spec for `profile plan` + `profile rollback`. Worked example reproduces the four CodeRabbit findings on the Fleet GitOps PR |
 
-**14/14 SOPs migrated.** Three formats are in active use:
-- **Procedural** (10 SOPs) — single canonical procedure with typed errors
+**15/15 SOPs migrated.** Three formats are in active use:
+- **Procedural** (11 SOPs) — single canonical procedure with typed errors
 - **Cookbook / decision tree** (1: SOP_SANTA) — fan-out command surface
 - **Numbered playbook** (1: SOP_FLEET_MIGRATE) — one-time, human-driven
 - **Hybrid** (2: SOP_CI, SOP_SCHEMA_DATA) — procedure for the bootstrap, reference for the rest

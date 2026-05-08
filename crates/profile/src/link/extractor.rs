@@ -1,6 +1,6 @@
 //! Extract UUID references from configuration profiles.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::profile::{ConfigurationProfile, PayloadContent};
@@ -110,7 +110,7 @@ fn extract_field_references(
 
 /// Navigate into nested dictionaries to find a value.
 fn navigate_nested<'a>(
-    content: &'a HashMap<String, plist::Value>,
+    content: &'a BTreeMap<String, plist::Value>,
     path: &[&str],
     field_name: &str,
 ) -> Option<&'a plist::Value> {
@@ -134,12 +134,8 @@ fn navigate_nested<'a>(
 }
 
 /// Navigate into nested dictionaries and return a mutable reference.
-#[allow(
-    clippy::implicit_hasher,
-    reason = "generic hasher not needed for this use case"
-)]
 pub fn navigate_nested_mut<'a>(
-    content: &'a mut HashMap<String, plist::Value>,
+    content: &'a mut BTreeMap<String, plist::Value>,
     path: &[&str],
     field_name: &str,
 ) -> Option<&'a mut plist::Value> {
@@ -208,7 +204,7 @@ mod tests {
         payload_type: &str,
         uuid: &str,
         identifier: &str,
-        content: HashMap<String, plist::Value>,
+        content: BTreeMap<String, plist::Value>,
     ) -> PayloadContent {
         PayloadContent {
             payload_type: payload_type.to_string(),
@@ -221,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_extract_direct_reference() {
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert(
             "PayloadCertificateUUID".to_string(),
             plist::Value::String("CERT-UUID-123".to_string()),
@@ -241,7 +237,7 @@ mod tests {
             payload_uuid: "PROFILE-UUID".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let profiles = vec![(std::path::PathBuf::from("test.mobileconfig"), profile)];
@@ -264,7 +260,7 @@ mod tests {
             ]),
         );
 
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert(
             "EAPClientConfiguration".to_string(),
             plist::Value::Dictionary(eap_config),
@@ -284,7 +280,7 @@ mod tests {
             payload_uuid: "PROFILE-UUID".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let profiles = vec![(std::path::PathBuf::from("test.mobileconfig"), profile)];
@@ -309,21 +305,21 @@ mod tests {
             "com.apple.security.root",
             "CERT-UUID",
             "com.test.cert",
-            HashMap::new(),
+            BTreeMap::new(),
         );
 
         let scep_payload = create_test_payload(
             "com.apple.security.scep",
             "SCEP-UUID",
             "com.test.scep",
-            HashMap::new(),
+            BTreeMap::new(),
         );
 
         let wifi_payload = create_test_payload(
             "com.apple.wifi.managed",
             "WIFI-UUID",
             "com.test.wifi",
-            HashMap::new(),
+            BTreeMap::new(),
         );
 
         let profile = ConfigurationProfile {
@@ -333,7 +329,7 @@ mod tests {
             payload_uuid: "PROFILE-UUID".to_string(),
             payload_display_name: "Test".to_string(),
             payload_content: vec![cert_payload, scep_payload, wifi_payload],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         };
 
         let profiles = vec![(std::path::PathBuf::from("test.mobileconfig"), profile)];

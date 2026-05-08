@@ -11,7 +11,7 @@ pub mod validator;
 pub use parser::PlistFormat;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Deserialize PayloadVersion accepting both `<integer>` and `<real>` plist types.
@@ -77,7 +77,7 @@ pub struct ConfigurationProfile {
     /// Additional fields including PayloadDescription, PayloadOrganization, etc.
     /// Note: plist crate has issues with Option<String> + flatten, so these are captured here
     #[serde(flatten)]
-    pub additional_fields: HashMap<String, plist::Value>,
+    pub additional_fields: BTreeMap<String, plist::Value>,
 }
 
 impl ConfigurationProfile {
@@ -195,7 +195,7 @@ pub struct PayloadContent {
 
     /// Payload-specific configuration fields.
     #[serde(flatten)]
-    pub content: HashMap<String, plist::Value>,
+    pub content: BTreeMap<String, plist::Value>,
 }
 
 impl PayloadContent {
