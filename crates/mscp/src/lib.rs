@@ -6,6 +6,7 @@
 //! - Managing profile constraints and ODV overrides
 
 pub mod api;
+pub mod baseline_to_recipe;
 pub mod cli;
 pub mod config;
 pub mod deduplicator;

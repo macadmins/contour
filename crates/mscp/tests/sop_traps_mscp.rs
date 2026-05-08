@@ -307,3 +307,126 @@ fn trap_18_mscp_schema_rules_expose_has_odv_field() {
         "has_odv MUST be a boolean (procedural SOP filters on it)"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 19: `mscp recipe --baseline X --mscp-repo Y` aggregates every rule's
+// mobileconfig payload by Apple payload type into one recipe TOML. Catches:
+//   - aggregator skipping rules with `mobileconfig: false`
+//   - separate payload types collapsing into a single profile
+//   - field collision policy regressing (must warn + last-writer-wins)
+//   - output not honoring `-o` / falling back to a hardcoded path
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_19_mscp_recipe_aggregates_baseline_rules() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules_dir = tmp.path().join("rules");
+    fs::create_dir_all(&rules_dir).unwrap();
+
+    // Two rules targeting the firewall payload (collision on
+    // EnableFirewall + extra key) plus one rule on a separate payload.
+    fs::write(
+        rules_dir.join("fw_enable.yaml"),
+        r#"id: fw_enable
+title: Enable firewall
+discussion: ""
+tags:
+  - tinybase
+mobileconfig: true
+mobileconfig_info:
+  com.apple.security.firewall:
+    EnableFirewall: false
+"#,
+    )
+    .unwrap();
+    fs::write(
+        rules_dir.join("fw_stealth.yaml"),
+        r#"id: fw_stealth
+title: Stealth mode
+discussion: ""
+tags:
+  - tinybase
+mobileconfig: true
+mobileconfig_info:
+  com.apple.security.firewall:
+    EnableFirewall: true
+    EnableStealthMode: true
+"#,
+    )
+    .unwrap();
+    fs::write(
+        rules_dir.join("ss_idle.yaml"),
+        r#"id: ss_idle
+title: Screensaver idle
+discussion: ""
+tags:
+  - tinybase
+mobileconfig: true
+mobileconfig_info:
+  com.apple.screensaver:
+    idleTime: 300
+"#,
+    )
+    .unwrap();
+    // A non-mobileconfig rule that must be skipped.
+    fs::write(
+        rules_dir.join("script_only.yaml"),
+        r#"id: script_only
+title: Script only
+discussion: ""
+tags:
+  - tinybase
+mobileconfig: false
+"#,
+    )
+    .unwrap();
+
+    let recipe_out = tmp.path().join("tinybase.toml");
+    let output = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "recipe",
+            "--mscp-repo",
+            tmp.path().to_str().unwrap(),
+            "--baseline",
+            "tinybase",
+            "-o",
+            recipe_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "mscp recipe must succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = fs::read_to_string(&recipe_out).expect("recipe TOML must exist at -o path");
+
+    // Two distinct payload types ⇒ two profile blocks.
+    assert_eq!(
+        body.matches("[[profile]]").count(),
+        2,
+        "expected one profile per payload type; got: {body}"
+    );
+    assert!(body.contains(r#"payload_type = "com.apple.security.firewall""#));
+    assert!(body.contains(r#"payload_type = "com.apple.screensaver""#));
+
+    // Last-writer-wins: fw_stealth overwrites fw_enable's
+    // EnableFirewall value.
+    assert!(
+        body.contains("EnableFirewall = true"),
+        "EnableFirewall must take the later writer's value; got: {body}"
+    );
+    assert!(body.contains("EnableStealthMode = true"));
+    assert!(body.contains("idleTime = 300"));
+
+    // Collision warning surfaces on stderr — operators rely on this
+    // for compliance review.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("EnableFirewall"),
+        "stderr must surface the collision; got: {stderr}"
+    );
+}
