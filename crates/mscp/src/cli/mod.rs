@@ -696,6 +696,33 @@ pub enum Commands {
         #[command(subcommand)]
         action: SchemaAction,
     },
+
+    /// Aggregate a baseline's mobileconfig rules into one recipe TOML
+    ///
+    /// Produces a contour recipe with one `[[profile]]` block per
+    /// payload type (e.g. firewall, screensaver) and every rule's
+    /// keys merged in. Drop the result into a recipe library and
+    /// render via `contour profile generate --recipe …`.
+    ///
+    /// Reads rule YAML directly from the mSCP repository — does NOT
+    /// run the mSCP Python build script.
+    Recipe {
+        /// Path to the mSCP repository (the directory that contains `rules/`).
+        #[arg(short = 'r', long)]
+        mscp_repo: PathBuf,
+
+        /// Baseline name (e.g., `cis_lvl1`, `800-53r5_high`).
+        #[arg(short, long)]
+        baseline: String,
+
+        /// Output recipe TOML path (defaults to `<baseline>.toml`).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Organization vendor string written to the recipe header.
+        #[arg(long)]
+        org: Option<String>,
+    },
 }
 
 /// Subcommands for the schema query command

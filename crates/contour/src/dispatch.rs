@@ -1355,6 +1355,7 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
             display_name,
             deterministic_uuids,
             format,
+            full_bundle,
             dry_run,
             fragment,
         } => {
@@ -1367,6 +1368,7 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
                 display_name.as_deref(),
                 deterministic_uuids,
                 format,
+                full_bundle,
                 dry_run,
                 fragment,
                 output_mode,
@@ -2480,7 +2482,77 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 mscp::cli::generate::test_container(image.as_deref())?;
             }
         },
+
+        Commands::Recipe {
+            mscp_repo,
+            baseline,
+            output,
+            org,
+        } => {
+            dispatch_mscp_recipe(&mscp_repo, &baseline, output.as_deref(), org.as_deref())?;
+        }
     }
+
+    Ok(())
+}
+
+/// Aggregate a baseline's mobileconfig rules into one recipe TOML.
+/// Reads rule YAML directly from the mSCP repo — no Python build.
+fn dispatch_mscp_recipe(
+    mscp_repo: &std::path::Path,
+    baseline: &str,
+    output: Option<&std::path::Path>,
+    org: Option<&str>,
+) -> Result<()> {
+    use anyhow::Context;
+    use colored::Colorize;
+
+    let extractor = mscp::extractors::RuleExtractor::new(mscp_repo);
+    let rules = extractor
+        .extract_rules_for_baseline(baseline)
+        .with_context(|| format!("loading baseline '{baseline}' from {}", mscp_repo.display()))?;
+
+    let resolved_org = match org {
+        Some(s) => Some(s.to_string()),
+        None => contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain),
+    };
+
+    let (body, warnings) =
+        mscp::baseline_to_recipe::baseline_to_recipe(baseline, resolved_org.as_deref(), &rules)?;
+
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+
+    let output_path = output
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{baseline}.toml")));
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&output_path, &body)
+        .with_context(|| format!("writing recipe to {}", output_path.display()))?;
+
+    let profile_count = body.matches("[[profile]]").count();
+    let mc_rules = rules.iter().filter(|r| r.mobileconfig).count();
+    println!(
+        "{} Aggregated {profile_count} profile(s) from {mc_rules} mobileconfig rule(s) into {}",
+        "✓".green(),
+        output_path.display()
+    );
+    if !warnings.is_empty() {
+        println!(
+            "{} {} key collision(s) — last writer won; review the warnings above",
+            "!".yellow(),
+            warnings.len()
+        );
+    }
+    println!(
+        "  Render with: contour profile generate --recipe {} --org <YOUR_ORG> -o ./out",
+        output_path.display()
+    );
 
     Ok(())
 }
