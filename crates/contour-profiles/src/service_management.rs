@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_btm_rule_type_from_str_invalid() {
-        assert!("Invalid".parse::<BtmRuleType>().is_err());
+        "Invalid".parse::<BtmRuleType>().unwrap_err();
     }
 
     #[test]
