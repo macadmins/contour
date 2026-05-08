@@ -110,6 +110,16 @@ pub enum NotificationCommands {
         /// Generate Fleet GitOps fragment directory
         #[arg(long)]
         fragment: bool,
+
+        /// Output format. `mobileconfig` (default) writes
+        /// .mobileconfig files. `recipe` writes a single combined
+        /// recipe TOML for the contour library workflow.
+        #[arg(
+            long,
+            value_parser = ["mobileconfig", "recipe"],
+            default_value = "mobileconfig"
+        )]
+        format: String,
     },
 
     /// Validate notification settings

@@ -7,7 +7,9 @@
 //! With --fragment: generates a Fleet fragment directory.
 
 use crate::cli::{OutputMode, print_info, print_kv, print_success, print_warning};
-use crate::pppc::{PppcConfig, PppcPolicy, PppcService, generate_pppc_profile, sanitize_id};
+use crate::pppc::{
+    PppcConfig, PppcPolicy, PppcService, build_pppc_payload, generate_pppc_profile, sanitize_id,
+};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use contour_core::fragment::{
@@ -15,6 +17,7 @@ use contour_core::fragment::{
     ScriptEntries,
 };
 use contour_core::{FleetLayout, resolve_output_dir, sanitize_filename};
+use contour_profiles::{RecipeProfile, write_recipe_toml};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -29,6 +32,7 @@ pub fn run(
     combined: bool,
     dry_run: bool,
     fragment: bool,
+    format: &str,
     output_mode: OutputMode,
 ) -> Result<()> {
     // Delegate to Fleet fragment generation if requested
@@ -41,6 +45,10 @@ pub fn run(
     }
 
     let config = PppcConfig::load(input)?;
+
+    if format == "recipe" {
+        return run_recipe(&config, output, combined, output_mode);
+    }
 
     if output_mode == OutputMode::Human {
         print_kv("Organization", &config.config.org);
@@ -325,6 +333,86 @@ pub fn find_duplicate_bundle_ids(config: &PppcConfig) -> Vec<(String, usize)> {
 
 /// Generate a Fleet fragment directory.
 ///
+/// Emit a combined recipe TOML for the PPPC policy.
+///
+/// `combined = true` collapses every app's TCC entries into ONE
+/// `[[profile]]` block (the typical deployment shape).
+/// `combined = false` produces N `[[profile]]` blocks — one per app.
+fn run_recipe(
+    config: &PppcConfig,
+    output: Option<&Path>,
+    combined: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let policies = config.to_policies();
+    if policies.is_empty() {
+        if output_mode == OutputMode::Human {
+            print_warning("No TCC profiles to generate");
+        }
+        return Ok(());
+    }
+
+    let recipe_name = "pppc".to_string();
+
+    let profiles: Vec<RecipeProfile> = if combined {
+        let payload = build_pppc_payload(&policies);
+        vec![RecipeProfile {
+            filename: "pppc.mobileconfig".to_string(),
+            payload_type: "com.apple.TCC.configuration-profile-policy".to_string(),
+            display_name: "PPPC Profile".to_string(),
+            description: "Privacy preferences for managed applications".to_string(),
+            removal_disallowed: true,
+            fields: payload,
+        }]
+    } else {
+        let mut out = Vec::with_capacity(policies.len());
+        for policy in &policies {
+            let payload = build_pppc_payload(std::slice::from_ref(policy));
+            out.push(RecipeProfile {
+                filename: format!("{}-pppc.mobileconfig", sanitize_filename(&policy.app.name)),
+                payload_type: "com.apple.TCC.configuration-profile-policy".to_string(),
+                display_name: format!("{} PPPC", policy.app.name),
+                description: format!("Privacy preferences for {}", policy.app.name),
+                removal_disallowed: true,
+                fields: payload,
+            });
+        }
+        out
+    };
+
+    let body = write_recipe_toml(
+        &recipe_name,
+        "PPPC (TCC) recipe",
+        Some(&config.config.org),
+        &profiles,
+    )?;
+
+    let output_dir = resolve_output_dir(output, Path::new("."))?;
+    let output_path = output_dir.join(format!("{recipe_name}.toml"));
+    std::fs::write(&output_path, &body)
+        .with_context(|| format!("Failed to write recipe TOML to {}", output_path.display()))?;
+
+    if output_mode == OutputMode::Human {
+        println!();
+        print_success(&format!(
+            "Generated recipe TOML with {} profile(s)",
+            profiles.len()
+        ));
+        print_kv("Recipe", &output_path.display().to_string());
+        print_info(&format!(
+            "Render with: contour profile generate --recipe {} --org <YOUR_ORG> -o ./out",
+            output_path.display()
+        ));
+    } else {
+        println!(
+            r#"{{"format":"recipe","output":{:?},"profile_count":{}}}"#,
+            output_path.display().to_string(),
+            profiles.len()
+        );
+    }
+    Ok(())
+}
+
 /// Produces:
 /// - `<layout.macos_profiles_subdir>/` with mobileconfig files
 /// - `<layout.fleets_dir>/reference-fleet.yml` with profile entries

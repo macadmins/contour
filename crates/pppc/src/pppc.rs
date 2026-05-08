@@ -524,18 +524,11 @@ pub fn sanitize_id(identifier: &str) -> String {
 /// When `identifier_suffix` is provided, it is appended to the profile identifier
 /// to produce unique identifiers for per-app profiles. When `None`, the profile
 /// uses the base `{org}.pppc` identifier (combined mode).
-pub fn generate_pppc_profile(
-    policies: &[PppcPolicy],
-    org: &str,
-    display_name: Option<&str>,
-    identifier_suffix: Option<&str>,
-) -> Result<Vec<u8>> {
+/// Build the inner `com.apple.TCC.configuration-profile-policy`
+/// payload for a set of PPPC policies. Used by both the
+/// mobileconfig generator and the recipe-TOML emitter.
+pub fn build_pppc_payload(policies: &[PppcPolicy]) -> Dictionary {
     use std::collections::HashMap;
-
-    let profile_id = match identifier_suffix {
-        Some(suffix) => format!("{org}.pppc.{suffix}"),
-        None => format!("{org}.pppc"),
-    };
 
     // Group entries by service
     let mut services_map: HashMap<&str, Vec<Value>> = HashMap::new();
@@ -558,9 +551,8 @@ pub fn generate_pppc_profile(
         }
     }
 
-    // Build Services dictionary
+    // Build Services dictionary, sorting keys for deterministic output.
     let mut services_dict = Dictionary::new();
-    // Sort keys for deterministic output
     let mut keys: Vec<_> = services_map.keys().collect();
     keys.sort();
     for key in keys {
@@ -571,7 +563,20 @@ pub fn generate_pppc_profile(
 
     let mut payload_content = Dictionary::new();
     payload_content.insert("Services".to_string(), Value::Dictionary(services_dict));
+    payload_content
+}
 
+pub fn generate_pppc_profile(
+    policies: &[PppcPolicy],
+    org: &str,
+    display_name: Option<&str>,
+    identifier_suffix: Option<&str>,
+) -> Result<Vec<u8>> {
+    let profile_id = match identifier_suffix {
+        Some(suffix) => format!("{org}.pppc.{suffix}"),
+        None => format!("{org}.pppc"),
+    };
+    let payload_content = build_pppc_payload(policies);
     let profile_display_name = display_name.unwrap_or("PPPC Profile");
 
     ProfileBuilder::new(org, &profile_id)

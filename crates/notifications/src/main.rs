@@ -104,12 +104,14 @@ fn main() -> Result<()> {
             combined,
             dry_run,
             fragment,
+            format,
         }) => notifications::cli::generate::run(
             &input,
             output.as_deref(),
             combined,
             dry_run,
             fragment,
+            &format,
             output_mode,
         ),
         Some(NotificationCommands::Validate { input, strict }) => {

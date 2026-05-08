@@ -62,12 +62,14 @@ fn main() -> Result<()> {
             combined,
             dry_run,
             fragment,
+            format,
         }) => pppc::cli::generate::run(
             &input,
             output.as_deref(),
             combined,
             dry_run,
             fragment,
+            &format,
             output_mode,
         ),
 
