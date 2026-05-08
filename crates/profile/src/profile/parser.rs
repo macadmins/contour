@@ -855,7 +855,7 @@ fn extract_xml_from_pkcs7(data: &[u8]) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::profile::PayloadContent;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -905,9 +905,9 @@ mod tests {
                 payload_version: 1,
                 payload_identifier: "com.test.wifi".to_string(),
                 payload_uuid: "87654321-4321-4321-4321-210987654321".to_string(),
-                content: HashMap::new(),
+                content: BTreeMap::new(),
             }],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         }
     }
 
@@ -1314,7 +1314,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_preserves_all_fields() {
-        let mut additional_fields = HashMap::new();
+        let mut additional_fields = BTreeMap::new();
         additional_fields.insert(
             "PayloadDescription".to_string(),
             plist::Value::String("A description".to_string()),
@@ -1324,7 +1324,7 @@ mod tests {
             plist::Value::String("Test Org".to_string()),
         );
 
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert(
             "PayloadDisplayName".to_string(),
             plist::Value::String("Login Window".to_string()),

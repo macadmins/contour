@@ -403,14 +403,14 @@ impl ValidationRules {
 mod tests {
     use super::*;
     use crate::profile::PayloadContent;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
     // ========== Test Fixtures ==========
 
     fn create_test_profile() -> ConfigurationProfile {
-        let mut additional_fields = HashMap::new();
+        let mut additional_fields = BTreeMap::new();
         additional_fields.insert(
             "PayloadDescription".to_string(),
             plist::Value::String("A test profile".to_string()),
@@ -420,7 +420,7 @@ mod tests {
             plist::Value::String("Test Org".to_string()),
         );
 
-        let mut wifi_content = HashMap::new();
+        let mut wifi_content = BTreeMap::new();
         wifi_content.insert(
             "PayloadDisplayName".to_string(),
             plist::Value::String("WiFi".to_string()),

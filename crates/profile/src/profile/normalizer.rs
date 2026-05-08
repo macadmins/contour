@@ -119,4 +119,121 @@ mod tests {
         sanitize_display_name(&mut name);
         assert_eq!(name, "Test Profile");
     }
+
+    /// Byte-stable serialization is the contract that `profile plan`
+    /// relies on: re-running normalize on already-normalized output must
+    /// produce byte-identical XML. If it doesn't, plan can't tell a
+    /// real change from `BTreeMap`/HashMap iteration noise.
+    ///
+    /// This guards the BTreeMap swap on `additional_fields` and `content`.
+    /// Any future field added to ConfigurationProfile or PayloadContent
+    /// that uses HashMap will break this test on the first iteration.
+    #[test]
+    fn normalize_is_byte_deterministic_round_trip() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadIdentifier</key>
+    <string>com.acme.test</string>
+    <key>PayloadUUID</key>
+    <string>11111111-2222-3333-4444-555555555555</string>
+    <key>PayloadDisplayName</key>
+    <string>Test</string>
+    <key>PayloadOrganization</key>
+    <string>Acme</string>
+    <key>PayloadDescription</key>
+    <string>desc</string>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.applicationaccess</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>com.acme.test.access</string>
+            <key>PayloadUUID</key>
+            <string>AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE</string>
+            <key>allowAirDrop</key>
+            <false/>
+            <key>allowAssistant</key>
+            <true/>
+            <key>allowBookstore</key>
+            <true/>
+            <key>allowExplicitContent</key>
+            <false/>
+        </dict>
+    </array>
+</dict>
+</plist>
+"#;
+        let cfg = NormalizerConfig {
+            org_domain: Some("com.acme".to_string()),
+            org_name: Some("Acme".to_string()),
+            naming_convention: NamingConvention::OrgDomainPrefix,
+        };
+
+        // Parse → normalize → serialize → parse → normalize → serialize.
+        // The two serializations must be byte-identical.
+        let mut prof_a: ConfigurationProfile = plist::from_bytes(xml.as_bytes()).expect("parse 1");
+        normalize_profile(&mut prof_a, &cfg).expect("normalize 1");
+        let mut buf_a = Vec::new();
+        plist::to_writer_xml(&mut buf_a, &prof_a).expect("serialize 1");
+
+        let mut prof_b: ConfigurationProfile = plist::from_bytes(&buf_a).expect("parse 2");
+        normalize_profile(&mut prof_b, &cfg).expect("normalize 2");
+        let mut buf_b = Vec::new();
+        plist::to_writer_xml(&mut buf_b, &prof_b).expect("serialize 2");
+
+        assert_eq!(
+            buf_a, buf_b,
+            "normalize must be byte-deterministic: a profile that has \
+                 already been normalized must serialize identically on a \
+                 second pass. If this fails, plan/diff cannot trust round-trip \
+                 stability — usually means a HashMap leaked into a payload \
+                 field somewhere."
+        );
+
+        // Run a third time to catch any second-iteration drift.
+        let mut prof_c: ConfigurationProfile = plist::from_bytes(&buf_b).expect("parse 3");
+        normalize_profile(&mut prof_c, &cfg).expect("normalize 3");
+        let mut buf_c = Vec::new();
+        plist::to_writer_xml(&mut buf_c, &prof_c).expect("serialize 3");
+        assert_eq!(buf_b, buf_c, "third pass must also be stable");
+
+        // Stronger check: assert keys in `additional_fields` and inner
+        // `content` actually come out alphabetically. HashMap-iteration
+        // order is *stable within a process*, so the round-trip check
+        // alone wouldn't catch a regression that keeps HashMap. This
+        // explicit ordering check would.
+        let xml_str = String::from_utf8(buf_a.clone()).expect("utf-8");
+        // PayloadOrganization appears twice in the output (inner content
+        // + outer additional_fields); rfind grabs the outer one.
+        let desc_pos = xml_str
+            .rfind("<key>PayloadDescription</key>")
+            .expect("desc key present");
+        let org_pos = xml_str
+            .rfind("<key>PayloadOrganization</key>")
+            .expect("org key present");
+        assert!(
+            desc_pos < org_pos,
+            "additional_fields must serialize alphabetically — \
+                 expected PayloadDescription before PayloadOrganization. \
+                 If this fails, the field switched back to HashMap."
+        );
+
+        let aa = xml_str.find("<key>allowAirDrop</key>").expect("aa");
+        let ab = xml_str.find("<key>allowAssistant</key>").expect("ab");
+        let ac = xml_str.find("<key>allowBookstore</key>").expect("ac");
+        let ad = xml_str.find("<key>allowExplicitContent</key>").expect("ad");
+        assert!(
+            aa < ab && ab < ac && ac < ad,
+            "PayloadContent[0].content must serialize alphabetically"
+        );
+    }
 }

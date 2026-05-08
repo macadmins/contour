@@ -213,12 +213,12 @@ fn validate_payload_scope(
 mod tests {
     use super::*;
     use crate::profile::PayloadContent;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // ========== Test Fixtures ==========
 
     fn create_valid_profile() -> ConfigurationProfile {
-        let mut additional_fields = HashMap::new();
+        let mut additional_fields = BTreeMap::new();
         additional_fields.insert(
             "PayloadDescription".to_string(),
             plist::Value::String("A test profile".to_string()),
@@ -228,7 +228,7 @@ mod tests {
             plist::Value::String("Test Org".to_string()),
         );
 
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert(
             "PayloadDisplayName".to_string(),
             plist::Value::String("WiFi".to_string()),
@@ -263,9 +263,9 @@ mod tests {
                 payload_version: 1,
                 payload_identifier: "com.test.loginwindow".to_string(),
                 payload_uuid: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE".to_string(),
-                content: HashMap::new(),
+                content: BTreeMap::new(),
             }],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         }
     }
 
@@ -545,7 +545,7 @@ mod tests {
             payload_version: 1,
             payload_identifier: "com.test.vpn".to_string(),
             payload_uuid: "11111111-2222-3333-4444-555555555555".to_string(),
-            content: HashMap::new(),
+            content: BTreeMap::new(),
         });
 
         let result = validate_profile(&profile).unwrap();
@@ -561,7 +561,7 @@ mod tests {
             payload_version: 1,
             payload_identifier: String::new(), // Invalid
             payload_uuid: "11111111-2222-3333-4444-555555555555".to_string(),
-            content: HashMap::new(),
+            content: BTreeMap::new(),
         });
 
         let result = validate_profile(&profile).unwrap();
@@ -584,7 +584,7 @@ mod tests {
             payload_version: 1,
             payload_identifier: String::new(),
             payload_uuid: "invalid-uuid".to_string(),
-            content: HashMap::new(),
+            content: BTreeMap::new(),
         });
 
         let result = validate_profile(&profile).unwrap();
@@ -694,7 +694,7 @@ mod tests {
             payload_version: 1,
             payload_identifier: String::new(),
             payload_uuid: "11111111-2222-3333-4444-555555555555".to_string(),
-            content: HashMap::new(),
+            content: BTreeMap::new(),
         });
 
         let result = validate_profile(&profile).unwrap();
