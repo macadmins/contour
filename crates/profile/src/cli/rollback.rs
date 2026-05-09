@@ -69,10 +69,15 @@ pub fn handle_rollback(baseline: &str, current: &str, opts: &RollbackCliOptions)
             }
         };
 
-        total_uuids += result.uuids_restored;
-        total_refs += result.refs_rewritten;
+        // `result.{uuids_restored,refs_rewritten}` are `usize` counts, not the
+        // UUID values themselves. Bind to local integers to make the data-flow
+        // boundary explicit — only the totals are reported, never the values.
+        let restored_count: usize = result.uuids_restored;
+        let rewritten_count: usize = result.refs_rewritten;
+        total_uuids += restored_count;
+        total_refs += rewritten_count;
 
-        if result.uuids_restored == 0 {
+        if restored_count == 0 {
             println!(
                 "{} {}: nothing to restore (UUIDs already match baseline)",
                 "=".dimmed(),
@@ -80,12 +85,11 @@ pub fn handle_rollback(baseline: &str, current: &str, opts: &RollbackCliOptions)
             );
             continue;
         }
+        // CodeQL[rust/cleartext-logging]: integer counts only, no UUID values.
         println!(
-            "{} {}: restored {} UUID(s), rewrote {} cross-reference(s)",
+            "{} {}: restored {restored_count} UUID(s), rewrote {rewritten_count} cross-reference(s)",
             "~".yellow(),
             pair.label.bold(),
-            result.uuids_restored,
-            result.refs_rewritten,
         );
 
         if !opts.dry_run {
@@ -102,14 +106,13 @@ pub fn handle_rollback(baseline: &str, current: &str, opts: &RollbackCliOptions)
     }
 
     println!();
+    // CodeQL[rust/cleartext-logging]: `total_uuids`, `total_refs`, and `written`
+    // are accumulator `usize` totals — never the UUID values themselves.
     if opts.dry_run {
         println!(
             "{}",
             format!(
-                "Dry run: would restore {} UUID(s), rewrite {} cross-reference(s) across {} file(s).",
-                total_uuids,
-                total_refs,
-                written, // 0 in dry-run mode
+                "Dry run: would restore {total_uuids} UUID(s), rewrite {total_refs} cross-reference(s) across {written} file(s).",
             )
             .yellow()
         );
@@ -118,8 +121,7 @@ pub fn handle_rollback(baseline: &str, current: &str, opts: &RollbackCliOptions)
         println!(
             "{}",
             format!(
-                "Rollback applied: {} UUID(s) restored, {} cross-reference(s) rewritten, {} file(s) written.",
-                total_uuids, total_refs, written
+                "Rollback applied: {total_uuids} UUID(s) restored, {total_refs} cross-reference(s) rewritten, {written} file(s) written.",
             )
             .green()
         );
