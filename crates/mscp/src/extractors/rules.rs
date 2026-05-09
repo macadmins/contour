@@ -39,7 +39,8 @@ impl RuleExtractor {
 
     /// Pin the layout explicitly (skips auto-detection).
     #[must_use]
-    pub fn with_layout(mut self, layout: MscpLayout) -> Self {
+    pub fn with_layout(self, layout: MscpLayout) -> Self {
+        // OnceCell::set takes &self via interior mutability; no `mut` needed.
         let _ = self.layout.set(layout);
         self
     }
