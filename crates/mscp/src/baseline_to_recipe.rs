@@ -162,23 +162,47 @@ pub fn baseline_to_recipe(
         "mSCP {} baseline aggregated into one recipe ({} profile(s), {} ddm bundle(s))",
         baseline_name, stats.profile_count, stats.ddm_count
     );
-    let mut body = write_recipe_toml(baseline_name, &description, org, &profiles)?;
+    let body_with_profiles = write_recipe_toml(baseline_name, &description, org, &profiles)?;
 
-    if mode == OdvMode::Variable && !odv_defaults.is_empty() {
-        let _ = writeln!(body);
+    // Build [odv] block separately so we can splice it directly under
+    // [recipe] (before the first [[profile]]) — operators expect to see
+    // editable defaults at the top of the file, not buried after profiles.
+    let odv_block = if mode == OdvMode::Variable && !odv_defaults.is_empty() {
+        let mut s = String::new();
         let _ = writeln!(
-            body,
+            s,
             "# Operator-editable defaults. Each key matches the parent field name"
         );
         let _ = writeln!(
-            body,
+            s,
             "# of every `\"$ODV\"` placeholder elsewhere in this recipe."
         );
-        let _ = writeln!(body, "[odv]");
+        let _ = writeln!(s, "[odv]");
         for (k, v) in &odv_defaults {
-            let _ = writeln!(body, "{k} = {}", render_toml_scalar(v)?);
+            let _ = writeln!(s, "{k} = {}", render_toml_scalar(v)?);
         }
-    }
+        let _ = writeln!(s);
+        s
+    } else {
+        String::new()
+    };
+
+    let mut body = if odv_block.is_empty() {
+        body_with_profiles
+    } else if let Some(pos) = body_with_profiles.find("\n[[profile]]") {
+        // Splice before the first [[profile]] so [odv] sits between
+        // the [recipe] header and the profiles.
+        let mut spliced = String::with_capacity(body_with_profiles.len() + odv_block.len());
+        spliced.push_str(&body_with_profiles[..=pos]);
+        spliced.push_str(&odv_block);
+        spliced.push_str(&body_with_profiles[pos + 1..]);
+        spliced
+    } else {
+        // No profiles at all (DDM-only recipe) — append after [recipe].
+        let mut s = body_with_profiles;
+        s.push_str(&odv_block);
+        s
+    };
 
     if !ddm_bundles.is_empty() {
         let ddm_section = render_ddm_section(&ddm_bundles)?;
