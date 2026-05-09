@@ -725,16 +725,17 @@ pub enum Commands {
 
         /// How to render mSCP `$ODV` placeholders.
         ///
-        /// `inline` (default): bake the resolved per-baseline default
-        /// directly into the field, e.g. `timeServer = "time.apple.com"`.
-        /// Operators edit the value in place.
+        /// `variable` (default): keep the literal `"$ODV"` placeholder
+        /// and emit the resolved defaults into a top-level `[odv]`
+        /// table directly under `[recipe]`. Operators edit the `[odv]`
+        /// entry once and every reference picks it up. `profile
+        /// generate --recipe` substitutes at load time.
         ///
-        /// `variable`: keep the literal `"$ODV"` placeholder and emit
-        /// the resolved defaults into a top-level `[odv]` table at the
-        /// top of the recipe. Operators edit the `[odv]` entry once
-        /// and every reference picks it up. `profile generate
-        /// --recipe` substitutes at load time.
-        #[arg(long, value_enum, default_value = "inline")]
+        /// `inline`: bake the resolved per-baseline default directly
+        /// into the field, e.g. `timeServer = "time.apple.com"`.
+        /// Useful for ad-hoc / one-shot recipes that don't need an
+        /// editable surface.
+        #[arg(long, value_enum, default_value = "variable")]
         odv_mode: crate::baseline_to_recipe::OdvMode,
 
         /// mSCP repository layout. Defaults to `auto` — sniff the rule

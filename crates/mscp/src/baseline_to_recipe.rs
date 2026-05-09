@@ -35,17 +35,19 @@ use crate::models::MscpRule;
 
 /// Rendering mode for mSCP `$ODV` placeholders.
 ///
-/// `Inline` (default) is the simplest workflow: the resolved
-/// per-baseline default is baked directly into the field. `Variable`
-/// preserves the `"$ODV"` literal in the field and collects defaults
-/// into a top-level `[odv]` table — operators tweak the table entry
-/// once and `profile generate --recipe` resolves at load time.
+/// `Variable` (default) preserves the `"$ODV"` literal in each field and
+/// collects defaults into a top-level `[odv]` table directly under
+/// `[recipe]` — operators edit the table once and every consumer
+/// (mobileconfig payloads, DDM declarations) picks up the override at
+/// `profile generate --recipe` time. `Inline` is the opt-out: the
+/// resolved per-baseline default is baked directly into each field for
+/// ad-hoc / one-shot recipes that don't need an editable surface.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum OdvMode {
-    /// Substitute the resolved default inline (default).
-    #[default]
+    /// Substitute the resolved default inline.
     Inline,
-    /// Keep `"$ODV"` literal, emit defaults in `[odv]`.
+    /// Keep `"$ODV"` literal, emit defaults in `[odv]` (default).
+    #[default]
     Variable,
 }
 
