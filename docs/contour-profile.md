@@ -263,6 +263,106 @@ contour profile diff <FILE1> <FILE2> [flags]
 contour profile diff baseline.mobileconfig updated.mobileconfig
 ```
 
+#### `profile plan`
+
+Classify changes between a baseline profile and a proposed one into a
+*change taxonomy* that maps to MDM behavior on enrolled devices —
+`terraform plan` for `.mobileconfig` files. Exits non-zero on blocking
+tiers so CI can gate destructive PRs.
+
+```
+contour profile plan <BASELINE> <PROPOSED> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<BASELINE>` | Baseline profile (file or directory) | **required** |
+| `<PROPOSED>` | Proposed profile (file or directory) | **required** |
+| `-r, --recursive` | Walk directory pairs recursively | `false` |
+| `--org <DOMAIN>` | Organization reverse domain (used with `--predictable`) | none |
+| `--predictable` | Normalize both sides with v5 UUIDs derived from `(org, identifier)` before classifying. Collapses cosmetic UUID churn so `REPLACE` only fires on real `PayloadIdentifier` renames | `false` |
+| `--format <text\|json>` | Output format | `text` |
+| `--accept-replace` | Treat `REPLACE` as a warning instead of a blocker | `false` |
+| `--accept-scope-change` | Treat `SCOPE_BROADENED` as a warning | `false` |
+| `--fleet-size <N>` | Multiplier for the blast-radius narrative on `REPLACE` | none |
+
+##### Change tiers (the taxonomy)
+
+Each payload-level delta is classified into exactly one tier. The
+order of the table is also the CI severity order — top is benign,
+bottom is fatal.
+
+| Tier | Trigger | Device behavior | Default exit |
+|---|---|---|---|
+| `NOOP` | Canonical-form-only delta after normalize | nothing pushed | 0 |
+| `IN_PLACE_UPDATE` | Same `PayloadUUID`, same `PayloadType`; values changed | in-place update | 0 |
+| `ADD` | Payload exists in proposed but not baseline | new payload installed | 0 |
+| `REMOVE` | Payload exists in baseline but not proposed | payload removed | 0 |
+| `REPLACE` | Same `(PayloadType, PayloadIdentifier)`, different `PayloadUUID` | **remove + reinstall** | non-zero unless `--accept-replace` |
+| `REF_BROKEN` | `PayloadCertificateUUID` / EAP / IKEv2 ref points at a missing UUID | payload installs but does not bind | non-zero (always) |
+| `SCOPE_BROADENED` | TCC `BundleIdentifier`→`BundleIdentifierPrefix`, `PayloadScope` widened, etc. | access surface increased | non-zero unless `--accept-scope-change` |
+| `TYPE_INVALID` | Plist value type does not match the consuming-app schema | silent fallback to default | non-zero (always) |
+| `DEPRECATED` | Newly introduces a deprecated `PayloadType` | will break on a future macOS | non-zero (always) |
+
+```bash
+# Full GitOps PR review against `git` HEAD
+contour profile plan ./baseline ./proposed --recursive --predictable --org com.acme
+
+# Treat the regenerated UUIDs as accepted, just verify nothing else broke
+contour profile plan baseline.mobileconfig proposed.mobileconfig --accept-replace
+
+# CI: emit JSON so a downstream job can render the verdict
+contour profile plan ./baseline ./proposed -r --format json | jq '.summary'
+```
+
+For the operational doctrine and the `review_bulk_profile_pr` decision
+tree (when to plan, when to rollback, when to forward-fix), see
+`contour help-ai --sop profile-changes`.
+
+#### `profile rollback`
+
+Cherry-pick UUID restore — the inverse of `plan`. When a PR has
+regenerated `PayloadUUID` values (and possibly forgotten to rewrite
+their cross-references), `rollback` walks the proposed profiles, pulls
+the baseline UUIDs back in, and rewrites every cross-reference that
+pointed at the new UUID so it resolves to the restored one. Fail-closed:
+a rollback that would orphan a `PayloadCertificateUUID` aborts before
+any file is written.
+
+```
+contour profile rollback <BASELINE> <CURRENT> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<BASELINE>` | Baseline profile (file or directory) | **required** |
+| `<CURRENT>` | Current profile (file or directory) to repair | **required** |
+| `-r, --recursive` | Walk directory pairs recursively | `false` |
+| `--uuids-only` | Restore `PayloadUUID` values only — leave content untouched | `false` |
+| `--payload-type <T>` | Restore only payloads of these types (repeatable) | none |
+| `--refs-only` | Restore only payloads referenced by another payload (certs, identities) | `false` |
+| `--no-rewrite-refs` | Skip the cross-reference rewrite pass | rewrite enabled |
+| `--dry-run` | Print the rollback plan; do not write | `false` |
+| `--output <PATH>` | Write restored profiles here | in-place |
+
+```bash
+# PR is churn-only — undo every PayloadUUID change in one shot
+contour profile rollback HEAD~1 . -r --uuids-only
+
+# Undo only SCEP/identity-preference UUID churn (the high-blast-radius set)
+contour profile rollback baseline/ proposed/ -r \
+    --uuids-only --payload-type com.apple.security.scep \
+                 --payload-type com.apple.security.identity
+
+# Cross-reference rewrite pass: undo SCEP UUID and rewrite the
+# PayloadCertificateUUID that pointed at the new SCEP UUID
+contour profile rollback baseline/ proposed/ --uuids-only
+
+# Confirm the round-trip is clean
+contour profile plan baseline/ proposed/ -r --predictable --org com.acme
+# → 0 REPLACE, 0 REF_BROKEN  → plan exits 0
+```
+
 #### `profile payload list`
 
 List all payloads in a profile, showing type, display name, and UUID for each.

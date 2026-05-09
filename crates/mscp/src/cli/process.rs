@@ -24,7 +24,7 @@ use std::path::PathBuf;
 /// read from `mscp.toml` via `BaselineConfig::gitops_glob`). When `None` or
 /// when every section is disabled, output is byte-identical to the legacy
 /// per-item `path:` emission.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "legacy signature shaped by CLI flags; refactoring is out of scope for the glob feature"
 )]

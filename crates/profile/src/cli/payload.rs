@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::output::OutputMode;
@@ -193,7 +193,7 @@ pub fn handle_payload_extract(
     }
 
     // Build additional fields
-    let mut additional_fields = HashMap::new();
+    let mut additional_fields = BTreeMap::new();
     additional_fields.insert(
         "PayloadDescription".to_string(),
         plist::Value::String(format!(

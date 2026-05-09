@@ -249,6 +249,7 @@ mod tests {
                 platforms: Some(vec!["macos".to_string()]),
                 deterministic_uuids: Some(true),
                 manifests_path: None,
+                library_path: None,
             },
         };
 

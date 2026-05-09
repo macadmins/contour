@@ -109,16 +109,18 @@ pub const REFERENCEABLE_TYPES: &[&str] = &[
 ];
 
 /// A discovered UUID reference in a profile.
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone)]
 pub struct UuidReference {
     /// Source profile path
+    #[allow(dead_code, reason = "reserved for future use")]
     pub source_profile: PathBuf,
     /// Source payload UUID (the payload containing the reference)
     pub source_payload_uuid: String,
     /// Source payload type
+    #[allow(dead_code, reason = "reserved for future use")]
     pub source_payload_type: String,
     /// Source payload identifier
+    #[allow(dead_code, reason = "reserved for future use")]
     pub source_payload_identifier: String,
     /// Field name containing the reference
     pub field_name: String,
@@ -127,13 +129,14 @@ pub struct UuidReference {
     /// Nesting path if applicable (e.g., `["EAPClientConfiguration"]`)
     pub nested_path: Vec<String>,
     /// Whether this is in an array of UUIDs
+    #[allow(dead_code, reason = "reserved for future use")]
     pub is_array_element: bool,
     /// Index in array (if array element)
+    #[allow(dead_code, reason = "reserved for future use")]
     pub array_index: Option<usize>,
 }
 
 /// A payload that can be referenced (certificate, identity, etc.).
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone)]
 pub struct ReferenceablePayload {
     /// Source profile path
@@ -143,8 +146,10 @@ pub struct ReferenceablePayload {
     /// Payload type (com.apple.security.*)
     pub payload_type: String,
     /// Payload identifier
+    #[allow(dead_code, reason = "reserved for future use")]
     pub payload_identifier: String,
     /// Payload display name (if present)
+    #[allow(dead_code, reason = "reserved for future use")]
     pub display_name: Option<String>,
 }
 
@@ -179,7 +184,6 @@ impl UuidMapping {
 }
 
 /// Configuration for the link operation.
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone)]
 pub struct LinkConfig {
     /// Organization domain for predictable UUIDs
@@ -187,6 +191,7 @@ pub struct LinkConfig {
     /// Use predictable UUIDs (v5 based on identifier)
     pub predictable: bool,
     /// Merge all profiles into one output profile
+    #[allow(dead_code, reason = "reserved for future use")]
     pub merge: bool,
     /// Validate references after linking
     pub validate: bool,
@@ -204,7 +209,6 @@ impl Default for LinkConfig {
 }
 
 /// Result of a link operation.
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug)]
 pub struct LinkResult {
     /// Linked profiles (path, profile pairs)
@@ -214,6 +218,7 @@ pub struct LinkResult {
     /// Number of references updated
     pub reference_count: usize,
     /// Number of referenceable payloads found
+    #[allow(dead_code, reason = "reserved for future use")]
     pub referenceable_count: usize,
 }
 

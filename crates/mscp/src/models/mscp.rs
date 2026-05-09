@@ -128,6 +128,7 @@ pub struct MobileConfigFile {
 
 /// Represents parsed mobileconfig content
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub struct MobileConfigContent {
     pub payload_identifier: String,
     pub payload_type: String,
@@ -140,6 +141,7 @@ pub struct MobileConfigContent {
 
 /// Represents a single payload item within a mobileconfig
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub struct PayloadItem {
     pub payload_type: String,
     pub payload_identifier: String,

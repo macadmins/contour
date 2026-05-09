@@ -279,7 +279,7 @@ pub fn is_valid_team_id(s: &str) -> bool {
 }
 
 /// Check if a string is a valid SigningID.
-#[allow(dead_code, reason = "reserved for future use")]
+#[expect(dead_code, reason = "reserved for future use")]
 pub fn is_valid_signing_id(s: &str) -> bool {
     if let Some((team_part, bundle_part)) = s.split_once(':') {
         (is_valid_team_id(team_part) || team_part == "platform") && !bundle_part.is_empty()
@@ -289,7 +289,7 @@ pub fn is_valid_signing_id(s: &str) -> bool {
 }
 
 /// Normalize an app name for grouping.
-#[allow(dead_code, reason = "reserved for future use")]
+#[expect(dead_code, reason = "reserved for future use")]
 pub fn normalize_app_name(name: &str) -> String {
     name.to_lowercase()
         .replace(|c: char| !c.is_ascii_alphanumeric(), " ")
