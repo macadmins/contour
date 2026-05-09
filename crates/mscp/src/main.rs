@@ -18,6 +18,7 @@ mod deduplicator;
 mod extractors;
 mod filters;
 mod generators;
+mod layout;
 mod managers;
 mod models;
 mod output;
@@ -833,6 +834,9 @@ fn main() -> Result<()> {
             output,
             org,
             odv_mode,
+            mscp_version,
+            os,
+            os_version,
         } => {
             run_recipe_command(
                 &mscp_repo,
@@ -840,6 +844,9 @@ fn main() -> Result<()> {
                 output.as_deref(),
                 org.as_deref(),
                 odv_mode,
+                &mscp_version,
+                os.into(),
+                os_version,
             )?;
         }
     }
@@ -852,16 +859,27 @@ fn main() -> Result<()> {
 /// Reads YAML rules directly from `<mscp_repo>/rules/**/*.yaml`,
 /// filters by baseline tag, groups by Apple payload type, and writes
 /// the rendered recipe to disk.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "CLI router carries flag-set verbatim"
+)]
 fn run_recipe_command(
     mscp_repo: &std::path::Path,
     baseline: &str,
     output: Option<&std::path::Path>,
     org: Option<&str>,
     mode: baseline_to_recipe::OdvMode,
+    mscp_version: &str,
+    os: models::mscp::Platform,
+    os_version: Option<String>,
 ) -> Result<()> {
     use anyhow::Context;
 
-    let extractor = extractors::RuleExtractor::new(mscp_repo);
+    let layout = layout::MscpLayout::detect_or_from(Some(mscp_version), mscp_repo)
+        .with_context(|| format!("detecting mSCP layout in {}", mscp_repo.display()))?;
+    let extractor = extractors::RuleExtractor::new(mscp_repo)
+        .with_layout(layout)
+        .with_os(os, os_version);
     let rules = extractor
         .extract_rules_for_baseline(baseline)
         .with_context(|| format!("loading baseline '{baseline}' from {}", mscp_repo.display()))?;

@@ -736,7 +736,40 @@ pub enum Commands {
         /// --recipe` substitutes at load time.
         #[arg(long, value_enum, default_value = "inline")]
         odv_mode: crate::baseline_to_recipe::OdvMode,
+
+        /// mSCP repository layout. Defaults to `auto` — sniff the rule
+        /// YAML to detect 1.x (flat) vs 2.0 (multi-OS `platforms:` block).
+        /// Pass `1.x` or `2.0` to override.
+        #[arg(long, default_value = "auto")]
+        mscp_version: String,
+
+        /// OS target for 2.0 layouts. Ignored for 1.x.
+        #[arg(long, value_enum, default_value_t = OsArg::Macos)]
+        os: OsArg,
+
+        /// OS version for 2.0 layouts (e.g. `26.0`, `15.0`, `18.0`).
+        /// Defaults to the highest version present in the rule set.
+        #[arg(long)]
+        os_version: Option<String>,
     },
+}
+
+/// CLI-facing OS selector. Maps 1:1 to [`crate::models::mscp::Platform`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OsArg {
+    Macos,
+    Ios,
+    Visionos,
+}
+
+impl From<OsArg> for crate::models::mscp::Platform {
+    fn from(o: OsArg) -> Self {
+        match o {
+            OsArg::Macos => Self::MacOS,
+            OsArg::Ios => Self::Ios,
+            OsArg::Visionos => Self::VisionOS,
+        }
+    }
 }
 
 /// Subcommands for the schema query command
