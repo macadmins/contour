@@ -14,9 +14,9 @@ pub mod schema;
 pub mod types;
 pub mod verify;
 
-#[allow(unused_imports, reason = "conditionally used")]
+#[allow(unused_imports, reason = "reserved for future use")]
 pub use parser::parse_declaration;
 pub use parser::{is_ddm_file, parse_declaration_file, write_declaration};
-#[allow(unused_imports, reason = "conditionally used")]
+#[allow(unused_imports, reason = "reserved for future use")]
 pub use types::DeclarationType;
 pub use types::{Declaration, DeclarationPayload};

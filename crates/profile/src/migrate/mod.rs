@@ -5,4 +5,5 @@
 
 pub mod mapping;
 
+#[allow(unused_imports, reason = "reserved for future use")]
 pub use mapping::{MigrationRegistry, MigrationStatus};

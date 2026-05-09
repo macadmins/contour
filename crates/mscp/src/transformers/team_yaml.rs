@@ -304,7 +304,6 @@ controls:
 
     /// Deprecated: Keep for backward compatibility
     #[deprecated(since = "0.2.0", note = "Use write_team_yml instead")]
-    #[allow(dead_code, reason = "reserved for future use")]
     pub fn write_example_team(&self, baseline_name: &str) -> Result<PathBuf> {
         self.write_team_yml(baseline_name)
     }

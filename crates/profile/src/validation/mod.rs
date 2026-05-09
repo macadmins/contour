@@ -15,8 +15,8 @@ use std::path::Path;
 pub use schema_validator::{SchemaValidator, Severity, ValidationOptions};
 
 /// Custom validation rules configuration
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub struct ValidationRules {
     /// Rules for profile-level validation
     #[serde(default)]
@@ -31,8 +31,8 @@ pub struct ValidationRules {
     pub custom: Vec<CustomRule>,
 }
 
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub struct ProfileRules {
     /// Required identifier prefix (e.g., "com.yourorg")
     #[serde(default)]
@@ -55,8 +55,8 @@ pub struct ProfileRules {
     pub max_payloads: Option<usize>,
 }
 
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub struct PayloadRules {
     /// Allowed payload types (whitelist)
     #[serde(default)]
@@ -86,8 +86,8 @@ fn default_true() -> bool {
     true
 }
 
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub struct CustomRule {
     /// Rule name
     pub name: String,
@@ -112,9 +112,9 @@ fn default_severity() -> String {
     "error".to_string()
 }
 
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(dead_code, reason = "reserved for future use")]
 pub enum RuleCheck {
     /// Field must exist
     #[serde(rename = "exists")]
@@ -142,17 +142,17 @@ pub enum RuleCheck {
 }
 
 /// Result of custom validation
-#[allow(dead_code, reason = "reserved for future use")]
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub struct CustomValidationResult {
     pub valid: bool,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
 }
 
-#[allow(dead_code, reason = "validation rules API is planned for future use")]
 impl ValidationRules {
     /// Load rules from TOML file
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn load(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("Failed to read validation rules: {}", path.display()))?;
@@ -164,6 +164,7 @@ impl ValidationRules {
     }
 
     /// Load rules from config directory
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn load_default() -> Result<Option<Self>> {
         // Check current directory
         let cwd = std::env::current_dir()?;
@@ -190,6 +191,7 @@ impl ValidationRules {
     }
 
     /// Validate a profile against custom rules
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn validate(&self, profile: &ConfigurationProfile) -> Result<CustomValidationResult> {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
@@ -286,6 +288,7 @@ impl ValidationRules {
         })
     }
 
+    #[allow(dead_code, reason = "reserved for future use")]
     fn check_custom_rule(
         &self,
         profile: &ConfigurationProfile,
@@ -359,6 +362,7 @@ impl ValidationRules {
         Ok(None)
     }
 
+    #[allow(dead_code, reason = "reserved for future use")]
     fn get_field_value(&self, profile: &ConfigurationProfile, field: &str) -> Option<String> {
         let parts: Vec<&str> = field.split('.').collect();
 
@@ -403,14 +407,14 @@ impl ValidationRules {
 mod tests {
     use super::*;
     use crate::profile::PayloadContent;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
     // ========== Test Fixtures ==========
 
     fn create_test_profile() -> ConfigurationProfile {
-        let mut additional_fields = HashMap::new();
+        let mut additional_fields = BTreeMap::new();
         additional_fields.insert(
             "PayloadDescription".to_string(),
             plist::Value::String("A test profile".to_string()),
@@ -420,7 +424,7 @@ mod tests {
             plist::Value::String("Test Org".to_string()),
         );
 
-        let mut wifi_content = HashMap::new();
+        let mut wifi_content = BTreeMap::new();
         wifi_content.insert(
             "PayloadDisplayName".to_string(),
             plist::Value::String("WiFi".to_string()),

@@ -11,8 +11,10 @@ mod docs;
 mod link;
 mod migrate;
 mod output;
+mod plan;
 mod profile;
 mod recipe;
+mod rollback;
 mod schema;
 mod signing;
 mod uuid;
@@ -328,6 +330,51 @@ fn run(cli: Cli) -> Result<()> {
             output,
         } => {
             cli::diff::handle_diff(&file1, &file2, output.as_deref())?;
+        }
+        Commands::Plan {
+            baseline,
+            proposed,
+            recursive,
+            org,
+            predictable,
+            format,
+            accept_replace,
+            accept_scope_change,
+            fleet_size,
+        } => {
+            let opts = cli::plan::PlanOptions {
+                recursive,
+                predictable,
+                org,
+                org_name: None,
+                format,
+                accept_replace,
+                accept_scope_change,
+                fleet_size,
+            };
+            cli::plan::handle_plan(&baseline, &proposed, &opts)?;
+        }
+        Commands::Rollback {
+            baseline,
+            current,
+            recursive,
+            uuids_only,
+            payload_types,
+            refs_only,
+            no_rewrite_refs,
+            dry_run,
+            output,
+        } => {
+            let opts = cli::rollback::RollbackCliOptions {
+                recursive,
+                uuids_only,
+                payload_types,
+                refs_only,
+                no_rewrite_refs,
+                dry_run,
+                output_dir: output.map(std::path::PathBuf::from),
+            };
+            cli::rollback::handle_rollback(&baseline, &current, &opts)?;
         }
         Commands::Unsign {
             paths,

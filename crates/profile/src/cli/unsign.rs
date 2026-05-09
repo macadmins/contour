@@ -164,7 +164,7 @@ fn handle_unsign_batch(
     Ok(())
 }
 
-#[allow(dead_code, reason = "reserved for future use")]
+#[expect(dead_code, reason = "reserved for future use")]
 fn collect_profile_files(path: &str, recursive: bool) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     let is_glob = path.contains('*') || path.contains('?');
@@ -247,7 +247,6 @@ fn collect_profile_files(path: &str, recursive: bool) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-#[allow(dead_code, reason = "reserved for future use")]
 fn collect_from_directory(dir: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> Result<()> {
     if recursive {
         for entry in walkdir::WalkDir::new(dir)

@@ -253,7 +253,7 @@ fn scan_files(
 }
 
 /// Scan a directory for profile files
-#[allow(dead_code, reason = "reserved for future use")]
+#[expect(dead_code, reason = "reserved for future use")]
 fn scan_directory(
     dir: &Path,
     recursive: bool,
@@ -279,7 +279,6 @@ fn scan_directory(
 }
 
 /// Check if a file is a profile file
-#[allow(dead_code, reason = "reserved for future use")]
 fn is_profile_file(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("mobileconfig"))

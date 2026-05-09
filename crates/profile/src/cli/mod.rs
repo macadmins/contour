@@ -23,7 +23,9 @@ pub mod library_validate;
 pub mod link;
 pub mod normalize;
 pub mod payload;
+pub mod plan;
 pub mod post_generate;
+pub mod rollback;
 pub mod scan;
 pub mod search;
 pub mod sign;
@@ -410,6 +412,123 @@ pub enum Commands {
         file2: String,
 
         #[arg(short, long, help = "Output diff to file (optional)")]
+        output: Option<String>,
+    },
+
+    #[command(
+        about = "Classify changes between baseline and proposed profiles \
+                 (terraform-plan-style change impact)",
+        long_about = "Compare a baseline profile (file or directory) against \
+                      a proposed one and classify every payload-level delta \
+                      into a tier that maps to MDM behavior on enrolled \
+                      devices: NOOP / IN_PLACE_UPDATE / ADD / REMOVE / \
+                      REPLACE / REF_BROKEN / SCOPE_BROADENED / TYPE_INVALID \
+                      / DEPRECATED.\n\n\
+                      Exits non-zero when the plan contains blocking changes \
+                      (REPLACE, REF_BROKEN, SCOPE_BROADENED, TYPE_INVALID, \
+                      DEPRECATED) so CI can gate destructive PRs.\n\n\
+                      See `contour help-ai --sop profile-changes` for the \
+                      operational doctrine."
+    )]
+    Plan {
+        #[arg(help = "Baseline profile (file or directory)")]
+        baseline: String,
+
+        #[arg(help = "Proposed profile (file or directory)")]
+        proposed: String,
+
+        #[arg(short, long, help = "Walk directory pairs recursively")]
+        recursive: bool,
+
+        #[arg(long, help = "Organization reverse domain (for predictable UUIDs)")]
+        org: Option<String>,
+
+        #[arg(
+            long,
+            help = "Normalize both sides with v5 UUIDs derived from \
+                    (org, identifier) before classifying — collapses \
+                    cosmetic UUID churn so REPLACE only fires on real \
+                    PayloadIdentifier renames"
+        )]
+        predictable: bool,
+
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = plan::OutputFormat::Text,
+            help = "Output format"
+        )]
+        format: plan::OutputFormat,
+
+        #[arg(
+            long,
+            help = "Treat REPLACE as a warning instead of a blocker \
+                    (use after a security-aware human approves the churn)"
+        )]
+        accept_replace: bool,
+
+        #[arg(long, help = "Treat SCOPE_BROADENED as a warning instead of a blocker")]
+        accept_scope_change: bool,
+
+        #[arg(long, help = "Fleet size (used for blast-radius narrative on REPLACE)")]
+        fleet_size: Option<usize>,
+    },
+
+    #[command(
+        about = "Cherry-pick UUID restore from baseline → current",
+        long_about = "Take a baseline profile (or directory), find every \
+                      payload whose PayloadUUID changed in the current set, \
+                      and restore the baseline UUID. Cross-references that \
+                      pointed at the new UUID are rewritten to point at the \
+                      restored one. Fail-closed: a rollback that would \
+                      orphan a cross-reference aborts before any file is \
+                      written.\n\n\
+                      See `contour help-ai --sop profile-changes` for the \
+                      operational doctrine."
+    )]
+    Rollback {
+        #[arg(help = "Baseline profile (file or directory)")]
+        baseline: String,
+
+        #[arg(help = "Current profile (file or directory) to repair")]
+        current: String,
+
+        #[arg(short, long, help = "Walk directory pairs recursively")]
+        recursive: bool,
+
+        #[arg(
+            long,
+            help = "Restore PayloadUUID values only — leave content untouched"
+        )]
+        uuids_only: bool,
+
+        #[arg(
+            long = "payload-type",
+            value_name = "T",
+            help = "Restore only payloads of these PayloadType values (repeatable)"
+        )]
+        payload_types: Vec<String>,
+
+        #[arg(
+            long,
+            help = "Restore only payloads referenced by another payload (high-blast-radius)"
+        )]
+        refs_only: bool,
+
+        #[arg(
+            long,
+            help = "Skip the cross-reference rewrite pass (default: rewrite)"
+        )]
+        no_rewrite_refs: bool,
+
+        #[arg(long, help = "Print the rollback plan; do not write")]
+        dry_run: bool,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Write restored profiles here (default: in-place)"
+        )]
         output: Option<String>,
     },
 

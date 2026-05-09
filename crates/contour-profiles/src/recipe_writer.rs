@@ -128,7 +128,7 @@ fn plist_to_toml(v: &Value) -> Result<toml::Value> {
             .ok_or_else(|| anyhow::anyhow!("integer out of i64 range"))?,
         Value::Real(f) => toml::Value::Float(*f),
         Value::Date(d) => {
-            let text: String = d.to_xml_format();
+            let text = d.to_xml_format();
             text.parse::<toml::value::Datetime>()
                 .map(toml::Value::Datetime)
                 .map_err(|e| anyhow::anyhow!("plist date '{text}' not TOML datetime: {e}"))?

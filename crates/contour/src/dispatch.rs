@@ -967,6 +967,51 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 )?;
             }
         },
+        Commands::Plan {
+            baseline,
+            proposed,
+            recursive,
+            org,
+            predictable,
+            format,
+            accept_replace,
+            accept_scope_change,
+            fleet_size,
+        } => {
+            let opts = profile::cli::plan::PlanOptions {
+                recursive,
+                predictable,
+                org,
+                org_name: None,
+                format,
+                accept_replace,
+                accept_scope_change,
+                fleet_size,
+            };
+            profile::cli::plan::handle_plan(&baseline, &proposed, &opts)?;
+        }
+        Commands::Rollback {
+            baseline,
+            current,
+            recursive,
+            uuids_only,
+            payload_types,
+            refs_only,
+            no_rewrite_refs,
+            dry_run,
+            output,
+        } => {
+            let opts = profile::cli::rollback::RollbackCliOptions {
+                recursive,
+                uuids_only,
+                payload_types,
+                refs_only,
+                no_rewrite_refs,
+                dry_run,
+                output_dir: output.map(std::path::PathBuf::from),
+            };
+            profile::cli::rollback::handle_rollback(&baseline, &current, &opts)?;
+        }
     }
 
     Ok(())

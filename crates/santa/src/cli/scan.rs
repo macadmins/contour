@@ -30,7 +30,7 @@ pub struct ScannedApp {
 /// JSON output from santactl fileinfo --json
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-#[allow(dead_code, reason = "reserved for future use")]
+#[expect(dead_code, reason = "reserved for future use")]
 struct SantactlJson {
     path: Option<String>,
     #[serde(rename = "SHA-256")]

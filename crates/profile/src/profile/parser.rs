@@ -194,9 +194,9 @@ pub enum PlistFormat {
     Binary,
 }
 
-#[allow(dead_code, reason = "reserved for future use")]
 impl PlistFormat {
     /// Detect plist format from file
+    #[allow(dead_code, reason = "reserved for future use")]
     pub fn detect(path: &str) -> Result<Self> {
         let mut file = File::open(path).with_context(|| format!("Failed to open file: {path}"))?;
 
@@ -637,10 +637,7 @@ pub fn read_pasteboard_bytes() -> Result<Vec<u8>> {
 
 /// Read a configuration profile from the macOS pasteboard (clipboard).
 /// Shells out to `pbpaste` and parses the result as plist.
-#[allow(
-    dead_code,
-    reason = "utility for interactive macOS clipboard parsing, not yet wired into CLI"
-)]
+#[allow(dead_code, reason = "reserved for future use")]
 pub fn parse_profile_from_pasteboard() -> Result<ConfigurationProfile> {
     if cfg!(not(target_os = "macos")) {
         anyhow::bail!("Pasteboard access requires macOS (uses `pbpaste` command)");
@@ -855,7 +852,7 @@ fn extract_xml_from_pkcs7(data: &[u8]) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::profile::PayloadContent;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -905,9 +902,9 @@ mod tests {
                 payload_version: 1,
                 payload_identifier: "com.test.wifi".to_string(),
                 payload_uuid: "87654321-4321-4321-4321-210987654321".to_string(),
-                content: HashMap::new(),
+                content: BTreeMap::new(),
             }],
-            additional_fields: HashMap::new(),
+            additional_fields: BTreeMap::new(),
         }
     }
 
@@ -1314,7 +1311,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_preserves_all_fields() {
-        let mut additional_fields = HashMap::new();
+        let mut additional_fields = BTreeMap::new();
         additional_fields.insert(
             "PayloadDescription".to_string(),
             plist::Value::String("A description".to_string()),
@@ -1324,7 +1321,7 @@ mod tests {
             plist::Value::String("Test Org".to_string()),
         );
 
-        let mut content = HashMap::new();
+        let mut content = BTreeMap::new();
         content.insert(
             "PayloadDisplayName".to_string(),
             plist::Value::String("Login Window".to_string()),

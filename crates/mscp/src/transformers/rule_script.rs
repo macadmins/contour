@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 
 /// Script generation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code, reason = "reserved for future use")]
 pub enum ScriptMode {
     /// One combined script with all rules
     Combined,

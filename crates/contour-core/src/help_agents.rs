@@ -206,8 +206,9 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "enrollment" | "dep" | "ade" | "setup-assistant" => SOP_ENROLLMENT,
         "osquery" => SOP_OSQUERY,
         "precommit" | "pre-commit" | "hook" | "git-hook" | "githook" => SOP_PRECOMMIT,
+        "profile-changes" | "plan" | "rollback" | "change-impact" | "review" => SOP_PROFILE_CHANGES,
         _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support, osquery, precommit"
+            "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support, osquery, precommit, profile-changes"
         ),
     };
     writer.write_all(sop.as_bytes())?;
@@ -266,6 +267,15 @@ const SOP_SUPPORT: &str = include_str!("../skills/contour/references/sop-support
 /// failing in CI 20+ minutes later.
 const SOP_PRECOMMIT: &str = include_str!("../skills/contour/references/sop-precommit.md");
 
+/// SOP_PROFILE_CHANGES — 15th SOP. Procedural format. Covers the
+/// risk model behind bulk `.mobileconfig` edits (PayloadUUID churn,
+/// orphaned cross-references, plist type-shape errors, scope
+/// broadening) and the `profile plan` / `profile rollback` workflow.
+/// Forward-spec for the new commands; the SOP is the authoring contract
+/// the implementations target.
+const SOP_PROFILE_CHANGES: &str =
+    include_str!("../skills/contour/references/sop-profile-changes.md");
+
 /// SOP_FLEET_MIGRATE — 12th SOP. Numbered migration playbook (NOT a
 /// callable procedure). Validated against fleetctl v4.84.2 scaffold +
 /// fleet/docs/Configuration/yaml-files.md. Keeps human diff-checkpoints
@@ -278,8 +288,8 @@ const SOP_FLEET_MIGRATE: &str = include_str!("../skills/contour/references/sop-f
 /// format's INVARIANTS block enforces this at the agent layer.
 const SOP_ENROLLMENT: &str = include_str!("../skills/contour/references/sop-enrollment.md");
 
-/// SOP_CI — 13th SOP. Hybrid: bootstrap procedure (`configure_ci`)
-/// + workflow-recipe reference. The procedural part has typed
+/// SOP_CI — 13th SOP. Hybrid: bootstrap procedure (`configure_ci`) plus
+/// a workflow-recipe reference. The procedural part has typed
 /// preconditions on `gh variable set` / `gh secret set`; the recipes
 /// are configuration patterns that don't fit a procedure shape.
 const SOP_CI: &str = include_str!("../skills/contour/references/sop-ci.md");
