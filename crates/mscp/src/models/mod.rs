@@ -3,6 +3,7 @@ pub mod ddm;
 pub mod fleet;
 pub mod mscp;
 pub mod rule;
+pub mod rule_v2;
 
 pub use baseline_reference::*;
 pub use ddm::*;

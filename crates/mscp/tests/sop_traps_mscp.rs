@@ -705,3 +705,201 @@ odv:
         "edited [odv] value must reach rendered profile; got: {mcx_edited}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6 traps — mSCP 2.0 (multi-OS) layout transition
+// ---------------------------------------------------------------------------
+
+/// Write a single 2.0-shaped rule into `<root>/rules/<category>/<id>.yaml`.
+/// `platforms_yaml` is the inline body for the `platforms:` block.
+fn write_v2x_rule(root: &Path, category: &str, id: &str, platforms_yaml: &str, extras: &str) {
+    let rules = root.join("rules").join(category);
+    fs::create_dir_all(&rules).unwrap();
+    let body = format!(
+        "id: {id}\ntitle: {id} title\ndiscussion: trap fixture\nreferences:\n  nist:\n    cce:\n      macos_15:\n        - CCE-00000-0\n    800-53r5:\n      - AC-1\nplatforms:\n{platforms_yaml}{extras}"
+    );
+    fs::write(rules.join(format!("{id}.yaml")), body).unwrap();
+}
+
+/// Trap 22 — `mscp recipe` auto-detects a 2.0 tree without `--mscp-version`.
+///
+/// Failure mode: the detector misclassifies and the V1x parser silently
+/// returns zero rules (because 2.0 schema lacks the 1.x top-level keys).
+#[test]
+fn trap_22_mscp_recipe_auto_detects_v2x_layout() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_v2x_rule(
+        tmp.path(),
+        "system_settings",
+        "tiny_v2_rule",
+        "  macOS:\n    '15.0':\n      benchmarks:\n        - name: tinybase_v2\n",
+        "mobileconfig_info:\n  - PayloadType: com.apple.screensaver\n    PayloadContent:\n      - askForPassword: true\n",
+    );
+
+    let recipe_out = tmp.path().join("tinybase_v2.toml");
+    let output = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "recipe",
+            "--mscp-repo",
+            tmp.path().to_str().unwrap(),
+            "--baseline",
+            "tinybase_v2",
+            "-o",
+            recipe_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            // No --mscp-version: auto-detect must pick V2x.
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "auto-detect must succeed on V2x tree; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = fs::read_to_string(&recipe_out).unwrap();
+    assert!(
+        body.contains("[[profile]]"),
+        "V2x recipe should emit at least one [[profile]] block; got: {body}"
+    );
+    assert!(
+        body.contains("com.apple.screensaver"),
+        "screensaver payload from V2x rule must reach the recipe; got: {body}"
+    );
+}
+
+/// Trap 23 — `--mscp-version 1.x` forces V1x parsing on a layout the
+/// detector might otherwise route differently. Lock the override path.
+#[test]
+fn trap_23_mscp_version_flag_forces_v1x() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules_dir = tmp.path().join("rules");
+    fs::create_dir_all(&rules_dir).unwrap();
+    fs::write(
+        rules_dir.join("flag_v1.yaml"),
+        r#"id: flag_v1
+title: 1.x mobileconfig rule
+discussion: ""
+tags:
+  - tinybase_flag
+mobileconfig: true
+mobileconfig_info:
+  com.apple.security.firewall:
+    EnableFirewall: true
+"#,
+    )
+    .unwrap();
+
+    let recipe_out = tmp.path().join("tinybase_flag.toml");
+    let output = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "recipe",
+            "--mscp-repo",
+            tmp.path().to_str().unwrap(),
+            "--baseline",
+            "tinybase_flag",
+            "-o",
+            recipe_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "--mscp-version",
+            "1.x",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "explicit --mscp-version 1.x must work; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = fs::read_to_string(&recipe_out).unwrap();
+    assert!(body.contains("com.apple.security.firewall"));
+}
+
+/// Trap 24 — V2x with `--os ios --os-version 18.0` filters to iOS-only
+/// benchmarks. A multi-OS rule that lists `cis_lvl1` only on macOS and
+/// `cis_lvl1_byod` only on iOS must produce different recipes per OS.
+#[test]
+fn trap_24_mscp_recipe_v2x_ios_targeting_filters_correctly() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Multi-OS rule: macOS-only baseline `mac_only`, iOS-only baseline `ios_only`.
+    write_v2x_rule(
+        tmp.path(),
+        "settings",
+        "multi_os_rule",
+        concat!(
+            "  macOS:\n",
+            "    '15.0':\n",
+            "      benchmarks:\n",
+            "        - name: mac_only\n",
+            "  iOS:\n",
+            "    '18.0':\n",
+            "      supervised: true\n",
+            "      benchmarks:\n",
+            "        - name: ios_only\n",
+        ),
+        "mobileconfig_info:\n  - PayloadType: com.apple.applicationaccess\n    PayloadContent:\n      - allowAirDrop: false\n",
+    );
+
+    // Run #1: macOS target asking for iOS baseline → no match.
+    let mac_out = tmp.path().join("ios_under_macos.toml");
+    let mac = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "recipe",
+            "--mscp-repo",
+            tmp.path().to_str().unwrap(),
+            "--baseline",
+            "ios_only",
+            "-o",
+            mac_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "--os",
+            "macos",
+            "--os-version",
+            "15.0",
+        ])
+        .output()
+        .unwrap();
+    assert!(mac.status.success());
+    let mac_body = fs::read_to_string(&mac_out).unwrap();
+    assert!(
+        !mac_body.contains("[[profile]]"),
+        "macOS target must not match the iOS-only baseline; got: {mac_body}"
+    );
+
+    // Run #2: iOS target asking for the iOS baseline → match.
+    let ios_out = tmp.path().join("ios_under_ios.toml");
+    let ios = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "recipe",
+            "--mscp-repo",
+            tmp.path().to_str().unwrap(),
+            "--baseline",
+            "ios_only",
+            "-o",
+            ios_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "--os",
+            "ios",
+            "--os-version",
+            "18.0",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        ios.status.success(),
+        "iOS target must succeed; stderr: {}",
+        String::from_utf8_lossy(&ios.stderr)
+    );
+    let ios_body = fs::read_to_string(&ios_out).unwrap();
+    assert!(
+        ios_body.contains("[[profile]]") && ios_body.contains("com.apple.applicationaccess"),
+        "iOS target must produce the applicationaccess profile; got: {ios_body}"
+    );
+}

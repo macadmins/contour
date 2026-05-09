@@ -13,6 +13,7 @@ pub mod deduplicator;
 pub mod extractors;
 pub mod filters;
 pub mod generators;
+pub mod layout;
 pub mod managers;
 pub mod models;
 pub mod output;

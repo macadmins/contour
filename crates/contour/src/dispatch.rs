@@ -2534,6 +2534,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             output,
             org,
             odv_mode,
+            mscp_version,
+            os,
+            os_version,
         } => {
             dispatch_mscp_recipe(
                 &mscp_repo,
@@ -2541,6 +2544,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 output.as_deref(),
                 org.as_deref(),
                 odv_mode,
+                &mscp_version,
+                os.into(),
+                os_version,
             )?;
         }
     }
@@ -2550,17 +2556,28 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 
 /// Aggregate a baseline's mobileconfig rules into one recipe TOML.
 /// Reads rule YAML directly from the mSCP repo — no Python build.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "CLI router carries flag-set verbatim"
+)]
 fn dispatch_mscp_recipe(
     mscp_repo: &std::path::Path,
     baseline: &str,
     output: Option<&std::path::Path>,
     org: Option<&str>,
     mode: mscp::baseline_to_recipe::OdvMode,
+    mscp_version: &str,
+    os: mscp::models::mscp::Platform,
+    os_version: Option<String>,
 ) -> Result<()> {
     use anyhow::Context;
     use colored::Colorize;
 
-    let extractor = mscp::extractors::RuleExtractor::new(mscp_repo);
+    let layout = mscp::layout::MscpLayout::detect_or_from(Some(mscp_version), mscp_repo)
+        .with_context(|| format!("detecting mSCP layout in {}", mscp_repo.display()))?;
+    let extractor = mscp::extractors::RuleExtractor::new(mscp_repo)
+        .with_layout(layout)
+        .with_os(os, os_version);
     let rules = extractor
         .extract_rules_for_baseline(baseline)
         .with_context(|| format!("loading baseline '{baseline}' from {}", mscp_repo.display()))?;

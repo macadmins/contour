@@ -4,6 +4,71 @@ This SOP covers the macOS Security Compliance Project (mSCP) integration:
 generating MDM-deployable compliance artifacts (mobileconfigs, scripts,
 policies, labels) for baselines like CIS Level 1, 800-53, STIG, CMMC.
 
+## Layout: 1.x vs 2.0 (auto-detected)
+
+mSCP ships in two coexisting shapes; contour auto-detects which one a
+`--mscp-repo` path holds by sniffing one rule YAML.
+
+| Signal | Layout | Notes |
+|---|---|---|
+| Top-level `platforms:` key on a rule | **2.0** | multi-OS (`macOS`/`iOS`/`visionOS`) under one rule file |
+| Top-level `id:` without `platforms:` | **1.x** | flat schema with top-level `tags`/`check`/`fix` |
+| Neither | error | "could not detect mSCP layout" with the offending file |
+
+**1.x rule (legacy):**
+
+```yaml
+id: system_settings_screensaver_password_enforce
+title: Enforce Screensaver Password
+check: '/usr/bin/osascript -l JavaScript ...'
+fix: '/usr/bin/defaults write ...'
+result: { string: 'true' }
+tags: [cis_lvl1, cis_lvl2, disa_stig]
+mobileconfig: true
+mobileconfig_info:
+  com.apple.screensaver:
+    askForPassword: true
+```
+
+**2.0 rule (multi-OS):**
+
+```yaml
+id: system_settings_screensaver_password_enforce
+title: Enforce Screensaver Password
+platforms:
+  macOS:
+    '15.0':
+      benchmarks:
+        - name: cis_lvl1
+        - name: disa_stig
+          severity: medium
+    enforcement_info:
+      check: { shell: '/usr/bin/osascript -l JavaScript ...', result: { string: 'true' } }
+      fix:   { shell: '/usr/bin/defaults write ...' }
+  iOS:
+    '18.0':
+      supervised: true
+      benchmarks:
+        - name: cis_lvl1_byod
+mobileconfig_info:
+  - PayloadType: com.apple.screensaver
+    PayloadContent:
+      - askForPassword: true
+```
+
+**Operator flags** (on `mscp recipe` and friends):
+
+- `--mscp-version <auto|1.x|2.0>` — default `auto`
+- `--os <macos|ios|visionos>` — default `macos`; ignored for 1.x
+- `--os-version <X.Y>` — default: highest version present in the rule set
+
+Internally the 2.0 deserializer flattens to the same `MscpRule` struct
+1.x produces, parameterized on `(os, os_version)`. Downstream extractors,
+recipe aggregators, and ODV resolvers don't know or care which layout
+the input came from.
+
+---
+
 mSCP rules carry rich metadata that agents must inspect before generation —
 the most important is **organization-defined values (ODV)**. Many rules
 have a baseline-specific recommended value but a generic `odv_default`
