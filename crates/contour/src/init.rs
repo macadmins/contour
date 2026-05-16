@@ -122,6 +122,9 @@ fn run_noninteractive(
             manifests_path: None,
             library_path: lib_path,
         },
+        vars: std::collections::BTreeMap::new(),
+        signing: None,
+        validation: contour_core::config::ValidationConfig::default(),
     };
 
     config.save(root)?;
@@ -297,6 +300,9 @@ fn run_interactive(
             manifests_path: None,
             library_path: lib_path,
         },
+        vars: std::collections::BTreeMap::new(),
+        signing: None,
+        validation: contour_core::config::ValidationConfig::default(),
     };
 
     config.save(root)?;
