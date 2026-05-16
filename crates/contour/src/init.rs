@@ -126,6 +126,7 @@ fn run_noninteractive(
         signing: None,
         validation: contour_core::config::ValidationConfig::default(),
         secrets: contour_core::config::SecretsConfig::default(),
+        mdm_variables: contour_core::config::MdmVariablesConfig::default(),
     };
 
     config.save(root)?;
@@ -305,6 +306,7 @@ fn run_interactive(
         signing: None,
         validation: contour_core::config::ValidationConfig::default(),
         secrets: contour_core::config::SecretsConfig::default(),
+        mdm_variables: contour_core::config::MdmVariablesConfig::default(),
     };
 
     config.save(root)?;

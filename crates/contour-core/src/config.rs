@@ -34,6 +34,26 @@ pub struct ContourConfig {
     /// plus default secret-source settings.
     #[serde(default)]
     pub secrets: SecretsConfig,
+    /// MDM deploy-time variable pool: named tokens (`%Username%`,
+    /// `FLEET_VAR_*`, …) referenced by `var:NAME` and passed through
+    /// untouched for the MDM server to substitute on-device.
+    #[serde(default)]
+    pub mdm_variables: MdmVariablesConfig,
+}
+
+/// MDM deploy-time variable pool.
+///
+/// `mdm` selects the built-in catalogue (`fleet`, `jamf`, `apple`)
+/// used to validate tokens. `pool` maps a friendly name to an MDM
+/// token (optionally combined with static text, e.g.
+/// `"%Username%@acme.com"`); a recipe field `Foo = "var:NAME"`
+/// resolves through this pool and the token is emitted verbatim.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MdmVariablesConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mdm: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pool: BTreeMap<String, String>,
 }
 
 /// Secret catalogue and default secret-source settings.
@@ -310,6 +330,26 @@ pub fn resolve_secrets_with_anchor(anchor: Option<&Path>) -> SecretsConfig {
     merged
 }
 
+/// Merge `[mdm_variables]` from configs anchored at CWD and at
+/// `anchor`, layering CWD over the anchor. `pool` maps merge
+/// key-by-key; `mdm` takes the CWD value when present.
+pub fn resolve_mdm_variables_with_anchor(anchor: Option<&Path>) -> MdmVariablesConfig {
+    let mut merged = MdmVariablesConfig::default();
+    if let Some(a) = anchor {
+        if let Some(cfg) = ContourConfig::load_nearest_from(a) {
+            merged = cfg.mdm_variables;
+        }
+    }
+    if let Some(cfg) = ContourConfig::load_nearest() {
+        let cwd = cfg.mdm_variables;
+        merged.pool.extend(cwd.pool);
+        if cwd.mdm.is_some() {
+            merged.mdm = cwd.mdm;
+        }
+    }
+    merged
+}
+
 /// Resolve the organization display name from multiple sources.
 ///
 /// Resolution order:
@@ -449,6 +489,7 @@ mod tests {
             signing: None,
             validation: ValidationConfig::default(),
             secrets: SecretsConfig::default(),
+            mdm_variables: MdmVariablesConfig::default(),
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -498,6 +539,32 @@ mod tests {
         assert!(v.dotenv.is_none());
         assert!(v.op_vault.is_none());
         assert!(v.refs.is_empty());
+    }
+
+    #[test]
+    fn mdm_variables_config_defaults_empty() {
+        let v = MdmVariablesConfig::default();
+        assert!(v.mdm.is_none());
+        assert!(v.pool.is_empty());
+    }
+
+    #[test]
+    fn mdm_variables_config_parses_pool() {
+        let toml = "\
+            mdm = \"fleet\"\n\
+            [pool]\n\
+            SCEP_CHALLENGE = \"FLEET_VAR_NDES_SCEP_CHALLENGE\"\n\
+            USER_EMAIL = \"%Username%@acme.com\"\n";
+        let v: MdmVariablesConfig = toml::from_str(toml).unwrap();
+        assert_eq!(v.mdm.as_deref(), Some("fleet"));
+        assert_eq!(
+            v.pool.get("SCEP_CHALLENGE").map(String::as_str),
+            Some("FLEET_VAR_NDES_SCEP_CHALLENGE")
+        );
+        assert_eq!(
+            v.pool.get("USER_EMAIL").map(String::as_str),
+            Some("%Username%@acme.com")
+        );
     }
 
     #[test]
