@@ -600,6 +600,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                         recipe_path.as_deref(),
                         output.as_deref(),
                         org.as_deref(),
+                        full,
                         schema_path.as_deref(),
                         config.as_ref(),
                         &vars,
