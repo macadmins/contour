@@ -9,6 +9,7 @@ mod ddm;
 mod diff;
 mod docs;
 mod link;
+mod mdm_vars;
 mod migrate;
 mod output;
 mod plan;

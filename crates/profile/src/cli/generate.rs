@@ -317,6 +317,20 @@ fn secret_ref_lookup(name: &str) -> Option<String> {
     SECRET_REFS.get().and_then(|m| m.get(name).cloned())
 }
 
+/// Process-wide `[mdm_variables].pool` from `.contour/config.toml`,
+/// populated once per run by [`load_var_pool`].
+static VAR_POOL: OnceLock<HashMap<String, String>> = OnceLock::new();
+
+/// Install the `[mdm_variables].pool` for `var:NAME` resolution.
+fn load_var_pool(pool: HashMap<String, String>) {
+    let _ = VAR_POOL.set(pool);
+}
+
+/// Look up a `var:NAME` reference's MDM token.
+fn var_pool_lookup(name: &str) -> Option<String> {
+    VAR_POOL.get().and_then(|m| m.get(name).cloned())
+}
+
 /// When set, secret references are left unresolved in the output
 /// (`--sanitize`) so the generated profile is safe to share/commit.
 static SANITIZE: OnceLock<bool> = OnceLock::new();
@@ -343,6 +357,19 @@ fn resolve_value(raw: &str) -> Result<ResolvedValue> {
     }
     if raw.starts_with("op://") {
         resolve_op(raw)
+    } else if let Some(name) = raw.strip_prefix("var:") {
+        // MDM deploy-time variable: look the name up in the
+        // `[mdm_variables.pool]` catalogue and emit the token verbatim
+        // — the MDM server substitutes it on-device, not contour.
+        let token = var_pool_lookup(name).with_context(|| {
+            format!(
+                "Variable '{name}' is not defined in [mdm_variables.pool] of .contour/config.toml"
+            )
+        })?;
+        Ok(ResolvedValue {
+            value: token,
+            is_binary: false,
+        })
     } else if let Some(name) = raw.strip_prefix("secret:") {
         // Indirection through the config `[secrets.refs]` catalogue.
         let target = secret_ref_lookup(name).with_context(|| {
@@ -483,12 +510,88 @@ fn resolve_toml_value(val: &toml::Value) -> Result<toml::Value> {
     }
 }
 
-/// Check if a string value is a secret reference that needs resolution.
+/// Check if a string value is a reference contour resolves at generate
+/// time — a secret (`op://`/`env:`/`file:`/`secret:`) or an MDM
+/// variable-pool lookup (`var:`).
 fn is_secret_reference(s: &str) -> bool {
     s.starts_with("op://")
         || s.starts_with("env:")
         || s.starts_with("file:")
         || s.starts_with("secret:")
+        || s.starts_with("var:")
+}
+
+/// Print an advisory warning for every MDM variable token in the
+/// recipe that is not in the active flavour's built-in catalogue nor
+/// the operator's `[mdm_variables.pool]`. No-op when no flavour is
+/// configured. Advisory only — never fails generation.
+fn warn_unknown_mdm_variables(
+    profiles: &[recipe::ProfileSpec],
+    mdm_cfg: &contour_core::config::MdmVariablesConfig,
+    output_mode: OutputMode,
+) {
+    let Some(flavour) = mdm_cfg
+        .mdm
+        .as_deref()
+        .and_then(crate::mdm_vars::MdmFlavour::parse)
+    else {
+        return;
+    };
+    // Tokens the operator explicitly pooled count as known.
+    let mut pooled: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for v in mdm_cfg.pool.values() {
+        for t in crate::mdm_vars::extract_tokens(v, flavour) {
+            pooled.insert(t);
+        }
+    }
+    let mut unknown: Vec<String> = Vec::new();
+    for spec in profiles {
+        for v in spec.fields.values().chain(spec.extra_fields.values()) {
+            collect_unknown_tokens(v, flavour, &pooled, &mut unknown);
+        }
+    }
+    unknown.sort();
+    unknown.dedup();
+    if output_mode == OutputMode::Human {
+        for t in &unknown {
+            println!(
+                "  {} Unknown {} variable: {}",
+                "⚠".yellow(),
+                flavour.as_str(),
+                t
+            );
+        }
+    }
+}
+
+/// Recurse a TOML value collecting MDM variable tokens that are neither
+/// catalogue-known nor pooled.
+fn collect_unknown_tokens(
+    val: &toml::Value,
+    flavour: crate::mdm_vars::MdmFlavour,
+    pooled: &std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    match val {
+        toml::Value::String(s) => {
+            for t in crate::mdm_vars::extract_tokens(s, flavour) {
+                if !crate::mdm_vars::is_known(&t, flavour) && !pooled.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        toml::Value::Array(arr) => {
+            for v in arr {
+                collect_unknown_tokens(v, flavour, pooled, out);
+            }
+        }
+        toml::Value::Table(tbl) => {
+            for v in tbl.values() {
+                collect_unknown_tokens(v, flavour, pooled, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Convert a TOML value to plist, handling `base64:` prefix as binary Data.
@@ -764,6 +867,11 @@ pub fn handle_generate_recipe(
     let secrets_cfg = contour_core::config::resolve_secrets_with_anchor(anchor_ref);
     load_secret_refs(secrets_cfg.refs.clone().into_iter().collect());
 
+    // Resolve the `[mdm_variables]` pool and install it for `var:`
+    // resolution.
+    let mdm_vars_cfg = contour_core::config::resolve_mdm_variables_with_anchor(anchor_ref);
+    load_var_pool(mdm_vars_cfg.pool.clone().into_iter().collect());
+
     // Load `.env` for `env:` resolution: anchor `.env` (low precedence),
     // CWD `.env`, then a `[secrets].dotenv` override (highest).
     {
@@ -823,8 +931,13 @@ pub fn handle_generate_recipe(
     });
     let registry = load_registry(schema_path)?;
 
-    // Resolve op://, env:, file: references in recipe field values
+    // Resolve op://, env:, file:, secret:, var: references in recipe
+    // field values.
     resolve_recipe_secrets(&mut r.profiles)?;
+
+    // Advisory: flag MDM variable tokens that aren't in the active
+    // flavour's catalogue or the operator's pool — typo-catching.
+    warn_unknown_mdm_variables(&r.profiles, &mdm_vars_cfg, output_mode);
 
     // Resolve org domain. Precedence: CLI --org → profile.toml →
     // CWD-walked `.contour/config.toml` → anchor-walked
