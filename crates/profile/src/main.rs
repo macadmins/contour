@@ -276,6 +276,9 @@ fn run(cli: Cli) -> Result<()> {
             recursive,
             max_depth,
             no_parallel,
+            deprecations,
+            md_report,
+            fail_on_deprecations,
         } => {
             let parallel = !no_parallel;
             cli::scan::handle_scan(
@@ -285,6 +288,9 @@ fn run(cli: Cli) -> Result<()> {
                 recursive,
                 max_depth,
                 parallel,
+                deprecations,
+                md_report.as_deref(),
+                fail_on_deprecations,
                 config.as_ref(),
                 output_mode,
             )?;
