@@ -330,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn prefix_to_exact_is_NOT_broadening() {
+    fn prefix_to_exact_is_not_broadening() {
         // exact → prefix widens; prefix → exact narrows. Don't flag.
         let baseline_payload = payload_with_services(services_with_one_rule(
             "SystemPolicyAllFiles",
