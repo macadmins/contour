@@ -581,6 +581,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             format,
             combined,
             no_combined,
+            sanitize,
         } => {
             // Tristate: --combined wins true, --no-combined wins false,
             // neither leaves the value as None so the recipe TOML
@@ -610,6 +611,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                         output.as_deref(),
                         org.as_deref(),
                         full,
+                        sanitize,
                         schema_path.as_deref(),
                         config.as_ref(),
                         &vars,

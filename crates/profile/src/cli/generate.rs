@@ -317,9 +317,30 @@ fn secret_ref_lookup(name: &str) -> Option<String> {
     SECRET_REFS.get().and_then(|m| m.get(name).cloned())
 }
 
+/// When set, secret references are left unresolved in the output
+/// (`--sanitize`) so the generated profile is safe to share/commit.
+static SANITIZE: OnceLock<bool> = OnceLock::new();
+
+/// Enable sanitize mode for the rest of the process.
+fn set_sanitize(on: bool) {
+    let _ = SANITIZE.set(on);
+}
+
+/// Whether sanitize mode is active.
+fn sanitize_enabled() -> bool {
+    SANITIZE.get().copied().unwrap_or(false)
+}
+
 /// Resolve a value that may be a secret reference (`op://`, `env:`,
 /// `file:`, `secret:`).
 fn resolve_value(raw: &str) -> Result<ResolvedValue> {
+    // Sanitize mode: leave any secret reference verbatim in the output.
+    if sanitize_enabled() && is_secret_reference(raw) {
+        return Ok(ResolvedValue {
+            value: raw.to_string(),
+            is_binary: false,
+        });
+    }
     if raw.starts_with("op://") {
         resolve_op(raw)
     } else if let Some(name) = raw.strip_prefix("secret:") {
@@ -700,6 +721,7 @@ pub fn handle_generate_recipe(
     output_dir: Option<&str>,
     org: Option<&str>,
     full: bool,
+    sanitize: bool,
     schema_path: Option<&str>,
     config: Option<&ProfileConfig>,
     vars: &[String],
@@ -707,6 +729,14 @@ pub fn handle_generate_recipe(
     format: &str,
     cli_combined: Option<bool>,
 ) -> Result<()> {
+    set_sanitize(sanitize);
+    if sanitize && output_mode == OutputMode::Human {
+        println!(
+            "{}",
+            "⚠ Sanitize mode — secret references left unresolved; output is not deployable as-is."
+                .yellow()
+        );
+    }
     // Resolve `--recipe-path`: explicit CLI flag wins, otherwise fall
     // back to `defaults.library_path` from `.contour/config.toml`
     // (with `recipes/` appended if the bare path doesn't already
