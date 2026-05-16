@@ -67,3 +67,26 @@ fn scan_without_flag_has_no_deprecation_field() {
         "default scan must not include deprecations: {stdout}"
     );
 }
+
+#[test]
+fn scan_md_report_writes_markdown_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("dep.mobileconfig");
+    std::fs::write(&file, DEPRECATED_PROFILE).unwrap();
+    let report = dir.path().join("report.md");
+
+    let out = contour()
+        .args([
+            "scan",
+            file.to_str().unwrap(),
+            "--md-report",
+            report.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let md = std::fs::read_to_string(&report).expect("report file written");
+    assert!(md.contains("# Deprecation Report"), "md: {md}");
+    assert!(md.contains("com.apple.SoftwareUpdate"), "md: {md}");
+    assert!(md.contains("### Critical"), "md: {md}");
+}

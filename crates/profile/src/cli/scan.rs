@@ -74,7 +74,7 @@ pub fn handle_scan(
 ) -> Result<()> {
     // `--md-report` implies `--deprecations`.
     let deprecations = deprecations || md_report.is_some();
-    let _ = (md_report, fail_on_deprecations); // wired in Tasks 7-8
+    let _ = fail_on_deprecations; // wired in Task 8
 
     // Build the deprecation registries once when scanning is requested.
     let registries = if deprecations {
@@ -109,7 +109,7 @@ pub fn handle_scan(
     };
 
     // Check if we should use batch processing
-    if should_batch_process_multi(paths) {
+    let all_results: Vec<ScanResult> = if should_batch_process_multi(paths) {
         let files = collect_profile_files_multi_with_depth(paths, recursive, max_depth)?;
         if files.is_empty() {
             if output_mode == OutputMode::Human {
@@ -127,22 +127,31 @@ pub fn handle_scan(
 
         let results = scan_files(&files, simulate, &sim_domain, parallel, registry_refs);
         output_scan_results(&results, output_mode);
-        return Ok(());
-    }
+        results
+    } else {
+        // Single file mode
+        let input = &paths[0];
+        let path = Path::new(input);
 
-    // Single file mode
-    let input = &paths[0];
-    let path = Path::new(input);
+        if !path.exists() {
+            anyhow::bail!("Path not found: {input}");
+        }
+        if !path.is_file() {
+            anyhow::bail!("Path is not a file: {input}");
+        }
 
-    if !path.exists() {
-        anyhow::bail!("Path not found: {input}");
-    }
-
-    if path.is_file() {
         let result = scan_single_file(path, simulate, &sim_domain, registry_refs)?;
         output_scan_result(&result, output_mode);
-    } else {
-        anyhow::bail!("Path is not a file: {input}");
+        vec![result]
+    };
+
+    if let Some(md_path) = md_report {
+        let md = render_markdown_report(&all_results);
+        std::fs::write(md_path, md)
+            .with_context(|| format!("Failed to write Markdown report to {md_path}"))?;
+        if output_mode == OutputMode::Human {
+            println!("  {} Markdown report → {}", "→".green(), md_path);
+        }
     }
 
     Ok(())
@@ -477,6 +486,81 @@ fn print_deprecations(findings: &[DeprecationFinding]) {
             repl.green()
         );
     }
+}
+
+/// Render a Markdown deprecation report for the scanned profiles.
+fn render_markdown_report(results: &[ScanResult]) -> String {
+    use std::fmt::Write as _;
+
+    let mut md = String::new();
+    md.push_str("# Deprecation Report\n\n");
+
+    let scanned: Vec<&ScanResult> = results
+        .iter()
+        .filter(|r| r.deprecations.is_some())
+        .collect();
+    let with_findings: Vec<&ScanResult> = scanned
+        .iter()
+        .copied()
+        .filter(|r| r.deprecations.as_ref().is_some_and(|d| !d.is_empty()))
+        .collect();
+
+    let _ = writeln!(
+        md,
+        "{} profile(s) scanned, {} with deprecations.\n",
+        scanned.len(),
+        with_findings.len()
+    );
+
+    md.push_str("| Profile | Critical | Warning |\n");
+    md.push_str("|---|---|---|\n");
+    for r in &scanned {
+        let report = r.deprecations.as_ref().unwrap();
+        let _ = writeln!(
+            md,
+            "| {} | {} | {} |",
+            r.path,
+            report.critical_count(),
+            report.warning_count()
+        );
+    }
+    md.push('\n');
+
+    for r in &with_findings {
+        let report = r.deprecations.as_ref().unwrap();
+        let _ = writeln!(md, "## {}\n", r.path);
+        for sev in [DeprecationSeverity::Critical, DeprecationSeverity::Warning] {
+            let group: Vec<&DeprecationFinding> = report
+                .findings
+                .iter()
+                .filter(|f| f.severity == sev)
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+            let label = match sev {
+                DeprecationSeverity::Critical => "Critical",
+                DeprecationSeverity::Warning => "Warning",
+            };
+            let _ = writeln!(md, "### {label}\n");
+            for f in group {
+                let since = f
+                    .deprecated_in
+                    .as_deref()
+                    .map(|d| format!(" (deprecated {d})"))
+                    .unwrap_or_default();
+                let repl = f
+                    .replacement
+                    .as_deref()
+                    .map(|r| format!(" → `{r}`"))
+                    .unwrap_or_default();
+                let _ = writeln!(md, "- `{}`{}{}", f.locator, since, repl);
+                let _ = writeln!(md, "  - {}", f.detail);
+            }
+            md.push('\n');
+        }
+    }
+    md
 }
 
 /// Sanitize a name for use in identifier
