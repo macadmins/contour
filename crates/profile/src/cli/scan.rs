@@ -2,8 +2,13 @@
 
 use crate::cli::glob_utils::{collect_profile_files_multi_with_depth, should_batch_process_multi};
 use crate::config::ProfileConfig;
+use crate::migrate::mapping::MigrationRegistry;
 use crate::output::OutputMode;
 use crate::profile::ConfigurationProfile;
+use crate::profile::deprecation::{
+    self, DeprecationFinding, DeprecationReport, DeprecationSeverity,
+};
+use crate::schema::SchemaRegistry;
 use crate::signing;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -20,6 +25,8 @@ struct ScanResult {
     payloads: Vec<PayloadInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     simulation: Option<SimulationInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deprecations: Option<DeprecationReport>,
 }
 
 #[derive(serde::Serialize)]
@@ -67,7 +74,19 @@ pub fn handle_scan(
 ) -> Result<()> {
     // `--md-report` implies `--deprecations`.
     let deprecations = deprecations || md_report.is_some();
-    let _ = (deprecations, md_report, fail_on_deprecations); // wired in Tasks 6-8
+    let _ = (md_report, fail_on_deprecations); // wired in Tasks 7-8
+
+    // Build the deprecation registries once when scanning is requested.
+    let registries = if deprecations {
+        let migration = MigrationRegistry::new();
+        let schema = SchemaRegistry::embedded()
+            .context("Failed to load embedded schema for deprecation scan")?;
+        Some((migration, schema))
+    } else {
+        None
+    };
+    let registry_refs = registries.as_ref().map(|(m, s)| (m, s));
+
     // Resolve simulation domain: CLI → profile.toml → .contour/config.toml.
     // Only required when --simulate is set (otherwise sim_domain is unused;
     // see line ~150 where the simulation block is gated on `simulate`).
@@ -106,7 +125,7 @@ pub fn handle_scan(
             return Ok(());
         }
 
-        let results = scan_files(&files, simulate, &sim_domain, parallel);
+        let results = scan_files(&files, simulate, &sim_domain, parallel, registry_refs);
         output_scan_results(&results, output_mode);
         return Ok(());
     }
@@ -120,7 +139,7 @@ pub fn handle_scan(
     }
 
     if path.is_file() {
-        let result = scan_single_file(path, simulate, &sim_domain)?;
+        let result = scan_single_file(path, simulate, &sim_domain, registry_refs)?;
         output_scan_result(&result, output_mode);
     } else {
         anyhow::bail!("Path is not a file: {input}");
@@ -130,7 +149,12 @@ pub fn handle_scan(
 }
 
 /// Scan a single profile file
-fn scan_single_file(path: &Path, simulate: bool, sim_domain: &str) -> Result<ScanResult> {
+fn scan_single_file(
+    path: &Path,
+    simulate: bool,
+    sim_domain: &str,
+    registries: Option<(&MigrationRegistry, &SchemaRegistry)>,
+) -> Result<ScanResult> {
     // Check if profile is signed
     let is_signed = signing::is_signed_profile(path).unwrap_or(false);
 
@@ -197,6 +221,11 @@ fn scan_single_file(path: &Path, simulate: bool, sim_domain: &str) -> Result<Sca
         None
     };
 
+    let deprecations = registries.map(|(migration, schema)| {
+        let value = profile.to_plist_value();
+        deprecation::scan_deprecations(&value, path, migration, schema)
+    });
+
     Ok(ScanResult {
         path: path.display().to_string(),
         signed: is_signed,
@@ -208,6 +237,7 @@ fn scan_single_file(path: &Path, simulate: bool, sim_domain: &str) -> Result<Sca
         },
         payloads,
         simulation,
+        deprecations,
     })
 }
 
@@ -217,12 +247,13 @@ fn scan_files(
     simulate: bool,
     sim_domain: &str,
     parallel: bool,
+    registries: Option<(&MigrationRegistry, &SchemaRegistry)>,
 ) -> Vec<ScanResult> {
     if parallel {
         let outcomes: Vec<Result<ScanResult, (String, String)>> = files
             .par_iter()
             .map(|path| {
-                scan_single_file(path, simulate, sim_domain)
+                scan_single_file(path, simulate, sim_domain, registries)
                     .map_err(|e| (path.display().to_string(), e.to_string()))
             })
             .collect();
@@ -243,7 +274,7 @@ fn scan_files(
         let mut errors = Vec::new();
 
         for path in files {
-            match scan_single_file(path, simulate, sim_domain) {
+            match scan_single_file(path, simulate, sim_domain, registries) {
                 Ok(result) => results.push(result),
                 Err(e) => errors.push((path.display().to_string(), e.to_string())),
             }
@@ -281,7 +312,7 @@ fn scan_directory(
         .map(|entry| entry.path().to_path_buf())
         .collect();
 
-    Ok(scan_files(&files, simulate, sim_domain, parallel))
+    Ok(scan_files(&files, simulate, sim_domain, parallel, None))
 }
 
 /// Check if a file is a profile file
@@ -328,6 +359,15 @@ fn output_scan_results(results: &[ScanResult], output_mode: OutputMode) {
         println!("  {} {} profiles", "Total:".cyan(), results.len());
         println!("  {} {} signed", "Signed:".cyan(), signed_count);
         println!("  {} {} payloads", "Payloads:".cyan(), total_payloads);
+
+        if results.iter().any(|r| r.deprecations.is_some()) {
+            let dep_total: usize = results
+                .iter()
+                .filter_map(|r| r.deprecations.as_ref())
+                .map(|r| r.findings.len())
+                .sum();
+            println!("  {} {} deprecations", "Deprecated:".cyan(), dep_total);
+        }
     }
 }
 
@@ -398,7 +438,45 @@ fn print_scan_result_human(result: &ScanResult) {
         }
     }
 
+    if let Some(report) = &result.deprecations {
+        println!();
+        print_deprecations(&report.findings);
+    }
+
     println!();
+}
+
+/// Print the deprecation findings for one scanned profile.
+fn print_deprecations(findings: &[DeprecationFinding]) {
+    if findings.is_empty() {
+        println!("  {} {}", "Deprecations".white().bold(), "none".green());
+        return;
+    }
+    println!("  {} ({})", "Deprecations".white().bold(), findings.len());
+    for f in findings {
+        let (marker, sev) = match f.severity {
+            DeprecationSeverity::Critical => ("✗".red(), "critical".red()),
+            DeprecationSeverity::Warning => ("⚠".yellow(), "warning".yellow()),
+        };
+        let since = f
+            .deprecated_in
+            .as_deref()
+            .map(|d| format!(" (deprecated {d})"))
+            .unwrap_or_default();
+        let repl = f
+            .replacement
+            .as_deref()
+            .map(|r| format!(" → {r}"))
+            .unwrap_or_default();
+        println!(
+            "    {} [{}] {}{}{}",
+            marker,
+            sev,
+            f.locator.cyan(),
+            since.dimmed(),
+            repl.green()
+        );
+    }
 }
 
 /// Sanitize a name for use in identifier

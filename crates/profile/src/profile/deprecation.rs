@@ -14,6 +14,7 @@ use crate::migrate::mapping::{MigrationRegistry, MigrationStatus};
 use crate::schema::SchemaRegistry;
 use plist::Value;
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 /// Whether a finding is about a whole payload type or a single key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -146,6 +147,36 @@ fn walk_keys(
             walk_keys(item, Some(i), schema, out);
         }
     }
+}
+
+/// All deprecation findings for a single profile file.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeprecationReport {
+    pub path: PathBuf,
+    pub findings: Vec<DeprecationFinding>,
+}
+
+impl DeprecationReport {
+    pub fn for_file(path: &Path, findings: Vec<DeprecationFinding>) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            findings,
+        }
+    }
+}
+
+/// Scan a profile for every known deprecation — payload types and keys —
+/// and wrap the findings in a `DeprecationReport` for `path`. This is the
+/// entry point `profile scan` uses.
+pub fn scan_deprecations(
+    value: &Value,
+    path: &Path,
+    migration: &MigrationRegistry,
+    schema: &SchemaRegistry,
+) -> DeprecationReport {
+    let mut findings = scan_payload_types(value, migration);
+    findings.extend(scan_keys(value, schema));
+    DeprecationReport::for_file(path, findings)
 }
 
 #[cfg(test)]

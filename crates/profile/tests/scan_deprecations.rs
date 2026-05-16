@@ -1,0 +1,69 @@
+//! Integration: `profile scan --deprecations`.
+
+use std::process::Command;
+
+fn contour() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_profile"))
+}
+
+const DEPRECATED_PROFILE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadIdentifier</key><string>com.test.dep</string>
+  <key>PayloadUUID</key><string>1AE33410-88E1-40DE-B41E-08BCD69B6238</string>
+  <key>PayloadDisplayName</key><string>Dep Test</string>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key><string>com.apple.SoftwareUpdate</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadIdentifier</key><string>com.test.dep.su</string>
+      <key>PayloadUUID</key><string>B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E</string>
+    </dict>
+  </array>
+</dict>
+</plist>
+"#;
+
+#[test]
+fn scan_deprecations_flags_deprecated_payload_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("dep.mobileconfig");
+    std::fs::write(&file, DEPRECATED_PROFILE).unwrap();
+
+    let out = contour()
+        .args(["scan", file.to_str().unwrap(), "--deprecations", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "scan should succeed without the gate");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"deprecations\""),
+        "JSON should carry a deprecations field: {stdout}"
+    );
+    assert!(
+        stdout.contains("com.apple.SoftwareUpdate"),
+        "deprecated payload type should appear: {stdout}"
+    );
+}
+
+#[test]
+fn scan_without_flag_has_no_deprecation_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("dep.mobileconfig");
+    std::fs::write(&file, DEPRECATED_PROFILE).unwrap();
+
+    let out = contour()
+        .args(["scan", file.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("\"deprecations\""),
+        "default scan must not include deprecations: {stdout}"
+    );
+}
