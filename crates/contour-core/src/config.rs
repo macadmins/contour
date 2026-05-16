@@ -65,6 +65,10 @@ pub struct ValidationConfig {
     /// advisory hints don't break CI.
     #[serde(default)]
     pub fail_on_warnings: bool,
+    /// When true, `profile scan --deprecations` exits non-zero if any
+    /// deprecation is found. CLI `--fail-on-deprecations` overrides this.
+    #[serde(default)]
+    pub fail_on_deprecations: bool,
 }
 
 impl Default for ValidationConfig {
@@ -72,6 +76,7 @@ impl Default for ValidationConfig {
         Self {
             fail_on_errors: true,
             fail_on_warnings: false,
+            fail_on_deprecations: false,
         }
     }
 }
@@ -424,5 +429,21 @@ mod tests {
     fn test_resolve_org_explicit() {
         let result = resolve_org(Some("com.example".into()));
         assert_eq!(result.unwrap(), "com.example");
+    }
+
+    #[test]
+    fn validation_config_defaults_fail_on_deprecations_false() {
+        let v = ValidationConfig::default();
+        assert!(v.fail_on_errors);
+        assert!(!v.fail_on_warnings);
+        assert!(!v.fail_on_deprecations);
+    }
+
+    #[test]
+    fn validation_config_parses_fail_on_deprecations() {
+        let toml = "fail_on_deprecations = true\n";
+        let v: ValidationConfig = toml::from_str(toml).unwrap();
+        assert!(v.fail_on_deprecations);
+        assert!(v.fail_on_errors); // serde default still applies
     }
 }
