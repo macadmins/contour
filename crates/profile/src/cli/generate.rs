@@ -14,7 +14,8 @@ use contour_profiles::ProfileBuilder;
 use inquire::{Confirm, MultiSelect, Select, Text};
 use plist::{Dictionary, Value};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Resolve a `--recipe-path` value with config fallback.
 ///
@@ -250,13 +251,70 @@ struct ResolvedValue {
     is_binary: bool,
 }
 
+/// Process-wide `.env` map, populated once per run by [`load_dotenv`].
+static DOTENV: OnceLock<HashMap<String, String>> = OnceLock::new();
+
+/// Parse a `.env` file: `KEY=VALUE` per line, `#` comments, blank lines,
+/// optional `export ` prefix, surrounding single/double quotes stripped.
+/// A missing or unreadable file yields an empty map (not an error).
+fn parse_env_file(path: &Path) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return map;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        if let Some((k, v)) = line.split_once('=') {
+            let k = k.trim();
+            let v = v.trim();
+            let v = v
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .or_else(|| v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                .unwrap_or(v);
+            if !k.is_empty() {
+                map.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+    map
+}
+
+/// Populate the process-wide `.env` map once. `dirs` are searched in
+/// precedence order low→high — a later dir's `.env` overrides an
+/// earlier one's. Must be called before any `env:` resolution.
+fn load_dotenv(dirs: &[PathBuf]) {
+    DOTENV.get_or_init(|| {
+        let mut merged = HashMap::new();
+        for dir in dirs {
+            merged.extend(parse_env_file(&dir.join(".env")));
+        }
+        merged
+    });
+}
+
+/// Look up a name in the loaded `.env` map (empty if `load_dotenv` was
+/// never called).
+fn dotenv_lookup(name: &str) -> Option<String> {
+    DOTENV.get().and_then(|m| m.get(name).cloned())
+}
+
 /// Resolve a value that may be a secret reference (`op://`, `env:`, `file:`).
 fn resolve_value(raw: &str) -> Result<ResolvedValue> {
     if raw.starts_with("op://") {
         resolve_op(raw)
     } else if let Some(env_name) = raw.strip_prefix("env:") {
+        // Process environment first, then the loaded `.env` file.
         let val = std::env::var(env_name)
-            .with_context(|| format!("Environment variable '{env_name}' not set"))?;
+            .ok()
+            .or_else(|| dotenv_lookup(env_name))
+            .with_context(|| {
+                format!("Environment variable '{env_name}' not set (checked process env and .env)")
+            })?;
         Ok(ResolvedValue {
             value: val,
             is_binary: false,
@@ -640,6 +698,19 @@ pub fn handle_generate_recipe(
         }
     };
     let anchor_ref = anchor.as_deref();
+
+    // Load `.env` for `env:` resolution: anchor dir first (low
+    // precedence), then CWD (overrides). Must run before `parse_vars`.
+    {
+        let mut dotenv_dirs: Vec<PathBuf> = Vec::new();
+        if let Some(a) = anchor_ref {
+            dotenv_dirs.push(a.to_path_buf());
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            dotenv_dirs.push(cwd);
+        }
+        load_dotenv(&dotenv_dirs);
+    }
 
     // Vars precedence: anchor config < CWD config < CLI `--vars`.
     let mut var_map: HashMap<String, String> =
@@ -1632,6 +1703,36 @@ mod tests {
     fn test_toml_to_plist_string() {
         let val = toml::Value::String("hello".into());
         assert_eq!(toml_to_plist(&val), Value::String("hello".into()));
+    }
+
+    #[test]
+    fn test_parse_env_file_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(
+            &path,
+            "# a comment\n\
+             FOO=bar\n\
+             \n\
+             export BAZ=qux\n\
+             QUOTED=\"with spaces\"\n\
+             SINGLE='single quoted'\n\
+             URL=https://x?a=b\n",
+        )
+        .unwrap();
+        let map = parse_env_file(&path);
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(map.get("BAZ").map(String::as_str), Some("qux"));
+        assert_eq!(map.get("QUOTED").map(String::as_str), Some("with spaces"));
+        assert_eq!(map.get("SINGLE").map(String::as_str), Some("single quoted"));
+        assert_eq!(map.get("URL").map(String::as_str), Some("https://x?a=b"));
+        assert!(!map.contains_key("# a comment"));
+    }
+
+    #[test]
+    fn test_parse_env_file_missing_is_empty() {
+        let map = parse_env_file(Path::new("/nonexistent/path/.env"));
+        assert!(map.is_empty());
     }
 
     #[test]
