@@ -155,6 +155,73 @@ contour profile generate --recipe wifi --recipe-path ./presets/recipes --org com
 
 ---
 
+## MDM variables
+
+MDM **deploy-time variables** — Jamf's `%Username%`, Fleet's
+`FLEET_VAR_NDES_SCEP_CHALLENGE`, and similar — are substituted by the
+**MDM server on the device at deploy time**, not by contour. contour
+passes them through untouched. They differ from secrets (resolved by
+contour at generate time) and from `[vars]` (`{{PLACEHOLDER}}`
+substitution, also at generate time):
+
+| Kind | Config | Example | Substituted by | When |
+|---|---|---|---|---|
+| Static var | `[vars]` | `{{OKTA_DOMAIN}}` | contour | generate |
+| Secret | `[secrets]` | `op://…`, `env:…` | contour | generate |
+| MDM variable | `[mdm_variables]` | `%Username%`, `FLEET_VAR_*` | the MDM server | deploy |
+
+### The `[mdm_variables]` pool
+
+Declare the MDM tokens you use in `.contour/config.toml` — a friendly
+name mapped to a token (composable with static text):
+
+```toml
+[mdm_variables]
+mdm = "fleet"                                    # fleet | jamf | apple
+
+[mdm_variables.pool]
+SCEP_CHALLENGE = "FLEET_VAR_NDES_SCEP_CHALLENGE"
+USER_EMAIL     = "%Username%@acme.com"
+```
+
+A recipe field `Challenge = "var:SCEP_CHALLENGE"` resolves through the
+pool to the token, which is emitted **verbatim** for the MDM to
+substitute on-device. The `mdm` flavour selects the built-in catalogue
+used for validation.
+
+### Reuse from secrets
+
+A `[secrets.refs]` entry can target a pooled variable, so a token like
+the NDES SCEP challenge is defined once and reachable as a secret:
+
+```toml
+[secrets.refs]
+NDES = "var:SCEP_CHALLENGE"
+```
+
+`Challenge = "secret:NDES"` then resolves `secret:` → `var:` → the
+`FLEET_VAR_…` token.
+
+### Validation
+
+`generate` warns on any MDM token in a recipe that is not in the active
+flavour's built-in catalogue **and** not in the pool — typo-catching
+(`FLEET_VAR_HOST_UUDI` is flagged). It is advisory and never fails the run.
+
+### Listing the catalogue
+
+```bash
+contour profile variables --mdm fleet     # built-in Fleet catalogue + your pool
+contour profile variables                 # all flavours when none is configured
+```
+
+contour ships catalogues for **Fleet** (exact + prefix variables like
+`FLEET_VAR_DIGICERT_DATA_<CA>`), **Jamf** (`%…%` payload variables), and
+**Apple** (minimal — Apple defines few literal in-profile tokens; extend
+via the pool).
+
+---
+
 ## Commands
 
 ### Getting Started

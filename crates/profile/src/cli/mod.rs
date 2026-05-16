@@ -33,6 +33,7 @@ pub mod synthesize;
 pub mod unsign;
 pub mod uuid;
 pub mod validate;
+pub mod variables;
 
 use clap::{Parser, Subcommand};
 
@@ -640,6 +641,17 @@ pub enum Commands {
 
     #[command(about = "List available signing identities")]
     Identities,
+
+    #[command(
+        about = "List known MDM deploy-time variables (Fleet/Jamf/Apple) and the config pool"
+    )]
+    Variables {
+        #[arg(
+            long,
+            help = "MDM flavour to list (fleet|jamf|apple); defaults to the configured one"
+        )]
+        mdm: Option<String>,
+    },
 
     #[command(about = "Link UUID cross-references between profiles")]
     Link {

@@ -441,6 +441,9 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Identities => {
             cli::sign::handle_list_identities(output_mode)?;
         }
+        Commands::Variables { mdm } => {
+            cli::variables::handle_variables(mdm.as_deref(), output_mode)?;
+        }
         Commands::Link {
             paths,
             output,

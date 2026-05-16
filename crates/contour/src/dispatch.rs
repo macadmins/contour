@@ -541,6 +541,9 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
         Commands::Identities => {
             profile::cli::sign::handle_list_identities(output_mode)?;
         }
+        Commands::Variables { mdm } => {
+            profile::cli::variables::handle_variables(mdm.as_deref(), output_mode)?;
+        }
         Commands::Link {
             paths,
             output,
