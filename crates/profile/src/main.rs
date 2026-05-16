@@ -502,6 +502,7 @@ fn run(cli: Cli) -> Result<()> {
                         recipe_path.as_deref(),
                         output.as_deref(),
                         org.as_deref(),
+                        full,
                         schema_path.as_deref(),
                         config.as_ref(),
                         &vars,

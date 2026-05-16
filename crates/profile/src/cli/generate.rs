@@ -607,6 +607,7 @@ pub fn handle_generate_recipe(
     recipe_path: Option<&str>,
     output_dir: Option<&str>,
     org: Option<&str>,
+    full: bool,
     schema_path: Option<&str>,
     config: Option<&ProfileConfig>,
     vars: &[String],
@@ -690,7 +691,7 @@ pub fn handle_generate_recipe(
 
         // Build payload content (using resolved values for secret references)
         let mut payload_content = if let Some(m) = manifest {
-            let mut content = build_payload_from_schema(m, &spec.fields, true);
+            let mut content = build_payload_from_schema(m, &spec.fields, full);
             // Apply extra fields with dot-notation nesting
             for (key, val) in &spec.extra_fields {
                 apply_nested_field(&mut content, key, toml_to_plist_resolved(val));
