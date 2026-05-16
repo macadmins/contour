@@ -618,6 +618,73 @@ pub fn parse_profile_lenient_from_bytes(data: &[u8]) -> Result<FixupResult> {
     })
 }
 
+impl FixupResult {
+    /// Wrap a strictly-parsed profile: no fixups, comments, or
+    /// placeholder substitutions were needed.
+    fn strict(profile: ConfigurationProfile) -> Self {
+        Self {
+            profile,
+            fixups: Vec::new(),
+            placeholders: Vec::new(),
+            placeholder_mapping: Vec::new(),
+            comments: Vec::new(),
+        }
+    }
+}
+
+/// How an import command should parse a `.mobileconfig`.
+///
+/// This is the single knob that decides whether the lenient repair
+/// layer (`fixup_profile_value`) is reachable. Every command that
+/// ingests externally-authored profiles should parse via
+/// [`parse_for_import`] / [`parse_for_import_from_bytes`] rather than
+/// calling the raw `parse_profile*` functions, so a malformed-but-
+/// fixable profile is never silently dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportParseMode {
+    /// Strict parse only — a profile missing a required field is an
+    /// error. Use when the caller explicitly opted into `--strict`.
+    Strict,
+    /// Strict parse first; on failure, fall back to lenient repair.
+    /// Well-formed profiles are parsed exactly as in `Strict` mode
+    /// (no placeholder substitution); only malformed ones get fixups.
+    Lenient,
+    /// Always lenient — additionally extracts XML comments and
+    /// placeholder mappings. Use for recipe conversion that needs
+    /// round-trip-faithful comment/placeholder preservation.
+    LenientWithComments,
+}
+
+/// Parse a profile file for an import pipeline. Single entry point so
+/// import commands cannot accidentally bypass the lenient repair layer.
+///
+/// The returned [`FixupResult::fixups`] lists every auto-repair applied
+/// (empty in `Strict` mode, or when a `Lenient` parse needed nothing).
+pub fn parse_for_import(path: &str, mode: ImportParseMode) -> Result<FixupResult> {
+    match mode {
+        ImportParseMode::Strict => parse_profile_auto_unsign(path).map(FixupResult::strict),
+        ImportParseMode::Lenient => match parse_profile_auto_unsign(path) {
+            Ok(profile) => Ok(FixupResult::strict(profile)),
+            Err(_) => parse_profile_lenient(path),
+        },
+        ImportParseMode::LenientWithComments => parse_profile_lenient(path),
+    }
+}
+
+/// Bytes variant of [`parse_for_import`] — for sources that already
+/// hold profile XML in memory (e.g. Jamf YAML exports). Does not
+/// auto-unsign; the input is assumed to be a plain plist.
+pub fn parse_for_import_from_bytes(data: &[u8], mode: ImportParseMode) -> Result<FixupResult> {
+    match mode {
+        ImportParseMode::Strict => parse_profile_from_bytes(data).map(FixupResult::strict),
+        ImportParseMode::Lenient => match parse_profile_from_bytes(data) {
+            Ok(profile) => Ok(FixupResult::strict(profile)),
+            Err(_) => parse_profile_lenient_from_bytes(data),
+        },
+        ImportParseMode::LenientWithComments => parse_profile_lenient_from_bytes(data),
+    }
+}
+
 /// Read raw bytes from the macOS pasteboard.
 pub fn read_pasteboard_bytes() -> Result<Vec<u8>> {
     if cfg!(not(target_os = "macos")) {

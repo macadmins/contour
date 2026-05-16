@@ -149,6 +149,16 @@ pub enum Commands {
         #[arg(long, help = "Import all profiles without interactive selection")]
         all: bool,
 
+        #[arg(
+            long,
+            help = "Reject profiles with auto-fixable defects instead of repairing them",
+            long_help = "By default, profiles missing a required field that has a known \
+                         default (e.g. PayloadVersion) are repaired on the fly with a \
+                         warning. With --strict, such profiles are rejected as parse \
+                         failures instead."
+        )]
+        strict: bool,
+
         /// Import from Jamf backup YAML files (jamf-cli export format)
         #[arg(long)]
         jamf: bool,

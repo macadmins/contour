@@ -11,7 +11,7 @@
 use crate::cli::generate::load_registry;
 use crate::cli::info::plist_tag_for;
 use crate::output::OutputMode;
-use crate::profile::parser::{XmlComment, parse_profile_lenient};
+use crate::profile::parser::{ImportParseMode, XmlComment, parse_for_import};
 use crate::recipe::{ProfileSpec, Recipe, RecipeMeta};
 use crate::schema::{PayloadManifest, Platform, SchemaRegistry};
 use anyhow::{Context, Result};
@@ -271,12 +271,13 @@ fn import_one(
     let path_str = input
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Input path is not valid UTF-8"))?;
-    let fixup = parse_profile_lenient(path_str).with_context(|| {
-        format!(
-            "Failed to parse {} as a configuration profile",
-            input.display()
-        )
-    })?;
+    let fixup =
+        parse_for_import(path_str, ImportParseMode::LenientWithComments).with_context(|| {
+            format!(
+                "Failed to parse {} as a configuration profile",
+                input.display()
+            )
+        })?;
     let profile = fixup.profile;
     let placeholder_mapping = fixup.placeholder_mapping;
     let xml_comments = fixup.comments;
@@ -463,12 +464,14 @@ fn import_combined(
         let path_str = input
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Input path is not valid UTF-8: {}", input.display()))?;
-        let fixup = parse_profile_lenient(path_str).with_context(|| {
-            format!(
-                "Failed to parse {} as a configuration profile",
-                input.display()
-            )
-        })?;
+        let fixup = parse_for_import(path_str, ImportParseMode::LenientWithComments).with_context(
+            || {
+                format!(
+                    "Failed to parse {} as a configuration profile",
+                    input.display()
+                )
+            },
+        )?;
         let profile = fixup.profile;
 
         // Take recipe-level fields from the first source that has them.
