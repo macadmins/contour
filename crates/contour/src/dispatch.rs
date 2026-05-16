@@ -422,6 +422,9 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             recursive,
             max_depth,
             no_parallel,
+            deprecations,
+            md_report,
+            fail_on_deprecations,
         } => {
             let parallel = !no_parallel;
             profile::cli::scan::handle_scan(
@@ -431,6 +434,9 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 recursive,
                 max_depth,
                 parallel,
+                deprecations,
+                md_report.as_deref(),
+                fail_on_deprecations,
                 config.as_ref(),
                 output_mode,
             )?;

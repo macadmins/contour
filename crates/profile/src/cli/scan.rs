@@ -59,9 +59,15 @@ pub fn handle_scan(
     recursive: bool,
     max_depth: Option<usize>,
     parallel: bool,
+    deprecations: bool,
+    md_report: Option<&str>,
+    fail_on_deprecations: bool,
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
 ) -> Result<()> {
+    // `--md-report` implies `--deprecations`.
+    let deprecations = deprecations || md_report.is_some();
+    let _ = (deprecations, md_report, fail_on_deprecations); // wired in Tasks 6-8
     // Resolve simulation domain: CLI → profile.toml → .contour/config.toml.
     // Only required when --simulate is set (otherwise sim_domain is unused;
     // see line ~150 where the simulation block is gated on `simulate`).

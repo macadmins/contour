@@ -323,6 +323,22 @@ pub enum Commands {
 
         #[arg(long, help = "Disable parallel processing")]
         no_parallel: bool,
+
+        #[arg(long, help = "Scan for deprecated payload types and keys")]
+        deprecations: bool,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Write a Markdown deprecation report to this path (implies --deprecations)"
+        )]
+        md_report: Option<String>,
+
+        #[arg(
+            long,
+            help = "Exit non-zero if any deprecation is found (overrides [validation].fail_on_deprecations)"
+        )]
+        fail_on_deprecations: bool,
     },
 
     #[command(
