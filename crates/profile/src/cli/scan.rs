@@ -74,7 +74,6 @@ pub fn handle_scan(
 ) -> Result<()> {
     // `--md-report` implies `--deprecations`.
     let deprecations = deprecations || md_report.is_some();
-    let _ = fail_on_deprecations; // wired in Task 8
 
     // Build the deprecation registries once when scanning is requested.
     let registries = if deprecations {
@@ -151,6 +150,24 @@ pub fn handle_scan(
             .with_context(|| format!("Failed to write Markdown report to {md_path}"))?;
         if output_mode == OutputMode::Human {
             println!("  {} Markdown report → {}", "→".green(), md_path);
+        }
+    }
+
+    // Gate: fail the run when deprecations are found and the gate is on.
+    // Runs after all output so the operator sees the full report first.
+    if deprecations {
+        let total: usize = all_results
+            .iter()
+            .filter_map(|r| r.deprecations.as_ref())
+            .map(|r| r.findings.len())
+            .sum();
+        let gate = fail_on_deprecations
+            || contour_core::config::resolve_validation_with_anchor(None).fail_on_deprecations;
+        if gate && total > 0 {
+            anyhow::bail!(
+                "deprecation scan failed: {total} deprecation(s) found \
+                 (--fail-on-deprecations / [validation].fail_on_deprecations)"
+            );
         }
     }
 
