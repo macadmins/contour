@@ -755,6 +755,12 @@ pub enum Commands {
             help = "Force separate emission: one .mobileconfig per [[profile]] (overrides recipe.output.combined)"
         )]
         no_combined: bool,
+
+        #[arg(
+            long,
+            help = "Leave secret references (op://, env:, file:, secret:) unresolved in the output so it is safe to share"
+        )]
+        sanitize: bool,
     },
 
     #[command(about = "Work with Declarative Device Management (DDM) declarations")]

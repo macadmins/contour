@@ -480,6 +480,7 @@ fn run(cli: Cli) -> Result<()> {
             format,
             combined,
             no_combined,
+            sanitize,
         } => {
             // Tristate: --combined wins true, --no-combined wins false,
             // neither leaves the value as None so the recipe TOML's
@@ -512,6 +513,7 @@ fn run(cli: Cli) -> Result<()> {
                         output.as_deref(),
                         org.as_deref(),
                         full,
+                        sanitize,
                         schema_path.as_deref(),
                         config.as_ref(),
                         &vars,
