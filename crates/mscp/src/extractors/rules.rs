@@ -208,6 +208,7 @@ impl RuleExtractor {
     }
 
     /// Get statistics about rules in a baseline
+    #[allow(dead_code, reason = "lib API; bin doesn't currently surface stats")]
     pub fn get_baseline_stats(&self, baseline_name: &str) -> Result<RuleStats> {
         let rules = self.extract_rules_for_baseline(baseline_name)?;
         Ok(RuleStats::from_rules(&rules))

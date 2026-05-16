@@ -27,6 +27,10 @@ pub enum MscpLayout {
     V2x,
 }
 
+#[allow(
+    dead_code,
+    reason = "lib API: `all`/`rules_subdir`/`rules_dir`/`baselines_dir` reachable from external consumers + tests; not transitively from the bin's `detect_or_from` → `detect` path"
+)]
 impl MscpLayout {
     /// All known layouts, newest first.
     pub fn all() -> &'static [Self] {
