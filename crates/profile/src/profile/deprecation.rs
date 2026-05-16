@@ -163,6 +163,24 @@ impl DeprecationReport {
             findings,
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.findings.is_empty()
+    }
+
+    pub fn critical_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|f| f.severity == DeprecationSeverity::Critical)
+            .count()
+    }
+
+    pub fn warning_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|f| f.severity == DeprecationSeverity::Warning)
+            .count()
+    }
 }
 
 /// Scan a profile for every known deprecation — payload types and keys —
