@@ -552,8 +552,12 @@ pub fn handle_generate(
 
     // Auto-validate generated output (mobileconfig only, not raw plist)
     if !is_plist {
-        let _ =
-            super::post_generate::validate_generated_profile(Path::new(&output_path), output_mode);
+        let policy = contour_core::config::resolve_validation_with_anchor(None);
+        super::post_generate::validate_generated_profile(
+            Path::new(&output_path),
+            output_mode,
+            &policy,
+        )?;
     }
 
     if output_mode == OutputMode::Json {
@@ -615,13 +619,38 @@ pub fn handle_generate_recipe(
     format: &str,
     cli_combined: Option<bool>,
 ) -> Result<()> {
-    let var_map = parse_vars(vars)?;
     // Resolve `--recipe-path`: explicit CLI flag wins, otherwise fall
     // back to `defaults.library_path` from `.contour/config.toml`
     // (with `recipes/` appended if the bare path doesn't already
     // point at a recipes dir).
     let resolved_recipe_path = resolve_recipe_path(recipe_path);
     let resolved_recipe_path_str = resolved_recipe_path.as_deref();
+
+    // Anchor for `.contour/config.toml` lookup: prefer a direct recipe
+    // file path, then `--recipe-path` (or its config fallback). When
+    // unset, anchored resolvers fall back to CWD only.
+    let anchor: Option<std::path::PathBuf> = {
+        let direct = Path::new(recipe_name);
+        if direct.is_file() {
+            direct.parent().map(Path::to_path_buf)
+        } else {
+            resolved_recipe_path
+                .as_deref()
+                .map(std::path::PathBuf::from)
+        }
+    };
+    let anchor_ref = anchor.as_deref();
+
+    // Vars precedence: anchor config < CWD config < CLI `--vars`.
+    let mut var_map: HashMap<String, String> =
+        contour_core::config::resolve_vars_with_anchor(anchor_ref)
+            .into_iter()
+            .collect();
+    for (k, v) in parse_vars(vars)? {
+        var_map.insert(k, v);
+    }
+
+    let validation_policy = contour_core::config::resolve_validation_with_anchor(anchor_ref);
 
     // Smart resolution: `recipe_name` may be either a bare name or a
     // direct path to a .toml file. The latter sidesteps the
@@ -658,21 +687,23 @@ pub fn handle_generate_recipe(
     // Resolve op://, env:, file: references in recipe field values
     resolve_recipe_secrets(&mut r.profiles)?;
 
-    // Resolve org domain: CLI --org → profile.toml → .contour/config.toml → error.
-    // We refuse to default to "com.example" because the resulting PayloadIdentifier
-    // is not deployable and silently produces invalid output.
-    let domain = org
-        .map(ToString::to_string)
-        .or_else(|| config.map(|c| c.organization.domain.clone()))
-        .or_else(|| {
-            contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
-        })
-        .ok_or_else(|| {
+    // Resolve org domain. Precedence: CLI --org → profile.toml →
+    // CWD-walked `.contour/config.toml` → anchor-walked
+    // `.contour/config.toml` → error. We refuse to default to
+    // "com.example" because the resulting PayloadIdentifier is not
+    // deployable and silently produces invalid output.
+    let domain = if let Some(o) = org {
+        o.to_string()
+    } else if let Some(c) = config {
+        c.organization.domain.clone()
+    } else {
+        contour_core::config::resolve_org_with_anchor(None, anchor_ref).map_err(|_| {
             anyhow::anyhow!(
                 "--org is required (e.g., --org com.yourorg)\n\
                  Alternatively, set organization.domain in profile.toml or .contour/config.toml"
             )
-        })?;
+        })?
+    };
 
     // Output directory
     let out_dir = output_dir.unwrap_or(&r.recipe.name);
@@ -777,10 +808,11 @@ pub fn handle_generate_recipe(
 
         // Auto-validate generated output
         if !is_plist {
-            let _ = super::post_generate::validate_generated_profile(
+            super::post_generate::validate_generated_profile(
                 Path::new(&output_path),
                 output_mode,
-            );
+                &validation_policy,
+            )?;
         }
 
         // Check for remaining placeholders
@@ -823,8 +855,11 @@ pub fn handle_generate_recipe(
 
         let final_bytes = substitute_placeholders(&bytes, &var_map);
         std::fs::write(&output_path, &final_bytes)?;
-        let _ =
-            super::post_generate::validate_generated_profile(Path::new(&output_path), output_mode);
+        super::post_generate::validate_generated_profile(
+            Path::new(&output_path),
+            output_mode,
+            &validation_policy,
+        )?;
 
         let xml = String::from_utf8_lossy(&final_bytes);
         for p in find_placeholders(&xml) {

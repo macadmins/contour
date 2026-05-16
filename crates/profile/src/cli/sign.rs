@@ -12,6 +12,47 @@ use colored::Colorize;
 use std::fs;
 use std::path::Path;
 
+/// Resolve a signing identity. Precedence: CLI `--identity` → CWD or
+/// preset-folder `.contour/config.toml` `[signing] identity` → auto-detected
+/// Developer ID certificate. Errors when no identity can be found.
+fn resolve_signer(
+    cli_identity: Option<&str>,
+    anchor: Option<&Path>,
+    output_mode: OutputMode,
+) -> Result<String> {
+    if let Some(id) = cli_identity {
+        return Ok(id.to_string());
+    }
+    if let Some(id) =
+        contour_core::config::resolve_signing_with_anchor(None, anchor).and_then(|s| s.identity)
+    {
+        if output_mode == OutputMode::Human {
+            println!(
+                "{} Using identity from .contour/config.toml: {}",
+                "ℹ".blue(),
+                id.cyan()
+            );
+        }
+        return Ok(id);
+    }
+    let identities = list_signing_identities()?;
+    let dev_id = identities
+        .iter()
+        .find(|i| i.is_developer_id)
+        .or_else(|| identities.first());
+    match dev_id {
+        Some(id) => {
+            if output_mode == OutputMode::Human {
+                println!("{} Auto-detected identity: {}", "ℹ".blue(), id.name.cyan());
+            }
+            Ok(id.name.clone())
+        }
+        None => anyhow::bail!(
+            "No signing identity found. Install a Developer ID certificate, set [signing].identity in .contour/config.toml, or specify --identity"
+        ),
+    }
+}
+
 /// Sign a profile (with batch support)
 pub fn handle_sign(
     paths: &[String],
@@ -99,28 +140,12 @@ fn handle_sign_batch(
         fs::create_dir_all(dir)?;
     }
 
-    // Determine signing identity once
-    let signer = if let Some(id) = identity {
-        id.to_string()
-    } else {
-        let identities = list_signing_identities()?;
-        let dev_id = identities
-            .iter()
-            .find(|i| i.is_developer_id)
-            .or_else(|| identities.first());
-
-        match dev_id {
-            Some(id) => {
-                if output_mode == OutputMode::Human {
-                    println!("{} Auto-detected identity: {}", "ℹ".blue(), id.name.cyan());
-                }
-                id.name.clone()
-            }
-            None => anyhow::bail!(
-                "No signing identity found. Install a Developer ID certificate or specify --identity"
-            ),
-        }
-    };
+    let anchor = paths
+        .first()
+        .map(Path::new)
+        .and_then(|p| p.parent())
+        .map(Path::to_path_buf);
+    let signer = resolve_signer(identity, anchor.as_deref(), output_mode)?;
 
     // Build signing config
     let mut config = SigningConfig::new(signer.clone());
@@ -165,30 +190,8 @@ fn handle_sign_single(
     output_mode: OutputMode,
 ) -> Result<()> {
     let input_path = Path::new(file);
-
-    // Determine signing identity
-    let signer = if let Some(id) = identity {
-        id.to_string()
-    } else {
-        // Auto-detect Developer ID certificate
-        let identities = list_signing_identities()?;
-        let dev_id = identities
-            .iter()
-            .find(|i| i.is_developer_id)
-            .or_else(|| identities.first());
-
-        match dev_id {
-            Some(id) => {
-                if output_mode == OutputMode::Human {
-                    println!("{} Auto-detected identity: {}", "ℹ".blue(), id.name.cyan());
-                }
-                id.name.clone()
-            }
-            None => anyhow::bail!(
-                "No signing identity found. Install a Developer ID certificate or specify --identity"
-            ),
-        }
-    };
+    let anchor = input_path.parent().map(Path::to_path_buf);
+    let signer = resolve_signer(identity, anchor.as_deref(), output_mode)?;
 
     // Determine output path
     let output_path = if let Some(path) = output {

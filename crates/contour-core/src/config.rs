@@ -4,6 +4,7 @@
 //! organization identity and defaults. This eliminates the need for
 //! `--org` flags on every invocation.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -15,6 +16,20 @@ pub struct ContourConfig {
     pub organization: OrgConfig,
     #[serde(default)]
     pub defaults: DefaultsConfig,
+    /// Default substitutions for `{{PLACEHOLDER}}`-style recipe vars.
+    /// CLI `--vars` and recipe-level overrides take precedence; this
+    /// table only fills in placeholders the operator hasn't otherwise
+    /// supplied.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vars: BTreeMap<String, String>,
+    /// Code-signing defaults used by `contour profile sign` when no
+    /// `--identity` is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing: Option<SigningConfig>,
+    /// Schema-validation policy applied to commands that emit
+    /// profiles. Defaults: errors fail the command, warnings don't.
+    #[serde(default)]
+    pub validation: ValidationConfig,
 }
 
 /// Organization identity.
@@ -24,6 +39,45 @@ pub struct OrgConfig {
     pub domain: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_url: Option<String>,
+}
+
+/// Code-signing identity defaults.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SigningConfig {
+    /// Developer ID Installer identity name (or SHA-1 hash). Passed to
+    /// `security cms -S -N <identity>` when no `--identity` flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
+    /// Apple Developer Team ID — used for `FilterDataProviderDesignatedRequirement`
+    /// strings and signature verification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
+}
+
+/// Schema-validation policy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValidationConfig {
+    /// When true, commands that produce profiles return a non-zero
+    /// exit status if the embedded schema reports any error.
+    #[serde(default = "default_true")]
+    pub fail_on_errors: bool,
+    /// When true, warnings also fail the command. Off by default so
+    /// advisory hints don't break CI.
+    #[serde(default)]
+    pub fail_on_warnings: bool,
+}
+
+impl Default for ValidationConfig {
+    fn default() -> Self {
+        Self {
+            fail_on_errors: true,
+            fail_on_warnings: false,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Optional project-wide defaults.
@@ -58,7 +112,23 @@ impl ContourConfig {
     ///
     /// Returns `None` if no config is found before reaching the filesystem root.
     pub fn load_nearest() -> Option<Self> {
-        let mut dir = std::env::current_dir().ok()?;
+        let dir = std::env::current_dir().ok()?;
+        Self::load_nearest_from(&dir)
+    }
+
+    /// Walk up from `start` looking for `.contour/config.toml`. If
+    /// `start` is a file, search begins in its parent directory.
+    /// Returns `None` if no config is found before reaching the
+    /// filesystem root.
+    ///
+    /// Lets callers anchor lookup at a preset folder or recipe file
+    /// path so an operator's `.contour/config.toml` travels with the
+    /// preset library, regardless of where the binary is invoked from.
+    pub fn load_nearest_from(start: &Path) -> Option<Self> {
+        let mut dir = start.canonicalize().ok().or_else(|| Some(start.into()))?;
+        if dir.is_file() {
+            dir = dir.parent()?.to_path_buf();
+        }
         loop {
             if dir.join(CONFIG_DIR).join(CONFIG_FILE).is_file() {
                 return Self::load(&dir);
@@ -94,19 +164,35 @@ impl ContourConfig {
 /// 2. `.contour/config.toml` found by walking up the directory tree
 /// 3. Error with guidance to use `contour init`
 pub fn resolve_org(org: Option<String>) -> anyhow::Result<String> {
-    // 1. Explicit --org flag
+    resolve_org_with_anchor(org, None)
+}
+
+/// Resolve organization domain with an optional path anchor.
+///
+/// Precedence: CLI flag → `CONTOUR_ORG` env → CWD-walked config →
+/// anchor-walked config → error. The CWD-walked config wins over the
+/// anchor because the operator's project config represents the
+/// operator's identity, while a `.contour/config.toml` shipped inside
+/// a preset folder is a vendor-provided default.
+pub fn resolve_org_with_anchor(
+    org: Option<String>,
+    anchor: Option<&Path>,
+) -> anyhow::Result<String> {
     if let Some(o) = org {
         return Ok(o);
     }
-    // 2. CONTOUR_ORG environment variable (useful for CI/GitHub Actions)
     if let Ok(env_org) = std::env::var("CONTOUR_ORG") {
         if !env_org.is_empty() {
             return Ok(env_org);
         }
     }
-    // 3. .contour/config.toml
     if let Some(cfg) = ContourConfig::load_nearest() {
         return Ok(cfg.organization.domain);
+    }
+    if let Some(a) = anchor {
+        if let Some(cfg) = ContourConfig::load_nearest_from(a) {
+            return Ok(cfg.organization.domain);
+        }
     }
     anyhow::bail!(
         "--org is required. Set it via:\n  \
@@ -114,6 +200,65 @@ pub fn resolve_org(org: Option<String>) -> anyhow::Result<String> {
          • CONTOUR_ORG=com.yourcompany (env var, ideal for CI)\n  \
          • contour init (creates .contour/config.toml)"
     )
+}
+
+/// Merge the `[vars]` table from configs anchored at CWD and at
+/// `anchor`, layering the CWD config over the anchor config (so the
+/// operator's project overrides a preset folder's defaults). The
+/// returned map can be combined with CLI `--vars` by the caller —
+/// CLI entries should win on conflict.
+pub fn resolve_vars_with_anchor(anchor: Option<&Path>) -> BTreeMap<String, String> {
+    let mut merged = BTreeMap::new();
+    if let Some(a) = anchor {
+        if let Some(cfg) = ContourConfig::load_nearest_from(a) {
+            merged.extend(cfg.vars);
+        }
+    }
+    if let Some(cfg) = ContourConfig::load_nearest() {
+        merged.extend(cfg.vars);
+    }
+    merged
+}
+
+/// Resolve a signing identity. Precedence: CLI flag → CWD-walked
+/// config `[signing]` → anchor-walked config `[signing]` → `None`.
+pub fn resolve_signing_with_anchor(
+    cli_identity: Option<String>,
+    anchor: Option<&Path>,
+) -> Option<SigningConfig> {
+    if let Some(id) = cli_identity {
+        return Some(SigningConfig {
+            identity: Some(id),
+            team_id: None,
+        });
+    }
+    if let Some(cfg) = ContourConfig::load_nearest() {
+        if cfg.signing.is_some() {
+            return cfg.signing;
+        }
+    }
+    if let Some(a) = anchor {
+        if let Some(cfg) = ContourConfig::load_nearest_from(a) {
+            if cfg.signing.is_some() {
+                return cfg.signing;
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the validation policy. CWD config wins over anchor config;
+/// falls back to defaults (errors fail, warnings don't).
+pub fn resolve_validation_with_anchor(anchor: Option<&Path>) -> ValidationConfig {
+    if let Some(cfg) = ContourConfig::load_nearest() {
+        return cfg.validation;
+    }
+    if let Some(a) = anchor {
+        if let Some(cfg) = ContourConfig::load_nearest_from(a) {
+            return cfg.validation;
+        }
+    }
+    ValidationConfig::default()
 }
 
 /// Resolve the organization display name from multiple sources.
@@ -251,6 +396,9 @@ mod tests {
                 manifests_path: None,
                 library_path: None,
             },
+            vars: BTreeMap::new(),
+            signing: None,
+            validation: ValidationConfig::default(),
         };
 
         let dir = tempfile::tempdir().unwrap();
