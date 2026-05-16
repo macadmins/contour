@@ -30,6 +30,26 @@ pub struct ContourConfig {
     /// profiles. Defaults: errors fail the command, warnings don't.
     #[serde(default)]
     pub validation: ValidationConfig,
+    /// Secret catalogue: named references resolved by `secret:NAME`,
+    /// plus default secret-source settings.
+    #[serde(default)]
+    pub secrets: SecretsConfig,
+}
+
+/// Secret catalogue and default secret-source settings.
+///
+/// `refs` maps a logical name to an `op://`/`env:`/`file:` reference;
+/// a recipe field `Password = "secret:WIFI_PW"` resolves through this
+/// table. `dotenv` overrides the default `.env` path; `op_vault` names
+/// a default 1Password vault (reserved for future short-form lookups).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SecretsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dotenv: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op_vault: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refs: BTreeMap<String, String>,
 }
 
 /// Organization identity.
@@ -266,6 +286,30 @@ pub fn resolve_validation_with_anchor(anchor: Option<&Path>) -> ValidationConfig
     ValidationConfig::default()
 }
 
+/// Merge `[secrets]` from configs anchored at CWD and at `anchor`,
+/// layering CWD over the anchor (operator project overrides a preset
+/// folder's defaults). `refs` maps merge key-by-key; scalar settings
+/// (`dotenv`, `op_vault`) take the CWD value when present.
+pub fn resolve_secrets_with_anchor(anchor: Option<&Path>) -> SecretsConfig {
+    let mut merged = SecretsConfig::default();
+    if let Some(a) = anchor {
+        if let Some(cfg) = ContourConfig::load_nearest_from(a) {
+            merged = cfg.secrets;
+        }
+    }
+    if let Some(cfg) = ContourConfig::load_nearest() {
+        let cwd = cfg.secrets;
+        merged.refs.extend(cwd.refs);
+        if cwd.dotenv.is_some() {
+            merged.dotenv = cwd.dotenv;
+        }
+        if cwd.op_vault.is_some() {
+            merged.op_vault = cwd.op_vault;
+        }
+    }
+    merged
+}
+
 /// Resolve the organization display name from multiple sources.
 ///
 /// Resolution order:
@@ -404,6 +448,7 @@ mod tests {
             vars: BTreeMap::new(),
             signing: None,
             validation: ValidationConfig::default(),
+            secrets: SecretsConfig::default(),
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -445,5 +490,34 @@ mod tests {
         let v: ValidationConfig = toml::from_str(toml).unwrap();
         assert!(v.fail_on_deprecations);
         assert!(v.fail_on_errors); // serde default still applies
+    }
+
+    #[test]
+    fn secrets_config_defaults_empty() {
+        let v = SecretsConfig::default();
+        assert!(v.dotenv.is_none());
+        assert!(v.op_vault.is_none());
+        assert!(v.refs.is_empty());
+    }
+
+    #[test]
+    fn secrets_config_parses_refs_and_sources() {
+        let toml = "\
+            dotenv = \".env.prod\"\n\
+            op_vault = \"Corp\"\n\
+            [refs]\n\
+            WIFI_PW = \"op://Corp/WiFi/password\"\n\
+            API_KEY = \"env:API_KEY\"\n";
+        let v: SecretsConfig = toml::from_str(toml).unwrap();
+        assert_eq!(v.dotenv.as_deref(), Some(".env.prod"));
+        assert_eq!(v.op_vault.as_deref(), Some("Corp"));
+        assert_eq!(
+            v.refs.get("WIFI_PW").map(String::as_str),
+            Some("op://Corp/WiFi/password")
+        );
+        assert_eq!(
+            v.refs.get("API_KEY").map(String::as_str),
+            Some("env:API_KEY")
+        );
     }
 }
