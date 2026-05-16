@@ -285,6 +285,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             max_depth,
             dry_run,
             all,
+            strict,
             jamf,
         } => {
             let validate = !no_validate;
@@ -300,6 +301,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     regen_uuid,
                     dry_run,
                     all,
+                    strict,
                     output_mode,
                 )?;
             } else {
@@ -314,6 +316,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     max_depth,
                     dry_run,
                     all,
+                    strict,
                     output_mode,
                 )?;
             }

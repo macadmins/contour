@@ -85,6 +85,7 @@ pub fn handle_jamf_import(
     regen_uuid: bool,
     dry_run: bool,
     import_all: bool,
+    strict: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
     let start = Instant::now();
@@ -311,6 +312,7 @@ pub fn handle_jamf_import(
             config,
             validate,
             regen_uuid,
+            strict,
             output_mode,
         ) {
             Ok(()) => {
@@ -436,15 +438,26 @@ fn process_extracted_profile(
     config: Option<&ProfileConfig>,
     validate: bool,
     regen_uuid: bool,
+    strict: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
-    // 1. Parse the extracted plist XML
-    let plist_bytes = ep.plist_xml.as_bytes();
-    let mut profile = parser::parse_profile_from_bytes(plist_bytes)
+    // 1. Parse the extracted plist XML via the shared import helper:
+    //    Jamf exports with auto-fixable defects (missing PayloadVersion,
+    //    etc.) are repaired unless --strict was given.
+    let mode = if strict {
+        parser::ImportParseMode::Strict
+    } else {
+        parser::ImportParseMode::Lenient
+    };
+    let fixup = parser::parse_for_import_from_bytes(ep.plist_xml.as_bytes(), mode)
         .with_context(|| format!("Failed to parse plist from \"{}\"", ep.name))?;
+    let mut profile = fixup.profile;
 
     if output_mode == OutputMode::Human {
         println!("  {} Parsed plist from YAML", "✓".green());
+        for f in &fixup.fixups {
+            println!("  {} Repaired: {}", "⚠".yellow(), f);
+        }
     }
 
     // 2. Normalize (org_domain and org_name are already resolved by caller)
@@ -638,6 +651,7 @@ general:
             true,
             false, // not dry_run
             true,  // import_all
+            false, // not strict
             OutputMode::Json,
         )
         .unwrap();
@@ -683,6 +697,7 @@ general:
             true,
             false,
             true,
+            false, // not strict
             OutputMode::Json,
         );
 

@@ -23,6 +23,9 @@ struct DiscoveredProfile {
     payload_types: Vec<String>,
     signed: bool,
     parse_error: Option<String>,
+    /// Auto-repairs applied during lenient parsing (e.g. "added missing
+    /// PayloadVersion=1"). Empty when the profile parsed cleanly.
+    fixups: Vec<String>,
 }
 
 struct PayloadTypeGroup {
@@ -58,6 +61,15 @@ impl std::fmt::Display for SelectionMode {
     }
 }
 
+/// Map the `--strict` flag to the shared import parser mode.
+fn import_mode(strict: bool) -> parser::ImportParseMode {
+    if strict {
+        parser::ImportParseMode::Strict
+    } else {
+        parser::ImportParseMode::Lenient
+    }
+}
+
 // ── Main entry point ─────────────────────────────────────────────────
 
 #[expect(
@@ -76,6 +88,7 @@ pub fn handle_import(
     max_depth: Option<usize>,
     dry_run: bool,
     import_all: bool,
+    strict: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
     let source_path = Path::new(source);
@@ -84,7 +97,7 @@ pub fn handle_import(
     }
 
     // Phase 1: Discovery
-    let discovered = discover_profiles(source_path, max_depth)?;
+    let discovered = discover_profiles(source_path, max_depth, strict)?;
 
     let parsed_count = discovered
         .iter()
@@ -95,6 +108,7 @@ pub fn handle_import(
         .filter(|p| p.parse_error.is_some())
         .count();
     let signed_count = discovered.iter().filter(|p| p.signed).count();
+    let repaired_count = discovered.iter().filter(|p| !p.fixups.is_empty()).count();
 
     // Collect unique payload types
     let mut unique_types = HashSet::new();
@@ -123,6 +137,17 @@ pub fn handle_import(
             discovered.len().to_string().green()
         );
         println!("  {} parsed successfully", parsed_count.to_string().green());
+        if repaired_count > 0 {
+            println!(
+                "  {} repaired on the fly (auto-fixable defects):",
+                repaired_count.to_string().yellow()
+            );
+            for p in discovered.iter().filter(|p| !p.fixups.is_empty()) {
+                for f in &p.fixups {
+                    println!("    {} {} — {}", "⚠".yellow(), p.path.display(), f);
+                }
+            }
+        }
         if failed_count > 0 {
             println!(
                 "  {} failed to parse (skipped):",
@@ -403,6 +428,7 @@ pub fn handle_import(
             config,
             validate,
             regen_uuid,
+            strict,
             output_mode,
         ) {
             Ok(actual_path) => {
@@ -438,7 +464,11 @@ pub fn handle_import(
 
 // ── Discovery ────────────────────────────────────────────────────────
 
-fn discover_profiles(source: &Path, max_depth: Option<usize>) -> Result<Vec<DiscoveredProfile>> {
+fn discover_profiles(
+    source: &Path,
+    max_depth: Option<usize>,
+    strict: bool,
+) -> Result<Vec<DiscoveredProfile>> {
     let mut profiles = Vec::new();
 
     let mut walker = WalkDir::new(source).follow_links(true);
@@ -462,44 +492,58 @@ fn discover_profiles(source: &Path, max_depth: Option<usize>) -> Result<Vec<Disc
         // Check if signed
         let signed = signing::is_signed_profile(path).unwrap_or(false);
 
-        // Try to parse
+        // Parse via the shared import helper: profiles with auto-fixable
+        // defects (missing PayloadVersion, bare payloads, Real version
+        // ints) are admitted and repaired unless --strict was given.
         let path_str = path.to_string_lossy().to_string();
-        match parser::parse_profile_auto_unsign(&path_str) {
-            Ok(profile) => {
-                let payload_types: Vec<String> = profile
-                    .payload_content
-                    .iter()
-                    .map(|c| c.payload_type.clone())
-                    .collect();
-
-                profiles.push(DiscoveredProfile {
-                    path: path.to_path_buf(),
-                    display_name: profile.payload_display_name.clone(),
-                    identifier: profile.payload_identifier.clone(),
-                    description: profile.payload_description(),
-                    payload_types,
-                    signed,
-                    parse_error: None,
-                });
-            }
-            Err(e) => {
-                profiles.push(DiscoveredProfile {
-                    path: path.to_path_buf(),
-                    display_name: String::new(),
-                    identifier: String::new(),
-                    description: None,
-                    payload_types: Vec::new(),
-                    signed,
-                    parse_error: Some(format!("{e:#}")),
-                });
-            }
-        }
+        let discovered = match parser::parse_for_import(&path_str, import_mode(strict)) {
+            Ok(fixup) => discovered_from_profile(path, &fixup.profile, signed, fixup.fixups),
+            Err(e) => discovered_parse_error(path, signed, format!("{e:#}")),
+        };
+        profiles.push(discovered);
     }
 
     // Sort by filename for consistent ordering
     profiles.sort_by(|a, b| a.path.file_name().cmp(&b.path.file_name()));
 
     Ok(profiles)
+}
+
+/// Build a `DiscoveredProfile` from a successfully parsed profile.
+fn discovered_from_profile(
+    path: &Path,
+    profile: &crate::profile::ConfigurationProfile,
+    signed: bool,
+    fixups: Vec<String>,
+) -> DiscoveredProfile {
+    DiscoveredProfile {
+        path: path.to_path_buf(),
+        display_name: profile.payload_display_name.clone(),
+        identifier: profile.payload_identifier.clone(),
+        description: profile.payload_description(),
+        payload_types: profile
+            .payload_content
+            .iter()
+            .map(|c| c.payload_type.clone())
+            .collect(),
+        signed,
+        parse_error: None,
+        fixups,
+    }
+}
+
+/// Build a `DiscoveredProfile` placeholder for a file that could not be parsed.
+fn discovered_parse_error(path: &Path, signed: bool, error: String) -> DiscoveredProfile {
+    DiscoveredProfile {
+        path: path.to_path_buf(),
+        display_name: String::new(),
+        identifier: String::new(),
+        description: None,
+        payload_types: Vec::new(),
+        signed,
+        parse_error: Some(error),
+        fixups: Vec::new(),
+    }
 }
 
 // ── Payload type grouping ────────────────────────────────────────────
@@ -764,15 +808,21 @@ fn import_single_profile(
     config: Option<&ProfileConfig>,
     validate: bool,
     regen_uuid: bool,
+    strict: bool,
     output_mode: OutputMode,
 ) -> Result<PathBuf> {
     let path_str = source.to_string_lossy().to_string();
 
-    // 1. Parse (auto-unsign)
-    let mut profile = parser::parse_profile_auto_unsign(&path_str)?;
+    // 1. Parse (auto-unsign). The shared helper repairs auto-fixable
+    //    defects unless --strict was given; each repair is reported.
+    let fixup = parser::parse_for_import(&path_str, import_mode(strict))?;
     if output_mode == OutputMode::Human {
         println!("  {} Parsed (auto-unsigned)", "✓".green());
+        for f in &fixup.fixups {
+            println!("  {} Repaired: {}", "⚠".yellow(), f);
+        }
     }
+    let mut profile = fixup.profile;
 
     // 2. Normalize (org_domain and org_name are already resolved by caller)
     if org_domain.is_some() || org_name.is_some() {

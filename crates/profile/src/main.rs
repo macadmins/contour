@@ -139,6 +139,7 @@ fn run(cli: Cli) -> Result<()> {
             max_depth,
             dry_run,
             all,
+            strict,
             jamf,
         } => {
             let validate = !no_validate;
@@ -154,6 +155,7 @@ fn run(cli: Cli) -> Result<()> {
                     regen_uuid,
                     dry_run,
                     all,
+                    strict,
                     output_mode,
                 )?;
             } else {
@@ -168,6 +170,7 @@ fn run(cli: Cli) -> Result<()> {
                     max_depth,
                     dry_run,
                     all,
+                    strict,
                     output_mode,
                 )?;
             }
