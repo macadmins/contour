@@ -258,6 +258,39 @@ struct SingleImportReport {
     comment_stats: CommentInjectionStats,
 }
 
+/// Sensitive-field detection for import redaction. The schema `X` flag
+/// is authoritative; the name heuristic is a backstop for YAML-sourced
+/// manifests (which carry `sensitive = false`) and payloads with no
+/// schema match.
+fn is_sensitive_field(payload_type: &str, key: &str, registry: Option<&SchemaRegistry>) -> bool {
+    if let Some(reg) = registry
+        && let Some(manifest) = reg.get(payload_type)
+        && let Some(def) = manifest.fields.get(key)
+        && def.flags.sensitive
+    {
+        return true;
+    }
+    let lower = key.to_ascii_lowercase();
+    ["password", "secret", "psk", "passphrase", "privatekey"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+/// Placeholder written into a recipe for a redacted sensitive field —
+/// `Key = "TODO: KEY"`. The operator replaces it with an `op://`,
+/// `env:`, `file:`, or `secret:` reference before generating.
+fn redaction_placeholder(key: &str) -> toml::Value {
+    toml::Value::String(format!("TODO: {}", key.to_ascii_uppercase()))
+}
+
+/// Sort + dedup redacted key names into the optional `[recipe] secrets`
+/// list (`None` when nothing was redacted).
+fn finish_secrets(mut keys: Vec<String>) -> Option<Vec<String>> {
+    keys.sort();
+    keys.dedup();
+    (!keys.is_empty()).then_some(keys)
+}
+
 fn import_one(
     input: &Path,
     into: &Path,
@@ -311,6 +344,10 @@ fn import_one(
     let mut profiles: Vec<ProfileSpec> = Vec::with_capacity(profile.payload_content.len());
     let mut seen_filenames: HashSet<String> = HashSet::new();
     let mut payload_types: Vec<String> = Vec::new();
+    // Schema registry drives sensitive-field detection during capture
+    // (and the sidecar later). Loaded once.
+    let registry = load_registry(None).ok();
+    let mut recipe_secrets: Vec<String> = Vec::new();
     for inner in &profile.payload_content {
         let display_name = inner
             .payload_display_name()
@@ -321,6 +358,13 @@ fn import_one(
         let mut fields: BTreeMap<String, toml::Value> = BTreeMap::new();
         for (k, v) in &inner.content {
             if MANAGEMENT_KEYS.contains(&k.as_str()) {
+                continue;
+            }
+            // Redact sensitive fields — never bake a real credential
+            // into a recipe TOML that gets committed/shared.
+            if is_sensitive_field(&inner.payload_type, k, registry.as_ref()) {
+                fields.insert(k.clone(), redaction_placeholder(k));
+                recipe_secrets.push(k.to_ascii_uppercase());
                 continue;
             }
             let tv = plist_value_to_toml(v, &placeholder_mapping).with_context(|| {
@@ -376,7 +420,7 @@ fn import_one(
             description,
             vendor,
             variables: None,
-            secrets: None,
+            secrets: finish_secrets(recipe_secrets),
             output: None,
         },
         profiles,
@@ -394,7 +438,6 @@ fn import_one(
     let (toml_body, comment_stats) = inject_xml_comments(&raw_toml, &xml_comments);
     std::fs::write(&recipe_path, &toml_body)
         .with_context(|| format!("Failed to write {}", recipe_path.display()))?;
-    let registry = load_registry(None).ok();
     let sidecar_body = build_meaning_md(&recipe, input, registry.as_ref());
     std::fs::write(&meaning_path, sidecar_body)
         .with_context(|| format!("Failed to write {}", meaning_path.display()))?;
@@ -450,6 +493,8 @@ fn import_combined(
     let mut first_description: Option<String> = None;
     let mut first_vendor: Option<String> = None;
     let mut vendor_warnings: Vec<String> = Vec::new();
+    let registry = load_registry(None).ok();
+    let mut recipe_secrets: Vec<String> = Vec::new();
 
     for input in inputs {
         // Only `.mobileconfig` makes sense in combined mode; `.json` DDM
@@ -511,6 +556,11 @@ fn import_combined(
                 if MANAGEMENT_KEYS.contains(&k.as_str()) {
                     continue;
                 }
+                if is_sensitive_field(&inner.payload_type, k, registry.as_ref()) {
+                    fields.insert(k.clone(), redaction_placeholder(k));
+                    recipe_secrets.push(k.to_ascii_uppercase());
+                    continue;
+                }
                 let tv =
                     plist_value_to_toml(v, &combined_placeholder_mapping).with_context(|| {
                         format!(
@@ -559,7 +609,7 @@ fn import_combined(
             description,
             vendor: first_vendor,
             variables: None,
-            secrets: None,
+            secrets: finish_secrets(recipe_secrets),
             output: None,
         },
         profiles: all_profiles,
@@ -574,7 +624,6 @@ fn import_combined(
     std::fs::write(&recipe_path, &toml_body)
         .with_context(|| format!("Failed to write {}", recipe_path.display()))?;
 
-    let registry = load_registry(None).ok();
     let sidecar_body = build_meaning_md(&recipe, &inputs[0], registry.as_ref());
     std::fs::write(&meaning_path, sidecar_body)
         .with_context(|| format!("Failed to write {}", meaning_path.display()))?;
@@ -1373,6 +1422,29 @@ pub fn build_meaning_md(
     }
     let _ = writeln!(out);
 
+    if let Some(secrets) = &recipe.recipe.secrets
+        && !secrets.is_empty()
+    {
+        let _ = writeln!(out, "## Secrets\n");
+        let _ = writeln!(
+            out,
+            "These fields were detected as sensitive and redacted on import —"
+        );
+        let _ = writeln!(
+            out,
+            "their real values are NOT in the recipe TOML. Replace each"
+        );
+        let _ = writeln!(
+            out,
+            "`TODO: <KEY>` placeholder with an `op://`, `env:`, `file:`, or"
+        );
+        let _ = writeln!(out, "`secret:` reference before generating:\n");
+        for s in secrets {
+            let _ = writeln!(out, "- `{s}`");
+        }
+        let _ = writeln!(out);
+    }
+
     // ── Schema-enriched payload sections ──────────────────────────────
     if !recipe.profiles.is_empty() {
         let _ = writeln!(out, "## Payloads\n");
@@ -1869,5 +1941,47 @@ mod tests {
         let v = plist::Value::String("auth.CONTOUR_PH_0/sso".into());
         let result = plist_value_to_toml(&v, &mapping).unwrap();
         assert_eq!(result.as_str(), Some("auth.$DOMAIN/sso"));
+    }
+
+    #[test]
+    fn redaction_placeholder_uppercases_key() {
+        assert_eq!(
+            redaction_placeholder("Password").as_str(),
+            Some("TODO: PASSWORD")
+        );
+    }
+
+    #[test]
+    fn is_sensitive_field_name_heuristic_backstop() {
+        // No registry — falls back to the name heuristic.
+        assert!(is_sensitive_field("com.example.x", "Password", None));
+        assert!(is_sensitive_field("com.example.x", "wifi_psk", None));
+        assert!(is_sensitive_field("com.example.x", "APISecret", None));
+        assert!(!is_sensitive_field("com.example.x", "SSID_STR", None));
+        assert!(!is_sensitive_field("com.example.x", "EncryptionType", None));
+    }
+
+    #[test]
+    fn is_sensitive_field_uses_schema_flag() {
+        // The embedded schema marks com.apple.wifi.managed's Password
+        // field sensitive (the `X` flag).
+        let registry = load_registry(None).ok();
+        if registry.is_none() {
+            return; // no embedded schema in this build
+        }
+        assert!(is_sensitive_field(
+            "com.apple.wifi.managed",
+            "Password",
+            registry.as_ref()
+        ));
+    }
+
+    #[test]
+    fn finish_secrets_sorts_dedups_and_empties_to_none() {
+        assert_eq!(finish_secrets(Vec::new()), None);
+        assert_eq!(
+            finish_secrets(vec!["B".into(), "A".into(), "B".into()]),
+            Some(vec!["A".to_string(), "B".to_string()])
+        );
     }
 }
