@@ -33,7 +33,9 @@
 //! Apple-schema-only; organizational conventions are off the agent's
 //! path until explicitly requested.
 
-use crate::migrate::mapping::{MigrationRegistry, MigrationStatus};
+use crate::migrate::mapping::MigrationRegistry;
+use crate::profile::deprecation;
+use crate::schema::SchemaRegistry;
 use crate::uuid::is_placeholder_uuid;
 use plist::Value;
 
@@ -94,6 +96,7 @@ pub const TIER_1_CHECKS: &[&str] = &[
     "nested-missing-payload-version",
     "placeholder-payload-uuid",
     "deprecated-payload-type",
+    "deprecated-key",
     "single-instance-payload-repeated",
 ];
 
@@ -145,6 +148,7 @@ impl LintOptions {
                     | "nested-missing-payload-version"
                     | "placeholder-payload-uuid"
                     | "deprecated-payload-type"
+                    | "deprecated-key"
                     | "single-instance-payload-repeated"
             ),
         }
@@ -190,6 +194,7 @@ fn is_tier_2(check: &str) -> bool {
 pub fn lint_profile_with_options(
     value: &Value,
     registry: &MigrationRegistry,
+    schema: Option<&SchemaRegistry>,
     options: &LintOptions,
 ) -> Vec<LintFinding> {
     let mut all = Vec::new();
@@ -207,6 +212,11 @@ pub fn lint_profile_with_options(
     }
     if options.includes("deprecated-payload-type") {
         all.extend(check_deprecated_payload_types(value, registry));
+    }
+    if options.includes("deprecated-key")
+        && let Some(sch) = schema
+    {
+        all.extend(check_deprecated_keys(value, sch));
     }
     if options.includes("single-instance-payload-repeated") {
         all.extend(check_single_instance_payload_repeated(
@@ -446,55 +456,37 @@ fn walk_check_uuid(value: &Value, idx: Option<usize>, findings: &mut Vec<LintFin
 /// Walk every payload in the tree and warn on any PayloadType that
 /// `MigrationRegistry` knows has a DDM replacement. Cites the
 /// replacement so the agent can route the user to the supported path.
+/// Lint adapter: deprecated payload types. Delegates detection to the
+/// shared `deprecation` module and converts to `LintFinding`s.
 pub fn check_deprecated_payload_types(
     value: &Value,
     registry: &MigrationRegistry,
 ) -> Vec<LintFinding> {
-    let mut findings = Vec::new();
-    walk_check_payload_type(value, None, registry, &mut findings);
-    findings
+    deprecation::scan_payload_types(value, registry)
+        .into_iter()
+        .map(|f| {
+            let lf = LintFinding::warn("deprecated-payload-type", f.detail);
+            match f.payload_index {
+                Some(i) => lf.with_payload(i),
+                None => lf,
+            }
+        })
+        .collect()
 }
 
-fn walk_check_payload_type(
-    value: &Value,
-    idx: Option<usize>,
-    registry: &MigrationRegistry,
-    findings: &mut Vec<LintFinding>,
-) {
-    let Value::Dictionary(dict) = value else {
-        return;
-    };
-    if let Some(payload_type) = dict.get("PayloadType").and_then(Value::as_string)
-        && let Some(mapping) = registry.get(payload_type)
-        && matches!(
-            mapping.status,
-            MigrationStatus::Available | MigrationStatus::Partial
-        )
-    {
-        let scope = idx.map_or("Profile".to_string(), |i| format!("PayloadContent[{i}]"));
-        let f = LintFinding::warn(
-            "deprecated-payload-type",
-            format!(
-                "{scope}: PayloadType {pt:?} has a DDM replacement \
-                 ({ddm:?}, status={status:?}); legacy payload still works on \
-                 macOS \u{2264}25 but stops working on macOS 26+. {notes}",
-                pt = payload_type,
-                ddm = mapping.ddm_type,
-                status = mapping.status,
-                notes = mapping.notes,
-            ),
-        );
-        findings.push(if let Some(i) = idx {
-            f.with_payload(i)
-        } else {
-            f
-        });
-    }
-    if let Some(Value::Array(items)) = dict.get("PayloadContent") {
-        for (i, item) in items.iter().enumerate() {
-            walk_check_payload_type(item, Some(i), registry, findings);
-        }
-    }
+/// Lint adapter: deprecated keys. Delegates to the shared `deprecation`
+/// module and converts to `LintFinding`s.
+pub fn check_deprecated_keys(value: &Value, schema: &SchemaRegistry) -> Vec<LintFinding> {
+    deprecation::scan_keys(value, schema)
+        .into_iter()
+        .map(|f| {
+            let lf = LintFinding::warn("deprecated-key", f.detail);
+            match f.payload_index {
+                Some(i) => lf.with_payload(i),
+                None => lf,
+            }
+        })
+        .collect()
 }
 
 // ── 1e. Single-instance payload repeated ──────────────────────────────
@@ -958,6 +950,44 @@ mod tests {
         assert!(check_deprecated_payload_types(&profile, &registry).is_empty());
     }
 
+    #[test]
+    fn deprecated_key_lint_check_fires() {
+        let schema = crate::schema::SchemaRegistry::embedded().expect("embedded schema");
+        // Find a (payload type, key) the schema marks deprecated.
+        let mut probe = None;
+        for manifest in schema.all() {
+            for (name, field) in &manifest.fields {
+                if field.deprecated_in.is_some() {
+                    probe = Some((manifest.payload_type.clone(), name.clone()));
+                    break;
+                }
+            }
+            if probe.is_some() {
+                break;
+            }
+        }
+        let Some((payload_type, key)) = probe else {
+            return; // no deprecated keys in this schema build
+        };
+        let mut p = Dictionary::new();
+        p.insert("PayloadType".into(), s(&payload_type));
+        p.insert("PayloadIdentifier".into(), s("com.test.p"));
+        p.insert(
+            "PayloadUUID".into(),
+            s("B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E"),
+        );
+        p.insert("PayloadVersion".into(), Value::Integer(1.into()));
+        p.insert(key.into(), Value::Boolean(true));
+        let mut top = Dictionary::new();
+        top.insert("PayloadType".into(), s("Configuration"));
+        top.insert(
+            "PayloadContent".into(),
+            Value::Array(vec![Value::Dictionary(p)]),
+        );
+        let findings = check_deprecated_keys(&Value::Dictionary(top), &schema);
+        assert!(findings.iter().any(|f| f.check == "deprecated-key"));
+    }
+
     // ── 1e single-instance payload repeated ──
 
     #[test]
@@ -1060,8 +1090,12 @@ mod tests {
             "PayloadContent".into(),
             Value::Array(vec![Value::Dictionary(a), Value::Dictionary(b)]),
         );
-        let findings =
-            lint_profile_with_options(&Value::Dictionary(top), &registry, &LintOptions::default());
+        let findings = lint_profile_with_options(
+            &Value::Dictionary(top),
+            &registry,
+            None,
+            &LintOptions::default(),
+        );
         let names: std::collections::HashSet<&str> = findings.iter().map(|f| f.check).collect();
         assert!(names.contains("duplicate-payload-uuid"), "1a fired");
         assert!(names.contains("payload-version-type"), "1b fired");
@@ -1212,6 +1246,7 @@ mod tests {
         let opted_in = lint_profile_with_options(
             &value,
             &registry,
+            None,
             &LintOptions {
                 strict: false,
                 selected_checks: Some(tier_2.clone()),
@@ -1221,6 +1256,7 @@ mod tests {
         let opted_in_strict = lint_profile_with_options(
             &value,
             &registry,
+            None,
             &LintOptions {
                 strict: true,
                 selected_checks: Some(tier_2),
@@ -1257,7 +1293,7 @@ mod tests {
         let value = Value::Dictionary(top);
 
         // Default mode: Tier-2 silent.
-        let default = lint_profile_with_options(&value, &registry, &LintOptions::default());
+        let default = lint_profile_with_options(&value, &registry, None, &LintOptions::default());
         assert!(
             !default
                 .iter()
@@ -1270,6 +1306,7 @@ mod tests {
         let strict_only = lint_profile_with_options(
             &value,
             &registry,
+            None,
             &LintOptions {
                 strict: true,
                 selected_checks: None,
@@ -1289,6 +1326,7 @@ mod tests {
         let opted_in = lint_profile_with_options(
             &value,
             &registry,
+            None,
             &LintOptions {
                 strict: false,
                 selected_checks: Some(tier_2),
@@ -1323,6 +1361,7 @@ mod tests {
         let result = lint_profile_with_options(
             &value,
             &registry,
+            None,
             &LintOptions {
                 strict: false,
                 selected_checks: Some(only),

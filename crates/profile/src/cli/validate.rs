@@ -515,6 +515,7 @@ fn validate_single_file_detailed(
         for finding in lint::lint_profile_with_options(
             &raw_value,
             &migration_registry,
+            registry,
             &lint_options_with_modes,
         ) {
             let severity = match finding.severity {
@@ -721,6 +722,7 @@ fn handle_validate_single(
         for finding in lint::lint_profile_with_options(
             &raw_value,
             &migration_registry,
+            schema_registry.as_ref(),
             &lint_options_with_modes,
         ) {
             let severity = match finding.severity {
