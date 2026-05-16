@@ -284,14 +284,14 @@ fn parse_env_file(path: &Path) -> HashMap<String, String> {
     map
 }
 
-/// Populate the process-wide `.env` map once. `dirs` are searched in
-/// precedence order low→high — a later dir's `.env` overrides an
-/// earlier one's. Must be called before any `env:` resolution.
-fn load_dotenv(dirs: &[PathBuf]) {
+/// Populate the process-wide `.env` map once. `files` are merged in
+/// precedence order low→high — a later file overrides an earlier one.
+/// Must be called before any `env:` resolution.
+fn load_dotenv(files: &[PathBuf]) {
     DOTENV.get_or_init(|| {
         let mut merged = HashMap::new();
-        for dir in dirs {
-            merged.extend(parse_env_file(&dir.join(".env")));
+        for f in files {
+            merged.extend(parse_env_file(f));
         }
         merged
     });
@@ -303,10 +303,37 @@ fn dotenv_lookup(name: &str) -> Option<String> {
     DOTENV.get().and_then(|m| m.get(name).cloned())
 }
 
-/// Resolve a value that may be a secret reference (`op://`, `env:`, `file:`).
+/// Process-wide `[secrets].refs` catalogue from `.contour/config.toml`,
+/// populated once per run by [`load_secret_refs`].
+static SECRET_REFS: OnceLock<HashMap<String, String>> = OnceLock::new();
+
+/// Install the `[secrets].refs` catalogue for `secret:NAME` resolution.
+fn load_secret_refs(refs: HashMap<String, String>) {
+    let _ = SECRET_REFS.set(refs);
+}
+
+/// Look up a `secret:NAME` reference's underlying target.
+fn secret_ref_lookup(name: &str) -> Option<String> {
+    SECRET_REFS.get().and_then(|m| m.get(name).cloned())
+}
+
+/// Resolve a value that may be a secret reference (`op://`, `env:`,
+/// `file:`, `secret:`).
 fn resolve_value(raw: &str) -> Result<ResolvedValue> {
     if raw.starts_with("op://") {
         resolve_op(raw)
+    } else if let Some(name) = raw.strip_prefix("secret:") {
+        // Indirection through the config `[secrets.refs]` catalogue.
+        let target = secret_ref_lookup(name).with_context(|| {
+            format!("Secret '{name}' is not defined in [secrets.refs] of .contour/config.toml")
+        })?;
+        if target.starts_with("secret:") {
+            anyhow::bail!(
+                "Secret '{name}' resolves to another secret: reference ('{target}') — \
+                 chained secret: references are not allowed"
+            );
+        }
+        resolve_value(&target)
     } else if let Some(env_name) = raw.strip_prefix("env:") {
         // Process environment first, then the loaded `.env` file.
         let val = std::env::var(env_name)
@@ -437,7 +464,10 @@ fn resolve_toml_value(val: &toml::Value) -> Result<toml::Value> {
 
 /// Check if a string value is a secret reference that needs resolution.
 fn is_secret_reference(s: &str) -> bool {
-    s.starts_with("op://") || s.starts_with("env:") || s.starts_with("file:")
+    s.starts_with("op://")
+        || s.starts_with("env:")
+        || s.starts_with("file:")
+        || s.starts_with("secret:")
 }
 
 /// Convert a TOML value to plist, handling `base64:` prefix as binary Data.
@@ -699,17 +729,25 @@ pub fn handle_generate_recipe(
     };
     let anchor_ref = anchor.as_deref();
 
-    // Load `.env` for `env:` resolution: anchor dir first (low
-    // precedence), then CWD (overrides). Must run before `parse_vars`.
+    // Resolve the `[secrets]` catalogue and install it for `secret:`
+    // resolution. Must run before `parse_vars` / `resolve_recipe_secrets`.
+    let secrets_cfg = contour_core::config::resolve_secrets_with_anchor(anchor_ref);
+    load_secret_refs(secrets_cfg.refs.clone().into_iter().collect());
+
+    // Load `.env` for `env:` resolution: anchor `.env` (low precedence),
+    // CWD `.env`, then a `[secrets].dotenv` override (highest).
     {
-        let mut dotenv_dirs: Vec<PathBuf> = Vec::new();
+        let mut dotenv_files: Vec<PathBuf> = Vec::new();
         if let Some(a) = anchor_ref {
-            dotenv_dirs.push(a.to_path_buf());
+            dotenv_files.push(a.join(".env"));
         }
         if let Ok(cwd) = std::env::current_dir() {
-            dotenv_dirs.push(cwd);
+            dotenv_files.push(cwd.join(".env"));
         }
-        load_dotenv(&dotenv_dirs);
+        if let Some(custom) = &secrets_cfg.dotenv {
+            dotenv_files.push(PathBuf::from(custom));
+        }
+        load_dotenv(&dotenv_files);
     }
 
     // Vars precedence: anchor config < CWD config < CLI `--vars`.
@@ -1733,6 +1771,16 @@ mod tests {
     fn test_parse_env_file_missing_is_empty() {
         let map = parse_env_file(Path::new("/nonexistent/path/.env"));
         assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_is_secret_reference_recognizes_all_prefixes() {
+        assert!(is_secret_reference("op://Vault/Item/field"));
+        assert!(is_secret_reference("env:PASSWORD"));
+        assert!(is_secret_reference("file:/etc/cert.p12"));
+        assert!(is_secret_reference("secret:WIFI_PW"));
+        assert!(!is_secret_reference("plain string"));
+        assert!(!is_secret_reference("TODO: PASSWORD"));
     }
 
     #[test]

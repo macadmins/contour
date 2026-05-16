@@ -125,6 +125,7 @@ fn run_noninteractive(
         vars: std::collections::BTreeMap::new(),
         signing: None,
         validation: contour_core::config::ValidationConfig::default(),
+        secrets: contour_core::config::SecretsConfig::default(),
     };
 
     config.save(root)?;
@@ -303,6 +304,7 @@ fn run_interactive(
         vars: std::collections::BTreeMap::new(),
         signing: None,
         validation: contour_core::config::ValidationConfig::default(),
+        secrets: contour_core::config::SecretsConfig::default(),
     };
 
     config.save(root)?;
