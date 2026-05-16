@@ -1330,11 +1330,15 @@ pub fn build_meaning_md(
 ) -> String {
     let name = &recipe.recipe.name;
     let description = &recipe.recipe.description;
+    // Use the file name only — never the absolute path. The recipe
+    // library is shareable; embedding a local filesystem path leaks
+    // the importing operator's environment.
+    let source_name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("the source profile");
     let intent = if description.is_empty() {
-        format!(
-            "Imported from `{}`. Document what this profile does.",
-            source.display()
-        )
+        format!("Imported from `{source_name}`. Document what this profile does.")
     } else {
         description.clone()
     };
@@ -1343,8 +1347,7 @@ pub fn build_meaning_md(
     let _ = writeln!(out, "# {name}\n");
     let _ = writeln!(
         out,
-        "Imported from `{}` via `contour profile library import`. The",
-        source.display()
+        "Imported from `{source_name}` via `contour profile library import`. The"
     );
     let _ = writeln!(
         out,
@@ -1364,7 +1367,7 @@ pub fn build_meaning_md(
     let _ = writeln!(out, "{intent}\n");
 
     let _ = writeln!(out, "## Source\n");
-    let _ = writeln!(out, "- Original profile: `{}`", source.display());
+    let _ = writeln!(out, "- Original profile: `{source_name}`");
     if let Some(vendor) = &recipe.recipe.vendor {
         let _ = writeln!(out, "- PayloadOrganization: `{vendor}`");
     }
