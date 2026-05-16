@@ -13,6 +13,7 @@ pub mod ddm;
 pub mod diff;
 pub mod docs;
 pub mod link;
+pub mod mdm_vars;
 pub mod migrate;
 pub mod output;
 pub mod plan;
