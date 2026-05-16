@@ -58,6 +58,103 @@ CLI flags > `profile.toml` > `.contour/config.toml` > built-in defaults.
 
 ---
 
+## Secrets
+
+Recipes are meant to be committed and shared, so a recipe field should
+hold a **reference** to a secret, never the secret itself. contour
+resolves references at generate time.
+
+### Reference prefixes
+
+A recipe `[profile.fields]` value (or a `--set KEY=VALUE`) is treated as
+a secret reference when it starts with one of:
+
+| Prefix | Resolves to | Example |
+|---|---|---|
+| `op://` | a 1Password item field via the `op` CLI | `op://Corp/WiFi/password` |
+| `env:` | an environment variable, then a `.env` file | `env:WIFI_PASSWORD` |
+| `file:` | the contents of a file (emitted as binary `Data`) | `file:/etc/scep/cert.p12` |
+| `secret:` | a named entry in the config `[secrets.refs]` catalogue | `secret:WIFI_PASSWORD` |
+
+`op://` is the canonical 1Password form — `op://<vault>/<item>/<field>`.
+
+### Import redaction
+
+`contour profile library import` never writes a real credential into a
+recipe. When a captured field is sensitive (the Apple schema `X` flag,
+or a name containing `password`/`secret`/`psk`/`passphrase`/`privatekey`),
+its value is replaced with a `TODO: <KEY>` placeholder, the field name is
+recorded in `[recipe] secrets`, and the `.meaning.md` sidecar gets a
+`## Secrets` section. Replace each `TODO:` with a real reference before
+generating.
+
+### `.env` files
+
+`env:NAME` is resolved from the process environment first, then a `.env`
+file — searched in the recipe-anchor directory, then the current
+directory (CWD wins), then a `[secrets].dotenv` path if configured.
+The file is plain `KEY=VALUE` (with `#` comments and optional `export`).
+
+**Add `.env` to `.gitignore` — never commit it.**
+
+### Config `[secrets]` catalogue
+
+`.contour/config.toml` can declare a reusable catalogue so recipes
+reference a name instead of repeating `op://…`:
+
+```toml
+[secrets]
+dotenv  = ".env"          # default .env path (optional)
+op_vault = "Corp"         # default 1Password vault (reserved)
+
+[secrets.refs]
+WIFI_PASSWORD  = "op://Corp/WiFi/password"
+SCEP_CHALLENGE = "env:SCEP_CHALLENGE"
+```
+
+A recipe field `Password = "secret:WIFI_PASSWORD"` then resolves through
+the catalogue to the underlying `op://…` reference.
+
+### GitHub Actions
+
+GitHub secrets work today with no extra wiring — expose them as env vars
+in the workflow and reference them with `env:`:
+
+```yaml
+- name: Generate profiles
+  env:
+    WIFI_PASSWORD: ${{ secrets.WIFI_PASSWORD }}
+  run: contour profile generate --recipe wifi --org com.acme -o build
+```
+
+### `--sanitize`
+
+`contour profile generate --sanitize` leaves every secret reference
+**unresolved** in the output `.mobileconfig` — the `op://…` / `env:…` /
+`secret:…` literal stays in place. The profile is then safe to share or
+commit for review, but is not deployable until regenerated without
+`--sanitize`. Default generation resolves the real values.
+
+### End-to-end example
+
+```bash
+# Import a Wi-Fi profile — the password is redacted automatically.
+contour profile library import ./wifi.mobileconfig --into ./presets
+# → presets/recipes/wifi.toml contains:  Password = "TODO: PASSWORD"
+
+# Edit the recipe to reference the secret instead of a literal:
+#   Password = "secret:WIFI_PASSWORD"
+# and add WIFI_PASSWORD to [secrets.refs] in .contour/config.toml.
+
+# Generate the real, deployable profile:
+contour profile generate --recipe wifi --recipe-path ./presets/recipes --org com.acme -o build
+
+# Or generate a shareable, sanitized copy:
+contour profile generate --recipe wifi --recipe-path ./presets/recipes --org com.acme -o review --sanitize
+```
+
+---
+
 ## Commands
 
 ### Getting Started
