@@ -3,6 +3,7 @@
 //! Core types for Apple configuration profiles including parsing, validation,
 //! and normalization of .mobileconfig files.
 
+pub mod deprecation;
 pub mod lint;
 pub mod normalizer;
 pub mod parser;
