@@ -473,6 +473,10 @@ pub enum Commands {
         /// Interactive mode: review and edit bundles before saving
         #[arg(short = 'I', long)]
         interactive: bool,
+
+        /// Also discover unsigned / unidentified apps by name similarity
+        #[arg(long)]
+        include_unsigned: bool,
     },
 
     /// Classify apps using bundle definitions and report coverage

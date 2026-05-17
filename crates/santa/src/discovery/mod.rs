@@ -5,7 +5,7 @@
 
 mod patterns;
 
-pub use patterns::{DiscoveredPattern, PatternType, SigningIdInfo, VendorInfo};
+pub use patterns::{DiscoveredPattern, NameInfo, PatternType, SigningIdInfo, VendorInfo};
 
 use crate::bundle::{Bundle, BundleSet, DiscoveryConfig};
 use crate::cel::{AppRecord, AppRecordSet};
@@ -200,6 +200,63 @@ impl DiscoveryEngine {
         result
     }
 
+    /// Analyze apps and discover name-similarity patterns.
+    ///
+    /// The fallback discovery dimension: groups apps that carry no valid
+    /// TeamID and no valid SigningID by their normalized name, surfacing
+    /// widely-installed unsigned or unidentified software that vendor-
+    /// and SigningID-based discovery skip entirely. These patterns are
+    /// review items — unsigned apps must ultimately be allowlisted by
+    /// binary hash.
+    pub fn discover_name_patterns(&mut self, apps: &AppRecordSet) -> DiscoveryResult {
+        let all_devices: std::collections::HashSet<_> =
+            apps.apps().iter().flat_map(|a| a.devices.iter()).collect();
+        self.total_devices = all_devices.len().max(1);
+
+        let mut result = DiscoveryResult::new(self.total_devices);
+
+        // Group by normalized name — only apps that vendor- and
+        // SigningID-discovery drop (no usable code-signing identifier).
+        let mut by_name: HashMap<String, NameInfo> = HashMap::new();
+
+        for app in apps.apps() {
+            let has_team_id = app
+                .team_id
+                .as_deref()
+                .is_some_and(patterns::is_valid_team_id);
+            let has_signing_id = app
+                .signing_id
+                .as_deref()
+                .is_some_and(crate::cel::is_valid_signing_id);
+            if has_team_id || has_signing_id {
+                continue;
+            }
+
+            let Some(app_name) = &app.app_name else {
+                continue;
+            };
+            let normalized = patterns::normalize_app_name(app_name);
+            if normalized.is_empty() {
+                continue;
+            }
+
+            by_name
+                .entry(normalized.clone())
+                .or_insert_with(|| NameInfo::new(normalized))
+                .add_app(app);
+        }
+
+        for info in by_name.into_values() {
+            let pattern = info.into_pattern();
+            if self.meets_threshold(&pattern) {
+                result.add_pattern(pattern);
+            }
+        }
+
+        result.sort_by_coverage();
+        result
+    }
+
     /// Discover vendor-level patterns by grouping on TeamID.
     fn discover_vendor_patterns(&self, apps: &AppRecordSet) -> Vec<DiscoveredPattern> {
         let mut by_team_id: HashMap<String, VendorInfo> = HashMap::new();
@@ -372,5 +429,29 @@ App4,1.0,UBF8T346G9,device1
         );
         // No vendor falls back to team_id
         assert_eq!(suggest_bundle_name(None, "ABC1234567"), "vendor-abc1234567");
+    }
+
+    #[test]
+    fn test_discover_name_patterns() {
+        // Apps with no TeamID/SigningID — invisible to vendor and
+        // SigningID discovery; the name dimension groups them by name.
+        let csv_data = r"name,version,device_name
+Acme Helper,1.0,device1
+acme helper,2.0,device2
+Acme  Helper,1.0,device3
+";
+        let apps = parse_fleet_csv(csv_data.as_bytes()).unwrap();
+        let mut engine = DiscoveryEngine::with_defaults();
+
+        // Vendor discovery finds nothing — there are no TeamIDs.
+        assert!(engine.discover(&apps).is_empty());
+
+        // Name discovery collapses the three spellings into one pattern.
+        let result = engine.discover_name_patterns(&apps);
+        assert_eq!(result.len(), 1);
+        let pattern = &result.patterns()[0];
+        assert_eq!(pattern.pattern_type, PatternType::NamePattern);
+        assert_eq!(pattern.device_count, 3);
+        assert_eq!(pattern.rule_type, crate::models::RuleType::Binary);
     }
 }

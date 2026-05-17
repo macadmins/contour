@@ -121,6 +121,37 @@ impl DiscoveredPattern {
         }
     }
 
+    /// Create a name-similarity pattern for apps that carry no usable
+    /// TeamID or SigningID, grouped by normalized app name.
+    pub fn name_pattern(
+        display_name: String,
+        normalized_name: &str,
+        device_count: usize,
+        name_variants: usize,
+        sample_apps: Vec<String>,
+    ) -> Self {
+        let description = format!(
+            "Unsigned/unidentified app \"{display_name}\" — no TeamID or SigningID; \
+             review and allowlist by binary hash"
+        );
+        let cel = format!(r#"has(app.app_name) && app.app_name == "{display_name}""#);
+        let confidence = (device_count as f64 / 50.0).min(1.0);
+
+        Self {
+            name: format!("unsigned-{normalized_name}").replace(' ', "-"),
+            description,
+            pattern_type: PatternType::NamePattern,
+            cel_expression: cel,
+            identifier: normalized_name.to_string(),
+            rule_type: RuleType::Binary,
+            device_count,
+            app_count: name_variants.max(1),
+            confidence,
+            sample_apps,
+            vendor: None,
+        }
+    }
+
     /// Convert this pattern to a bundle definition.
     pub fn to_bundle(&self) -> Bundle {
         Bundle::new(&self.name, &self.cel_expression)
@@ -273,23 +304,73 @@ impl SigningIdInfo {
     }
 }
 
+/// Collected information about apps that share a normalized name.
+///
+/// The name-similarity fallback for [`DiscoveredPattern`] — covers apps
+/// that carry no usable TeamID or SigningID.
+#[derive(Debug)]
+pub struct NameInfo {
+    /// Normalized (lowercased, de-punctuated) app name.
+    pub normalized_name: String,
+    /// Original app-name spellings collapsed into this group.
+    pub raw_names: HashSet<String>,
+    /// Unique devices with an app in this group.
+    pub devices: HashSet<String>,
+}
+
+impl NameInfo {
+    /// Create a new name-group collector.
+    pub fn new(normalized_name: String) -> Self {
+        Self {
+            normalized_name,
+            raw_names: HashSet::new(),
+            devices: HashSet::new(),
+        }
+    }
+
+    /// Add an app record to this name group.
+    pub fn add_app(&mut self, app: &AppRecord) {
+        if let Some(name) = &app.app_name {
+            self.raw_names.insert(name.clone());
+        }
+        for device in &app.devices {
+            self.devices.insert(device.clone());
+        }
+    }
+
+    /// A representative display name — the longest spelling seen.
+    pub fn display_name(&self) -> String {
+        self.raw_names
+            .iter()
+            .max_by_key(|n| n.len())
+            .cloned()
+            .unwrap_or_else(|| self.normalized_name.clone())
+    }
+
+    /// Convert to a discovered pattern.
+    pub fn into_pattern(self) -> DiscoveredPattern {
+        let display = self.display_name();
+        let device_count = self.devices.len();
+        let variants = self.raw_names.len();
+        let mut sample_apps: Vec<String> = self.raw_names.into_iter().collect();
+        sample_apps.sort();
+        sample_apps.truncate(5);
+        DiscoveredPattern::name_pattern(
+            display,
+            &self.normalized_name,
+            device_count,
+            variants,
+            sample_apps,
+        )
+    }
+}
+
 /// Check if a string is a valid Apple TeamID.
 pub fn is_valid_team_id(s: &str) -> bool {
     s.len() == 10 && s.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-/// Check if a string is a valid SigningID.
-#[expect(dead_code, reason = "reserved for future use")]
-pub fn is_valid_signing_id(s: &str) -> bool {
-    if let Some((team_part, bundle_part)) = s.split_once(':') {
-        (is_valid_team_id(team_part) || team_part == "platform") && !bundle_part.is_empty()
-    } else {
-        false
-    }
-}
-
-/// Normalize an app name for grouping.
-#[expect(dead_code, reason = "reserved for future use")]
+/// Normalize an app name for grouping (lowercase, punctuation → spaces).
 pub fn normalize_app_name(name: &str) -> String {
     name.to_lowercase()
         .replace(|c: char| !c.is_ascii_alphanumeric(), " ")

@@ -17,6 +17,7 @@ pub fn run(
     threshold: f64,
     min_apps: usize,
     interactive: bool,
+    include_unsigned: bool,
     json_output: bool,
 ) -> Result<()> {
     // Parse CSV
@@ -28,12 +29,21 @@ pub fn run(
     let config = DiscoveryConfig {
         threshold,
         min_apps,
-        include_unsigned: false,
+        include_unsigned,
     };
 
     // Run discovery
     let mut engine = DiscoveryEngine::new(config);
-    let result = engine.discover(&apps);
+    let mut result = engine.discover(&apps);
+
+    // With --include-unsigned, also fold in name-similarity patterns for
+    // apps that carry no usable TeamID or SigningID.
+    if include_unsigned {
+        for pattern in engine.discover_name_patterns(&apps) {
+            result.add_pattern(pattern);
+        }
+        result.sort_by_coverage();
+    }
 
     print_kv("Patterns discovered", &result.len().to_string());
     print_kv("Total devices", &result.total_devices.to_string());

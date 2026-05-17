@@ -287,12 +287,14 @@ fn main() -> Result<()> {
             threshold,
             min_apps,
             interactive,
+            include_unsigned,
         } => santa::cli::discover::run(
             &input,
             output.as_deref(),
             threshold,
             min_apps,
             interactive,
+            include_unsigned,
             cli.json,
         ),
 
