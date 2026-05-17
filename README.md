@@ -27,7 +27,24 @@ Profiles, DDM declarations, Santa rules, osquery policies — some of this confi
 
 ## How it's used
 
-Two modes — CLI on macOS or Linux. Same core: every artifact is processed with built-in tools and validated against the embedded schemas. For details on each tool, see the docs.
+Two modes — hand it to an AI agent, or run the CLI directly on macOS or Linux. Same core: every artifact is processed with built-in tools and validated against the embedded schemas. For details on each tool, see the docs.
+
+### As an AI skill
+
+Because validation is baked into every generator, Contour is safe to hand to an agent. Install it as a skill for Claude Code (and similar):
+
+```bash
+contour setup-agent
+```
+
+The agent gets the Apple schema, routed SOPs for each task, and a generator that refuses to write a broken file. You ask in plain English; the agent picks the right command and the tool keeps it straight — and it grounds osquery queries against the real embedded schema instead of guessing table and column names.
+
+```bash
+contour help-ai                     # what the agent sees: command index + SOP routing
+contour help-ai --sop profile       # profile generation SOP
+contour help-ai --sop osquery       # osquery schema lookup + query patterns
+contour help-ai --sop fleet-migrate # GitOps repo migration SOP
+```
 
 ### As a CLI toolkit
 
@@ -80,22 +97,6 @@ contour pppc generate pppc.toml -o pppc.mobileconfig
 # Santa allowlist
 contour santa scan -f csv -o apps.csv
 contour santa allow -i apps.csv --org com.acme -o santa.mobileconfig
-```
-
-### As an AI skill
-
-Because validation is baked into every generator, Contour is also safe to hand to an agent. Install it as a skill for Claude Code (and similar):
-
-```bash
-contour setup-agent
-```
-
-The agent gets the Apple schema, routed SOPs for each task, and a generator that refuses to write a broken file. You ask in plain English; the agent picks the right command and the tool keeps it straight.
-
-```bash
-contour help-ai                     # what the agent sees: command index + SOP routing
-contour help-ai --sop profile       # profile generation SOP
-contour help-ai --sop fleet-migrate # GitOps repo migration SOP
 ```
 
 ## Install
