@@ -177,7 +177,10 @@ pub fn verify_references(output: PathBuf, fix: bool) -> Result<()> {
     }
 
     if !report.orphaned_baseline_references.is_empty() {
-        println!("{}", "Orphaned baseline references in fleet files:".yellow());
+        println!(
+            "{}",
+            "Orphaned baseline references in fleet files:".yellow()
+        );
         for orphan in &report.orphaned_baseline_references {
             println!("  {} Baseline: {}", "-".dimmed(), orphan.reference);
             println!("    {} {}", "Reason:".dimmed(), orphan.reason);
