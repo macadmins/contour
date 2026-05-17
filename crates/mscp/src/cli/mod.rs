@@ -274,6 +274,22 @@ pub enum Commands {
         #[arg(short, long)]
         baseline: String,
 
+        /// mSCP repository layout: `auto` (sniff the rule schema),
+        /// `1.x` (flat `baselines/<name>.yaml`), or `2.0` (multi-OS,
+        /// `baselines/<os>/<name>_<os>_<version>.yaml`).
+        #[arg(long, default_value = "auto")]
+        mscp_version: String,
+
+        /// OS target for 2.0 layouts: `macos`, `ios`, or `visionos`.
+        /// Selects which `baselines/<os>/` file is built. Ignored for 1.x.
+        #[arg(long, value_enum, default_value_t = OsArg::Macos)]
+        os: OsArg,
+
+        /// OS version for 2.0 layouts (e.g. `26.0`). Defaults to the
+        /// highest version available for the baseline. Ignored for 1.x.
+        #[arg(long)]
+        os_version: Option<String>,
+
         /// Output directory for Fleet `GitOps` structure
         #[arg(short, long)]
         output: PathBuf,
@@ -773,6 +789,19 @@ impl From<OsArg> for crate::models::mscp::Platform {
             OsArg::Macos => Self::MacOS,
             OsArg::Ios => Self::Ios,
             OsArg::Visionos => Self::VisionOS,
+        }
+    }
+}
+
+impl OsArg {
+    /// Lowercase OS token used in mSCP 2.0 layout paths — the
+    /// `baselines/<os>/` directory and the `<name>_<os>_<version>.yaml`
+    /// baseline filename.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Macos => "macos",
+            Self::Ios => "ios",
+            Self::Visionos => "visionos",
         }
     }
 }

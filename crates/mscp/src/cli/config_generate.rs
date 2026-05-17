@@ -176,6 +176,9 @@ pub fn generate_from_config(config: Config) -> Result<()> {
             false, // fragment - not supported in config-based generation
             opts.structure,
             Some(baseline_config.gitops_glob.clone()),
+            "auto".to_string(),  // mscp_version — config path auto-detects layout
+            "macos".to_string(), // os
+            None,                // os_version
         )?;
     }
 

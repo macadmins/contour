@@ -199,6 +199,9 @@ fn main() -> Result<()> {
             mscp_repo,
             branch,
             baseline,
+            mscp_version,
+            os,
+            os_version,
             output,
             use_uv,
             use_python3,
@@ -325,6 +328,9 @@ fn main() -> Result<()> {
                     fragment,
                     opts.structure,
                     Some(baseline_config.gitops_glob.clone()),
+                    "auto".to_string(), // mscp_version — config path auto-detects layout
+                    "macos".to_string(), // os
+                    None,               // os_version
                 )?;
                 return Ok(());
             }
@@ -425,6 +431,9 @@ fn main() -> Result<()> {
                 fragment,
                 crate::config::OutputStructure::default(),
                 None, // glob_config - CLI-flag mode does not carry mscp.toml
+                mscp_version,
+                os.as_str().to_string(),
+                os_version,
             )?;
         }
 

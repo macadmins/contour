@@ -1999,6 +1999,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             mscp_repo,
             branch,
             baseline,
+            mscp_version,
+            os,
+            os_version,
             output,
             use_uv,
             use_python3,
@@ -2109,6 +2112,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                     fragment,
                     opts.structure,
                     glob_config,
+                    "auto".to_string(), // mscp_version — config path auto-detects layout
+                    "macos".to_string(), // os
+                    None,               // os_version
                 )?;
                 return Ok(());
             }
@@ -2208,6 +2214,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 fragment,
                 mscp::config::OutputStructure::default(),
                 None,
+                mscp_version,
+                os.as_str().to_string(),
+                os_version,
             )?;
         }
 

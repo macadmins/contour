@@ -8,7 +8,7 @@ use crate::transformers::{
 use anyhow::{Context, Result};
 use colored::Colorize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Python execution method
@@ -34,6 +34,11 @@ pub enum ContainerRuntime {
 
 /// Default mSCP container image
 pub const DEFAULT_MSCP_CONTAINER_IMAGE: &str = "ghcr.io/brodjieski/mscp_2.0:latest";
+
+/// In-container path the default mSCP 2.0 image writes its build output to.
+/// The 2.0 image checks the project out at `/mscp` (vs the legacy 1.x
+/// `/macos_security`), so the host `build/` directory mounts here.
+const MSCP_CONTAINER_BUILD_DIR: &str = "/mscp/build";
 
 /// Generate command - wrapper mode (calls mSCP then processes)
 #[expect(
@@ -63,6 +68,9 @@ pub fn generate_baseline(
     fragment: bool,
     output_structure: OutputStructure,
     glob_config: Option<GitopsGlobConfig>,
+    mscp_version: String,
+    os: String,
+    os_version: Option<String>,
 ) -> Result<()> {
     tracing::info!(
         "Starting generate workflow for baseline '{}'",
@@ -95,7 +103,15 @@ pub fn generate_baseline(
     // Step 1: Run mSCP generation (even in dry-run to see what would be generated)
     // Note: mSCP writes to its build directory, but that's acceptable for dry-run
     tracing::info!("Running mSCP baseline generation...");
-    run_mscp_generation(&mscp_repo_path, &baseline_name, method, generate_ddm)?;
+    let build_subdir = run_mscp_generation(
+        &mscp_repo_path,
+        &baseline_name,
+        method,
+        generate_ddm,
+        &mscp_version,
+        &os,
+        os_version.as_deref(),
+    )?;
 
     // Initialize result tracking
     let mut result = CommandResult::new("generate")
@@ -103,7 +119,7 @@ pub fn generate_baseline(
         .with_output_dir(output_path.to_string_lossy().to_string());
 
     // Step 2: Process the output
-    let build_path = mscp_repo_path.join("build").join(&baseline_name);
+    let build_path = mscp_repo_path.join("build").join(&build_subdir);
 
     if !dry_run && !build_path.exists() {
         anyhow::bail!(
@@ -417,43 +433,119 @@ fn clone_mscp_repo(target_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Run mSCP baseline generation
+/// Pick the highest available OS version for a 2.0 baseline.
+///
+/// mSCP 2.0 names baseline files `<name>_<os>_<version>.yaml` under
+/// `baselines/<os>/`. With no explicit `--os-version`, choose the newest.
+fn highest_baseline_version(mscp_repo: &Path, baseline_name: &str, os: &str) -> Result<String> {
+    let dir = mscp_repo.join("baselines").join(os);
+    let prefix = format!("{baseline_name}_{os}_");
+    let mut versions: Vec<(u32, u32, String)> = std::fs::read_dir(&dir)
+        .with_context(|| format!("reading mSCP 2.0 baselines directory {}", dir.display()))?
+        .filter_map(std::result::Result::ok)
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter_map(|name| {
+            let ver = name.strip_prefix(&prefix)?.strip_suffix(".yaml")?;
+            let mut parts = ver.split('.');
+            let major: u32 = parts.next()?.parse().ok()?;
+            let minor: u32 = parts.next().and_then(|m| m.parse().ok()).unwrap_or(0);
+            Some((major, minor, ver.to_string()))
+        })
+        .collect();
+    versions.sort();
+    versions.pop().map(|(_, _, v)| v).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no mSCP 2.0 baseline files matching '{prefix}*.yaml' under {}; \
+             check --os or pass --os-version",
+            dir.display()
+        )
+    })
+}
+
+/// Resolve the repo-relative baseline YAML path to feed the mSCP build,
+/// handling both layouts:
+/// - 1.x: `baselines/<name>.yaml`
+/// - 2.0: `baselines/<os>/<name>_<os>_<version>.yaml`
+fn resolve_baseline_yaml(
+    mscp_repo: &Path,
+    baseline_name: &str,
+    mscp_version: &str,
+    os: &str,
+    os_version: Option<&str>,
+) -> Result<String> {
+    let layout = crate::layout::MscpLayout::detect_or_from(Some(mscp_version), mscp_repo)
+        .with_context(|| format!("detecting mSCP layout in {}", mscp_repo.display()))?;
+
+    let rel = match layout {
+        crate::layout::MscpLayout::V1x => format!("baselines/{baseline_name}.yaml"),
+        crate::layout::MscpLayout::V2x => {
+            let version = match os_version {
+                Some(v) => v.to_string(),
+                None => highest_baseline_version(mscp_repo, baseline_name, os)?,
+            };
+            format!("baselines/{os}/{baseline_name}_{os}_{version}.yaml")
+        }
+    };
+
+    if !mscp_repo.join(&rel).exists() {
+        anyhow::bail!(
+            "Baseline YAML not found: {} (detected mSCP {} layout)",
+            mscp_repo.join(&rel).display(),
+            layout
+        );
+    }
+    tracing::info!("Using baseline manifest: {rel} (mSCP {layout})");
+    Ok(rel)
+}
+
+/// Run mSCP baseline generation. Returns the `build/<subdir>` directory
+/// name the build wrote to (`<baseline>` for 1.x, `<baseline>_<os>_<version>`
+/// for 2.0).
 fn run_mscp_generation(
     mscp_repo_path: &PathBuf,
     baseline_name: &str,
     method: PythonMethod,
     generate_ddm: bool,
-) -> Result<()> {
-    // Container mode doesn't require local mSCP repo
-    if method != PythonMethod::Container {
-        // Ensure mSCP repo exists (clone if needed)
-        ensure_mscp_repo(mscp_repo_path)?;
-
-        // Validate baseline name to prevent path traversal
-        if !baseline_name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-            || baseline_name.is_empty()
-        {
-            anyhow::bail!(
-                "Invalid baseline name '{baseline_name}': must contain only letters, digits, hyphens, and underscores"
-            );
-        }
-
-        let baseline_yaml = format!("baselines/{baseline_name}.yaml");
-        let baseline_yaml_path = mscp_repo_path.join(&baseline_yaml);
-
-        if !baseline_yaml_path.exists() {
-            anyhow::bail!(
-                "Baseline YAML not found: {}. Available baselines should be in baselines/ directory.",
-                baseline_yaml_path.display()
-            );
-        }
+    mscp_version: &str,
+    os: &str,
+    os_version: Option<&str>,
+) -> Result<String> {
+    // Validate baseline name to prevent path traversal.
+    if !baseline_name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        || baseline_name.is_empty()
+    {
+        anyhow::bail!(
+            "Invalid baseline name '{baseline_name}': must contain only letters, digits, hyphens, and underscores"
+        );
     }
+
+    // Container mode runs mSCP inside the image; the other methods build the
+    // local repo, so ensure it is present first.
+    if method != PythonMethod::Container {
+        ensure_mscp_repo(mscp_repo_path)?;
+    }
+
+    // Resolve the baseline YAML path for the repo's mSCP layout. Container
+    // mode without a local checkout has nothing to inspect, so it falls
+    // back to the 1.x flat path.
+    let baseline_yaml_relative =
+        if method == PythonMethod::Container && !mscp_repo_path.join("rules").exists() {
+            format!("baselines/{baseline_name}.yaml")
+        } else {
+            resolve_baseline_yaml(mscp_repo_path, baseline_name, mscp_version, os, os_version)?
+        };
+
+    // The mSCP build writes to `build/<yaml-stem>`.
+    let build_subdir = Path::new(&baseline_yaml_relative)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(baseline_name)
+        .to_string();
 
     // Use relative paths since we set current_dir to mscp_repo_path
     let script_relative = "scripts/generate_guidance.py";
-    let baseline_yaml_relative = format!("baselines/{baseline_name}.yaml");
 
     let output = match method {
         PythonMethod::Python3 => {
@@ -519,7 +611,8 @@ fn run_mscp_generation(
                 .context("Failed to execute uv run")?
         }
         PythonMethod::Container => {
-            return run_mscp_container(mscp_repo_path, baseline_name, generate_ddm);
+            run_mscp_container(mscp_repo_path, &baseline_yaml_relative, generate_ddm)?;
+            return Ok(build_subdir);
         }
     };
 
@@ -531,7 +624,7 @@ fn run_mscp_generation(
     let stdout = String::from_utf8_lossy(&output.stdout);
     tracing::debug!("mSCP output:\n{}", stdout);
 
-    Ok(())
+    Ok(build_subdir)
 }
 
 /// Detect available container runtime
@@ -912,7 +1005,7 @@ pub fn test_container(image: Option<&str>) -> Result<()> {
 /// Run mSCP generation using container
 fn run_mscp_container(
     mscp_repo_path: &PathBuf,
-    baseline_name: &str,
+    baseline_yaml_relative: &str,
     generate_ddm: bool,
 ) -> Result<()> {
     let runtime = detect_container_runtime().ok_or_else(|| {
@@ -933,7 +1026,7 @@ fn run_mscp_container(
     tracing::info!(
         "Running mSCP generation in container ({:?}): baseline={}",
         runtime,
-        baseline_name
+        baseline_yaml_relative
     );
 
     let mut cmd_args = vec!["-p", "-s"];
@@ -943,13 +1036,15 @@ fn run_mscp_container(
 
     let output = match runtime {
         ContainerRuntime::Docker => {
-            // Docker: mount local directory for output
-            // docker run --rm -v /path/to/output:/macos_security/build image python3 scripts/generate_guidance.py -p -s baselines/cis_lvl1.yaml
+            // Docker: mount local build dir to the image's build path
             let mut cmd = Command::new("docker");
             cmd.arg("run")
                 .arg("--rm")
                 .arg("-v")
-                .arg(format!("{}:/macos_security/build", build_dir.display()))
+                .arg(format!(
+                    "{}:{MSCP_CONTAINER_BUILD_DIR}",
+                    build_dir.display()
+                ))
                 .arg(image)
                 .arg("python3")
                 .arg("scripts/generate_guidance.py")
@@ -960,14 +1055,14 @@ fn run_mscp_container(
                 cmd.arg("-D");
             }
 
-            cmd.arg(format!("baselines/{}.yaml", baseline_name));
+            cmd.arg(baseline_yaml_relative);
 
             tracing::info!(
-                "Executing: docker run --rm -v {}:/macos_security/build {} python3 scripts/generate_guidance.py {} baselines/{}.yaml",
+                "Executing: docker run --rm -v {}:{MSCP_CONTAINER_BUILD_DIR} {} python3 scripts/generate_guidance.py {} {}",
                 build_dir.display(),
                 image,
                 cmd_args.join(" "),
-                baseline_name
+                baseline_yaml_relative
             );
 
             cmd.output().context("Failed to execute docker run")?
@@ -978,7 +1073,10 @@ fn run_mscp_container(
             cmd.arg("run")
                 .arg("--rm")
                 .arg("--volume")
-                .arg(format!("{}:/macos_security/build", build_dir.display()))
+                .arg(format!(
+                    "{}:{MSCP_CONTAINER_BUILD_DIR}",
+                    build_dir.display()
+                ))
                 .arg(image)
                 .arg("python3")
                 .arg("scripts/generate_guidance.py")
@@ -989,14 +1087,14 @@ fn run_mscp_container(
                 cmd.arg("-D");
             }
 
-            cmd.arg(format!("baselines/{}.yaml", baseline_name));
+            cmd.arg(baseline_yaml_relative);
 
             tracing::info!(
-                "Executing: container run --rm --volume {}:/macos_security/build {} python3 scripts/generate_guidance.py {} baselines/{}.yaml",
+                "Executing: container run --rm --volume {}:{MSCP_CONTAINER_BUILD_DIR} {} python3 scripts/generate_guidance.py {} {}",
                 mscp_repo_abs.display(),
                 image,
                 cmd_args.join(" "),
-                baseline_name
+                baseline_yaml_relative
             );
 
             cmd.output().context("Failed to execute container run")?
@@ -1082,6 +1180,9 @@ pub fn generate_all_baselines(
                     fragment,
                     output_structure.clone(),
                     None, // glob_config - not yet plumbed per-baseline in generate-all
+                    "auto".to_string(), // mscp_version — auto-detect layout
+                    "macos".to_string(), // os
+                    None, // os_version
                 );
 
                 (i, baseline_name.clone(), result)
@@ -1135,7 +1236,10 @@ pub fn generate_all_baselines(
                 None, // exclude_categories - not supported in generate-all mode
                 fragment,
                 output_structure.clone(),
-                None, // glob_config - not yet plumbed per-baseline in generate-all
+                None,               // glob_config - not yet plumbed per-baseline in generate-all
+                "auto".to_string(), // mscp_version — auto-detect layout
+                "macos".to_string(), // os
+                None,               // os_version
             ) {
                 Ok(()) => {
                     all_result.processed += 1;
@@ -1659,4 +1763,35 @@ pub fn list_baselines(output: PathBuf, output_mode: OutputMode) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_highest_baseline_version_picks_newest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("baselines/macos");
+        fs::create_dir_all(&dir).unwrap();
+        for f in [
+            "800-53r5_high_macos_15.0.yaml",
+            "800-53r5_high_macos_26.0.yaml",
+            "800-53r5_high_macos_14.0.yaml",
+            "cis_lvl1_macos_26.0.yaml", // different baseline — must be ignored
+        ] {
+            fs::write(dir.join(f), "x").unwrap();
+        }
+        let v = highest_baseline_version(tmp.path(), "800-53r5_high", "macos").unwrap();
+        assert_eq!(v, "26.0");
+    }
+
+    #[test]
+    fn test_highest_baseline_version_errors_when_absent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("baselines/ios")).unwrap();
+        let err = highest_baseline_version(tmp.path(), "800-53r5_high", "ios").unwrap_err();
+        assert!(err.to_string().contains("no mSCP 2.0 baseline files"));
+    }
 }

@@ -156,23 +156,42 @@ several OSes at once, and contour adapts it to the normalized internal
 rule model per selected platform.
 
 **`generate` / `generate-all`.** These shell out to the mSCP project's
-own Python toolchain to *build* the baseline, so the schema is handled
-on the Python side — contour just needs the right repo. Select the
-branch with `--branch` (e.g. `--branch dev_2.0`), or run the mSCP 2.0
-container image `ghcr.io/brodjieski/mscp_2.0:latest` via
-`--use-container`.
+own Python toolchain to *build* the baseline. `generate` resolves the
+baseline file for whichever layout the repo uses —
+`baselines/<name>.yaml` (1.x) or
+`baselines/<os>/<name>_<os>_<version>.yaml` (2.0) — and reads the build
+output from `build/<name>` or `build/<name>_<os>_<version>` accordingly.
+`generate-all` always auto-detects the layout and targets macOS.
 
-**`recipe`** (`contour mscp recipe`) reads rule YAML directly — it does
-*not* run the Python build — and so exposes explicit layout controls:
+mSCP 2.0 is verified on both build paths and produces an identical
+Fleet GitOps structure either way:
+- a local `dev_2.0` checkout built with `--use-uv` / `--use-python3` —
+  point `--mscp-repo` at it and run `generate`;
+- the `--use-container` route against the default mSCP 2.0 image
+  `ghcr.io/brodjieski/mscp_2.0:latest` (the image checks the project
+  out at `/mscp`, which contour mounts the host `build/` directory
+  into).
+
+**Layout flags.** `generate` and `recipe` both accept:
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--mscp-version <VER>` | Repository layout: `auto`, `1.x`, or `2.0` | `auto` (sniff the rule schema) |
 | `--os <OS>` | OS target for 2.0 layouts: `macos`, `ios`, `visionos` (ignored for 1.x) | `macos` |
-| `--os-version <VER>` | OS version for 2.0 layouts (e.g. `26.0`, `15.0`) | highest version in the rule set |
+| `--os-version <VER>` | OS version for 2.0 layouts (e.g. `26.0`, `15.0`) | highest version available |
 
 Pass `--mscp-version 1.x` or `2.0` to skip detection when the heuristic
-cannot decide (e.g. an empty or non-standard checkout).
+cannot decide (e.g. an empty or non-standard checkout). With a 2.0 repo,
+`generate -b 800-53r5_high --os macos` builds
+`baselines/macos/800-53r5_high_macos_26.0.yaml` (newest version) — no
+need to know the exact filename.
+
+> **mSCP 2.0 toolchain note:** the 2.0 Python build pulls a heavier
+> dependency set (pandas, lxml, Pillow). Pillow has no Python 3.14 wheel
+> yet, so a fresh 2.0 build under the newest Python can fail to compile
+> it. If you hit this, build with Python 3.13 — e.g. pre-create the
+> environment with `uv venv --python 3.13` in the mSCP repo, or install
+> the `libjpeg` headers.
 
 ---
 
@@ -256,6 +275,9 @@ contour mscp generate [flags]
 | `-b, --baseline <NAME>` | Baseline name (e.g., `cis_lvl1`) | **required** |
 | `-o, --output <DIR>` | Output directory | **required** |
 | `--branch <BRANCH>` | Git branch (determines platform/OS) | repo default |
+| `--mscp-version <VER>` | mSCP layout: `auto`, `1.x`, or `2.0` (see [mSCP repository layout](#mscp-repository-layout--1x-vs-20)) | `auto` |
+| `--os <OS>` | OS target for 2.0 layouts: `macos`, `ios`, `visionos` (ignored for 1.x) | `macos` |
+| `--os-version <VER>` | OS version for 2.0 layouts (e.g. `26.0`); highest available if unset | auto |
 | `--dry-run` | Preview without writing files | `false` |
 
 **Organization options:**
