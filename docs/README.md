@@ -14,6 +14,8 @@ toolkits. Start with the umbrella guide, then the toolkit you need.
 | [contour-mscp.md](contour-mscp.md) | macOS Security Compliance Project baseline transformation |
 | [contour-btm.md](contour-btm.md) | Background Task Management service profiles |
 | [contour-notifications.md](contour-notifications.md) | Per-app notification settings profiles |
+| [contour-support.md](contour-support.md) | Root3 Support App per-brand configuration profiles |
+| [contour-osquery.md](contour-osquery.md) | Offline osquery schema reference (table/column lookup) |
 | [contour-config.md](contour-config.md) | `.contour/config.toml` reference — the shared, cross-toolkit configuration |
 
 ## Examples
