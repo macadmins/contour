@@ -80,7 +80,7 @@ pub fn clean_baseline(baseline: String, output: PathBuf, force: bool) -> Result<
             eprintln!("{} {}", "Error:".red().bold(), e);
             if !force {
                 eprintln!(
-                    "\n{} Use --force to remove baseline even if referenced by team files",
+                    "\n{} Use --force to remove baseline even if referenced by fleet files",
                     "Hint:".yellow()
                 );
             }
@@ -177,7 +177,7 @@ pub fn verify_references(output: PathBuf, fix: bool) -> Result<()> {
     }
 
     if !report.orphaned_baseline_references.is_empty() {
-        println!("{}", "Orphaned baseline references in team files:".yellow());
+        println!("{}", "Orphaned baseline references in fleet files:".yellow());
         for orphan in &report.orphaned_baseline_references {
             println!("  {} Baseline: {}", "-".dimmed(), orphan.reference);
             println!("    {} {}", "Reason:".dimmed(), orphan.reason);

@@ -650,7 +650,7 @@ pub enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Force removal even if referenced by team files
+        /// Force removal even if referenced by fleet files
         #[arg(short, long)]
         force: bool,
     },
