@@ -385,6 +385,7 @@ fn run_recipe(
         "PPPC (TCC) recipe",
         Some(&config.config.org),
         &profiles,
+        &[],
     )?;
 
     let output_dir = resolve_output_dir(output, Path::new("."))?;

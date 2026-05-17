@@ -3,9 +3,10 @@
 use crate::cli::{OutputMode, print_info, print_kv, print_success, print_warning};
 use crate::config::{BtmAppEntry, BtmConfig};
 use crate::generate::{
-    build_combined_service_management_payload, build_service_management_payload,
-    generate_btm_declaration, generate_combined_service_management_profile,
-    generate_service_management_profile, resolve_output_dir, sanitize_filename,
+    BTM_DDM_CONFIGURATION_TYPE, build_btm_ddm_payload, build_combined_service_management_payload,
+    build_service_management_payload, generate_btm_declaration,
+    generate_combined_service_management_profile, generate_service_management_profile,
+    resolve_output_dir, sanitize_filename,
 };
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -14,7 +15,7 @@ use contour_core::fragment::{
     DefaultYmlEntries, FleetEntries, FragmentManifest, FragmentMeta, LibFiles, ProfileEntry,
     ScriptEntries,
 };
-use contour_profiles::{RecipeProfile, write_recipe_toml};
+use contour_profiles::{RecipeDdm, RecipeProfile, write_recipe_toml};
 use std::path::{Path, PathBuf};
 
 /// Run the BTM generate command.
@@ -51,13 +52,11 @@ pub fn run(
 
     // Recipe-TOML output: bundle every app's service-management
     // payload into one combined recipe TOML that drops into
-    // `./recipes/<name>.toml` of a contour preset library.
+    // `./recipes/<name>.toml` of a contour preset library. The recipe
+    // always carries BOTH `[[profile]]` blocks (mobileconfig rules)
+    // and `[[ddm]]` blocks (DDM-capable rules), so `--ddm` is a no-op
+    // here — the recipe is the single source for both delivery paths.
     if format == "recipe" {
-        if ddm {
-            anyhow::bail!(
-                "--format recipe is incompatible with --ddm; DDM declarations stay one-file-per-bundle. Use --format mobileconfig with --ddm, or import the resulting JSON via `contour profile library import`."
-            );
-        }
         return run_recipe(&config, output, per_app, output_mode);
     }
 
@@ -83,55 +82,55 @@ pub fn run(
     let output_dir = resolve_output_dir(output, input)?;
     let mut profiles_written = Vec::new();
 
-    if per_app {
-        // Per-app mode: one profile per app
+    if ddm {
+        // DDM declarations are emitted one `.json` per app, regardless
+        // of --per-app — a declaration is inherently per-app. (Without
+        // this branch, combined mode silently ignored --ddm and wrote a
+        // mobileconfig instead.)
         for app in &apps_with_btm {
-            if ddm {
-                let filename = format!("{}-btm.json", sanitize_filename(&app.name));
-                let output_path = output_dir.join(&filename);
+            let filename = format!("{}-btm.json", sanitize_filename(&app.name));
+            let output_path = output_dir.join(&filename);
 
-                match generate_btm_declaration(app, &config.settings.org) {
-                    Ok(content) => {
-                        std::fs::write(&output_path, &content).with_context(|| {
-                            format!(
-                                "Failed to write DDM declaration to {}",
-                                output_path.display()
-                            )
-                        })?;
-                        profiles_written
-                            .push((format!("{} BTM Declaration", app.name), output_path));
-                    }
-                    Err(e) => {
-                        if output_mode == OutputMode::Human {
-                            print_warning(&format!(
-                                "Skipping DDM declaration for {}: {}",
-                                app.name, e
-                            ));
-                        }
+            match generate_btm_declaration(app, &config.settings.org) {
+                Ok(content) => {
+                    std::fs::write(&output_path, &content).with_context(|| {
+                        format!(
+                            "Failed to write DDM declaration to {}",
+                            output_path.display()
+                        )
+                    })?;
+                    profiles_written.push((format!("{} BTM Declaration", app.name), output_path));
+                }
+                Err(e) => {
+                    if output_mode == OutputMode::Human {
+                        print_warning(&format!("Skipping DDM declaration for {}: {}", app.name, e));
                     }
                 }
-            } else {
-                let filename = format!(
-                    "{}-service-management.mobileconfig",
-                    sanitize_filename(&app.name)
-                );
-                let output_path = output_dir.join(&filename);
+            }
+        }
+    } else if per_app {
+        // Per-app mode: one profile per app
+        for app in &apps_with_btm {
+            let filename = format!(
+                "{}-service-management.mobileconfig",
+                sanitize_filename(&app.name)
+            );
+            let output_path = output_dir.join(&filename);
 
-                match generate_service_management_profile(app, &config.settings.org) {
-                    Ok(content) => {
-                        std::fs::write(&output_path, &content).with_context(|| {
-                            format!("Failed to write profile to {}", output_path.display())
-                        })?;
-                        profiles_written
-                            .push((format!("{} Service Management", app.name), output_path));
-                    }
-                    Err(e) => {
-                        if output_mode == OutputMode::Human {
-                            print_warning(&format!(
-                                "Skipping service management for {}: {}",
-                                app.name, e
-                            ));
-                        }
+            match generate_service_management_profile(app, &config.settings.org) {
+                Ok(content) => {
+                    std::fs::write(&output_path, &content).with_context(|| {
+                        format!("Failed to write profile to {}", output_path.display())
+                    })?;
+                    profiles_written
+                        .push((format!("{} Service Management", app.name), output_path));
+                }
+                Err(e) => {
+                    if output_mode == OutputMode::Human {
+                        print_warning(&format!(
+                            "Skipping service management for {}: {}",
+                            app.name, e
+                        ));
                     }
                 }
             }
@@ -185,21 +184,31 @@ pub fn run(
 /// Print dry-run preview for BTM generate.
 fn print_btm_dry_run(apps: &[&BtmAppEntry], ddm: bool, per_app: bool, output_mode: OutputMode) {
     if output_mode == OutputMode::Json {
-        let json = if per_app {
+        let json = if ddm {
             serde_json::json!({
-                "mode": "per-app",
-                "format": if ddm { "ddm" } else { "mobileconfig" },
+                "mode": "ddm",
+                "format": "ddm",
                 "profiles": apps.iter().map(|a| {
                     serde_json::json!({
                         "name": a.name,
                         "bundle_id": a.bundle_id,
                         "team_id": a.team_id,
                         "rules": a.rules.len(),
-                        "filename": if ddm {
-                            format!("{}-btm.json", sanitize_filename(&a.name))
-                        } else {
-                            format!("{}-service-management.mobileconfig", sanitize_filename(&a.name))
-                        },
+                        "filename": format!("{}-btm.json", sanitize_filename(&a.name)),
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        } else if per_app {
+            serde_json::json!({
+                "mode": "per-app",
+                "format": "mobileconfig",
+                "profiles": apps.iter().map(|a| {
+                    serde_json::json!({
+                        "name": a.name,
+                        "bundle_id": a.bundle_id,
+                        "team_id": a.team_id,
+                        "rules": a.rules.len(),
+                        "filename": format!("{}-service-management.mobileconfig", sanitize_filename(&a.name)),
                     })
                 }).collect::<Vec<_>>(),
             })
@@ -207,7 +216,7 @@ fn print_btm_dry_run(apps: &[&BtmAppEntry], ddm: bool, per_app: bool, output_mod
             let total_rules: usize = apps.iter().map(|a| a.rules.len().max(1)).sum();
             serde_json::json!({
                 "mode": "combined",
-                "format": if ddm { "ddm" } else { "mobileconfig" },
+                "format": "mobileconfig",
                 "filename": "service-management.mobileconfig",
                 "total_rules": total_rules,
                 "apps": apps.iter().map(|a| {
@@ -230,15 +239,33 @@ fn print_btm_dry_run(apps: &[&BtmAppEntry], ddm: bool, per_app: bool, output_mod
     println!("{}", "=".repeat(50));
     println!();
 
-    if per_app {
-        if ddm {
+    if ddm {
+        println!(
+            "{}",
+            "DDM Background Task Declarations (per-app):".bold().cyan()
+        );
+        for app in apps {
+            let team_id = app.team_id.as_deref().unwrap_or("(from code_requirement)");
+            let btm_info = if app.rules.is_empty() {
+                String::new()
+            } else {
+                format!(" ({} BTM rules)", app.rules.len())
+            };
             println!(
-                "{}",
-                "DDM Background Task Declarations (per-app):".bold().cyan()
+                "  {} {} [Team: {}]{} → {}-btm.json",
+                "•".green(),
+                app.name,
+                team_id.dimmed(),
+                btm_info.cyan(),
+                sanitize_filename(&app.name)
             );
-        } else {
-            println!("{}", "Service Management Profiles (per-app):".bold().cyan());
         }
+
+        println!();
+        println!("{}", "-".repeat(50));
+        println!("Total declarations to generate: {}", apps.len());
+    } else if per_app {
+        println!("{}", "Service Management Profiles (per-app):".bold().cyan());
 
         for app in apps {
             let team_id = app.team_id.as_deref().unwrap_or("(from code_requirement)");
@@ -247,25 +274,14 @@ fn print_btm_dry_run(apps: &[&BtmAppEntry], ddm: bool, per_app: bool, output_mod
             } else {
                 format!(" ({} BTM rules)", app.rules.len())
             };
-            if ddm {
-                println!(
-                    "  {} {} [Team: {}]{} → {}-btm.json",
-                    "•".green(),
-                    app.name,
-                    team_id.dimmed(),
-                    btm_info.cyan(),
-                    sanitize_filename(&app.name)
-                );
-            } else {
-                println!(
-                    "  {} {} [Team: {}]{} → {}-service-management.mobileconfig",
-                    "•".green(),
-                    app.name,
-                    team_id.dimmed(),
-                    btm_info.cyan(),
-                    sanitize_filename(&app.name)
-                );
-            }
+            println!(
+                "  {} {} [Team: {}]{} → {}-service-management.mobileconfig",
+                "•".green(),
+                app.name,
+                team_id.dimmed(),
+                btm_info.cyan(),
+                sanitize_filename(&app.name)
+            );
         }
 
         println!();
@@ -304,6 +320,12 @@ fn print_btm_dry_run(apps: &[&BtmAppEntry], ddm: bool, per_app: bool, output_mod
 /// `per_app = false` (default) collapses every app's rules into one
 /// combined `com.apple.servicemanagement` payload — matches the
 /// existing combined-mobileconfig deployment model.
+///
+/// Regardless of `per_app`, every app that has `Label`-type BTM rules
+/// also contributes one `[[ddm]]` block of type
+/// `com.apple.configuration.services.background-tasks` — the same
+/// declaration the `--format mobileconfig --ddm` path emits as JSON.
+/// A recipe is the single source for both delivery channels.
 fn run_recipe(
     config: &BtmConfig,
     output: Option<&Path>,
@@ -351,11 +373,29 @@ fn run_recipe(
         }]
     };
 
+    // DDM blocks: one per app that has Label-type BTM rules. Apps with
+    // no Label rules produce a background-tasks payload with no
+    // LaunchdConfigurations, which carries no deployable intent — skip
+    // those so the recipe only emits actionable `[[ddm]]` blocks.
+    let ddms: Vec<RecipeDdm> = config
+        .apps
+        .iter()
+        .filter(|app| app.rules.iter().any(|r| r.rule_type == "Label"))
+        .map(|app| {
+            RecipeDdm::new(
+                format!("{}-btm", sanitize_filename(&app.name)),
+                BTM_DDM_CONFIGURATION_TYPE,
+                build_btm_ddm_payload(app, &config.settings.org),
+            )
+        })
+        .collect();
+
     let body = write_recipe_toml(
         &recipe_name,
         "Service management profile generated from a BTM scan",
         Some(&config.settings.org),
         &profiles,
+        &ddms,
     )?;
 
     let output_dir = resolve_output_dir(output, Path::new("."))?;
@@ -366,8 +406,9 @@ fn run_recipe(
     if output_mode == OutputMode::Human {
         println!();
         print_success(&format!(
-            "Generated recipe TOML with {} profile(s)",
-            profiles.len()
+            "Generated recipe TOML with {} profile(s) and {} DDM block(s)",
+            profiles.len(),
+            ddms.len()
         ));
         print_kv("Recipe", &output_path.display().to_string());
         print_info(&format!(
@@ -376,9 +417,10 @@ fn run_recipe(
         ));
     } else {
         println!(
-            r#"{{"format":"recipe","output":{:?},"profile_count":{}}}"#,
+            r#"{{"format":"recipe","output":{:?},"profile_count":{},"ddm_count":{}}}"#,
             output_path.display().to_string(),
-            profiles.len()
+            profiles.len(),
+            ddms.len()
         );
     }
     Ok(())

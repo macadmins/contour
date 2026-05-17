@@ -126,7 +126,10 @@ pub enum BtmCommands {
         /// Output format. `mobileconfig` (default) writes one or more
         /// .mobileconfig files. `recipe` writes a single combined
         /// recipe TOML that drops into a `contour profile library`
-        /// (recipes/ subdir) for later `generate --recipe …` use.
+        /// (recipes/ subdir) for later `generate --recipe …` use. A
+        /// recipe always carries both `[[profile]]` (mobileconfig) and
+        /// `[[ddm]]` (background-tasks declaration) blocks, so `--ddm`
+        /// is ignored when `--format recipe` is set.
         #[arg(
             long,
             value_parser = ["mobileconfig", "recipe"],
