@@ -132,6 +132,50 @@ Cross-platform baselines (`800-53r5_*`, `cisv8`, `all_rules`) have different rul
 
 ---
 
+## mSCP repository layout — 1.x vs 2.0
+
+The macOS Security Compliance Project currently ships in **two coexisting
+shapes**, and contour detects which one `--mscp-repo` points at:
+
+| Layout | Branch | Rule schema |
+|--------|--------|-------------|
+| **2.0** — current | `dev_2.0` | Multi-OS — `platforms.{macOS,iOS,visionOS}.<version>`, nested `enforcement_info`, array-shaped `mobileconfig_info`, `references.{vendor}…`; baselines are derived from rule metadata. |
+| **1.x** — legacy | `tahoe` and earlier release branches | Flat — top-level `tags`, `check`, `fix`, `result`; dict-shaped `mobileconfig_info`; baselines are explicit files under `baselines/`. |
+
+contour treats **2.0 as the standard layout**. 1.x repositories remain
+fully supported — detection is automatic, so existing 1.x workflows keep
+working unchanged — but 1.x is the older schema and the focus of new
+work is 2.0.
+
+**Auto-detection.** For commands that read mSCP rule YAML *directly*,
+contour sniffs the first rule file: a top-level `platforms:` key ⇒ 2.0;
+an `id:` without `platforms:` ⇒ 1.x. The `dev_2.0` branch keeps the
+`rules/` and `baselines/` symlinks in place, so path-based access still
+works — only the schema underneath differs. A 2.0 rule can describe
+several OSes at once, and contour adapts it to the normalized internal
+rule model per selected platform.
+
+**`generate` / `generate-all`.** These shell out to the mSCP project's
+own Python toolchain to *build* the baseline, so the schema is handled
+on the Python side — contour just needs the right repo. Select the
+branch with `--branch` (e.g. `--branch dev_2.0`), or run the mSCP 2.0
+container image `ghcr.io/brodjieski/mscp_2.0:latest` via
+`--use-container`.
+
+**`recipe`** (`contour mscp recipe`) reads rule YAML directly — it does
+*not* run the Python build — and so exposes explicit layout controls:
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--mscp-version <VER>` | Repository layout: `auto`, `1.x`, or `2.0` | `auto` (sniff the rule schema) |
+| `--os <OS>` | OS target for 2.0 layouts: `macos`, `ios`, `visionos` (ignored for 1.x) | `macos` |
+| `--os-version <VER>` | OS version for 2.0 layouts (e.g. `26.0`, `15.0`) | highest version in the rule set |
+
+Pass `--mscp-version 1.x` or `2.0` to skip detection when the heuristic
+cannot decide (e.g. an empty or non-standard checkout).
+
+---
+
 ## Commands
 
 ### Getting Started

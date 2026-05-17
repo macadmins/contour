@@ -590,7 +590,13 @@ software:
             default_yml: contour_core::fragment::DefaultYmlEntries {
                 label_paths: label_paths.to_vec(),
                 report_paths: Vec::new(),
-                policy_paths: policy_entries.iter().map(|e| e.path.clone()).collect(),
+                // `default.yml` sits at the repo root, so its policy paths
+                // need one fewer `../` than the fleets/-relative form reused
+                // below for `fleet_entries.policies`.
+                policy_paths: policy_entries
+                    .iter()
+                    .map(|e| Self::fleets_path_to_root_path(&e.path))
+                    .collect(),
             },
             fleet_entries: contour_core::fragment::FleetEntries {
                 profiles: profile_entries.to_vec(),
@@ -608,6 +614,19 @@ software:
         manifest.save(&file_path)?;
         tracing::info!("Generated fragment.toml: {}", file_path.display());
         Ok(file_path)
+    }
+
+    /// Convert a fleets/-relative path (`../platforms/…`) to a repo-root-
+    /// relative path (`./platforms/…`).
+    ///
+    /// Fleet files live in `fleets/`, one level below the repo root, so they
+    /// reference shared artifacts with a leading `../`. `default.yml` lives
+    /// at the root, so paths referenced from it carry one fewer `../`.
+    fn fleets_path_to_root_path(path: &str) -> String {
+        match path.strip_prefix("../") {
+            Some(rest) => format!("./{rest}"),
+            None => path.to_string(),
+        }
     }
 
     /// Check if default.yml already exists
@@ -696,6 +715,22 @@ fn insert_label_entry(content: &str, entry_line: &str) -> Option<String> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_fleets_path_to_root_path() {
+        // A fleets/-relative path drops one `../` for the repo-root form.
+        assert_eq!(
+            FleetGitOpsGenerator::fleets_path_to_root_path(
+                "../platforms/macos/policies/800-53r5_high/p.yml"
+            ),
+            "./platforms/macos/policies/800-53r5_high/p.yml"
+        );
+        // An already-root-relative path is left unchanged.
+        assert_eq!(
+            FleetGitOpsGenerator::fleets_path_to_root_path("./labels/mscp.labels.yml"),
+            "./labels/mscp.labels.yml"
+        );
+    }
 
     #[test]
     fn test_generate_default_yml() {
