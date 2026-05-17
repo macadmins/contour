@@ -157,7 +157,7 @@ contour profile generate --recipe wifi --recipe-path ./presets/recipes --org com
 
 ## MDM variables
 
-MDM **deploy-time variables** — Jamf's `%Username%`, Fleet's
+MDM **deploy-time variables** — Jamf's `$USERNAME`, Fleet's
 `FLEET_VAR_NDES_SCEP_CHALLENGE`, and similar — are substituted by the
 **MDM server on the device at deploy time**, not by contour. contour
 passes them through untouched. They differ from secrets (resolved by
@@ -168,7 +168,7 @@ substitution, also at generate time):
 |---|---|---|---|---|
 | Static var | `[vars]` | `{{OKTA_DOMAIN}}` | contour | generate |
 | Secret | `[secrets]` | `op://…`, `env:…` | contour | generate |
-| MDM variable | `[mdm_variables]` | `%Username%`, `FLEET_VAR_*` | the MDM server | deploy |
+| MDM variable | `[mdm_variables]` | `$USERNAME`, `FLEET_VAR_*` | the MDM server | deploy |
 
 ### The `[mdm_variables]` pool
 
@@ -181,7 +181,7 @@ mdm = "fleet"                                    # fleet | jamf | apple
 
 [mdm_variables.pool]
 SCEP_CHALLENGE = "FLEET_VAR_NDES_SCEP_CHALLENGE"
-USER_EMAIL     = "%Username%@acme.com"
+USER_EMAIL     = "$USERNAME@acme.com"
 ```
 
 A recipe field `Challenge = "var:SCEP_CHALLENGE"` resolves through the
@@ -216,7 +216,7 @@ contour profile variables                 # all flavours when none is configured
 ```
 
 contour ships catalogues for **Fleet** (exact + prefix variables like
-`FLEET_VAR_DIGICERT_DATA_<CA>`), **Jamf** (`%…%` payload variables), and
+`FLEET_VAR_DIGICERT_DATA_<CA>`), **Jamf** (`$VARIABLE` payload variables, Jamf Pro), and
 **Apple** (minimal — Apple defines few literal in-profile tokens; extend
 via the pool).
 

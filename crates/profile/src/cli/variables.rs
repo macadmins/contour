@@ -74,6 +74,7 @@ fn catalogue(flavour: MdmFlavour) -> Vec<String> {
         MdmFlavour::Jamf => mdm_vars::JAMF_VARS
             .iter()
             .map(|s| (*s).to_string())
+            .chain(mdm_vars::JAMF_PREFIXES.iter().map(|p| format!("{p}<id>")))
             .collect(),
         MdmFlavour::Apple => mdm_vars::APPLE_VARS
             .iter()

@@ -1,6 +1,6 @@
 //! MDM deploy-time variable catalogues.
 //!
-//! Tokens like Jamf `%Username%` or Fleet `FLEET_VAR_HOST_UUID` are
+//! Tokens like Jamf `$USERNAME` or Fleet `FLEET_VAR_HOST_UUID` are
 //! substituted by the MDM server on-device at deploy time — contour
 //! passes them through verbatim. This module ships the known token
 //! catalogues per MDM so typos can be flagged, plus helpers to extract
@@ -62,32 +62,41 @@ pub const FLEET_PREFIXES: &[&str] = &[
     "FLEET_VAR_SMALLSTEP_SCEP_PROXY_URL_",
 ];
 
-/// Jamf payload variables (`%...%`).
+/// Jamf Pro configuration-profile payload variables (`$VARIABLE`).
 pub const JAMF_VARS: &[&str] = &[
-    "%Username%",
-    "%FullName%",
-    "%RealName%",
-    "%EmailAddress%",
-    "%PhoneNumber%",
-    "%Position%",
-    "%Department%",
-    "%Building%",
-    "%Room%",
-    "%SerialNumber%",
-    "%UDID%",
-    "%MACAddress%",
-    "%ComputerName%",
-    "%AssetTag%",
-    "%JSSID%",
-    "%ProductName%",
-    "%Model%",
-    "%ModelIdentifier%",
-    "%OSVersion%",
+    "$COMPUTERNAME",
+    "$DEVICENAME",
+    "$ASSETTAG",
+    "$UDID",
+    "$SERIALNUMBER",
+    "$USERNAME",
+    "$FULLNAME",
+    "$REALNAME",
+    "$EMAIL",
+    "$PHONE",
+    "$POSITION",
+    "$DEPARTMENTID",
+    "$DEPARTMENTNAME",
+    "$BUILDINGID",
+    "$BUILDINGNAME",
+    "$ROOM",
+    "$MACADDRESS",
+    "$JSSID",
+    "$PROFILEJAMFID",
+    "$SITEID",
+    "$SITENAME",
+    "$IMEI",
+    "$MEID",
+    "$ICCID",
 ];
 
-/// Apple in-profile variables. Apple defines very few literal
-/// substitution tokens; operators extend coverage via the config
-/// `[mdm_variables.pool]`.
+/// Jamf prefix variables — a complete token appends an identifier:
+/// `$EXTENSIONATTRIBUTE_<id>`.
+pub const JAMF_PREFIXES: &[&str] = &["$EXTENSIONATTRIBUTE_"];
+
+/// Apple in-profile variables. Apple defines no general `$`/`%` payload
+/// substitution catalogue; operators declare what they need in the
+/// config `[mdm_variables.pool]`.
 pub const APPLE_VARS: &[&str] = &[];
 
 /// Whether `token` is a known variable for `flavour`.
@@ -99,17 +108,24 @@ pub fn is_known(token: &str, flavour: MdmFlavour) -> bool {
                     .iter()
                     .any(|p| token.len() > p.len() && token.starts_with(p))
         }
-        MdmFlavour::Jamf => JAMF_VARS.contains(&token),
+        MdmFlavour::Jamf => {
+            JAMF_VARS.contains(&token)
+                || JAMF_PREFIXES
+                    .iter()
+                    .any(|p| token.len() > p.len() && token.starts_with(p))
+        }
         MdmFlavour::Apple => APPLE_VARS.contains(&token),
     }
 }
 
 /// Extract every MDM variable token of `flavour`'s shape from `s`
-/// (e.g. `%Username%@acme.com` yields `["%Username%"]`).
+/// (e.g. `$USERNAME@acme.com` yields `["$USERNAME"]`).
 pub fn extract_tokens(s: &str, flavour: MdmFlavour) -> Vec<String> {
     match flavour {
         MdmFlavour::Fleet => extract_fleet(s),
-        MdmFlavour::Jamf | MdmFlavour::Apple => extract_percent(s),
+        MdmFlavour::Jamf => extract_jamf(s),
+        // Apple has no recognised token shape — nothing to extract.
+        MdmFlavour::Apple => Vec::new(),
     }
 }
 
@@ -129,21 +145,23 @@ fn extract_fleet(s: &str) -> Vec<String> {
     out
 }
 
-fn extract_percent(s: &str) -> Vec<String> {
+fn extract_jamf(s: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut rest = s;
-    while let Some(open) = rest.find('%') {
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('%') else {
-            break;
-        };
-        let token_end = open + 1 + close + 1;
-        let token = &rest[open..token_end];
-        let inner = &token[1..token.len() - 1];
-        if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_alphanumeric()) {
-            out.push(token.to_string());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while let Some(rel) = s[i..].find('$') {
+        let start = i + rel;
+        let mut end = start + 1;
+        // A token is `$` followed by at least one ASCII letter.
+        if end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                end += 1;
+            }
+            out.push(s[start..end].to_string());
+            i = end;
+        } else {
+            i = start + 1;
         }
-        rest = &rest[token_end..];
     }
     out
 }
@@ -170,20 +188,23 @@ mod tests {
     }
 
     #[test]
-    fn is_known_jamf() {
-        assert!(is_known("%Username%", MdmFlavour::Jamf));
-        assert!(!is_known("%Userrname%", MdmFlavour::Jamf));
+    fn is_known_jamf_exact_and_prefix() {
+        assert!(is_known("$USERNAME", MdmFlavour::Jamf));
+        assert!(is_known("$SERIALNUMBER", MdmFlavour::Jamf));
+        assert!(is_known("$EXTENSIONATTRIBUTE_42", MdmFlavour::Jamf));
+        assert!(!is_known("$EXTENSIONATTRIBUTE_", MdmFlavour::Jamf));
+        assert!(!is_known("$NOTAVAR", MdmFlavour::Jamf));
     }
 
     #[test]
     fn extract_tokens_jamf_with_static_text() {
         assert_eq!(
-            extract_tokens("%Username%@acme.com", MdmFlavour::Jamf),
-            vec!["%Username%".to_string()]
+            extract_tokens("$USERNAME@acme.com", MdmFlavour::Jamf),
+            vec!["$USERNAME".to_string()]
         );
         assert_eq!(
-            extract_tokens("%ProductName% of %FullName%", MdmFlavour::Jamf),
-            vec!["%ProductName%".to_string(), "%FullName%".to_string()]
+            extract_tokens("$COMPUTERNAME — $FULLNAME", MdmFlavour::Jamf),
+            vec!["$COMPUTERNAME".to_string(), "$FULLNAME".to_string()]
         );
     }
 
