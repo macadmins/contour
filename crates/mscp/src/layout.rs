@@ -139,7 +139,10 @@ impl MscpLayout {
 
 impl Default for MscpLayout {
     fn default() -> Self {
-        Self::V1x
+        // 2.0 is the current standard layout; auto-detection
+        // (`detect`/`detect_or_from`) still falls back to 1.x for older
+        // checkouts, so this default only applies when nothing is known.
+        Self::V2x
     }
 }
 

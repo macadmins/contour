@@ -1779,7 +1779,9 @@ controls:
         assert!(result.contains("        labels_include_all:"));
         assert!(result.contains("          - \"mscp-800-53r5_high\""));
         // Existing entries and the unrelated scripts section survive.
-        assert!(result.contains("- path: ../lib/macos/configuration-profiles/date-time.mobileconfig"));
+        assert!(
+            result.contains("- path: ../lib/macos/configuration-profiles/date-time.mobileconfig")
+        );
         assert!(result.contains("          - macOS screen lock exclusions"));
         assert!(result.contains("    - path: ../lib/macos/scripts/uninstall-fleetd-macos.sh"));
         // The glob sits inside configuration_profiles, before `scripts:`.
@@ -1863,9 +1865,6 @@ controls:
     #[test]
     fn test_append_apple_cp_empty_entries_noop() {
         let content = "name: ws\ncontrols:\n  apple_settings:\n    configuration_profiles:\n";
-        assert_eq!(
-            append_apple_configuration_profiles(&content, &[]),
-            content
-        );
+        assert_eq!(append_apple_configuration_profiles(&content, &[]), content);
     }
 }
