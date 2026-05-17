@@ -190,6 +190,7 @@ contour btm generate <INPUT> [flags]
 | `--ddm` | Generate DDM declarations (JSON) instead of mobileconfig | `false` |
 | `--per-app` | Generate one profile per app instead of combined | `false` |
 | `--fragment` | Generate Fleet GitOps fragment directory | `false` |
+| `--format <FMT>` | Output format: `mobileconfig` (default) or `recipe` | `mobileconfig` |
 
 ```bash
 # Generate combined service management profile (default)
@@ -197,6 +198,9 @@ contour btm generate btm.toml -o ./profiles
 
 # Generate one profile per app
 contour btm generate btm.toml --per-app -o ./profiles
+
+# Emit a contour recipe TOML instead of a .mobileconfig
+contour btm generate btm.toml --format recipe -o ./recipes
 
 # Generate DDM declarations (macOS 15+)
 contour btm generate btm.toml --ddm -o ./ddm
@@ -215,6 +219,8 @@ contour btm generate btm.toml --dry-run
 **DDM mode** (`--ddm`): Generates JSON declarations (type `com.apple.configuration.services.background-tasks`) instead of mobileconfig. One declaration per app. Only `Label`-type rules are included (as `LaunchdConfigurations`). Requires macOS 15+.
 
 **Fragment mode** (`--fragment`): Produces a fragment directory with profiles under `platforms/macos/configuration-profiles/`, a `fleets/reference-fleet.yml`, and a `fragment.toml` for merging into a Fleet GitOps repository. Default output dir: `btm-fragment/`.
+
+**Recipe mode** (`--format recipe`): Writes a single combined recipe `.toml` instead of a `.mobileconfig`. Drop it into a contour recipe library's `recipes/` directory and render it later with `contour profile generate --recipe`. Incompatible with `--ddm` — DDM declarations stay one file per bundle; use `--format mobileconfig --ddm`, or import the resulting JSON with `contour profile library import`.
 
 ### `btm validate`
 

@@ -190,6 +190,7 @@ contour notifications generate <INPUT> [flags]
 | `-o, --output <PATH>` | Output directory or file path | same dir as input |
 | `--combined` | Merge all apps into a single profile | `false` |
 | `--fragment` | Generate a Fleet GitOps fragment directory (per-app profiles, `fleets/reference-fleet.yml`, `fragment.toml` manifest) | `false` |
+| `--format <FMT>` | Output format: `mobileconfig` (default) or `recipe` | `mobileconfig` |
 | `--dry-run` | Preview profiles without writing | `false` |
 
 ```bash
@@ -202,9 +203,14 @@ contour notifications generate notifications.toml --combined -o notifications.mo
 # Generate a Fleet GitOps fragment for merge into an existing repo
 contour notifications generate notifications.toml --fragment -o notifications-fragment/
 
+# Emit a contour recipe TOML instead of a .mobileconfig
+contour notifications generate notifications.toml --format recipe -o ./recipes
+
 # Preview what would be generated
 contour notifications generate notifications.toml --dry-run
 ```
+
+**Recipe mode** (`--format recipe`): Writes a single combined recipe `.toml` instead of `.mobileconfig` files. Drop it into a contour recipe library's `recipes/` directory and render it later with `contour profile generate --recipe`.
 
 **Per-app mode** (default): Creates one `{app-name}-notifications.mobileconfig` per app. Profile identifier: `{org}.notifications.{bundle-id}`.
 
