@@ -183,8 +183,11 @@ impl TrainerWorkflow for BtmWorkflow {
                 .with_explanation(
                     "BTM can emit alternative output formats for integration with\n\
                      other Contour workflows and GitOps repositories.\n\n\
-                     - --format recipe: emits a Contour recipe .toml (a reusable\n\
-                       profile template) instead of a finished mobileconfig.\n\
+                     - --format recipe: emits a Contour recipe .toml carrying BOTH\n\
+                       [[profile]] blocks (from mobileconfig rules) and [[ddm]]\n\
+                       blocks (from DDM-capable rules) — one reusable template that\n\
+                       covers both delivery paths, rendered later with\n\
+                       `contour profile generate --recipe`.\n\
                      - --fragment: emits a Fleet GitOps fragment directory that\n\
                        can be referenced from a Fleet GitOps configuration.\n\n\
                      Pick the format that matches how you deploy.",
