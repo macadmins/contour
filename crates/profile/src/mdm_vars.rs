@@ -36,9 +36,9 @@ impl MdmFlavour {
 
 /// Fleet exact variable names.
 ///
-/// `FLEET_VAR_HOST_END_USER_EMAIL_IDP` is intentionally excluded — it is
-/// a legacy variable Fleet advises against in new configs, so contour
-/// flags it as unknown rather than blessing it.
+/// Legacy variables are kept out of this list (see [`FLEET_LEGACY`]) so
+/// they are not blessed as current; they still get a specific legacy
+/// notice rather than a generic "unknown" warning.
 pub const FLEET_EXACT: &[&str] = &[
     "FLEET_VAR_NDES_SCEP_CHALLENGE",
     "FLEET_VAR_NDES_SCEP_PROXY_URL",
@@ -101,6 +101,28 @@ pub const JAMF_PREFIXES: &[&str] = &["$EXTENSIONATTRIBUTE_"];
 /// substitution catalogue; operators declare what they need in the
 /// config `[mdm_variables.pool]`.
 pub const APPLE_VARS: &[&str] = &[];
+
+/// Legacy variables — recognised (token, advisory note) pairs that
+/// still work but should be avoided in new configs. Kept out of the
+/// exact catalogues so they are flagged with a specific legacy notice
+/// instead of a generic "unknown variable" warning.
+pub const FLEET_LEGACY: &[(&str, &str)] = &[(
+    "FLEET_VAR_HOST_END_USER_EMAIL_IDP",
+    "Fleet advises against it in new configs — use a current IdP variable instead",
+)];
+
+/// If `token` is a known *legacy* variable for `flavour`, return the
+/// advisory reason. Legacy variables still resolve at deploy time but
+/// should be replaced.
+pub fn legacy_note(token: &str, flavour: MdmFlavour) -> Option<&'static str> {
+    match flavour {
+        MdmFlavour::Fleet => FLEET_LEGACY
+            .iter()
+            .find(|(name, _)| *name == token)
+            .map(|(_, note)| *note),
+        MdmFlavour::Jamf | MdmFlavour::Apple => None,
+    }
+}
 
 /// Whether `token` is a known variable for `flavour`.
 pub fn is_known(token: &str, flavour: MdmFlavour) -> bool {
@@ -193,6 +215,13 @@ mod tests {
             "FLEET_VAR_HOST_END_USER_EMAIL_IDP",
             MdmFlavour::Fleet
         ));
+    }
+
+    #[test]
+    fn legacy_note_flags_legacy_fleet_variable() {
+        assert!(legacy_note("FLEET_VAR_HOST_END_USER_EMAIL_IDP", MdmFlavour::Fleet).is_some());
+        assert!(legacy_note("FLEET_VAR_HOST_UUID", MdmFlavour::Fleet).is_none());
+        assert!(legacy_note("FLEET_VAR_HOST_END_USER_EMAIL_IDP", MdmFlavour::Jamf).is_none());
     }
 
     #[test]

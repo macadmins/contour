@@ -70,6 +70,11 @@ fn catalogue(flavour: MdmFlavour) -> Vec<String> {
                     .iter()
                     .map(|p| format!("{p}<suffix>")),
             )
+            .chain(
+                mdm_vars::FLEET_LEGACY
+                    .iter()
+                    .map(|(name, _)| format!("{name}  (legacy — avoid)")),
+            )
             .collect(),
         MdmFlavour::Jamf => mdm_vars::JAMF_VARS
             .iter()

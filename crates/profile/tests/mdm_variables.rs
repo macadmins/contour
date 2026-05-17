@@ -116,3 +116,18 @@ fn unknown_mdm_variable_is_warned() {
         "a typo'd token should be flagged: {stdout}"
     );
 }
+
+#[test]
+fn legacy_mdm_variable_gets_a_legacy_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = SCEP_RECIPE.replace("VAR_PLACEHOLDER", "FLEET_VAR_HOST_END_USER_EMAIL_IDP");
+    let (stdout, _content) = generate(dir.path(), &body);
+    assert!(
+        stdout.contains("Legacy fleet variable: FLEET_VAR_HOST_END_USER_EMAIL_IDP"),
+        "a legacy token should get a legacy notice, not 'unknown': {stdout}"
+    );
+    assert!(
+        !stdout.contains("Unknown fleet variable: FLEET_VAR_HOST_END_USER_EMAIL_IDP"),
+        "a legacy token must not be reported as merely unknown: {stdout}"
+    );
+}

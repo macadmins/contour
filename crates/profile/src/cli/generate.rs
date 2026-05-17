@@ -554,12 +554,23 @@ fn warn_unknown_mdm_variables(
     unknown.dedup();
     if output_mode == OutputMode::Human {
         for t in &unknown {
-            println!(
-                "  {} Unknown {} variable: {}",
-                "⚠".yellow(),
-                flavour.as_str(),
-                t
-            );
+            // A legacy variable gets a specific notice, not "unknown".
+            if let Some(note) = crate::mdm_vars::legacy_note(t, flavour) {
+                println!(
+                    "  {} Legacy {} variable: {} — {}",
+                    "⚠".yellow(),
+                    flavour.as_str(),
+                    t,
+                    note
+                );
+            } else {
+                println!(
+                    "  {} Unknown {} variable: {}",
+                    "⚠".yellow(),
+                    flavour.as_str(),
+                    t
+                );
+            }
         }
     }
 }
