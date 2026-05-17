@@ -1,0 +1,21 @@
+# Desktop / Stage Manager behavior.
+#
+# Consolidates two single-key recipes — both set keys on the
+# com.apple.WindowManager domain (delivered via the MCX
+# com.apple.ManagedClient.preferences wrapper).
+
+[recipe]
+name = "windowmanager"
+description = "Window Manager desktop behavior — hide desktop widgets and disable click-wallpaper-to-show-desktop"
+
+[[profile]]
+filename = "windowmanager.mobileconfig"
+payload_type = "com.apple.ManagedClient.preferences"
+display_name = "Window Manager — Desktop"
+description = "Hides desktop widgets and disables click-wallpaper-to-reveal-desktop"
+removal_disallowed = false
+mcx_domain = "com.apple.WindowManager"
+
+[profile.fields]
+StandardHideWidgets = true
+EnableStandardClickToShowDesktop = false

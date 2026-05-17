@@ -1,0 +1,100 @@
+# CrowdStrike Falcon — managed deployment bundle.
+#
+# Five profiles that together approve and grant the CrowdStrike Falcon
+# sensor everything it needs on a managed Mac: background service
+# management, Full Disk Access, system-extension approval, notification
+# settings, and the network content filter.
+#
+# Team identifier X9E956P446 is CrowdStrike Inc.
+
+[recipe]
+name = "crowdstrike"
+description = "CrowdStrike Falcon — service management, Full Disk Access, system extension, notifications, and web content filter"
+vendor = "CrowdStrike"
+variables = []
+
+[[profile]]
+filename = "crowdstrike-service-management.mobileconfig"
+payload_type = "com.apple.servicemanagement"
+display_name = "CrowdStrike Service Management"
+description = "Allows the CrowdStrike Falcon background service to run as a managed login item"
+removal_disallowed = false
+
+[[profile.fields.Rules]]
+RuleType = "BundleIdentifier"
+RuleValue = "com.crowdstrike.falcon.UserAgent"
+
+[[profile.fields.Rules]]
+RuleType = "TeamIdentifier"
+RuleValue = "X9E956P446"
+
+[[profile]]
+filename = "crowdstrike-full-disk-access.mobileconfig"
+payload_type = "com.apple.TCC.configuration-profile-policy"
+display_name = "CrowdStrike Full Disk Access"
+description = "Grants Full Disk Access (SystemPolicyAllFiles) to the CrowdStrike Falcon agent and app"
+removal_disallowed = false
+
+[[profile.fields.Services.SystemPolicyAllFiles]]
+Allowed = true
+CodeRequirement = 'identifier "com.crowdstrike.falcon.Agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = X9E956P446'
+Comment = ""
+Identifier = "com.crowdstrike.falcon.Agent"
+IdentifierType = "bundleID"
+StaticCode = false
+
+[[profile.fields.Services.SystemPolicyAllFiles]]
+Allowed = true
+CodeRequirement = 'identifier "com.crowdstrike.falcon.App" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = X9E956P446'
+Comment = ""
+Identifier = "com.crowdstrike.falcon.App"
+IdentifierType = "bundleID"
+StaticCode = false
+
+[[profile]]
+filename = "crowdstrike-system-extension.mobileconfig"
+payload_type = "com.apple.system-extension-policy"
+display_name = "CrowdStrike System Extension"
+description = "Approves the CrowdStrike Falcon system extension"
+removal_disallowed = false
+
+[profile.fields]
+AllowUserOverrides = true
+
+[profile.fields.AllowedSystemExtensions]
+X9E956P446 = ["com.crowdstrike.falcon.Agent"]
+
+[profile.fields.NonRemovableFromUISystemExtensions]
+X9E956P446 = ["com.crowdstrike.falcon.Agent"]
+
+[[profile]]
+filename = "crowdstrike-notifications.mobileconfig"
+payload_type = "com.apple.notificationsettings"
+display_name = "CrowdStrike Notifications"
+description = "Configures notification settings for the CrowdStrike Falcon user agent"
+removal_disallowed = false
+
+[[profile.fields.NotificationSettings]]
+AlertType = 1
+BundleIdentifier = "com.crowdstrike.falcon.UserAgent"
+CriticalAlertEnabled = false
+NotificationsEnabled = true
+ShowInLockScreen = false
+ShowInNotificationCenter = true
+
+[[profile]]
+filename = "crowdstrike-web-filter.mobileconfig"
+payload_type = "com.apple.webcontent-filter"
+display_name = "CrowdStrike Web Content Filter"
+description = "Enables the CrowdStrike Falcon network content filter (socket-level inspection)"
+removal_disallowed = false
+
+[profile.fields]
+FilterDataProviderBundleIdentifier = "com.crowdstrike.falcon.Agent"
+FilterDataProviderDesignatedRequirement = 'identifier "com.crowdstrike.falcon.Agent" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "X9E956P446"'
+FilterGrade = "inspector"
+FilterPackets = false
+FilterSockets = true
+FilterType = "Plugin"
+Organization = "CrowdStrike Inc."
+PluginBundleID = "com.crowdstrike.falcon.App"

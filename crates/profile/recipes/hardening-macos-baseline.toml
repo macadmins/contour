@@ -6,13 +6,16 @@
 #   - system_settings_firewall_enable            (App Firewall)
 #   - system_settings_firewall_stealth_mode_enable
 #   - pwpolicy_minimum_length_enforce            (12-char minimum, see note)
+#   - DDM com.apple.configuration.passcode.settings       (passcode policy)
 #   - DDM com.apple.configuration.softwareupdate.settings (auto-install OS updates)
 #
-# mSCP's CIS-recommended `minLength` is 15. This baseline ships with 12 as
-# a conservative floor — bump in your library override if your posture
-# requires the full mSCP value. The DDM software-update bundle is the
-# DDM-native replacement for the legacy `com.apple.SoftwareUpdate`
-# mobileconfig knobs (which mSCP currently lists as ProfileCapable).
+# mSCP's CIS-recommended minimum length is 15. This baseline ships with
+# 12 as a conservative floor — bump `MinimumLength` in your library
+# override if your posture requires the full mSCP value. Both the
+# passcode policy and the OS software-update settings ship as DDM
+# declarations — the DDM-native replacements for the legacy
+# `com.apple.mobiledevice.passwordpolicy` and `com.apple.SoftwareUpdate`
+# mobileconfig payloads.
 #
 # Generate with:
 #   contour profile generate --recipe hardening-macos-baseline \
@@ -21,7 +24,8 @@
 # Output:
 #   ./out/gatekeeper.mobileconfig
 #   ./out/firewall.mobileconfig
-#   ./out/password-policy.mobileconfig
+#   ./out/passcode-settings/configuration.json
+#   ./out/passcode-settings/activation.json
 #   ./out/softwareupdate-settings/configuration.json
 #   ./out/softwareupdate-settings/activation.json
 
@@ -53,16 +57,18 @@ removal_disallowed = true
   EnableFirewall = true
   EnableStealthMode = true
 
-# ─── Password policy (12-char minimum) ─────────────────────────────────
-[[profile]]
-filename = "password-policy.mobileconfig"
-payload_type = "com.apple.mobiledevice.passwordpolicy"
-display_name = "Password Policy"
-description = "Enforce a 12-character minimum password length (mSCP pwpolicy_minimum_length_enforce, CIS-recommended 15)"
-removal_disallowed = true
+# ─── DDM passcode policy (12-char minimum) ─────────────────────────────
+[[ddm]]
+intent_name = "passcode-settings"
 
-  [profile.fields]
-  minLength = 12
+  [ddm.configuration]
+  type = "com.apple.configuration.passcode.settings"
+
+    [ddm.configuration.payload]
+    MinimumLength = 12
+
+  [ddm.activation]
+  type = "com.apple.activation.simple"
 
 # ─── DDM software updates ──────────────────────────────────────────────
 [[ddm]]

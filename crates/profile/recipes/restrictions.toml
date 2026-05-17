@@ -1,0 +1,26 @@
+# macOS restrictions.
+#
+# Consolidates three single-key recipes — all set keys on the
+# com.apple.applicationaccess (Restrictions) payload.
+#
+# DEPRECATION NOTE: com.apple.applicationaccess is deprecated by Apple as
+# of macOS 26. The legacy payload still applies on macOS 25 and earlier
+# but stops working on macOS 26+. The partial DDM replacement is
+# com.apple.configuration.screentime — not every restriction key has a
+# DDM equivalent yet.
+
+[recipe]
+name = "restrictions"
+description = "macOS restrictions — block AirDrop, iPhone Mirroring, and Erase All Content and Settings"
+
+[[profile]]
+filename = "restrictions.mobileconfig"
+payload_type = "com.apple.applicationaccess"
+display_name = "Restrictions"
+description = "Blocks AirDrop, iPhone Mirroring, and Erase All Content and Settings"
+removal_disallowed = false
+
+[profile.fields]
+allowAirDrop = false
+allowiPhoneMirroring = false
+allowEraseContentAndSettings = false

@@ -1,0 +1,29 @@
+[recipe]
+name = "allow-fleetd-full-disk-access"
+description = "Allow fleetd Full Disk Access"
+vendor = "FleetDM"
+
+[[profile]]
+filename = "configuration-profile-policy.mobileconfig"
+payload_type = "com.apple.TCC.configuration-profile-policy"
+display_name = "Privacy Preferences Policy Control"
+description = ""
+removal_disallowed = false
+
+[[profile.fields.Services.SystemPolicyAllFiles]]
+Allowed = true
+CodeRequirement = 'identifier "com.fleetdm.orbit" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "8VBZ3948LU"'
+Comment = ""
+Identifier = "/opt/orbit/bin/orbit/macos/edge/orbit"
+IdentifierType = "path"
+StaticCode = false
+
+[[profile.fields.Services.SystemPolicyAllFiles]]
+Allowed = true
+CodeRequirement = 'identifier "com.fleetdm.orbit" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "8VBZ3948LU"'
+Comment = ""
+Identifier = "/opt/orbit/bin/orbit/macos/stable/orbit"
+IdentifierType = "path"
+StaticCode = false
+
+[profile.extra_fields]

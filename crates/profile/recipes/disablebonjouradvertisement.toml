@@ -1,0 +1,16 @@
+[recipe]
+name = "disablebonjouradvertisement"
+description = "Disable Advertisement of Services via Bonjour"
+
+[[profile]]
+filename = "preferences.mobileconfig"
+payload_type = "com.apple.ManagedClient.preferences"
+display_name = "preferences"
+description = ""
+removal_disallowed = false
+mcx_domain = "com.apple.mDNSResponder"
+
+[profile.fields]
+NoMulticastAdvertisements = true
+
+[profile.extra_fields]

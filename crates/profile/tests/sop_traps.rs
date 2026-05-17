@@ -2609,18 +2609,17 @@ fn trap_74_hardening_baseline_emits_mobileconfig_and_ddm() {
     assert_eq!(parsed["success"], true);
     assert_eq!(parsed["recipe"], "hardening-macos-baseline");
 
-    // 3 mobileconfig profiles emitted.
+    // 2 mobileconfig profiles emitted (Gatekeeper + firewall).
     let profiles = parsed["profiles"].as_array().expect("profiles array");
     assert_eq!(
         profiles.len(),
-        3,
-        "expected 3 mobileconfigs; got {profiles:?}"
+        2,
+        "expected 2 mobileconfigs; got {profiles:?}"
     );
     assert!(out.path().join("gatekeeper.mobileconfig").exists());
     assert!(out.path().join("firewall.mobileconfig").exists());
-    assert!(out.path().join("password-policy.mobileconfig").exists());
 
-    // DDM bundle emitted under <intent_name>/.
+    // Two DDM bundles emitted under <intent_name>/.
     let ddm = parsed["ddm"].as_array().expect("ddm array");
     assert!(
         ddm.iter().any(|d| d["kind"] == "configuration"),
@@ -2630,6 +2629,33 @@ fn trap_74_hardening_baseline_emits_mobileconfig_and_ddm() {
         ddm.iter().any(|d| d["kind"] == "activation"),
         "ddm array must include an activation; got {ddm:?}"
     );
+
+    // Passcode DDM: enforces the 12-char minimum length (the DDM-native
+    // replacement for the legacy passwordpolicy mobileconfig).
+    let passcode_cfg_path = out.path().join("passcode-settings/configuration.json");
+    assert!(
+        passcode_cfg_path.exists(),
+        "passcode DDM configuration.json missing"
+    );
+    assert!(
+        out.path()
+            .join("passcode-settings/activation.json")
+            .exists(),
+        "passcode DDM activation.json missing"
+    );
+    let passcode_cfg: Value =
+        serde_json::from_slice(&fs::read(&passcode_cfg_path).unwrap()).unwrap();
+    assert_eq!(
+        passcode_cfg["Type"].as_str(),
+        Some("com.apple.configuration.passcode.settings")
+    );
+    assert_eq!(
+        passcode_cfg["Payload"]["MinimumLength"].as_i64(),
+        Some(12),
+        "passcode MinimumLength must propagate from the recipe"
+    );
+
+    // Software-update DDM bundle.
     let cfg_path = out
         .path()
         .join("softwareupdate-settings/configuration.json");
@@ -2654,11 +2680,7 @@ fn trap_74_hardening_baseline_emits_mobileconfig_and_ddm() {
         "AutomaticActions.InstallOSUpdates must propagate from the recipe"
     );
 
-    // No recipe placeholders surface. The password-policy mobileconfig
-    // carries Apple's `{{key}}/{{value}}` runtime template markers from
-    // the embedded schema — these are NOT user-fillable and must be
-    // filtered from the placeholder warning. A regression here means
-    // operators see a misleading "Replace these placeholders" prompt.
+    // No user-fillable recipe placeholders surface.
     let placeholders = parsed["placeholders"]
         .as_array()
         .expect("placeholders array");
@@ -3841,7 +3863,7 @@ fn trap_83_library_import_combine_and_generate_combined() {
             lib.to_str().unwrap(),
             "--combine",
             "--name",
-            "crowdstrike",
+            "acmebundle",
             "--json",
         ])
         .output()
@@ -3853,7 +3875,7 @@ fn trap_83_library_import_combine_and_generate_combined() {
     );
     let parsed: Value = serde_json::from_slice(&combined.stdout).expect("JSON");
     assert_eq!(parsed["payload_count"], 3);
-    let recipe_path = lib.join("recipes/crowdstrike.toml");
+    let recipe_path = lib.join("recipes/acmebundle.toml");
     let recipe_toml = fs::read_to_string(&recipe_path).unwrap();
     assert_eq!(
         recipe_toml.matches("\n[[profile]]\n").count(),
@@ -3861,7 +3883,7 @@ fn trap_83_library_import_combine_and_generate_combined() {
         "combined recipe must carry 3 [[profile]] blocks; got: {recipe_toml}"
     );
 
-    // Default emission: 3 files, none called crowdstrike.mobileconfig.
+    // Default emission: 3 files, none called acmebundle.mobileconfig.
     let out_default = tempfile::tempdir().unwrap();
     let gen_default = Command::cargo_bin("profile")
         .unwrap()
@@ -3871,7 +3893,7 @@ fn trap_83_library_import_combine_and_generate_combined() {
             "--recipe-path",
             lib.join("recipes").to_str().unwrap(),
             "--recipe",
-            "crowdstrike",
+            "acmebundle",
             "--org",
             "com.acme",
             "-o",
@@ -3893,7 +3915,7 @@ fn trap_83_library_import_combine_and_generate_combined() {
         .count();
     assert_eq!(default_count, 3, "default emission must write 3 files");
     assert!(
-        !out_default.path().join("crowdstrike.mobileconfig").exists(),
+        !out_default.path().join("acmebundle.mobileconfig").exists(),
         "default emission must NOT produce a combined file"
     );
 
@@ -3907,7 +3929,7 @@ fn trap_83_library_import_combine_and_generate_combined() {
             "--recipe-path",
             lib.join("recipes").to_str().unwrap(),
             "--recipe",
-            "crowdstrike",
+            "acmebundle",
             "--org",
             "com.acme",
             "-o",
@@ -3921,7 +3943,7 @@ fn trap_83_library_import_combine_and_generate_combined() {
         "--combined emission must succeed; stderr: {}",
         String::from_utf8_lossy(&gen_combined.stderr)
     );
-    let combined_path = out_combined.path().join("crowdstrike.mobileconfig");
+    let combined_path = out_combined.path().join("acmebundle.mobileconfig");
     assert!(
         combined_path.exists(),
         "combined output must land at <recipe-name>.mobileconfig"
@@ -3935,7 +3957,7 @@ fn trap_83_library_import_combine_and_generate_combined() {
     );
     // Outer identifier carries `--org` prefix + recipe name.
     assert!(
-        combined_xml.contains("<string>com.acme.crowdstrike</string>"),
+        combined_xml.contains("<string>com.acme.acmebundle</string>"),
         "combined output's outer identifier must be com.acme.<recipe-name>"
     );
 }

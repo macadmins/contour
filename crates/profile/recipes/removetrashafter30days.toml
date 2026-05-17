@@ -1,0 +1,15 @@
+[recipe]
+name = "removetrashafter30days"
+description = "Remove Trash After 30 Days"
+
+[[profile]]
+filename = "finder.mobileconfig"
+payload_type = "com.apple.finder"
+display_name = "Finder"
+description = ""
+removal_disallowed = false
+
+[profile.fields]
+FXRemoveOldTrashItems = true
+
+[profile.extra_fields]

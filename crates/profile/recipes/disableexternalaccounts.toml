@@ -1,0 +1,16 @@
+[recipe]
+name = "disableexternalaccounts"
+description = "Disable External Accounts"
+
+[[profile]]
+filename = "preferences.mobileconfig"
+payload_type = "com.apple.ManagedClient.preferences"
+display_name = "preferences"
+description = ""
+removal_disallowed = false
+mcx_domain = "com.apple.loginwindow"
+
+[profile.fields]
+EnableExternalAccounts = false
+
+[profile.extra_fields]

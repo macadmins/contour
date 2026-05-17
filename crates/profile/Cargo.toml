@@ -42,6 +42,7 @@ cms.workspace = true
 # File system
 walkdir.workspace = true
 glob.workspace = true
+include_dir = "0.7"
 
 # Parallelism
 rayon.workspace = true

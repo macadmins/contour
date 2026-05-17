@@ -1,0 +1,44 @@
+# Managed Migration Assistant (macOS 26.4+).
+#
+# DDM bundle for `com.apple.configuration.migration-assistant.settings`.
+# Turns on Managed Migration so Migration Assistant runs under MDM
+# control, and migrates the source Mac's Security & Privacy settings.
+#
+# Optionally restrict what is migrated:
+#   - ExcludedAccounts  — user accounts to skip
+#   - ExcludedPaths     — paths NOT to migrate
+#   - RequiredPaths     — paths that MUST migrate
+# Uncomment and fill the arrays below to use them.
+#
+# Compose with:
+#   contour profile ddm compose \
+#       ddm/managed-migration-assistant.toml \
+#       -o ./declarations/managed-migration-assistant
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's
+# group/team assignment.
+#
+# Schema source: Apple device-management. Verified against contour's
+# embedded schema:
+# `contour profile info com.apple.configuration.migration-assistant.settings --full`.
+
+intent_name = "managed-migration-assistant"
+
+[configuration]
+type = "com.apple.configuration.migration-assistant.settings"
+
+  [configuration.payload]
+  # Run Migration Assistant under managed control.
+  ShouldDoManagedMigration = true
+  # Carry over the source Mac's Security & Privacy settings.
+  ShouldMigrateSecurityPrivacySettings = true
+
+  # Optional migration scoping — uncomment to use.
+  # ExcludedAccounts = ["guest"]
+  # ExcludedPaths = ["/Users/Shared/Scratch"]
+  # RequiredPaths = ["/Users/Shared/CompanyData"]
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"
