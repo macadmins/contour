@@ -50,7 +50,22 @@ max_threads = 4
 
 ### .contour/config.toml
 
-Repo-level defaults (same schema as `profile.toml`). Shared across all contour subcommands.
+Repo-level, cross-tool defaults — created by `contour init` and read by
+every contour subcommand. Sections:
+
+| Section | Purpose |
+|---|---|
+| `[organization]` | Org name + reverse-DNS domain (identifier prefix) |
+| `[defaults]` | Platforms, deterministic UUIDs, default library path |
+| `[vars]` | Static `{{PLACEHOLDER}}` substitutions for recipes |
+| `[signing]` | Code-signing identity + team ID for `profile sign` |
+| `[validation]` | Schema-validation policy (`fail_on_errors`/`warnings`/`deprecations`) |
+| `[secrets]` | Secret reference catalogue — see [Secrets](#secrets) |
+| `[mdm_variables]` | MDM deploy-time variable pool — see [MDM variables](#mdm-variables) |
+
+See **[`contour-config.md`](contour-config.md)** for the full reference
+with every key, type, and default. The discovery walk and CWD-over-anchor
+precedence are described there.
 
 ### Precedence
 
@@ -282,11 +297,19 @@ contour profile import <SOURCE> [flags]
 | `--no-uuid` | Skip UUID regeneration | `false` |
 | `--max-depth <N>` | Maximum directory depth for recursive search | unlimited |
 | `--dry-run` | Preview without writing files | `false` |
+| `--strict` | Reject profiles with auto-fixable defects instead of repairing them | `false` |
+| `--jamf` | Import from Jamf backup YAML (jamf-cli export format) | `false` |
 
 ```bash
 # Import vendor profiles, normalize with org identity
 contour profile import ~/vendor-profiles -o ./profiles --org com.acme --all
 ```
+
+By default, import is **tolerant** — a profile missing a required field
+that has a known default (e.g. `PayloadVersion`) or a bare payload
+needing a `Configuration` wrapper is repaired on the fly with a warning,
+rather than being dropped. `--strict` turns those repairs back into hard
+rejections. The same tolerant parse path backs `profile library import`.
 
 #### `profile normalize`
 
@@ -380,11 +403,36 @@ contour profile scan <PATHS>... [flags]
 | `-r, --recursive` | Process directories recursively | `false` |
 | `--max-depth <N>` | Maximum directory depth (requires `--recursive`) | unlimited |
 | `--no-parallel` | Disable parallel processing | `false` |
+| `--deprecations` | Scan for deprecated payload types and keys | `false` |
+| `--md-report <PATH>` | Write a Markdown deprecation report (implies `--deprecations`) | — |
+| `--fail-on-deprecations` | Exit non-zero if any deprecation is found | `[validation].fail_on_deprecations` |
 
 ```bash
 # Audit all profiles in a directory
 contour profile scan ./profiles -r --json
 ```
+
+##### Deprecation scanning
+
+`--deprecations` flags two kinds of obsolescence: **deprecated payload
+types** (legacy MDM payloads with a DDM replacement — they stop working
+on macOS 26+) and **deprecated keys** (fields Apple's schema marks
+superseded). It reuses the same detection as `profile plan` and the
+`deprecated-payload-type` / `deprecated-key` lint checks.
+
+```bash
+# Human + per-profile findings
+contour profile scan ./profiles -r --deprecations
+
+# Markdown report for a PR or wiki
+contour profile scan ./profiles -r --md-report deprecations.md
+
+# CI gate — non-zero exit when anything is deprecated
+contour profile scan ./profiles -r --deprecations --fail-on-deprecations
+```
+
+The gate defaults to the `[validation].fail_on_deprecations` config key;
+the CLI flag overrides it.
 
 #### `profile validate`
 
@@ -920,6 +968,77 @@ contour profile generate com.apple.mobiledevice.passwordpolicy --interactive --o
 
 # Raw payload dict for Workspace ONE
 contour profile generate com.apple.wifi.managed --format plist --full -o wifi-payload.plist
+```
+
+---
+
+### Library & Recipes
+
+A **recipe** is a TOML file describing one or more profiles to generate.
+A **library** is a directory of recipes (`recipes/`) and DDM bundles
+(`ddm/`) — a shareable, version-controlled preset collection. `profile
+generate --recipe` consumes them; the `library` subcommands manage them.
+
+#### `profile library new`
+
+Scaffold a fresh library directory (`recipes/`, `ddm/`, `README.md`,
+`.github/`).
+
+```bash
+contour profile library new ./contour-presets
+```
+
+#### `profile library import`
+
+Convert an existing `.mobileconfig` (or a directory of them) into recipe
+TOMLs at `<INTO>/recipes/<name>.toml`, each with a `.meaning.md` sidecar.
+Uses the same tolerant parse as `profile import`. **Sensitive fields are
+redacted** — a captured `Password` becomes `Password = "TODO: PASSWORD"`,
+recorded in `[recipe] secrets` (see [Secrets](#secrets)). Refuses to
+overwrite unless `--force`.
+
+```bash
+contour profile library import ./vendor-profiles --into ./contour-presets
+```
+
+#### `profile library validate` / `normalize` / `diff`
+
+Validate every recipe in a library, restyle recipe TOML (`--style
+flat|nested`), or diff two recipe files.
+
+```bash
+contour profile library validate ./contour-presets
+contour profile library diff old.toml new.toml
+```
+
+#### Generating from a recipe
+
+```bash
+contour profile generate --recipe wifi --recipe-path ./contour-presets/recipes --org com.acme -o build
+```
+
+- `--recipe <NAME|PATH>` — a bare name (resolved via `--recipe-path` →
+  `~/.contour/recipes/` → embedded) or a direct `.toml` path. Repeatable.
+- `--recipe-path <DIR>` — recipe search directory; falls back to
+  `defaults.library_path` in `.contour/config.toml`.
+- `--combined` / `--no-combined` — bundle every `[[profile]]` into one
+  `.mobileconfig`, or emit one per payload (overrides `[recipe.output]`).
+- `--sanitize` — leave secret references unresolved (see
+  [`--sanitize`](#--sanitize)).
+- `[odv]` defaults in the recipe fill `"$ODV"` placeholders;
+  `{{PLACEHOLDER}}` tokens come from `--set`, `[vars]`, or recipe
+  `variables`.
+
+Recipe field values may reference secrets and MDM variables — see
+[Secrets](#secrets) and [MDM variables](#mdm-variables).
+
+#### `profile variables`
+
+List the MDM deploy-time variable catalogues and the configured pool.
+
+```bash
+contour profile variables --mdm fleet     # built-in catalogue + your pool
+contour profile variables                 # all flavours when none configured
 ```
 
 ---
