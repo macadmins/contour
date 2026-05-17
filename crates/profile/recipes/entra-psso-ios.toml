@@ -1,0 +1,57 @@
+# Microsoft Entra ID SSO for iOS / iPadOS.
+#
+# Configures the Microsoft Enterprise SSO app extension (redirect type)
+# for iOS / iPadOS. iOS has no Platform SSO or Secure Enclave keys — it
+# is the redirect SSO extension only, so there are no PlatformSSO keys.
+#
+# Mirrors Microsoft's recommended "other MDM" configuration.
+#
+# Two things differ from the macOS `entra-psso` recipe: the extension
+# identifier is the Authenticator extension (not Company Portal), and no
+# Team Identifier is set (Microsoft documents it as blank for iOS). The
+# Microsoft Authenticator app must be installed on the device.
+#
+# URLs cover the worldwide commercial cloud. For sovereign clouds also
+# add: login.partner.microsoftonline.cn, login.chinacloudapi.cn,
+# login.microsoftonline.us, login-us.microsoftonline.com.
+#
+# References:
+#   - Microsoft Enterprise SSO plug-in for Apple devices:
+#     https://learn.microsoft.com/entra/identity-platform/apple-sso-plugin
+#   - Configure the iOS/iPadOS Enterprise SSO app extension with MDMs:
+#     https://learn.microsoft.com/intune/device-configuration/settings-catalog/configure-enterprise-sso-plugin-ios
+
+[recipe]
+name = "entra-psso-ios"
+description = "Microsoft Entra ID SSO extension for iOS / iPadOS (redirect)"
+vendor = "Microsoft"
+
+[[profile]]
+filename = "entra-psso-ios.mobileconfig"
+payload_type = "com.apple.extensiblesso"
+display_name = "SSO Extension – Entra ID (iOS)"
+description = "Configures the Microsoft Entra ID redirect SSO extension for iOS / iPadOS"
+removal_disallowed = true
+
+[profile.fields]
+Type = "Redirect"
+ExtensionIdentifier = "com.microsoft.azureauthenticator.ssoextension"
+URLs = ["https://login.microsoftonline.com", "https://login.microsoft.com", "https://sts.windows.net"]
+
+[profile.extra_fields]
+# Microsoft Enterprise SSO extension data — Microsoft's recommended
+# defaults. To also allow Jamf apps, set AppPrefixAllowList to:
+#   com.microsoft.,com.apple.,com.jamf.selfserviceplus.,com.jamf.trust.,com.jamf.management.,com.jamfsoftware.
+"ExtensionData.AppPrefixAllowList" = "com.microsoft.,com.apple."
+"ExtensionData.browser_sso_interaction_enabled" = 1
+"ExtensionData.disable_explicit_app_prompt" = 1
+# Optional allowlist-tuning keys (Microsoft "Summary of keys") — these
+# are org-specific, so they ship commented out. Uncomment as needed:
+#   "ExtensionData.Enable_SSO_On_All_ManagedApps" = 1
+#   "ExtensionData.AppAllowList" = "com.contoso.app1,com.contoso.app2"
+#   "ExtensionData.AppBlockList" = "com.apple.mobilesafari,com.apple.SafariViewService"
+#   "ExtensionData.AppCookieSSOAllowList" = "com.contoso.app1"
+#       iOS-only last resort for apps with custom networking that fail
+#       normal SSO; apps listed here must ALSO be in AppPrefixAllowList.
+#       https://learn.microsoft.com/entra/identity-platform/apple-sso-plugin#enable-sso-through-cookies-for-a-specific-application
+#   "ExtensionData.device_registration" = "{{DEVICEREGISTRATION}}"    # Intune JIT device registration
