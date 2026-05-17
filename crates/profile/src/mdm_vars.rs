@@ -35,10 +35,13 @@ impl MdmFlavour {
 }
 
 /// Fleet exact variable names.
+///
+/// `FLEET_VAR_HOST_END_USER_EMAIL_IDP` is intentionally excluded — it is
+/// a legacy variable Fleet advises against in new configs, so contour
+/// flags it as unknown rather than blessing it.
 pub const FLEET_EXACT: &[&str] = &[
     "FLEET_VAR_NDES_SCEP_CHALLENGE",
     "FLEET_VAR_NDES_SCEP_PROXY_URL",
-    "FLEET_VAR_HOST_END_USER_EMAIL_IDP",
     "FLEET_VAR_HOST_HARDWARE_SERIAL",
     "FLEET_VAR_HOST_END_USER_IDP_USERNAME",
     "FLEET_VAR_HOST_END_USER_IDP_USERNAME_LOCAL_PART",
@@ -185,6 +188,11 @@ mod tests {
         assert!(!is_known("FLEET_VAR_DIGICERT_DATA_", MdmFlavour::Fleet));
         // Typo.
         assert!(!is_known("FLEET_VAR_HOST_UUDI", MdmFlavour::Fleet));
+        // Legacy variable — intentionally not in the catalogue.
+        assert!(!is_known(
+            "FLEET_VAR_HOST_END_USER_EMAIL_IDP",
+            MdmFlavour::Fleet
+        ));
     }
 
     #[test]
