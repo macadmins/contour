@@ -228,6 +228,10 @@ pub enum Commands {
         /// to scaffold a fresh library at this location.
         #[arg(long, value_name = "DIR")]
         library_path: Option<String>,
+        /// MDM platform for the [mdm_variables] section (fleet|jamf|apple).
+        /// Writes that platform's variable catalogue as a commented template.
+        #[arg(long)]
+        mdm: Option<String>,
         /// Non-interactive mode (uses flags or defaults)
         #[arg(short, long)]
         yes: bool,

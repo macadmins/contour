@@ -180,6 +180,7 @@ pub fn run(cli: Cli) -> Result<()> {
             platforms,
             deterministic_uuids,
             library_path,
+            mdm,
             yes,
         } => crate::init::run(
             &path,
@@ -189,6 +190,7 @@ pub fn run(cli: Cli) -> Result<()> {
             platforms,
             deterministic_uuids,
             library_path,
+            mdm,
             yes,
             cli.json,
         ),
