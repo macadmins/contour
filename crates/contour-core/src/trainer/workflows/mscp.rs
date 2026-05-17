@@ -144,8 +144,43 @@ impl TrainerWorkflow for MscpWorkflow {
                     ],
                 }),
 
-            // Step 4: Configure Constraints (Optional)
-            TrainerStep::new(4, "Configure Constraints (Optional)")
+            // Step 4: Generate a Recipe from a Baseline
+            TrainerStep::new(4, "Generate a Recipe from a Baseline")
+                .with_explanation(
+                    "The recipe command aggregates a baseline's rules into a single\n\
+                     Contour recipe TOML.\n\n\
+                     It reads the mSCP rule YAML directly — no Python build is needed:\n\
+                     - Rules backed by mobileconfig become [[profile]] blocks\n\
+                     - Rules with a ddm_info block become [[ddm]] blocks\n\n\
+                     The resulting recipe is a reusable, version-controllable template\n\
+                     you can hand to the profile workflow or share across teams.",
+                )
+                .with_commands(vec![CommandPreview::new(
+                    format!(
+                        "contour mscp recipe -r {} -b {} -o ./recipes/{}.toml --org com.acme",
+                        mscp_repo.display(),
+                        baseline,
+                        baseline
+                    ),
+                    "Aggregate a baseline's rules into a Contour recipe",
+                )])
+                .with_action(StepAction::ContourCommand {
+                    args: vec![
+                        "mscp".to_string(),
+                        "recipe".to_string(),
+                        "-r".to_string(),
+                        mscp_repo.display().to_string(),
+                        "-b".to_string(),
+                        baseline.clone(),
+                        "-o".to_string(),
+                        format!("./recipes/{baseline}.toml"),
+                        "--org".to_string(),
+                        "com.acme".to_string(),
+                    ],
+                }),
+
+            // Step 5: Configure Constraints (Optional)
+            TrainerStep::new(5, "Configure Constraints (Optional)")
                 .with_explanation(
                     "Constraints let you exclude specific rules or categories.\n\n\
                      Common exclusions:\n\
@@ -166,8 +201,8 @@ impl TrainerWorkflow for MscpWorkflow {
                 ])
                 .with_action(StepAction::ConfirmContinue),
 
-            // Step 5: Configure ODVs (Optional)
-            TrainerStep::new(5, "Configure ODVs (Optional)")
+            // Step 6: Configure ODVs (Optional)
+            TrainerStep::new(6, "Configure ODVs (Optional)")
                 .with_explanation(
                     "Organization Defined Values (ODVs) let you customize rule parameters.\n\n\
                      Common ODVs:\n\
@@ -199,8 +234,8 @@ impl TrainerWorkflow for MscpWorkflow {
                 ])
                 .with_action(StepAction::ConfirmContinue),
 
-            // Step 6: Generate Baseline
-            TrainerStep::new(6, "Generate Security Baseline")
+            // Step 7: Generate Baseline
+            TrainerStep::new(7, "Generate Security Baseline")
                 .with_explanation(
                     "The generate command runs mSCP and transforms the output.\n\n\
                      This produces:\n\
@@ -208,7 +243,12 @@ impl TrainerWorkflow for MscpWorkflow {
                      - Remediation scripts (check and fix)\n\
                      - Fleet/Jamf manifests for deployment\n\
                      - Documentation and compliance mapping\n\n\
-                     Use --odv to apply custom values, --deterministic-uuids for reproducible builds.",
+                     Use --odv to apply custom values, --deterministic-uuids for reproducible builds.\n\n\
+                     mSCP 2.0 support:\n\
+                     - --mscp-version (auto / 1.x / 2.0) selects the repository layout;\n\
+                       2.0 is the default layout, and auto detects it for you\n\
+                     - --os (macos / ios / visionos) picks the target platform\n\
+                     - --os-version targets a specific OS release",
                 )
                 .with_commands(vec![
                     CommandPreview::new(
@@ -250,8 +290,8 @@ impl TrainerWorkflow for MscpWorkflow {
                     ],
                 }),
 
-            // Step 7: Validate Output
-            TrainerStep::new(7, "Validate Generated Output")
+            // Step 8: Validate Output
+            TrainerStep::new(8, "Validate Generated Output")
                 .with_explanation(
                     "Validate the generated profiles and scripts.\n\n\
                      Validation checks:\n\
@@ -273,8 +313,8 @@ impl TrainerWorkflow for MscpWorkflow {
                     ],
                 }),
 
-            // Step 8: Review Diff (if updating)
-            TrainerStep::new(8, "Review Changes")
+            // Step 9: Review Diff (if updating)
+            TrainerStep::new(9, "Review Changes")
                 .with_explanation(
                     "If updating an existing baseline, review what changed.\n\n\
                      The diff command shows:\n\
@@ -297,8 +337,8 @@ impl TrainerWorkflow for MscpWorkflow {
                 ))
                 .with_action(StepAction::ConfirmContinue),
 
-            // Step 9: Git Commit
-            TrainerStep::new(9, "Commit Changes to Git")
+            // Step 10: Git Commit
+            TrainerStep::new(10, "Commit Changes to Git")
                 .with_explanation(
                     "Version control your security baselines.\n\n\
                      Commit should include:\n\
@@ -318,8 +358,8 @@ impl TrainerWorkflow for MscpWorkflow {
                     },
                 }),
 
-            // Step 10: Create PR
-            TrainerStep::new(10, "Create Pull Request")
+            // Step 11: Create PR
+            TrainerStep::new(11, "Create Pull Request")
                 .with_explanation(
                     "Open a pull request for security review.\n\n\
                      Security baseline changes should be reviewed for:\n\
@@ -365,10 +405,10 @@ mod tests {
         let workflow = MscpWorkflow::default_workflow();
         let steps = workflow.steps();
 
-        assert_eq!(steps.len(), 10);
+        assert_eq!(steps.len(), 11);
         assert_eq!(steps[0].title, "Understand mSCP Baselines");
-        assert_eq!(steps[4].title, "Configure ODVs (Optional)");
-        assert_eq!(steps[9].title, "Create Pull Request");
+        assert_eq!(steps[3].title, "Generate a Recipe from a Baseline");
+        assert_eq!(steps[10].title, "Create Pull Request");
     }
 
     #[test]

@@ -318,6 +318,10 @@ pub enum TrainerTool {
     Mscp,
     /// Learn profile management workflow
     Profile,
+    /// Learn Background Task Management workflow
+    Btm,
+    /// Learn the shared .contour/config.toml configuration
+    Config,
 }
 
 fn main() {

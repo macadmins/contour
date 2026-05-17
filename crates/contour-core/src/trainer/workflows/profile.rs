@@ -104,8 +104,52 @@ impl TrainerWorkflow for ProfileWorkflow {
                         "--recursive".to_string(),
                     ],
                 }),
-            // Step 3: Validate Profiles
-            TrainerStep::new(3, "Validate Against Schema")
+            // Step 3: Scan for Deprecations
+            TrainerStep::new(3, "Scan for Deprecations")
+                .with_explanation(
+                    "Scan profiles for payload types and keys that Apple has retired.\n\n\
+                     The --deprecations flag flags settings that:\n\
+                     - Use payload types Apple has deprecated\n\
+                     - Reference keys that newer OS versions ignore\n\
+                     - Should be migrated before they stop working\n\n\
+                     Use --md-report deprecations.md to write a Markdown report,\n\
+                     and --fail-on-deprecations to turn the scan into a CI gate\n\
+                     that fails the build when deprecated settings are found.",
+                )
+                .with_commands(vec![
+                    CommandPreview::new(
+                        format!(
+                            "contour profile scan {} --deprecations --recursive",
+                            profile_path.display()
+                        ),
+                        "Flag deprecated payload types and keys",
+                    ),
+                    CommandPreview::new(
+                        format!(
+                            "contour profile scan {} --deprecations --recursive --md-report deprecations.md",
+                            profile_path.display()
+                        ),
+                        "Write a Markdown deprecations report",
+                    ),
+                    CommandPreview::new(
+                        format!(
+                            "contour profile scan {} --deprecations --recursive --fail-on-deprecations",
+                            profile_path.display()
+                        ),
+                        "Fail the build when deprecated settings are found (CI gate)",
+                    ),
+                ])
+                .with_action(StepAction::ContourCommand {
+                    args: vec![
+                        "profile".to_string(),
+                        "scan".to_string(),
+                        profile_path.display().to_string(),
+                        "--deprecations".to_string(),
+                        "--recursive".to_string(),
+                    ],
+                }),
+            // Step 4: Validate Profiles
+            TrainerStep::new(4, "Validate Against Schema")
                 .with_explanation(
                     "Validate profiles against Apple's schema definitions.\n\n\
                      Validation checks:\n\
@@ -130,8 +174,8 @@ impl TrainerWorkflow for ProfileWorkflow {
                         "--recursive".to_string(),
                     ],
                 }),
-            // Step 4: Normalize Profiles
-            TrainerStep::new(4, "Normalize Profile Identifiers")
+            // Step 5: Normalize Profiles
+            TrainerStep::new(5, "Normalize Profile Identifiers")
                 .with_explanation(
                     "Normalize profiles to use consistent identifiers and UUIDs.\n\n\
                      Normalization:\n\
@@ -171,8 +215,80 @@ impl TrainerWorkflow for ProfileWorkflow {
                         "--recursive".to_string(),
                     ],
                 }),
-            // Step 5: Manage UUIDs
-            TrainerStep::new(5, "Manage Profile UUIDs")
+            // Step 6: Generate from a Recipe
+            TrainerStep::new(6, "Generate from a Recipe")
+                .with_explanation(
+                    "Recipes are reusable TOML profile templates. Instead of\n\
+                     hand-authoring a mobileconfig, you generate one from a recipe.\n\n\
+                     Contour ships built-in recipes, and you can build your own\n\
+                     library of presets:\n\
+                     - List built-in recipes to see what is available\n\
+                     - Generate a profile from a named recipe\n\
+                     - Create a preset library, then import existing vendor\n\
+                       profiles into it as new recipes\n\n\
+                     A recipe library keeps profile templates version-controlled\n\
+                     and shareable across teams.",
+                )
+                .with_commands(vec![
+                    CommandPreview::new(
+                        "contour profile generate --list-recipes",
+                        "List built-in recipes",
+                    ),
+                    CommandPreview::new(
+                        format!(
+                            "contour profile generate --recipe <name> --org {org} -o build"
+                        ),
+                        "Generate a profile from a named recipe",
+                    ),
+                    CommandPreview::new(
+                        "contour profile library new ./contour-presets",
+                        "Create a new recipe library",
+                    ),
+                    CommandPreview::new(
+                        "contour profile library import ./vendor-profiles --into ./contour-presets",
+                        "Import existing vendor profiles into the library",
+                    ),
+                ])
+                .with_action(StepAction::ContourCommand {
+                    args: vec![
+                        "profile".to_string(),
+                        "generate".to_string(),
+                        "--list-recipes".to_string(),
+                    ],
+                }),
+            // Step 7: Secrets & MDM Variables
+            TrainerStep::new(7, "Secrets and MDM Variables")
+                .with_explanation(
+                    "Recipes keep sensitive and deploy-time values out of the\n\
+                     template itself. There are two distinct mechanisms.\n\n\
+                     (a) Secrets — recipe fields hold a *reference*, never a\n\
+                     literal value. Supported reference schemes:\n\
+                     - op://vault/item/field  (1Password)\n\
+                     - env:NAME               (environment variable / .env)\n\
+                     - secret:NAME            ([secrets] config catalogue)\n\
+                     Run generate with --sanitize to leave these references\n\
+                     unresolved, producing output safe to share or commit.\n\n\
+                     (b) MDM deploy-time variables — tokens like $USERNAME or\n\
+                     FLEET_VAR_* that the MDM server substitutes on-device at\n\
+                     install time. Declare them in [mdm_variables], reference\n\
+                     them with var:NAME, and list them per MDM with the\n\
+                     variables command.",
+                )
+                .with_commands(vec![
+                    CommandPreview::new(
+                        format!(
+                            "contour profile generate --recipe <name> --org {org} --sanitize -o build"
+                        ),
+                        "Generate with secret references left unresolved",
+                    ),
+                    CommandPreview::new(
+                        "contour profile variables --mdm fleet",
+                        "List MDM deploy-time variables for Fleet",
+                    ),
+                ])
+                .with_action(StepAction::ConfirmContinue),
+            // Step 8: Manage UUIDs
+            TrainerStep::new(8, "Manage Profile UUIDs")
                 .with_explanation(
                     "Control UUID generation for reproducible builds.\n\n\
                      Options:\n\
@@ -190,8 +306,8 @@ impl TrainerWorkflow for ProfileWorkflow {
                     "Generate predictable UUIDs",
                 )])
                 .with_action(StepAction::ConfirmContinue),
-            // Step 6: Sign Profiles (Optional)
-            TrainerStep::new(6, "Sign Profiles (Optional)")
+            // Step 9: Sign Profiles (Optional)
+            TrainerStep::new(9, "Sign Profiles (Optional)")
                 .with_explanation(
                     "Sign profiles with a Developer ID certificate.\n\n\
                      Signing:\n\
@@ -215,8 +331,8 @@ impl TrainerWorkflow for ProfileWorkflow {
                     ),
                 ])
                 .with_action(StepAction::ConfirmContinue),
-            // Step 7: Verify Signatures
-            TrainerStep::new(7, "Verify Signatures")
+            // Step 10: Verify Signatures
+            TrainerStep::new(10, "Verify Signatures")
                 .with_explanation(
                     "Verify that signed profiles have valid signatures.\n\n\
                      Verification checks:\n\
@@ -237,8 +353,8 @@ impl TrainerWorkflow for ProfileWorkflow {
                         "--recursive".to_string(),
                     ],
                 }),
-            // Step 8: Generate Documentation
-            TrainerStep::new(8, "Generate Documentation")
+            // Step 11: Generate Documentation
+            TrainerStep::new(11, "Generate Documentation")
                 .with_explanation(
                     "Generate markdown documentation for your profiles.\n\n\
                      Documentation includes:\n\
@@ -261,8 +377,8 @@ impl TrainerWorkflow for ProfileWorkflow {
                     ),
                 ])
                 .with_action(StepAction::ConfirmContinue),
-            // Step 9: Git Commit
-            TrainerStep::new(9, "Commit Changes to Git")
+            // Step 12: Git Commit
+            TrainerStep::new(12, "Commit Changes to Git")
                 .with_explanation(
                     "Commit your normalized and validated profiles.\n\n\
                      Include:\n\
@@ -280,8 +396,8 @@ impl TrainerWorkflow for ProfileWorkflow {
                                 .to_string(),
                     },
                 }),
-            // Step 10: Create PR
-            TrainerStep::new(10, "Create Pull Request")
+            // Step 13: Create PR
+            TrainerStep::new(13, "Create Pull Request")
                 .with_explanation(
                     "Create a pull request for profile changes.\n\n\
                      Profile changes should be reviewed for:\n\
@@ -320,9 +436,12 @@ mod tests {
         let workflow = ProfileWorkflow::default_workflow();
         let steps = workflow.steps();
 
-        assert_eq!(steps.len(), 10);
+        assert_eq!(steps.len(), 13);
         assert_eq!(steps[0].title, "Initialize Profile Configuration");
-        assert_eq!(steps[9].title, "Create Pull Request");
+        assert_eq!(steps[2].title, "Scan for Deprecations");
+        assert_eq!(steps[5].title, "Generate from a Recipe");
+        assert_eq!(steps[6].title, "Secrets and MDM Variables");
+        assert_eq!(steps[12].title, "Create Pull Request");
     }
 
     #[test]

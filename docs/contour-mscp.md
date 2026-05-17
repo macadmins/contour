@@ -26,17 +26,25 @@ contour mscp generate-all -c mscp.toml
 
 ### mscp.toml
 
-Created by `mscp init`. Place it at the root of your mSCP project. Commands that accept `--config` load it automatically.
+Created by [`mscp init`](#mscp-init) and placed at the root of your mSCP
+project. Every command that accepts `--config` (`info`, `generate-all`)
+loads it automatically. CLI flags override config values — see
+[Precedence](#precedence).
+
+The file has four top-level tables: **`[settings]`** (global generation
+options, with `jamf` / `fleet` / `munki` sub-tables), **`[[baselines]]`**
+(one per baseline to generate), **`[output]`** (directory layout), and
+**`[validation]`**. A representative file:
 
 ```toml
 [settings]
-mscp_repo = "./macos_security"   # Path to mSCP repository
-output_dir = "./output"          # Output directory
-python_method = "auto"           # auto, uv, or python3
-generate_ddm = false             # Generate DDM declarations
+mscp_repo = "./macos_security"   # Path to the mSCP repository checkout
+output_dir = "./output"          # Where generated config is written
+python_method = "auto"           # auto | uv | python3
+generate_ddm = false             # Pass -D to the mSCP build script
 
 [settings.organization]
-domain = "com.yourorg"           # Reverse-domain identifier
+domain = "com.yourorg"           # Reverse-domain identifier prefix
 name = "Your Org"                # Sets PayloadOrganization
 
 [settings.fleet]
@@ -44,6 +52,7 @@ enabled = true
 no_labels = false
 
 [settings.jamf]
+enabled = false
 deterministic_uuids = false
 identical_payload_uuid = false
 no_creation_date = false
@@ -57,7 +66,7 @@ script_nopkg = false
 [[baselines]]
 name = "cis_lvl1"
 enabled = true
-branch = "origin/tahoe"          # Git branch (determines platform/OS)
+branch = "origin/tahoe"          # Git branch — determines platform/OS
 
 [[baselines]]
 name = "800-53r5_moderate"
@@ -68,7 +77,7 @@ excluded_rules = []
 include_any = ["compliance-moderate"]
 
 [output]
-structure = "pluggable"            # pluggable (Fleet), flat (Jamf), nested (Munki)
+structure = "pluggable"          # pluggable (Fleet) | flat (Jamf) | nested (Munki)
 separate_baselines = true
 generate_diffs = true
 versions_to_keep = 5
@@ -77,6 +86,117 @@ versions_to_keep = 5
 strict = false
 check_conflicts = true
 ```
+
+#### `[settings]`
+
+Global generation settings shared by every baseline.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `mscp_repo` | path | `./macos_security` | The mSCP repository checkout (the directory containing `rules/`, `baselines/`). |
+| `output_dir` | path | `./output` | Directory generated config is written to. Any path works; `mscp init` scaffolds `./output`. |
+| `python_method` | string | `auto` | How to run the mSCP build script: `auto`, `uv`, or `python3`. |
+| `verbose` | bool | `false` | Verbose logging. |
+| `generate_ddm` | bool | `false` | Pass `-D` to the mSCP script so it also emits DDM declarations. |
+
+#### `[settings.organization]`
+
+Identity stamped into every generated profile.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `domain` | string | `com.example` | Reverse-domain identifier — the `PayloadIdentifier` prefix. |
+| `name` | string | `Example Organization` | Display name — sets `PayloadOrganization`. |
+
+#### `[settings.jamf]`
+
+Jamf Pro post-processing. Auto-enabled when `output.structure = "flat"`.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Jamf Pro mode. |
+| `deterministic_uuids` | bool | `false` | Derive UUIDs from `PayloadType` (stable across runs). |
+| `no_creation_date` | bool | `false` | Strip creation dates from `PayloadDescription`. |
+| `identical_payload_uuid` | bool | `false` | Use one UUID for both `PayloadIdentifier` and `PayloadUUID`. |
+| `exclude_conflicts` | bool | `false` | Drop profiles that conflict with Jamf Pro native settings. |
+| `remove_consent_text` | bool | `false` | Remove `ConsentText` from profiles. |
+| `consent_text` | string | — | Custom `ConsentText` (overrides `remove_consent_text`). |
+| `description_format` | string | — | Custom `PayloadDescription` format string. |
+
+#### `[settings.fleet]`
+
+Fleet GitOps options. Auto-enabled when `output.structure = "pluggable"`.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable Fleet conflict filtering. |
+| `no_labels` | bool | `false` | Skip generating Fleet label definitions. |
+
+#### `[settings.munki]`
+
+Munki integration. Auto-enabled when `output.structure = "nested"`.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `compliance_flags` | bool | `false` | Emit a Munki `nopkg` item that writes compliance flags. |
+| `compliance_path` | path | `/Library/Managed Preferences/mscp_compliance.plist` | Where the compliance plist is written on target devices. |
+| `flag_prefix` | string | `mscp_` | Prefix for compliance flag keys. |
+| `script_nopkg` | bool | `false` | Emit Munki `nopkg` items from script rules. |
+| `catalog` | string | `production` | Munki catalog for script `nopkg` items. |
+| `category` | string | `mSCP Compliance` | Munki category for script `nopkg` items. |
+| `separate_postinstall` | bool | `false` | Use a separate postinstall instead of embedding the fix in installcheck. |
+
+#### `[[baselines]]`
+
+One table per baseline to generate. Repeat the `[[baselines]]` header for each.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `name` | string | **required** | Baseline name (e.g. `cis_lvl1`, `800-53r5_high`). |
+| `enabled` | bool | `true` | Whether `generate-all` processes this baseline. |
+| `branch` | string | current branch | Git branch to check out — determines platform and OS version (e.g. `origin/sequoia`, `origin/ios_18`). |
+| `fleet` | string | — | Fleet name override for this baseline. |
+| `excluded_rules` | string[] | `[]` | Rule IDs to drop from this baseline. |
+| `metadata` | table | `{}` | Free-form key/value metadata. |
+
+#### `[baselines.labels]`
+
+Fleet label targeting for a baseline (one `[baselines.labels]` per `[[baselines]]`).
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `include_all` | string[] | Host must carry **all** of these labels. |
+| `include_any` | string[] | Host must carry **at least one** of these labels. |
+| `exclude_any` | string[] | Host must carry **none** of these labels. |
+
+#### `[baselines.gitops_glob]`
+
+Advanced. Per-section glob decisions for Fleet GitOps output — which of
+`profiles`, `scripts`, `labels`, `policies`, `reports` collapse into a
+single `paths:` glob and which items stay as literal `path:` exceptions.
+Normally written by `mscp process --interactive` or implied by
+`generate --glob`, not edited by hand. Each section sub-table accepts
+`enabled`, `drop_labels`, and an `exceptions` list.
+
+#### `[output]`
+
+Directory layout of the generated output.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `structure` | string | `pluggable` | `pluggable` (Fleet GitOps), `flat` (Jamf), or `nested` (Munki) — see [Output Structure](#output-structure). |
+| `separate_baselines` | bool | `true` | Give each baseline its own subdirectory. |
+| `generate_diffs` | bool | `false` | Write diff reports against the previous generation. |
+| `versions_to_keep` | int | `5` | How many prior versions to retain for version tracking. |
+
+#### `[validation]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `schemas_path` | path | embedded | External JSON schema directory (overrides the embedded schemas). |
+| `strict` | bool | `false` | Treat validation warnings as errors. |
+| `check_conflicts` | bool | `true` | Check for conflicting keys across baselines. |
+| `validate_paths` | bool | `true` | Verify referenced files exist on disk. |
 
 ### Precedence
 
@@ -427,10 +547,17 @@ contour mscp process -i ./macos_security/build/cis_lvl1 -o ./output -b cis_lvl1 
 
 #### `mscp recipe`
 
-Aggregate a baseline's `mobileconfig` rules into a single contour recipe
-TOML — one `[[profile]]` block per payload type (firewall, screensaver,
-…) with every rule's keys merged in. Drop the result into a recipe
-library and render it with `contour profile generate --recipe`.
+Aggregate a baseline's rules into a single contour recipe TOML, ready to
+drop into a recipe library and render with `contour profile generate
+--recipe`. The recipe carries two kinds of block:
+
+- **`[[profile]]`** — one per payload type (firewall, screensaver, …),
+  built from the baseline's `mobileconfig` rules with every rule's keys
+  merged in.
+- **`[[ddm]]`** — one per DDM configuration, built from rules that carry
+  a `ddm_info:` block (Declarative Device Management settings). A fully
+  declarative baseline can therefore produce a DDM-only recipe with no
+  `[[profile]]` blocks at all.
 
 `recipe` reads rule YAML **directly** from the mSCP repository — it does
 **not** run the mSCP Python build script, so it is fast and needs no
