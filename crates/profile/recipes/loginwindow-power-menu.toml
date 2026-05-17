@@ -1,0 +1,28 @@
+# Remove power-related items from the Apple menu and the login window.
+#
+# Consolidates five single-key recipes — all set keys on the
+# com.apple.loginwindow domain (delivered via the MCX
+# com.apple.ManagedClient.preferences wrapper).
+#
+# `*DisabledWhileLoggedIn` hides the item from the Apple menu during a
+# session; the plain `*Disabled` keys hide the buttons on the login
+# window itself. Drop any key you still want available.
+
+[recipe]
+name = "loginwindow-power-menu"
+description = "Hide Restart, Shut Down, and Log Out from the Apple menu and the login window"
+
+[[profile]]
+filename = "loginwindow-power-menu.mobileconfig"
+payload_type = "com.apple.ManagedClient.preferences"
+display_name = "Login Window — Power Menu Items"
+description = "Removes Restart / Shut Down / Log Out from the Apple menu and login window"
+removal_disallowed = true
+mcx_domain = "com.apple.loginwindow"
+
+[profile.fields]
+RestartDisabled = true
+RestartDisabledWhileLoggedIn = true
+ShutDownDisabled = true
+ShutDownDisabledWhileLoggedIn = true
+LogOutDisabledWhileLoggedIn = true

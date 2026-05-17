@@ -1,0 +1,26 @@
+# Hide panes from System Settings / System Preferences.
+#
+# Consolidates two single-pane recipes — both set DisabledPreferencePanes
+# on com.apple.systempreferences.
+#
+# DEPRECATION NOTE: the DisabledPreferencePanes key in
+# com.apple.systempreferences was deprecated by Apple in macOS 13.0. It
+# still applies but is scheduled for removal — expect it to stop working
+# in a future release.
+
+[recipe]
+name = "disable-preference-panes"
+description = "Hide System Settings panes — Device Management (configuration profiles) and iCloud"
+
+[[profile]]
+filename = "disable-preference-panes.mobileconfig"
+payload_type = "com.apple.systempreferences"
+display_name = "System Settings — Disabled Panes"
+description = "Hides the configuration-profiles and iCloud panes from System Settings"
+removal_disallowed = false
+
+[profile.fields]
+DisabledPreferencePanes = [
+    "com.apple.preferences.configurationprofiles",
+    "com.apple.preferences.icloud",
+]

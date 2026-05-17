@@ -2,24 +2,39 @@
 
 use super::Recipe;
 use anyhow::{Context, Result};
+use include_dir::{Dir, include_dir};
 use std::path::{Path, PathBuf};
 
-/// Embedded recipes compiled into the binary.
-const EMBEDDED_OKTA: &str = include_str!("../../recipes/okta.toml");
-const EMBEDDED_ENTRA_PSSO: &str = include_str!("../../recipes/entra-psso.toml");
-const EMBEDDED_SANTA: &str = include_str!("../../recipes/santa.toml");
-const EMBEDDED_HARDENING_MACOS: &str = include_str!("../../recipes/hardening-macos-baseline.toml");
+/// Every built-in recipe — the whole `recipes/` directory embedded into
+/// the binary at compile time. Adding a built-in recipe is just dropping
+/// a `<name>.toml` into that directory; no code change is needed.
+///
+/// The `ddm/` subdirectory holds DDM presets, not recipes — it is
+/// handled separately by [`crate::ddm::presets`] and excluded by
+/// [`embedded_recipes`].
+static RECIPE_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/recipes");
 
-/// Built-in recipes as `(name, raw TOML body)`. Single source of truth
-/// for both `load_recipe` (embedded fallback) and `list_recipes`
-/// (embedded enumeration). Adding a recipe here also flows into the
-/// library scaffolder via the same slice.
-pub const EMBEDDED_RECIPES: &[(&str, &str)] = &[
-    ("okta", EMBEDDED_OKTA),
-    ("entra-psso", EMBEDDED_ENTRA_PSSO),
-    ("santa", EMBEDDED_SANTA),
-    ("hardening-macos-baseline", EMBEDDED_HARDENING_MACOS),
-];
+/// Built-in recipes as `(name, raw TOML body)`, discovered from the
+/// embedded [`RECIPE_DIR`]. Top-level `.toml` files only — the `ddm/`
+/// subdirectory is excluded. Sorted by name for deterministic output.
+///
+/// This is the single source of truth for `load_recipe`'s embedded
+/// fallback, `list_recipes`' embedded enumeration, and the library
+/// scaffolder.
+pub fn embedded_recipes() -> Vec<(&'static str, &'static str)> {
+    let mut recipes: Vec<(&'static str, &'static str)> = RECIPE_DIR
+        .files()
+        .filter_map(|f| {
+            let path = f.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                return None;
+            }
+            Some((path.file_stem()?.to_str()?, f.contents_utf8()?))
+        })
+        .collect();
+    recipes.sort_by(|a, b| a.0.cmp(b.0));
+    recipes
+}
 
 /// Summary of an available recipe.
 #[derive(Debug)]
@@ -89,7 +104,7 @@ pub fn load_recipe(name: &str, recipe_path: Option<&str>) -> Result<Recipe> {
     }
 
     // 3. Embedded
-    if let Some((_, body)) = EMBEDDED_RECIPES.iter().find(|(n, _)| *n == name) {
+    if let Some((_, body)) = embedded_recipes().into_iter().find(|(n, _)| *n == name) {
         return parse_recipe_toml(body, "embedded");
     }
     anyhow::bail!(
@@ -108,8 +123,9 @@ pub fn load_recipe(name: &str, recipe_path: Option<&str>) -> Result<Recipe> {
 /// Output is sorted by recipe name for deterministic listing.
 pub fn list_recipes(recipe_path: Option<&str>) -> Vec<RecipeSummary> {
     let mut recipes: Vec<RecipeSummary> = Vec::new();
+    let embedded = embedded_recipes();
     let embedded_names: std::collections::HashSet<&str> =
-        EMBEDDED_RECIPES.iter().map(|(n, _)| *n).collect();
+        embedded.iter().map(|(n, _)| *n).collect();
 
     // 1. External from explicit --recipe-path (highest precedence)
     if let Some(rp) = recipe_path {
@@ -125,7 +141,7 @@ pub fn list_recipes(recipe_path: Option<&str>) -> Vec<RecipeSummary> {
     }
 
     // 3. Embedded — only when no external entry has shadowed the name.
-    for (_, toml_str) in EMBEDDED_RECIPES {
+    for &(_, toml_str) in &embedded {
         let Ok(r) = parse_recipe_toml(toml_str, "embedded") else {
             continue;
         };
@@ -205,17 +221,20 @@ mod tests {
     #[test]
     fn listing_with_no_external_returns_only_embedded() {
         let recipes = list_recipes(None);
-        // Anchor on the embedded slice — no manual count drift when a
+        // Anchor on the embedded set — no manual count drift when a
         // new built-in lands.
-        assert_eq!(recipes.len(), EMBEDDED_RECIPES.len());
+        let embedded = embedded_recipes();
+        assert_eq!(recipes.len(), embedded.len());
         for r in &recipes {
             assert_eq!(r.source, "embedded");
         }
-        // Sorted alphabetically.
-        let mut expected: Vec<&str> = EMBEDDED_RECIPES.iter().map(|(n, _)| *n).collect();
-        expected.sort_unstable();
+        // `list_recipes` reports the `[recipe].name`, which may differ
+        // from the file stem; just assert it stays sorted and non-empty.
         let names: Vec<&str> = recipes.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, expected);
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted);
+        assert!(!names.is_empty());
     }
 
     /// Minimal but well-formed Recipe TOML matching the `[[profile]]`

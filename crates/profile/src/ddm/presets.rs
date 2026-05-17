@@ -43,6 +43,11 @@ pub const EMBEDDED: &[(&str, &str, &str)] = &[
         "Disable Apple Intelligence on macOS (intelligence.settings)",
         include_str!("../../recipes/ddm/disable-apple-intelligence-macos.toml"),
     ),
+    (
+        "managed-migration-assistant",
+        "Run Migration Assistant under managed MDM control (migration-assistant.settings)",
+        include_str!("../../recipes/ddm/managed-migration-assistant.toml"),
+    ),
 ];
 
 /// Listing entry returned by [`list`]. Fields are agent-friendly so JSON
@@ -244,7 +249,8 @@ mod tests {
             names,
             vec![
                 "disable-apple-intelligence-ios",
-                "disable-apple-intelligence-macos"
+                "disable-apple-intelligence-macos",
+                "managed-migration-assistant"
             ]
         );
         for p in &presets {

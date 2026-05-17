@@ -215,7 +215,7 @@ pub fn handle_library_new(opts: LibraryNewOptions<'_>, output_mode: OutputMode) 
         std::fs::create_dir_all(&recipes_dir)
             .with_context(|| format!("Failed to create {}", recipes_dir.display()))?;
         let registry = crate::cli::generate::load_registry(None).ok();
-        for (name, body) in recipe::loader::EMBEDDED_RECIPES {
+        for (name, body) in recipe::loader::embedded_recipes() {
             let toml_target = recipes_dir.join(format!("{name}.toml"));
             write_file(&toml_target, body.as_bytes(), &mut written)?;
             let meaning_target = recipes_dir.join(format!("{name}.meaning.md"));
@@ -356,7 +356,7 @@ fn emit_human(root: &Path, written: &[PathBuf], opts: &LibraryNewOptions<'_>) {
         println!(
             "  {} recipes/  ({} embedded recipe(s))",
             "•".cyan(),
-            recipe::loader::EMBEDDED_RECIPES.len()
+            recipe::loader::embedded_recipes().len()
         );
     }
     println!();
@@ -587,7 +587,7 @@ mod tests {
                 "missing ddm/{name}.meaning.md"
             );
         }
-        for (name, _) in recipe::loader::EMBEDDED_RECIPES {
+        for (name, _) in recipe::loader::embedded_recipes() {
             assert!(
                 root.join("recipes").join(format!("{name}.toml")).exists(),
                 "missing recipes/{name}.toml"

@@ -1,0 +1,52 @@
+# Skip macOS Setup Assistant screens.
+#
+# Consolidates what used to be 14 single-key recipes. Two profiles,
+# because the underlying keys are delivered two different ways:
+#
+#   1. `SkipSetupItems` — an array on com.apple.SetupAssistant.managed,
+#      delivered here via the com.apple.ManagedClient.preferences (MCX)
+#      wrapper, as the upstream preset library did.
+#   2. Individual `Skip*` booleans set directly on
+#      com.apple.SetupAssistant.managed.
+#
+# Drop screens you still want shown by removing the relevant array
+# entry or boolean.
+
+[recipe]
+name = "skip-setup-assistant"
+description = "Skip macOS Setup Assistant screens — Diagnostics, FileVault, Apple Intelligence, Siri, Screen Time, Touch ID, iCloud, appearance, True Tone, and more"
+
+[[profile]]
+filename = "skip-setup-assistant-items.mobileconfig"
+payload_type = "com.apple.ManagedClient.preferences"
+display_name = "Setup Assistant — Skipped Items"
+description = "Skips Setup Assistant panes delivered via the SkipSetupItems array"
+removal_disallowed = true
+mcx_domain = "com.apple.SetupAssistant.managed"
+
+[profile.fields]
+SkipSetupItems = [
+    "Diagnostics",
+    "FileVault",
+    "Intelligence",
+    "OSShowcase",
+    "SoftwareUpdate",
+    "UpdateCompleted",
+    "Welcome",
+]
+
+[[profile]]
+filename = "skip-setup-assistant-managed.mobileconfig"
+payload_type = "com.apple.SetupAssistant.managed"
+display_name = "Setup Assistant — Skipped Screens"
+description = "Skips Setup Assistant screens controlled by individual keys"
+removal_disallowed = false
+
+[profile.fields]
+SkipAppearance = true
+SkipCloudSetup = true
+SkipPrivacySetup = true
+SkipScreenTime = true
+SkipSiriSetup = true
+SkipTouchIDSetup = true
+SkipTrueTone = true

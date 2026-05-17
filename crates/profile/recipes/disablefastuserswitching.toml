@@ -1,0 +1,16 @@
+[recipe]
+name = "disablefastuserswitching"
+description = "Disable Fast User Switching"
+
+[[profile]]
+filename = "preferences.mobileconfig"
+payload_type = "com.apple.ManagedClient.preferences"
+display_name = "preferences"
+description = ""
+removal_disallowed = false
+mcx_domain = ".GlobalPreferences"
+
+[profile.fields]
+MultipleSessionEnabled = false
+
+[profile.extra_fields]

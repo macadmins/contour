@@ -1,0 +1,17 @@
+[recipe]
+name = "disable-mac-app-store"
+description = "Disable Mac App Store"
+
+[[profile]]
+filename = "appstore.mobileconfig"
+payload_type = "com.apple.appstore"
+display_name = "App Store"
+description = ""
+removal_disallowed = true
+
+[profile.fields]
+restrict-store-disable-app-adoption = true
+restrict-store-require-admin-to-install = true
+restrict-store-softwareupdate-only = true
+
+[profile.extra_fields]
