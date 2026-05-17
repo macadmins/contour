@@ -125,47 +125,75 @@ pub fn generate_combined_service_management_profile(
         .build("com.apple.servicemanagement", payload_content)
 }
 
-/// Generate a DDM declaration for background tasks (macOS 15+).
-pub fn generate_btm_declaration(app: &BtmAppEntry, org: &str) -> Result<String> {
-    let sanitized = sanitize_id(&app.bundle_id);
-    let identifier = format!("{org}.btm.{sanitized}");
+/// Apple DDM configuration type for BTM background-tasks declarations.
+pub const BTM_DDM_CONFIGURATION_TYPE: &str = "com.apple.configuration.services.background-tasks";
 
-    // Build LaunchdConfigurations from Label-type BTM rules
-    let launchd_configs: Vec<serde_json::Value> = app
+/// Build the inner `Payload` of a `com.apple.configuration.services.background-tasks`
+/// DDM declaration for one app.
+///
+/// Shared by [`generate_btm_declaration`] (which wraps it in the
+/// `Type`/`Identifier`/`Payload` envelope and serializes to JSON) and
+/// the recipe-TOML emitter (which feeds it straight into a `[[ddm]]`
+/// block as `[ddm.configuration.payload]`). `Label`-type BTM rules
+/// become `LaunchdConfigurations` entries.
+pub fn build_btm_ddm_payload(app: &BtmAppEntry, org: &str) -> Dictionary {
+    // Build LaunchdConfigurations from Label-type BTM rules.
+    let launchd_configs: Vec<Value> = app
         .rules
         .iter()
         .filter(|r| r.rule_type == "Label")
         .map(|r| {
-            // Use comment to override context; default to "daemon"
+            // Use comment to override context; default to "daemon".
             let context = r
                 .comment
                 .as_deref()
                 .filter(|c| c.eq_ignore_ascii_case("agent"))
                 .map_or("daemon", |_| "agent");
 
-            serde_json::json!({
-                "FileAssetReference": format!("{org}.asset.launchd.{}", sanitize_id(&r.rule_value)),
-                "Context": context,
-            })
+            let mut entry = Dictionary::new();
+            entry.insert(
+                "FileAssetReference".to_string(),
+                Value::String(format!(
+                    "{org}.asset.launchd.{}",
+                    sanitize_id(&r.rule_value)
+                )),
+            );
+            entry.insert("Context".to_string(), Value::String(context.to_string()));
+            Value::Dictionary(entry)
         })
         .collect();
 
-    let mut payload = serde_json::json!({
-        "TaskType": app.bundle_id,
-        "TaskDescription": format!("Background tasks for {}", app.name),
-    });
-
+    let mut payload = Dictionary::new();
+    payload.insert("TaskType".to_string(), Value::String(app.bundle_id.clone()));
+    payload.insert(
+        "TaskDescription".to_string(),
+        Value::String(format!("Background tasks for {}", app.name)),
+    );
     if !launchd_configs.is_empty() {
-        payload.as_object_mut().unwrap().insert(
+        payload.insert(
             "LaunchdConfigurations".to_string(),
-            serde_json::Value::Array(launchd_configs),
+            Value::Array(launchd_configs),
         );
     }
+    payload
+}
+
+/// Compute the DDM declaration identifier for an app's background-tasks
+/// declaration.
+pub fn btm_ddm_identifier(app: &BtmAppEntry, org: &str) -> String {
+    format!("{org}.btm.{}", sanitize_id(&app.bundle_id))
+}
+
+/// Generate a DDM declaration for background tasks (macOS 15+).
+pub fn generate_btm_declaration(app: &BtmAppEntry, org: &str) -> Result<String> {
+    let payload = build_btm_ddm_payload(app, org);
+    let payload_json = serde_json::to_value(Value::Dictionary(payload))
+        .map_err(|e| anyhow::anyhow!("Failed to serialize DDM payload: {e}"))?;
 
     let declaration = serde_json::json!({
-        "Type": "com.apple.configuration.services.background-tasks",
-        "Identifier": identifier,
-        "Payload": payload,
+        "Type": BTM_DDM_CONFIGURATION_TYPE,
+        "Identifier": btm_ddm_identifier(app, org),
+        "Payload": payload_json,
     });
 
     serde_json::to_string_pretty(&declaration)

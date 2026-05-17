@@ -231,6 +231,7 @@ fn run_recipe(
         "Santa rules recipe (com.northpolesec.santa) generated from rule files",
         Some(org),
         &profiles,
+        &[],
     )?;
 
     let output_path = output

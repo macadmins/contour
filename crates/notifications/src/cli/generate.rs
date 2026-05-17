@@ -264,6 +264,7 @@ fn run_recipe(
         "Notification settings recipe",
         Some(&config.settings.org),
         &profiles,
+        &[],
     )?;
 
     let output_dir = resolve_output_dir(output, Path::new("."))?;

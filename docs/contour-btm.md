@@ -220,7 +220,7 @@ contour btm generate btm.toml --dry-run
 
 **Fragment mode** (`--fragment`): Produces a fragment directory with profiles under `platforms/macos/configuration-profiles/`, a `fleets/reference-fleet.yml`, and a `fragment.toml` for merging into a Fleet GitOps repository. Default output dir: `btm-fragment/`.
 
-**Recipe mode** (`--format recipe`): Writes a single combined recipe `.toml` instead of a `.mobileconfig`. Drop it into a contour recipe library's `recipes/` directory and render it later with `contour profile generate --recipe`. Incompatible with `--ddm` — DDM declarations stay one file per bundle; use `--format mobileconfig --ddm`, or import the resulting JSON with `contour profile library import`.
+**Recipe mode** (`--format recipe`): Writes a single combined recipe `.toml` instead of `.mobileconfig` files. Drop it into a contour recipe library's `recipes/` directory and render it later with `contour profile generate --recipe`. The recipe always carries **both** `[[profile]]` blocks (the `com.apple.servicemanagement` mobileconfig payload) **and** `[[ddm]]` blocks (one `com.apple.configuration.services.background-tasks` declaration per app that has `Label`-type rules) — so a single recipe drives both delivery channels. Because the recipe already contains the DDM declarations, `--ddm` is ignored when `--format recipe` is set.
 
 ### `btm validate`
 

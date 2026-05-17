@@ -164,7 +164,9 @@ pub fn baseline_to_recipe(
         "mSCP {} baseline aggregated into one recipe ({} profile(s), {} ddm bundle(s))",
         baseline_name, stats.profile_count, stats.ddm_count
     );
-    let body_with_profiles = write_recipe_toml(baseline_name, &description, org, &profiles)?;
+    // mscp renders its own `[[ddm]]` section below (it splices `[odv]`
+    // mid-document and needs per-bundle control), so pass no DDMs here.
+    let body_with_profiles = write_recipe_toml(baseline_name, &description, org, &profiles, &[])?;
 
     // Build [odv] block separately so we can splice it directly under
     // [recipe] (before the first [[profile]]) — operators expect to see

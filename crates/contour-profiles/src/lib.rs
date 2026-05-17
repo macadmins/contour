@@ -7,7 +7,7 @@ pub mod uuid;
 
 pub use builder::ProfileBuilder;
 pub use notifications::build_notification_entry;
-pub use recipe_writer::{RecipeProfile, write_recipe_toml};
+pub use recipe_writer::{DEFAULT_DDM_ACTIVATION_TYPE, RecipeDdm, RecipeProfile, write_recipe_toml};
 pub use service_management::{
     BtmRuleType, ParseBtmRuleTypeError, build_btm_rule, build_service_management_rule,
 };

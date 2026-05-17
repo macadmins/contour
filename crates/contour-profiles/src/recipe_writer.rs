@@ -20,11 +20,25 @@
 //!
 //! [profile.fields]
 //! <flat key/value pairs from the inner payload>
+//!
+//! [[ddm]]
+//! intent_name = "..."
+//!
+//! [ddm.configuration]
+//! type = "..."
+//!
+//! [ddm.configuration.payload]
+//! <flat key/value pairs from the configuration payload>
+//!
+//! [ddm.activation]
+//! type = "com.apple.activation.simple"
 //! ```
 //!
 //! Used by `btm`, `notifications`, and `pppc` so a scan-then-author
 //! workflow can land directly in the operator's preset library
-//! without a `.mobileconfig` round-trip.
+//! without a `.mobileconfig` round-trip. A recipe can carry both
+//! `[[profile]]` and `[[ddm]]` blocks — `btm` emits both from a single
+//! scan when `--format recipe` is used.
 
 use anyhow::{Context, Result};
 use plist::{Dictionary, Value};
@@ -52,13 +66,60 @@ pub struct RecipeProfile {
     pub fields: Dictionary,
 }
 
-/// Render a combined recipe TOML body for `profiles`. The body is
-/// returned as a `String` — the caller decides where to write it.
+/// Default DDM activation type for `[[ddm]]` blocks emitted by the
+/// recipe writer. Callers that scan a host (like `btm`) always use a
+/// bare `simple` activation — operators wanting a gated activation
+/// edit the rendered TOML.
+pub const DEFAULT_DDM_ACTIVATION_TYPE: &str = "com.apple.activation.simple";
+
+/// One `[[ddm]]` block contribution to a combined recipe TOML.
+///
+/// Mirrors the recipe `Bundle` shape (`crates/profile/src/ddm/compose.rs`):
+/// an `intent_name`, a configuration `type` + `payload`, and a simple
+/// activation. Callers building DDM declarations from a scan use this
+/// instead of writing the declaration JSON directly.
+#[derive(Debug, Clone)]
+pub struct RecipeDdm {
+    /// `{tail}` segment for computed DDM identifiers — becomes
+    /// `intent_name` on the `[[ddm]]` block.
+    pub intent_name: String,
+    /// Apple DDM configuration declaration type — emitted as
+    /// `[ddm.configuration].type`.
+    pub configuration_type: String,
+    /// Configuration payload. Keys become `[ddm.configuration.payload].<key>`.
+    pub configuration_payload: Dictionary,
+    /// Activation declaration type — emitted as `[ddm.activation].type`.
+    /// Defaults to [`DEFAULT_DDM_ACTIVATION_TYPE`] via
+    /// [`RecipeDdm::new`]; BTM never sets a predicate.
+    pub activation_type: String,
+}
+
+impl RecipeDdm {
+    /// Build a `RecipeDdm` with the default simple activation.
+    pub fn new(
+        intent_name: impl Into<String>,
+        configuration_type: impl Into<String>,
+        configuration_payload: Dictionary,
+    ) -> Self {
+        Self {
+            intent_name: intent_name.into(),
+            configuration_type: configuration_type.into(),
+            configuration_payload,
+            activation_type: DEFAULT_DDM_ACTIVATION_TYPE.to_string(),
+        }
+    }
+}
+
+/// Render a combined recipe TOML body for `profiles` and `ddms`. The
+/// body is returned as a `String` — the caller decides where to write
+/// it. `[[profile]]` blocks are emitted first, then `[[ddm]]` blocks.
+/// Pass `&[]` for `ddms` when the caller has no DDM declarations.
 pub fn write_recipe_toml(
     name: &str,
     description: &str,
     vendor: Option<&str>,
     profiles: &[RecipeProfile],
+    ddms: &[RecipeDdm],
 ) -> Result<String> {
     let mut out = String::new();
     let _ = writeln!(out, "[recipe]");
@@ -106,6 +167,50 @@ pub fn write_recipe_toml(
             }
             let _ = writeln!(out);
         }
+    }
+
+    for ddm in ddms {
+        let _ = writeln!(out, "[[ddm]]");
+        let _ = writeln!(out, "intent_name = {}", quote_toml_str(&ddm.intent_name));
+        let _ = writeln!(out);
+
+        let _ = writeln!(out, "[ddm.configuration]");
+        let _ = writeln!(out, "type = {}", quote_toml_str(&ddm.configuration_type));
+        let _ = writeln!(out);
+
+        // Same `[__fields__]`-wrapper rewrite trick used for
+        // `[profile.fields]`, retargeted to `ddm.configuration.payload`.
+        // Always emit the header so an empty payload still parses as a
+        // table (recipe `Bundle.configuration.payload` defaults to {}).
+        let _ = writeln!(out, "[ddm.configuration.payload]");
+        if !ddm.configuration_payload.is_empty() {
+            let toml_value = plist_to_toml(&Value::Dictionary(ddm.configuration_payload.clone()))
+                .context("failed to convert DDM configuration payload to TOML")?;
+            let mut wrapper = toml::map::Map::new();
+            wrapper.insert("__fields__".to_string(), toml_value);
+            let serialized = toml::to_string(&toml::Value::Table(wrapper))
+                .context("failed to serialize DDM configuration payload TOML")?;
+            for line in serialized.lines() {
+                let rewritten = if let Some(rest) = line.strip_prefix("[__fields__") {
+                    if rest == "]" {
+                        // Root `[__fields__]` header — already wrote
+                        // `[ddm.configuration.payload]` above; drop it.
+                        continue;
+                    }
+                    format!("[ddm.configuration.payload{rest}")
+                } else if let Some(rest) = line.strip_prefix("[[__fields__") {
+                    format!("[[ddm.configuration.payload{rest}")
+                } else {
+                    line.to_string()
+                };
+                let _ = writeln!(out, "{rewritten}");
+            }
+        }
+        let _ = writeln!(out);
+
+        let _ = writeln!(out, "[ddm.activation]");
+        let _ = writeln!(out, "type = {}", quote_toml_str(&ddm.activation_type));
+        let _ = writeln!(out);
     }
 
     Ok(out)
@@ -197,9 +302,29 @@ mod tests {
         }
     }
 
+    fn sample_ddm() -> RecipeDdm {
+        let mut payload = Dictionary::new();
+        payload.insert("TaskType".into(), Value::String("com.acme.app".into()));
+        let mut nested = Dictionary::new();
+        nested.insert(
+            "FileAssetReference".into(),
+            Value::String("com.acme.asset.launchd.daemon".into()),
+        );
+        nested.insert("Context".into(), Value::String("daemon".into()));
+        payload.insert(
+            "LaunchdConfigurations".into(),
+            Value::Array(vec![Value::Dictionary(nested)]),
+        );
+        RecipeDdm::new(
+            "acme-background-tasks",
+            "com.apple.configuration.services.background-tasks",
+            payload,
+        )
+    }
+
     #[test]
     fn writes_recipe_header_and_profile() {
-        let toml = write_recipe_toml("fw", "demo", Some("Acme"), &[sample_profile()]).unwrap();
+        let toml = write_recipe_toml("fw", "demo", Some("Acme"), &[sample_profile()], &[]).unwrap();
         assert!(toml.contains("[recipe]"));
         assert!(toml.contains("name = \"fw\""));
         assert!(toml.contains("vendor = \"Acme\""));
@@ -212,15 +337,78 @@ mod tests {
 
     #[test]
     fn round_trips_through_toml_parser() {
-        let toml_body = write_recipe_toml("fw", "demo", None, &[sample_profile()]).unwrap();
+        let toml_body = write_recipe_toml("fw", "demo", None, &[sample_profile()], &[]).unwrap();
         // Parse via the toml crate to confirm the body is well-formed.
         let _: toml::Value = toml::from_str(&toml_body).expect("parses");
     }
 
     #[test]
     fn vendor_omitted_when_none() {
-        let toml = write_recipe_toml("x", "y", None, &[]).unwrap();
+        let toml = write_recipe_toml("x", "y", None, &[], &[]).unwrap();
         assert!(!toml.contains("vendor"));
+    }
+
+    #[test]
+    fn writes_ddm_block() {
+        let toml = write_recipe_toml("btm", "demo", None, &[], &[sample_ddm()]).unwrap();
+        assert!(toml.contains("[[ddm]]"));
+        assert!(toml.contains("intent_name = \"acme-background-tasks\""));
+        assert!(toml.contains("[ddm.configuration]"));
+        assert!(toml.contains("type = \"com.apple.configuration.services.background-tasks\""));
+        assert!(toml.contains("[ddm.configuration.payload]"));
+        assert!(toml.contains("TaskType = \"com.acme.app\""));
+        assert!(toml.contains("[ddm.activation]"));
+        assert!(toml.contains("type = \"com.apple.activation.simple\""));
+    }
+
+    #[test]
+    fn ddm_block_round_trips_as_recipe_bundle() {
+        // The emitted `[[ddm]]` block must deserialize into the recipe
+        // `Bundle` shape used by `contour profile generate --recipe`.
+        let toml_body = write_recipe_toml(
+            "btm",
+            "demo",
+            Some("Acme"),
+            &[sample_profile()],
+            &[sample_ddm()],
+        )
+        .unwrap();
+        let parsed: toml::Value = toml::from_str(&toml_body).expect("parses");
+        let ddm = &parsed["ddm"][0];
+        assert_eq!(ddm["intent_name"].as_str(), Some("acme-background-tasks"));
+        assert_eq!(
+            ddm["configuration"]["type"].as_str(),
+            Some("com.apple.configuration.services.background-tasks")
+        );
+        assert_eq!(
+            ddm["configuration"]["payload"]["TaskType"].as_str(),
+            Some("com.acme.app")
+        );
+        let launchd = ddm["configuration"]["payload"]["LaunchdConfigurations"]
+            .as_array()
+            .expect("LaunchdConfigurations array");
+        assert_eq!(launchd.len(), 1);
+        assert_eq!(
+            launchd[0]["FileAssetReference"].as_str(),
+            Some("com.acme.asset.launchd.daemon")
+        );
+        assert_eq!(
+            ddm["activation"]["type"].as_str(),
+            Some("com.apple.activation.simple")
+        );
+    }
+
+    #[test]
+    fn ddm_empty_payload_still_emits_table_header() {
+        let ddm = RecipeDdm::new(
+            "empty",
+            "com.apple.configuration.services.background-tasks",
+            Dictionary::new(),
+        );
+        let toml = write_recipe_toml("btm", "demo", None, &[], &[ddm]).unwrap();
+        assert!(toml.contains("[ddm.configuration.payload]"));
+        let parsed: toml::Value = toml::from_str(&toml).expect("parses");
+        assert!(parsed["ddm"][0]["configuration"]["payload"].is_table());
     }
 
     #[test]
@@ -239,6 +427,7 @@ mod tests {
                 removal_disallowed: false,
                 fields,
             }],
+            &[],
         )
         .unwrap();
         // The hand-rolled `[recipe]` section uses our quote_toml_str —
