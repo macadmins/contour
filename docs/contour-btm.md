@@ -214,7 +214,7 @@ contour btm generate btm.toml --dry-run
 
 **DDM mode** (`--ddm`): Generates JSON declarations (type `com.apple.configuration.services.background-tasks`) instead of mobileconfig. One declaration per app. Only `Label`-type rules are included (as `LaunchdConfigurations`). Requires macOS 15+.
 
-**Fragment mode** (`--fragment`): Produces a fragment directory with profiles under `lib/macos/configuration-profiles/`, a `fleets/reference-fleet.yml`, and a `fragment.toml` for merging into a Fleet GitOps repository. Default output dir: `btm-fragment/`.
+**Fragment mode** (`--fragment`): Produces a fragment directory with profiles under `platforms/macos/configuration-profiles/`, a `fleets/reference-fleet.yml`, and a `fragment.toml` for merging into a Fleet GitOps repository. Default output dir: `btm-fragment/`.
 
 ### `btm validate`
 
@@ -425,7 +425,7 @@ ddm/
 
 ```
 btm-fragment/
-  lib/
+  platforms/
     macos/
       configuration-profiles/
         Zoom-service-management.mobileconfig

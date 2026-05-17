@@ -243,16 +243,28 @@ via the pool).
 
 #### `profile info`
 
-Show Profile CLI version, configuration, and schema statistics. Use this to verify your setup.
+Without arguments, show Profile CLI version, configuration, and schema
+statistics — use this to verify your setup. With a `<PAYLOAD_TYPE>`
+argument, dump the full Apple schema for that payload (title,
+description, platforms, every field's type, plist tag, required flag,
+default, and allowed values). This mirrors `profile ddm info <name>`.
 
 ```
-contour profile info [--json]
+contour profile info [PAYLOAD_TYPE] [flags]
 ```
 
-No additional flags. Displays the loaded `profile.toml` path, org domain, schema count, and version info.
+| Flag | Description | Default |
+|------|-------------|---------|
+| `[PAYLOAD_TYPE]` | Payload type for schema lookup. Omit to show CLI metadata. | — |
+| `--full` | Include all fields, not just required + top-level | `false` |
+| `--os <NAME>` | Restrict output to one OS (`macOS`, `iOS`, `tvOS`, `watchOS`, `visionOS`); fails fast if the payload is unsupported there | all platforms |
+| `--schema-path <DIR>` | External schema directory (overrides embedded) | embedded schemas |
+| `--json` | Emit JSON instead of human-readable output | `false` |
 
 ```bash
 contour profile info
+contour profile info com.apple.applicationaccess --json
+contour profile info com.apple.applicationaccess --full --os macOS
 ```
 
 #### `profile init`
@@ -332,6 +344,7 @@ contour profile normalize <PATHS>... [flags]
 | `--no-uuid` | Skip UUID regeneration | `false` |
 | `--no-parallel` | Disable parallel processing | `false` |
 | `--dry-run` | Preview without writing files | `false` |
+| `--report <PATH>` | Write a Markdown normalize report to this path | — |
 
 ```bash
 # Normalize all profiles in a directory tree
@@ -447,15 +460,26 @@ contour profile validate <PATHS>... [flags]
 | `<PATHS>...` | Profile file(s) or directory to validate | **required** |
 | `--no-schema` | Skip schema-based validation of payload fields | `false` |
 | `--schema-path <DIR>` | Path to external schema directory (ProfileManifests, Apple YAML) | embedded schemas |
+| `--lookup <PATH>` | Path to a ProfileManifests repo for third-party identifier lookup | — |
 | `--strict` | Treat warnings as errors | `false` |
+| `--lint-policy <NAMES>` | Opt into org-policy lint checks — comma-separated names, or `all` | schema checks only |
+| `--no-placeholders` | Reject MDM template placeholders (`$VAR`, `{{VAR}}`, `%VAR%`); by default they are accepted with warnings | `false` |
 | `-r, --recursive` | Process directories recursively | `false` |
 | `--max-depth <N>` | Maximum directory depth (requires `--recursive`) | unlimited |
 | `--no-parallel` | Disable parallel processing | `false` |
+| `--report <PATH>` | Write a Markdown validation report to this path | — |
 
 ```bash
 # Strict validation against embedded Apple schemas
 contour profile validate ./profiles -r --strict
 ```
+
+By default `validate` runs Apple-schema checks only. `--lint-policy`
+adds Tier-2 authoring-convention checks on top: pass `all`, or a
+comma-separated subset of `payload-identifier-reverse-dns`,
+`payload-organization-required`, `payload-scope-consistency`,
+`nested-payload-identifier-prefix`. When combined with `--strict`,
+Tier-2 warnings are promoted to errors.
 
 #### `profile diff`
 
@@ -753,12 +777,15 @@ contour profile docs generate -o <DIR> [flags]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-o, --output <DIR>` | Output directory | **required** |
+| `-o, --output <DIR>` | Output directory | **required** unless `--stdout` |
+| `--stdout` | Print markdown to stdout instead of writing files | `false` |
 | `--payload <TYPE>` | Specific payload type (generates one file) | all payloads |
 | `-c, --category <CAT>` | Filter by category: `apple`, `apps`, `prefs` | all categories |
+| `--schema-path <DIR>` | External schema directory | embedded schemas |
 
 ```bash
 contour profile docs generate -o ./docs --category apple
+contour profile docs generate --payload com.apple.wifi.managed --stdout
 ```
 
 #### `profile docs list`
@@ -772,6 +799,7 @@ contour profile docs list [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-c, --category <CAT>` | Filter by category: `apple`, `apps`, `prefs` | all categories |
+| `--schema-path <DIR>` | External schema directory | embedded schemas |
 
 ```bash
 contour profile docs list --category apps --json
@@ -908,26 +936,99 @@ contour profile ddm generate <NAME> [flags]
 contour profile ddm generate passcode.settings -o passcode.json --full
 ```
 
+#### `profile ddm compose`
+
+*status: experimemtal*
+
+Compose a complete DDM bundle — asset, configuration, and activation —
+from a single TOML input describing one DDM intent. Identifiers are
+computed from the org domain plus the intent name, the asset reference
+is auto-wired into the configuration's `*AssetReference` field, and the
+three `.json` declarations are written in build order. Dangling
+references and identifier collisions become impossible by construction.
+
+```
+contour profile ddm compose <BUNDLE> -o <DIR> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<BUNDLE>` | Bundle TOML file describing a DDM intent. Required unless `--preset`/`--list-presets`. | — |
+| `-o, --output <DIR>` | Output directory for the emitted `.json` declarations | **required** unless `--list-presets` |
+| `--org <ORG>` | Organization reverse-DNS (overrides `CONTOUR_ORG` / `profile.toml`) | from config |
+| `--preset <NAME>` | Compose an embedded or external preset by name instead of a bundle path | — |
+| `--preset-path <DIR_OR_FILE>` | External preset library — a directory of `.toml` bundles or a single file | — |
+| `--list-presets` | List presets available via `--preset` (embedded + external) | `false` |
+| `--allow-orphans` | Allow assets that are declared but not referenced by the configuration | `false` |
+| `-p, --schema-path <DIR>` | External Apple device-management repo (overrides embedded schema) | embedded schemas |
+
+```bash
+contour profile ddm compose ./intent.toml -o ./out --org com.acme
+contour profile ddm compose --preset disable-apple-intelligence-macos --org com.acme -o ./out
+contour profile ddm compose --list-presets
+```
+
+Preset resolution order: `--preset-path` → `~/.contour/presets/` →
+embedded; external presets win on name collisions. The bundle format is
+documented in `sop-ddm.md`.
+
+#### `profile ddm verify`
+
+Walk every `.json` declaration in a directory and verify cross-references:
+the reference DAG (configurations resolve to assets, activations resolve
+to configurations), predicate gating (every `@status('key')` in an
+activation predicate is covered by a status-subscriptions declaration),
+and `ServerToken` absence. Exits non-zero on any error; warnings (orphan
+assets/configurations, unused subscription keys) only fail with `--strict`.
+
+```
+contour profile ddm verify <DIRECTORY> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<DIRECTORY>` | Directory containing DDM `.json` declaration files | **required** |
+| `-r, --recursive` | Recurse into subdirectories | `false` |
+| `--strict` | Treat warnings as errors (orphans, unused subscriptions) | `false` |
+
+```bash
+contour profile ddm verify ./declarations -r
+contour profile ddm verify ./declarations -r --strict
+```
+
 ---
 
 ### Search & Generate
 
 #### `profile search`
 
-Search the embedded payload schemas by keyword. Matches against payload type, title, description, and key names.
+Search the embedded payload schemas. Runs in one of three modes:
+
+- **Substring search** (default) — matches `<QUERY>` against payload
+  type, title, description, and field names; returns matching payloads.
+- **`--field <NAME>`** — exact field-name lookup across every payload.
+  Returns each match with its `payload_type` plus full field detail
+  (type, plist tag, required, default, allowed values). The one-call
+  answer to "what type does Apple expect for this key?".
+- **`--include-fields`** — polymorphic mode. Substring-matches across
+  payload-level *and* field-level metadata, returning categorized
+  output with `payload_matches[]` and `field_matches[]` arrays.
 
 ```
-contour profile search <QUERY> [flags]
+contour profile search [QUERY] [flags]
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `<QUERY>` | Search term (e.g., `passcode`, `wifi`, `vpn`, `filevault`) | **required** |
+| `[QUERY]` | Substring search term (e.g., `passcode`, `wifi`). Required unless `--field` is given; conflicts with `--field`. | — |
+| `--field <NAME>` | Exact field-name lookup across all payloads; conflicts with `<QUERY>` and `--include-fields` | — |
+| `--include-fields` | Polymorphic mode — also walk field metadata. Requires `<QUERY>`; conflicts with `--field`. | `false` |
 | `--schema-path <DIR>` | External schema directory | embedded schemas |
 
 ```bash
-contour profile search passcode --json
 contour profile search wifi --json
+contour profile search --field safariAcceptCookies --json
+contour profile search cookie --include-fields --json
 ```
 
 #### `profile generate`
@@ -1004,7 +1105,7 @@ contour profile library import ./vendor-profiles --into ./contour-presets
 #### `profile library validate` / `normalize` / `diff`
 
 Validate every recipe in a library, restyle recipe TOML (`--style
-flat|nested`), or diff two recipe files.
+flat|nested`, default `nested`), or diff two recipe files.
 
 ```bash
 contour profile library validate ./contour-presets
