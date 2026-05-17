@@ -1,6 +1,28 @@
+# Microsoft Entra ID Platform SSO for macOS.
+#
+# Configures the Microsoft Enterprise SSO app extension with Platform
+# SSO (Secure Enclave-backed keys). The ExtensionData keys mirror
+# Microsoft's recommended "other MDM" configuration.
+#
+# `AppPrefixAllowList` ships with the vendor-neutral core
+# (com.microsoft.,com.apple.). Jamf-managed fleets can extend it — see
+# the commented value below.
+#
+# URLs cover the worldwide commercial cloud. For sovereign clouds also
+# add: login.partner.microsoftonline.cn, login.chinacloudapi.cn,
+# login.microsoftonline.us, login-us.microsoftonline.com.
+#
+# References:
+#   - Microsoft Enterprise SSO plug-in for Apple devices:
+#     https://learn.microsoft.com/entra/identity-platform/apple-sso-plugin
+#   - Configure the macOS Enterprise SSO app extension with MDMs:
+#     https://learn.microsoft.com/intune/device-configuration/templates/configure-enterprise-sso-plugin-macos
+#   - Configure Platform SSO for macOS:
+#     https://learn.microsoft.com/intune/device-configuration/settings-catalog/configure-platform-sso-macos
+
 [recipe]
 name = "entra-psso"
-description = "Microsoft Entra ID Platform SSO with Secure Enclave"
+description = "Microsoft Entra ID Platform SSO for macOS (Secure Enclave)"
 vendor = "Microsoft"
 
 [[profile]]
@@ -26,3 +48,15 @@ ScreenLockedBehavior = "DoNotHandle"
 "PlatformSSO.UserAuthorizationMode" = "Standard"
 "PlatformSSO.TokenToUserMapping.AccountName" = "preferred_username"
 "PlatformSSO.TokenToUserMapping.FullName" = "name"
+# Microsoft Enterprise SSO extension data — Microsoft's recommended
+# defaults. To also allow Jamf apps, set AppPrefixAllowList to:
+#   com.microsoft.,com.apple.,com.jamf.selfserviceplus.,com.jamf.trust.,com.jamf.management.,com.jamfsoftware.
+"ExtensionData.AppPrefixAllowList" = "com.microsoft.,com.apple."
+"ExtensionData.browser_sso_interaction_enabled" = 1
+"ExtensionData.disable_explicit_app_prompt" = 1
+# Optional allowlist-tuning keys (Microsoft "Summary of keys") — these
+# are org-specific, so they ship commented out. Uncomment as needed:
+#   "ExtensionData.Enable_SSO_On_All_ManagedApps" = 1
+#   "ExtensionData.AppAllowList" = "com.contoso.app1,com.contoso.app2"
+#   "ExtensionData.AppBlockList" = "com.apple.Safari"
+#   "ExtensionData.disable_explicit_app_prompt_and_autologin" = 1
