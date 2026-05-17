@@ -4,6 +4,8 @@
 
 `contour profile` is a CLI toolkit for managing Apple configuration profiles (`.mobileconfig`). It handles normalization, validation, signing, UUID management, payload inspection, and documentation generation for Apple device management.
 
+contour turns intent into valid `.mobileconfig` profiles and Declarative Device Management (DDM) declarations for macOS, iOS, iPadOS, tvOS, watchOS, and visionOS — every one checked against Apple's official device-management schema, so an agent can't ship config that won't apply.
+
 Aimed at Mac admins who manage profiles across MDM solutions, GitOps repositories, or local development workflows.
 
 ## Quick Start

@@ -44,9 +44,24 @@ pub const EMBEDDED: &[(&str, &str, &str)] = &[
         include_str!("../../recipes/ddm/disable-apple-intelligence-macos.toml"),
     ),
     (
+        "external-intelligence-settings",
+        "Disable or scope third-party external intelligence integrations (external-intelligence.settings)",
+        include_str!("../../recipes/ddm/external-intelligence-settings.toml"),
+    ),
+    (
+        "keyboard-settings",
+        "Managed keyboard settings — typing aids and dictation (keyboard.settings)",
+        include_str!("../../recipes/ddm/keyboard-settings.toml"),
+    ),
+    (
         "managed-migration-assistant",
         "Run Migration Assistant under managed MDM control (migration-assistant.settings)",
         include_str!("../../recipes/ddm/managed-migration-assistant.toml"),
+    ),
+    (
+        "siri-settings",
+        "Managed Siri settings — restrict or disable Siri (siri.settings)",
+        include_str!("../../recipes/ddm/siri-settings.toml"),
     ),
 ];
 
@@ -250,7 +265,10 @@ mod tests {
             vec![
                 "disable-apple-intelligence-ios",
                 "disable-apple-intelligence-macos",
-                "managed-migration-assistant"
+                "external-intelligence-settings",
+                "keyboard-settings",
+                "managed-migration-assistant",
+                "siri-settings"
             ]
         );
         for p in &presets {

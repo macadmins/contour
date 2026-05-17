@@ -10,6 +10,8 @@ CLI for control, AI for intent — ship consistent, declarative Apple configurat
 
 > **Status: Preview** — almost feature-complete for core workflows, APIs and flags may still change before 1.0.
 
+**contour turns intent into valid `.mobileconfig` profiles and Declarative Device Management (DDM) declarations for macOS, iOS, iPadOS, tvOS, watchOS, and visionOS — every one checked against Apple's official device-management schema, so an agent can't ship config that won't apply.**
+
 One signed binary that makes common device management tasks simpler. Contour validates, normalizes, and processes Apple device management artifacts using embedded Apple schemas — producing clean diffs, clear errors, and predictable output every time. Designed for terminal workflows, CI pipelines, and AI agents, it brings consistency and reliability to modern device management operations.
 
 Contour works primarily with your existing profiles and DDM configuration payloads — whether created by you, your MDM vendor, or an AI agent. It can also generate new configurations from scratch, reverse-engineer existing plists on mdm managed devices, and transform everything into a clean, consistent format optimized for modern Git-driven device management workflows.
@@ -56,7 +58,7 @@ Each tool can be used in CI, GitHooks, Scripts or the Terminal.
 | `contour profile synthesize` | Reverse-engineer managed preference plists into validated mobileconfigs. |
 | `contour profile import --jamf` | Import from [Jamf Pro backup](https://github.com/Jamf-Concepts/jamf-cli) YAML — extract, normalize, validate in one step. |
 | `contour profile command` | Generate MDM command plist payloads (RestartDevice, DeviceLock, EraseDevice, …) with `--base64` for the Fleet API. |
-| `contour profile enrollment` | Generate DEP/ADE enrollment profiles from Setup Assistant skip keys, platform/version-gated. |
+| `contour profile enrollment` | Generate ADE enrollment profiles from Setup Assistant skip keys, platform/version-gated. |
 | `contour osquery` | Search and inspect the embedded osquery schema for writing queries and policies. |
 | [`contour pppc`](docs/contour-pppc.md) | Generate TCC/Privacy Preferences profiles from app bundles. Scan → configure → generate. |
 | [`contour santa`](docs/contour-santa.md) | Santa allowlists, CEL toolkit (compile, eval, validate, dry-run, classify), and FAA plist generation. |
@@ -83,7 +85,7 @@ contour profile generate com.apple.mobiledevice.passwordpolicy --full --org com.
 # MDM command for Fleet API
 contour profile command generate DeviceLock --set PIN=123456 --uuid --base64
 
-# DEP enrollment profile
+# ADE enrollment profile
 contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
 
 # Query mSCP compliance rules
