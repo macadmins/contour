@@ -8,9 +8,80 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use contour_core::config::{
-    ContourConfig, DefaultsConfig, OrgConfig, derive_domain_from_name, derive_server_url_from_name,
+    ContourConfig, DefaultsConfig, MdmVariablesConfig, OrgConfig, SecretsConfig, ValidationConfig,
+    derive_domain_from_name, derive_server_url_from_name,
 };
+use profile::mdm_vars::{self, MdmFlavour};
 
+/// Build the `[mdm_variables]` config value for a chosen flavour.
+fn mdm_config(flavour: Option<MdmFlavour>) -> MdmVariablesConfig {
+    MdmVariablesConfig {
+        mdm: flavour.map(|f| f.as_str().to_string()),
+        pool: std::collections::BTreeMap::new(),
+    }
+}
+
+/// Append a commented `[mdm_variables.pool]` template to the written
+/// config — the flavour's catalogue, ready for the operator to
+/// uncomment and reference as `var:NAME`.
+fn append_mdm_template(root: &Path, flavour: MdmFlavour) -> Result<()> {
+    use std::fmt::Write as _;
+
+    let mut block = String::from("\n");
+    let _ = writeln!(
+        block,
+        "# Available {} variables — uncomment an entry under",
+        flavour.as_str()
+    );
+    let _ = writeln!(
+        block,
+        "# [mdm_variables.pool] and reference it in recipes as `var:NAME`."
+    );
+    let _ = writeln!(block, "# [mdm_variables.pool]");
+    match flavour {
+        MdmFlavour::Fleet => {
+            for v in mdm_vars::FLEET_EXACT {
+                let name = v.strip_prefix("FLEET_VAR_").unwrap_or(v);
+                let _ = writeln!(block, "# {name} = \"{v}\"");
+            }
+            for p in mdm_vars::FLEET_PREFIXES {
+                let name = p
+                    .strip_prefix("FLEET_VAR_")
+                    .unwrap_or(p)
+                    .trim_end_matches('_');
+                let _ = writeln!(block, "# {name} = \"{p}<suffix>\"");
+            }
+        }
+        MdmFlavour::Jamf => {
+            for v in mdm_vars::JAMF_VARS {
+                let name = v.strip_prefix('$').unwrap_or(v);
+                let _ = writeln!(block, "# {name} = \"{v}\"");
+            }
+            for p in mdm_vars::JAMF_PREFIXES {
+                let name = p.strip_prefix('$').unwrap_or(p).trim_end_matches('_');
+                let _ = writeln!(block, "# {name} = \"{p}<id>\"");
+            }
+        }
+        MdmFlavour::Apple => {
+            let _ = writeln!(
+                block,
+                "# (no built-in Apple catalogue — add NAME = \"token\" entries yourself)"
+            );
+        }
+    }
+
+    let path = ContourConfig::config_path(root);
+    let mut content =
+        fs::read_to_string(&path).with_context(|| format!("Cannot read {}", path.display()))?;
+    content.push_str(&block);
+    fs::write(&path, content).with_context(|| format!("Cannot write {}", path.display()))?;
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "init wizard mirrors all CLI flags"
+)]
 pub fn run(
     path: &Path,
     name: Option<String>,
@@ -19,6 +90,7 @@ pub fn run(
     platforms: Option<Vec<String>>,
     deterministic_uuids: Option<bool>,
     library_path: Option<String>,
+    mdm: Option<String>,
     yes: bool,
     json: bool,
 ) -> Result<()> {
@@ -35,6 +107,17 @@ pub fn run(
     // Load existing config as defaults for update flow
     let existing = ContourConfig::load(&root);
 
+    // Resolve the MDM flavour: explicit --mdm flag, else carry over an
+    // existing config's setting.
+    let mdm_flag = mdm.or_else(|| existing.as_ref().and_then(|c| c.mdm_variables.mdm.clone()));
+    let mdm_flavour = match mdm_flag.as_deref() {
+        Some(s) => Some(
+            MdmFlavour::parse(s)
+                .with_context(|| format!("invalid --mdm '{s}' (expected fleet|jamf|apple)"))?,
+        ),
+        None => None,
+    };
+
     if yes {
         run_noninteractive(
             &root,
@@ -45,6 +128,7 @@ pub fn run(
             platforms,
             deterministic_uuids,
             library_path,
+            mdm_flavour,
             json,
         )
     } else {
@@ -57,11 +141,16 @@ pub fn run(
             platforms,
             deterministic_uuids,
             library_path,
+            mdm_flavour,
             json,
         )
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "init wizard mirrors all CLI flags"
+)]
 fn run_noninteractive(
     root: &Path,
     existing: Option<ContourConfig>,
@@ -71,6 +160,7 @@ fn run_noninteractive(
     platforms: Option<Vec<String>>,
     deterministic_uuids: Option<bool>,
     library_path: Option<String>,
+    mdm_flavour: Option<MdmFlavour>,
     json: bool,
 ) -> Result<()> {
     // For non-interactive, name and domain must come from flags or existing config
@@ -124,17 +214,24 @@ fn run_noninteractive(
         },
         vars: std::collections::BTreeMap::new(),
         signing: None,
-        validation: contour_core::config::ValidationConfig::default(),
-        secrets: contour_core::config::SecretsConfig::default(),
-        mdm_variables: contour_core::config::MdmVariablesConfig::default(),
+        validation: ValidationConfig::default(),
+        secrets: SecretsConfig::default(),
+        mdm_variables: mdm_config(mdm_flavour),
     };
 
     config.save(root)?;
+    if let Some(flavour) = mdm_flavour {
+        append_mdm_template(root, flavour)?;
+    }
     let wrote_agent_md = write_agent_md(root)?;
     print_summary(root, &config, wrote_agent_md, json);
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "init wizard mirrors all CLI flags"
+)]
 fn run_interactive(
     root: &Path,
     existing: Option<ContourConfig>,
@@ -144,6 +241,7 @@ fn run_interactive(
     cli_platforms: Option<Vec<String>>,
     cli_deterministic_uuids: Option<bool>,
     cli_library_path: Option<String>,
+    mdm_flavour: Option<MdmFlavour>,
     json: bool,
 ) -> Result<()> {
     if !json {
@@ -290,6 +388,23 @@ fn run_interactive(
         }
     };
 
+    // MDM platform — the --mdm flag wins; otherwise ask.
+    let mdm_flavour: Option<MdmFlavour> = if mdm_flavour.is_some() {
+        mdm_flavour
+    } else {
+        let choices = vec!["skip", "fleet", "jamf", "apple"];
+        let answer = inquire::Select::new(
+            "MDM platform (for the [mdm_variables] section):",
+            choices,
+        )
+        .with_help_message(
+            "Writes the platform's variable catalogue into config.toml as a commented template.",
+        )
+        .prompt()
+        .context("Cancelled")?;
+        MdmFlavour::parse(answer)
+    };
+
     let config = ContourConfig {
         organization: OrgConfig {
             name: org_name,
@@ -304,12 +419,15 @@ fn run_interactive(
         },
         vars: std::collections::BTreeMap::new(),
         signing: None,
-        validation: contour_core::config::ValidationConfig::default(),
-        secrets: contour_core::config::SecretsConfig::default(),
-        mdm_variables: contour_core::config::MdmVariablesConfig::default(),
+        validation: ValidationConfig::default(),
+        secrets: SecretsConfig::default(),
+        mdm_variables: mdm_config(mdm_flavour),
     };
 
     config.save(root)?;
+    if let Some(flavour) = mdm_flavour {
+        append_mdm_template(root, flavour)?;
+    }
     let wrote_agent_md = write_agent_md(root)?;
     print_summary(root, &config, wrote_agent_md, json);
     Ok(())
