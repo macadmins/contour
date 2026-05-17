@@ -168,6 +168,7 @@ contour pppc generate <INPUT> [flags]
 | `-o, --output <PATH>` | Output directory or file path | same dir as input |
 | `--combined` | Merge all apps into a single profile | `false` |
 | `--fragment` | Generate Fleet GitOps fragment directory | `false` |
+| `--format <FMT>` | Output format: `mobileconfig` (default) or `recipe` | `mobileconfig` |
 | `--dry-run` | Preview profiles without writing | `false` |
 
 ```bash
@@ -176,6 +177,9 @@ contour pppc generate pppc.toml -o ./profiles
 
 # Generate a single combined profile
 contour pppc generate pppc.toml --combined -o pppc.mobileconfig
+
+# Emit a contour recipe TOML instead of a .mobileconfig
+contour pppc generate pppc.toml --format recipe -o ./recipes
 
 # Preview what would be generated
 contour pppc generate pppc.toml --dry-run
@@ -189,6 +193,8 @@ contour pppc generate pppc.toml --fragment -o pppc-fragment
 **Combined mode** (`--combined`): Merges all TCC entries into a single profile. Profile identifier: `{org}.pppc`.
 
 **Fleet mode** (`--fragment`): Produces a fragment directory with profiles under `platforms/macos/configuration-profiles/`, a `fleets/reference-fleet.yml`, and a `fragment.toml` for merging into a Fleet GitOps repository.
+
+**Recipe mode** (`--format recipe`): Writes a single combined recipe `.toml` instead of `.mobileconfig` files. Drop it into a contour recipe library's `recipes/` directory and render it later with `contour profile generate --recipe`.
 
 Apps with empty `services = []` are skipped during generation.
 
