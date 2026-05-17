@@ -658,7 +658,7 @@ santa-rules.mobileconfig
 
 ```
 santa-fragment/
-  lib/
+  platforms/
     macos/
       configuration-profiles/
         santa-rules.mobileconfig

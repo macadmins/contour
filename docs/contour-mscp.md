@@ -425,6 +425,46 @@ Also accepts all profile options (`--deterministic-uuids`, `--org`, `--org-name`
 contour mscp process -i ./macos_security/build/cis_lvl1 -o ./output -b cis_lvl1 --fleet-mode
 ```
 
+#### `mscp recipe`
+
+Aggregate a baseline's `mobileconfig` rules into a single contour recipe
+TOML — one `[[profile]]` block per payload type (firewall, screensaver,
+…) with every rule's keys merged in. Drop the result into a recipe
+library and render it with `contour profile generate --recipe`.
+
+`recipe` reads rule YAML **directly** from the mSCP repository — it does
+**not** run the mSCP Python build script, so it is fast and needs no
+Python toolchain.
+
+```
+contour mscp recipe -r <MSCP_REPO> -b <BASELINE> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-r, --mscp-repo <PATH>` | Path to the mSCP repository (the directory containing `rules/`) | **required** |
+| `-b, --baseline <NAME>` | Baseline name (e.g., `cis_lvl1`, `800-53r5_high`) | **required** |
+| `-o, --output <PATH>` | Output recipe TOML path | `<baseline>.toml` |
+| `--org <VENDOR>` | Organization vendor string written to the recipe header | none |
+| `--odv-mode <MODE>` | How to render `$ODV` placeholders: `variable` or `inline` | `variable` |
+| `--mscp-version <VER>` | Repository layout: `auto`, `1.x`, or `2.0` | `auto` |
+| `--os <OS>` | OS target for 2.0 layouts: `macos`, `ios`, `visionos` (ignored for 1.x) | `macos` |
+| `--os-version <VER>` | OS version for 2.0 layouts (e.g. `26.0`); highest available if unset | auto |
+
+`--odv-mode variable` (default) keeps the literal `"$ODV"` placeholder
+in each field and emits the resolved per-baseline defaults into a
+top-level `[odv]` table — operators edit `[odv]` once and every
+reference picks it up; `profile generate --recipe` substitutes at load
+time. `--odv-mode inline` bakes the resolved default straight into the
+field (e.g. `timeServer = "time.apple.com"`) — handy for one-shot
+recipes that need no editable surface.
+
+```bash
+# Build a recipe from the CIS Level 1 baseline, then render it
+contour mscp recipe -r ./macos_security -b cis_lvl1 -o ./recipes/cis_lvl1.toml --org com.acme
+contour profile generate --recipe ./recipes/cis_lvl1.toml --org com.acme -o build
+```
+
 ---
 
 ### Inspect & Validate
@@ -1005,28 +1045,35 @@ The `output.structure` setting in `mscp.toml` (or `--fleet-mode` / `--jamf-mode`
 
 ### `pluggable` — Fleet GitOps
 
-Default structure. Produces a full Fleet GitOps repository with team YAMLs, labels, policies, and a `default.yml` entry point.
+Default structure. Produces a full Fleet GitOps repository (Fleet v4.83+
+layout) with fleet YAMLs, labels, policies, and a `default.yml` entry
+point.
 
 ```
 output/
-  default.yml                        # Default team (labels, agent options)
-  lib/
-    agent-options.yml
-    all/
-      labels/
-        mscp-cis_lvl1.labels.yml     # Label definitions for targeting
-    mscp/
-      cis_lvl1/
-        profiles/                    # .mobileconfig files
-        scripts/                     # Remediation scripts (bundled by category)
-        declarative/                 # DDM declarations (if --generate-ddm)
-        policies/                    # Fleet policies (YAML)
-        baseline.toml                # Baseline metadata
+  default.yml                                   # Default fleet (labels, agent options)
   fleets/
-    cis_lvl1.yml                     # Team YAML referencing profiles/scripts
-    no-team.yml
-  versions/
-    manifest.json                    # Version tracking
+    cis_lvl1.yml                                # Fleet YAML referencing profiles/scripts
+    unassigned.yml                              # Unassigned hosts
+  labels/
+    mscp-cis_lvl1.labels.yml                    # Label definitions for targeting
+  mscp/
+    cis_lvl1/
+      baseline.toml                             # Baseline metadata
+    versions/
+      manifest.json                             # Version tracking
+  platforms/
+    all/
+      agent-options.yml
+    macos/
+      configuration-profiles/
+        cis_lvl1/                               # .mobileconfig files
+      scripts/
+        cis_lvl1/                               # Remediation scripts (bundled by category)
+      policies/
+        cis_lvl1/                               # Fleet policies (YAML)
+      declaration-profiles/
+        cis_lvl1/                               # DDM declarations (if --generate-ddm)
 ```
 
 Set via: `output.structure = "pluggable"`, `--fleet` during init, or `--fleet-mode` CLI flag.
