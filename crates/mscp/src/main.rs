@@ -215,7 +215,8 @@ fn main() -> Result<()> {
             description_format,
             generate_ddm,
             no_labels,
-            teams,
+            fleets,
+            glob,
             fleet_mode,
             jamf_exclude_conflicts,
             munki_compliance_flags,
@@ -311,7 +312,8 @@ fn main() -> Result<()> {
                     opts.munki_compliance_options,
                     opts.munki_script_options,
                     opts.no_labels,
-                    opts.team_names,
+                    opts.fleet_names,
+                    false, // fleet_glob — --glob is a CLI-flag-mode option
                     opts.fleet_mode,
                     opts.jamf_exclude_conflicts,
                     opts.generate_ddm,
@@ -410,7 +412,8 @@ fn main() -> Result<()> {
                 munki_compliance_options,
                 munki_script_options,
                 no_labels,
-                teams,
+                fleets,
+                glob,
                 fleet_mode,
                 jamf_exclude_conflicts,
                 generate_ddm,
@@ -654,11 +657,11 @@ fn main() -> Result<()> {
         Commands::Migrate {
             from,
             to,
-            team,
+            fleet,
             output,
             no_backup,
         } => {
-            cli::migrate_team_file(from, to, team, output, !no_backup)?;
+            cli::migrate_fleet_file(from, to, fleet, output, !no_backup)?;
         }
 
         Commands::Verify { output, fix } => {

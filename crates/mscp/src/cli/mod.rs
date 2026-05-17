@@ -346,13 +346,17 @@ pub enum Commands {
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         no_labels: bool,
 
-        /// [FLEET] Teams to add baseline to (comma-separated). Updates team YAML files and default.yml
+        /// [FLEET] Fleets to add the baseline to (comma-separated). Updates fleet YAML files and default.yml
         #[arg(
             long,
             value_delimiter = ',',
             help_heading = "Experimental - not stable (Fleet Options)"
         )]
-        teams: Option<Vec<String>>,
+        fleets: Option<Vec<String>>,
+
+        /// [FLEET] With --fleets, attach the baseline as a single *.mobileconfig glob entry instead of one entry per profile
+        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        glob: bool,
 
         /// [MUNKI] Generate Munki compliance flags nopkg item (for osquery/FleetDM scoping)
         #[arg(long, help_heading = "Experimental - not stable (Munki Options)")]
@@ -566,7 +570,7 @@ pub enum Commands {
         #[arg(short, long, default_value = "macOS")]
         platform: String,
 
-        /// Generate Jamf Pro Smart Group scoping templates
+        /// [JAMF PRO] Also emit Jamf Smart Group scoping templates (the Jamf counterpart to Fleet labels) for the deduplicated baselines
         #[arg(long)]
         jamf_mode: bool,
 
@@ -635,7 +639,7 @@ pub enum Commands {
         force: bool,
     },
 
-    /// Migrate team files from one baseline to another
+    /// Migrate fleet files from one baseline to another
     Migrate {
         /// Baseline to migrate from
         #[arg(long)]
@@ -645,9 +649,9 @@ pub enum Commands {
         #[arg(long)]
         to: String,
 
-        /// Team file to migrate
-        #[arg(short, long)]
-        team: PathBuf,
+        /// Fleet file to migrate
+        #[arg(short = 'f', long = "fleet")]
+        fleet: PathBuf,
 
         /// Output directory containing Fleet `GitOps` structure
         #[arg(short, long)]

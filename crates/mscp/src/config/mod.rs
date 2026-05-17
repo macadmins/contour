@@ -242,8 +242,8 @@ pub struct BaselineConfig {
     /// If not specified, uses current branch
     pub branch: Option<String>,
 
-    /// Optional team name override
-    pub team: Option<String>,
+    /// Optional fleet name override
+    pub fleet: Option<String>,
 
     /// Label targeting
     #[serde(default)]

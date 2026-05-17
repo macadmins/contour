@@ -546,6 +546,177 @@ pub fn append_custom_settings(content: &str, entries: &[Vec<String>]) -> String 
     result
 }
 
+/// One profile entry to append to a Fleet `configuration_profiles` list,
+/// plus optional `labels_include_all` filters.
+///
+/// Fleet distinguishes the two list-entry forms by key:
+/// - `path:` — a single literal `.mobileconfig` file
+/// - `paths:` — a glob pattern (e.g. `.../*.mobileconfig`)
+#[derive(Debug, Clone)]
+pub struct ProfileListEntry {
+    /// The `path` / `paths` value — a file or a glob pattern.
+    pub path: String,
+    /// When true, emit the entry as `- paths:` (glob); otherwise `- path:`.
+    pub glob: bool,
+    /// `labels_include_all:` label names; empty means no label block.
+    pub labels_include_all: Vec<String>,
+}
+
+/// Find the line index and indentation of the final key in a nested key
+/// path (e.g. `["controls", "apple_settings"]`). Returns `None` if any key
+/// in the path is absent.
+pub fn find_nested_key(lines: &[&str], section_path: &[&str]) -> Option<(usize, usize)> {
+    if section_path.is_empty() {
+        return None;
+    }
+
+    let mut search_start = 0;
+    let mut parent_indent = 0;
+    let mut found_idx = 0;
+    let mut found_indent = 0;
+
+    for (depth, key) in section_path.iter().enumerate() {
+        let needle = format!("{key}:");
+        let mut found = false;
+
+        for (i, line) in lines.iter().enumerate().skip(search_start) {
+            let trimmed = line.trim();
+            let indent = line.len() - line.trim_start().len();
+
+            if depth > 0 && indent <= parent_indent && !trimmed.is_empty() && i > search_start {
+                break;
+            }
+
+            if trimmed == needle || trimmed.starts_with(&format!("{needle} ")) {
+                search_start = i + 1;
+                parent_indent = indent;
+                found_idx = i;
+                found_indent = indent;
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            return None;
+        }
+    }
+
+    Some((found_idx, found_indent))
+}
+
+/// Format `ProfileListEntry` values into YAML lines at the given indent.
+///
+/// A glob entry is emitted as `- paths:`, a literal one as `- path:`.
+fn format_profile_list_entries(entries: &[ProfileListEntry], indent: usize) -> Vec<String> {
+    let pad = " ".repeat(indent);
+    let sub_pad = " ".repeat(indent + 2);
+    let mut lines = Vec::new();
+
+    for e in entries {
+        let key = if e.glob { "paths" } else { "path" };
+        lines.push(format!("{pad}- {key}: {}", e.path));
+
+        if !e.labels_include_all.is_empty() {
+            lines.push(format!("{sub_pad}labels_include_all:"));
+            for label in &e.labels_include_all {
+                lines.push(format!("{sub_pad}  - \"{label}\""));
+            }
+        }
+    }
+
+    lines
+}
+
+/// Append profile entries into `controls.apple_settings.configuration_profiles`
+/// (current Fleet GitOps schema), creating any missing intermediate keys.
+///
+/// Comment- and formatting-preserving: existing content is never reflowed,
+/// only new lines are inserted. `controls:` is assumed to be a top-level key
+/// (always true for Fleet team / `default.yml` files).
+///
+/// Handles every shape a real Fleet file presents:
+/// - the `configuration_profiles` list exists with items → append after the last
+/// - `configuration_profiles:` exists but is empty → insert items under it
+/// - `apple_settings:` exists without `configuration_profiles` → create the child
+/// - `controls:` exists without `apple_settings` → create the subtree
+/// - no `controls:` at all → append the whole block
+///
+/// The result is NOT validated here; callers should parse it (fail-closed)
+/// before writing over an operator's file.
+pub fn append_apple_configuration_profiles(content: &str, entries: &[ProfileListEntry]) -> String {
+    if entries.is_empty() {
+        return content.to_string();
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Shapes A & B — the configuration_profiles section already exists, with
+    // items or empty. `find_nested_section_insert_point` covers both.
+    if let Some(insert) = find_nested_section_insert_point(
+        &lines,
+        &["controls", "apple_settings", "configuration_profiles"],
+    ) {
+        let flat = format_profile_list_entries(entries, insert.indent);
+        return insert_lines_at(content, &insert, &flat);
+    }
+
+    // Shape C — apple_settings exists but has no configuration_profiles child.
+    if let Some((as_idx, as_indent)) = find_nested_key(&lines, &["controls", "apple_settings"]) {
+        let cp_indent = as_indent + 2;
+        let item_indent = cp_indent + 2;
+        let mut new_lines = vec![format!("{}configuration_profiles:", " ".repeat(cp_indent))];
+        new_lines.extend(format_profile_list_entries(entries, item_indent));
+        let insert = InsertPoint {
+            line: as_idx + 1,
+            indent: item_indent,
+            section_exists: false,
+        };
+        return insert_lines_at(content, &insert, &new_lines);
+    }
+
+    // Shape D — controls exists but has no apple_settings.
+    if let Some((c_idx, c_indent)) = find_nested_key(&lines, &["controls"]) {
+        let mut insert_at = c_idx + 1;
+        for (i, line) in lines.iter().enumerate().skip(c_idx + 1) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                insert_at = i + 1;
+                continue;
+            }
+            let indent = line.len() - line.trim_start().len();
+            if indent <= c_indent {
+                break;
+            }
+            insert_at = i + 1;
+        }
+        let item_indent = c_indent + 6;
+        let mut new_lines = vec![
+            format!("{}apple_settings:", " ".repeat(c_indent + 2)),
+            format!("{}configuration_profiles:", " ".repeat(c_indent + 4)),
+        ];
+        new_lines.extend(format_profile_list_entries(entries, item_indent));
+        let insert = InsertPoint {
+            line: insert_at,
+            indent: item_indent,
+            section_exists: false,
+        };
+        return insert_lines_at(content, &insert, &new_lines);
+    }
+
+    // Shape E — no controls section at all. Append the whole subtree.
+    let mut result = content.to_string();
+    if !result.is_empty() && !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result.push_str("controls:\n  apple_settings:\n    configuration_profiles:\n");
+    for line in format_profile_list_entries(entries, 6) {
+        result.push_str(&line);
+        result.push('\n');
+    }
+    result
+}
+
 /// Set key-value pairs within a nested YAML section.
 ///
 /// Finds the section at `section_path` (e.g. `["controls", "macos_updates"]`)
@@ -1585,5 +1756,116 @@ controls:
         // Existing keys untouched
         assert!(result.contains("    deadline: 2025-04-01"));
         assert!(result.contains("    minimum_version: 15.3"));
+    }
+
+    fn glob_entry() -> ProfileListEntry {
+        ProfileListEntry {
+            path: "../lib/macos/configuration-profiles/mscp_800-53/*.mobileconfig".to_string(),
+            glob: true,
+            labels_include_all: vec!["mscp-800-53r5_high".to_string()],
+        }
+    }
+
+    /// Shape A — the configuration_profiles list already has items.
+    #[test]
+    fn test_append_apple_cp_shape_a_existing_items() {
+        let content = "name: \"\u{1f4bb} Workstations\"\ncontrols:\n  enable_disk_encryption: true\n  apple_settings:\n    configuration_profiles:\n      - path: ../lib/macos/configuration-profiles/date-time.mobileconfig\n      - path: ../lib/macos/configuration-profiles/firewall.mobileconfig\n        labels_exclude_any:\n          - macOS screen lock exclusions\n  scripts:\n    - path: ../lib/macos/scripts/uninstall-fleetd-macos.sh\n";
+        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+
+        // Glob appended after the last existing profile, at item indent 6.
+        assert!(result.contains(
+            "      - paths: ../lib/macos/configuration-profiles/mscp_800-53/*.mobileconfig"
+        ));
+        assert!(result.contains("        labels_include_all:"));
+        assert!(result.contains("          - \"mscp-800-53r5_high\""));
+        // Existing entries and the unrelated scripts section survive.
+        assert!(result.contains("- path: ../lib/macos/configuration-profiles/date-time.mobileconfig"));
+        assert!(result.contains("          - macOS screen lock exclusions"));
+        assert!(result.contains("    - path: ../lib/macos/scripts/uninstall-fleetd-macos.sh"));
+        // The glob sits inside configuration_profiles, before `scripts:`.
+        let glob_at = result.find("mscp_800-53").unwrap();
+        let scripts_at = result.find("\n  scripts:").unwrap();
+        assert!(glob_at < scripts_at);
+    }
+
+    /// Shape B — `configuration_profiles:` exists but is empty.
+    #[test]
+    fn test_append_apple_cp_shape_b_empty_list() {
+        let content = "name: servers\ncontrols:\n  apple_settings:\n    configuration_profiles:\n  scripts:\n";
+        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+
+        assert!(result.contains(
+            "      - paths: ../lib/macos/configuration-profiles/mscp_800-53/*.mobileconfig"
+        ));
+        // Inserted under configuration_profiles, ahead of the sibling `scripts:`.
+        let glob_at = result.find("mscp_800-53").unwrap();
+        let scripts_at = result.find("\n  scripts:").unwrap();
+        assert!(glob_at < scripts_at);
+    }
+
+    /// Shape C — `apple_settings:` exists but has no configuration_profiles.
+    #[test]
+    fn test_append_apple_cp_shape_c_no_cp_child() {
+        let content = "name: Unassigned\npolicies:\ncontrols:\n  apple_settings:\n";
+        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+
+        assert!(result.contains("    configuration_profiles:"));
+        assert!(result.contains(
+            "      - paths: ../lib/macos/configuration-profiles/mscp_800-53/*.mobileconfig"
+        ));
+        assert!(result.contains("name: Unassigned"));
+    }
+
+    /// Shape D — `controls:` exists but has no apple_settings.
+    #[test]
+    fn test_append_apple_cp_shape_d_no_apple_settings() {
+        let content = "name: \"\u{1f9ea} Testing & QA\"\ncontrols:\n  enable_disk_encryption: true\n  scripts:\n    - path: ../lib/macos/scripts/uninstall-fleetd-macos.sh\npolicies:\n";
+        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+
+        assert!(result.contains("  apple_settings:"));
+        assert!(result.contains("    configuration_profiles:"));
+        assert!(result.contains(
+            "      - paths: ../lib/macos/configuration-profiles/mscp_800-53/*.mobileconfig"
+        ));
+        // apple_settings inserted within controls, before the top-level `policies:`.
+        let glob_at = result.find("mscp_800-53").unwrap();
+        let policies_at = result.find("\npolicies:").unwrap();
+        assert!(glob_at < policies_at);
+        // Existing controls children survive.
+        assert!(result.contains("    - path: ../lib/macos/scripts/uninstall-fleetd-macos.sh"));
+    }
+
+    /// Shape E — no controls section at all.
+    #[test]
+    fn test_append_apple_cp_shape_e_no_controls() {
+        let content = "name: minimal\n";
+        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+
+        assert!(result.contains("name: minimal"));
+        assert!(result.contains("controls:"));
+        assert!(result.contains("    configuration_profiles:"));
+        assert!(result.contains(
+            "      - paths: ../lib/macos/configuration-profiles/mscp_800-53/*.mobileconfig"
+        ));
+    }
+
+    /// Comments must survive an append.
+    #[test]
+    fn test_append_apple_cp_preserves_comments() {
+        let content = "# Fleet team file\nname: ws\ncontrols:\n  apple_settings:\n    configuration_profiles:\n      # security baseline profiles\n      - path: ../lib/macos/configuration-profiles/firewall.mobileconfig\n";
+        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+        assert!(result.contains("# Fleet team file"));
+        assert!(result.contains("      # security baseline profiles"));
+        assert!(result.contains("mscp_800-53"));
+    }
+
+    /// An empty entry list is a no-op.
+    #[test]
+    fn test_append_apple_cp_empty_entries_noop() {
+        let content = "name: ws\ncontrols:\n  apple_settings:\n    configuration_profiles:\n";
+        assert_eq!(
+            append_apple_configuration_profiles(&content, &[]),
+            content
+        );
     }
 }
