@@ -1,0 +1,44 @@
+# Managed External Intelligence settings.
+#
+# DDM bundle for `com.apple.configuration.external-intelligence.settings`
+# — the declaration that governs third-party "external intelligence"
+# integrations in Apple Intelligence (e.g. ChatGPT).
+#
+# Ships a compliance-oriented posture: external intelligence is turned
+# off. To allow it instead, set `Enabled = true` and use `AllowSignIn`
+# / `AllowedWorkspaceIDs` to scope it (see the commented keys below).
+#
+# Compose with:
+#   contour profile ddm compose \
+#       ddm/external-intelligence-settings.toml \
+#       -o ./declarations/external-intelligence-settings
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's
+# group/team assignment.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/external-intelligence.settings.yaml).
+# Verified against contour's embedded schema:
+# `contour profile info com.apple.configuration.external-intelligence.settings --full`.
+
+intent_name = "external-intelligence-settings"
+
+[configuration]
+type = "com.apple.configuration.external-intelligence.settings"
+
+  [configuration.payload]
+  # Master switch for third-party external intelligence integrations.
+  Enabled = false
+
+  # The keys below only take effect when Enabled = true:
+  # AllowSignIn — let users sign in to a personal external-intelligence
+  #   account (vs. using only an org-provided workspace).
+  # AllowSignIn = false
+  # AllowedWorkspaceIDs — restrict external intelligence to these
+  #   workspace identifiers.
+  # AllowedWorkspaceIDs = ["workspace-id-1", "workspace-id-2"]
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

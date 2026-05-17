@@ -18,8 +18,12 @@ or `--org` decides the prefix.
 |---|---|
 | `disable-apple-intelligence-macos.toml` | Sets every `com.apple.configuration.intelligence.settings` toggle to `false` (Writing Tools, Genmoji, Image Playground, Image Wand, Personalized Handwriting, Visual Intelligence Summary, Apple Intelligence Report) plus nested Mail (`AllowSmartReplies`, `AllowSummary`) and Notes (`AllowTranscription`, `AllowTranscriptionSummary`) — for macOS scope |
 | `disable-apple-intelligence-ios.toml` | Same payload as the macOS bundle, distinct intent_name so identifiers and group-targeting stay separate — for iOS / iPadOS scope |
+| `external-intelligence-settings.toml` | Disables third-party external intelligence integrations (ChatGPT and similar) via `com.apple.configuration.external-intelligence.settings`; commented keys cover the keep-enabled / workspace-scoped case |
+| `keyboard-settings.toml` | Managed `com.apple.configuration.keyboard.settings` — turns dictation off and leaves the other typing aids on; all eight keys stated explicitly for easy adjustment |
+| `managed-migration-assistant.toml` | Runs Migration Assistant under managed control via `com.apple.configuration.migration-assistant.settings`, carrying over Security & Privacy settings |
+| `siri-settings.toml` | Managed `com.apple.configuration.siri.settings` — keeps Siri enabled but off the lock screen, profanity filter forced, no user-generated content; set `Enabled = false` to disable Siri entirely |
 
-Both bundles use a simple activation (no predicate) — scope to platform
+All bundles use a simple activation (no predicate) — scope to platform
 via your MDM's group/team assignment.
 
 ## Verifying the output

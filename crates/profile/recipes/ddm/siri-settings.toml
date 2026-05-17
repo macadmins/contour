@@ -1,0 +1,42 @@
+# Managed Siri settings.
+#
+# DDM bundle for `com.apple.configuration.siri.settings`. Ships a
+# hardened-but-functional posture: Siri stays enabled, but it is kept
+# off the lock screen, the profanity filter is forced on, and Siri
+# audio is not contributed back to Apple as user-generated content.
+#
+# To disable Siri entirely instead, set `Enabled = false` — the other
+# three keys then have no effect.
+#
+# Compose with:
+#   contour profile ddm compose \
+#       ddm/siri-settings.toml \
+#       -o ./declarations/siri-settings
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's
+# group/team assignment.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/siri.settings.yaml). Verified against
+# contour's embedded schema:
+# `contour profile info com.apple.configuration.siri.settings --full`.
+
+intent_name = "siri-settings"
+
+[configuration]
+type = "com.apple.configuration.siri.settings"
+
+  [configuration.payload]
+  # Master switch — set to false to turn Siri off completely.
+  Enabled = true
+  # Keep Siri off the lock screen.
+  AllowWhileLocked = false
+  # Do not contribute Siri audio as user-generated content.
+  AllowUserGeneratedContent = false
+  # Force the profanity filter on.
+  ForceProfanityFilter = true
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

@@ -1,0 +1,43 @@
+# Managed keyboard settings.
+#
+# DDM bundle for `com.apple.configuration.keyboard.settings`. Every key
+# defaults to `true` in Apple's schema; this template states all eight
+# explicitly so an admin can flip individual typing aids.
+#
+# Ships a light-touch posture: dictation is turned off (it streams audio
+# to Apple), and the remaining typing aids are left on. Adjust to taste.
+#
+# Compose with:
+#   contour profile ddm compose \
+#       ddm/keyboard-settings.toml \
+#       -o ./declarations/keyboard-settings
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's
+# group/team assignment.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/keyboard.settings.yaml). Verified against
+# contour's embedded schema:
+# `contour profile info com.apple.configuration.keyboard.settings --full`.
+
+intent_name = "keyboard-settings"
+
+[configuration]
+type = "com.apple.configuration.keyboard.settings"
+
+  [configuration.payload]
+  # Dictation streams audio to Apple — off by default in this template.
+  AllowDictation = false
+  # Typing aids — left enabled; set any to false to restrict.
+  AllowAutoCorrection = true
+  AllowDefinitionLookup = true
+  AllowMathKeyboardSuggestions = true
+  AllowPredictiveText = true
+  AllowSlideToType = true
+  AllowSpellCheck = true
+  AllowTextReplacement = true
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"
