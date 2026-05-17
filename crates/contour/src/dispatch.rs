@@ -167,11 +167,11 @@ pub fn run(cli: Cli) -> Result<()> {
             contour_core::help_agents::generate_json(&cmd, command.as_deref(), &mut out)?;
             Ok(())
         }
-        Commands::Completions { shell } => {
-            use clap::CommandFactory;
-            contour_core::generate_completions(&mut Cli::command(), "contour", shell);
-            Ok(())
-        }
+        Commands::Completions {
+            shell,
+            install,
+            script,
+        } => crate::completions::run(shell, install, script),
         Commands::Init {
             path,
             name,

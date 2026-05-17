@@ -92,11 +92,34 @@ command/flag schema.
 
 ### `contour completions`
 
-Generates shell completions.
+Sets up shell tab-completion. Supports **zsh**, **bash**, and **fish**.
+
+```
+contour completions [SHELL] [--install] [--script]
+```
+
+| Form | What it does |
+|---|---|
+| `contour completions` | Detects the current shell from `$SHELL`, lets you confirm/pick, then prints the install guide |
+| `contour completions <shell>` | Prints a per-shell install guide — where the file goes, the rc line, how to reload |
+| `contour completions <shell> --install` | Writes the completion file to its conventional location and prints any one-time rc setup |
+| `contour completions <shell> --script` | Emits only the raw completion script to stdout, for piping or packaging |
 
 ```bash
-contour completions zsh > _contour     # also: bash | fish
+# Detect shell, print a tailored guide
+contour completions
+
+# Install directly
+contour completions zsh --install
+
+# Manual / packaging — raw script
+contour completions fish --script > ~/.config/fish/completions/contour.fish
 ```
+
+`--install` targets `~/.zfunc/_contour` (zsh), `~/.bash_completion.d/contour`
+(bash), or `~/.config/fish/completions/contour.fish` (fish). zsh and bash
+need a one-time rc line (printed after install); fish auto-loads its
+completions directory.
 
 ## Global flags
 
