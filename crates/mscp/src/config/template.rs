@@ -70,7 +70,7 @@ fn create_template_config(options: &InitOptions) -> Config {
                 name: baseline_name.clone(),
                 enabled: true,
                 branch: None,
-                team: None,
+                fleet: None,
                 labels: LabelConfig {
                     include_all: vec![baseline_label(&domain, baseline_name)],
                     include_any: vec![],
@@ -88,7 +88,7 @@ fn create_template_config(options: &InitOptions) -> Config {
                 name: "cis_lvl1".to_string(),
                 enabled: true,
                 branch: None,
-                team: Some("workstations".to_string()),
+                fleet: Some("workstations".to_string()),
                 labels: LabelConfig {
                     include_all: vec![format!("{domain}.mscp.cis-lvl1")],
                     include_any: vec![],
@@ -109,7 +109,7 @@ fn create_template_config(options: &InitOptions) -> Config {
                 name: "800-53r5_moderate".to_string(),
                 enabled: false,
                 branch: None,
-                team: Some("servers".to_string()),
+                fleet: Some("servers".to_string()),
                 labels: LabelConfig {
                     include_all: vec![format!("{domain}.mscp.800-53-moderate")],
                     include_any: vec![],
@@ -217,7 +217,7 @@ fn add_comments(toml_str: &str) -> String {
 #   name: Baseline name from mSCP baselines/ directory
 #   enabled: true | false
 #   branch: Optional git branch (e.g., "sequoia", "ios_18")
-#   team: Optional team name for Fleet
+#   fleet: Optional fleet name
 #   [baselines.labels]: Label targeting for progressive rollout
 #     include_all: All these labels must be present
 #     include_any: At least one of these labels must be present

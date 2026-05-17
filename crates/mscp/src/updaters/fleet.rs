@@ -1,46 +1,58 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::managers::baseline::baseline_path_to_team_path;
+use crate::managers::baseline::baseline_path_to_fleet_path;
 use contour_core::fleet_layout::FleetLayout;
 use contour_core::yaml_edit;
 
-/// Updates Fleet team YAML files to include baseline profiles and scripts.
+/// Updates Fleet YAML files to include baseline profiles and scripts.
 ///
 /// Uses line-based YAML editing (via `yaml_edit`) to preserve comments
 /// and formatting, rather than serde round-trips.
 #[derive(Debug)]
-pub struct TeamUpdater {
+pub struct FleetUpdater {
     output_base: PathBuf,
     baseline_name: String,
+    /// When true, the baseline's profiles are attached as a single
+    /// `*.mobileconfig` glob entry instead of one entry per file.
+    glob: bool,
 }
 
-impl TeamUpdater {
+impl FleetUpdater {
     pub fn new<P: AsRef<Path>>(output_base: P, baseline_name: String) -> Self {
         Self {
             output_base: output_base.as_ref().to_path_buf(),
             baseline_name,
+            glob: false,
         }
     }
 
-    /// Validate that all team names resolve to existing team files.
-    /// Bails with a clear error listing available teams if any are missing.
-    pub fn validate_teams(&self, team_names: &[String]) -> Result<()> {
+    /// Enable glob mode: attach the baseline as one `*.mobileconfig` glob
+    /// entry rather than a literal entry per profile.
+    #[must_use]
+    pub fn with_glob(mut self, glob: bool) -> Self {
+        self.glob = glob;
+        self
+    }
+
+    /// Validate that all fleet names resolve to existing fleet files.
+    /// Bails with a clear error listing available fleets if any are missing.
+    pub fn validate_fleets(&self, fleet_names: &[String]) -> Result<()> {
         let mut missing = Vec::new();
-        for team_name in team_names {
-            let team_file = self
+        for fleet_name in fleet_names {
+            let fleet_file = self
                 .output_base
                 .join("fleets")
-                .join(format!("{team_name}.yml"));
-            if !team_file.exists() {
-                missing.push(team_name.clone());
+                .join(format!("{fleet_name}.yml"));
+            if !fleet_file.exists() {
+                missing.push(fleet_name.clone());
             }
         }
 
         if !missing.is_empty() {
-            let available = self.list_available_teams()?;
+            let available = self.list_available_fleets()?;
             anyhow::bail!(
-                "Team files not found: {}\nAvailable teams: {}",
+                "Fleet files not found: {}\nAvailable fleets: {}",
                 missing.join(", "),
                 if available.is_empty() {
                     "(none)".to_string()
@@ -53,19 +65,19 @@ impl TeamUpdater {
         Ok(())
     }
 
-    /// Add baseline to specified teams using comment-preserving editing.
-    pub fn add_to_teams(&self, team_names: &[String]) -> Result<()> {
-        for team_name in team_names {
-            let team_file = self
+    /// Add baseline to specified fleets using comment-preserving editing.
+    pub fn add_to_fleets(&self, fleet_names: &[String]) -> Result<()> {
+        for fleet_name in fleet_names {
+            let fleet_file = self
                 .output_base
                 .join("fleets")
-                .join(format!("{team_name}.yml"));
+                .join(format!("{fleet_name}.yml"));
 
-            if !team_file.exists() {
-                let available = self.list_available_teams()?;
+            if !fleet_file.exists() {
+                let available = self.list_available_fleets()?;
                 anyhow::bail!(
-                    "Team file not found: {}\nAvailable teams: {}",
-                    team_file.display(),
+                    "Fleet file not found: {}\nAvailable fleets: {}",
+                    fleet_file.display(),
                     if available.is_empty() {
                         "(none)".to_string()
                     } else {
@@ -75,18 +87,18 @@ impl TeamUpdater {
             }
 
             tracing::info!(
-                "Adding baseline '{}' to team '{}'",
+                "Adding baseline '{}' to fleet '{}'",
                 self.baseline_name,
-                team_name
+                fleet_name
             );
 
-            let content = std::fs::read_to_string(&team_file)
-                .with_context(|| format!("Failed to read team file: {}", team_file.display()))?;
+            let content = std::fs::read_to_string(&fleet_file)
+                .with_context(|| format!("Failed to read fleet file: {}", fleet_file.display()))?;
 
             let mut modified = content.clone();
             let mut changes_made = false;
 
-            // Append profiles to controls.macos_settings.custom_settings
+            // Append profiles to controls.apple_settings.configuration_profiles
             if let Some(new_content) = self.append_profiles(&modified)? {
                 modified = new_content;
                 changes_made = true;
@@ -99,15 +111,27 @@ impl TeamUpdater {
             }
 
             if changes_made {
-                std::fs::write(&team_file, &modified).with_context(|| {
-                    format!("Failed to write team file: {}", team_file.display())
+                // Fail-closed: never overwrite an operator's fleet file with
+                // content that no longer parses. The line-based editors are
+                // heuristic; if a splice produced invalid YAML, abort and
+                // leave the original file byte-for-byte untouched.
+                if let Err(e) = yaml_serde::from_str::<yaml_serde::Value>(&modified) {
+                    anyhow::bail!(
+                        "refused to edit {}: the baseline append produced invalid YAML ({e}). \
+                         The file was left untouched — add the baseline manually.",
+                        fleet_file.display()
+                    );
+                }
+
+                std::fs::write(&fleet_file, &modified).with_context(|| {
+                    format!("Failed to write fleet file: {}", fleet_file.display())
                 })?;
 
-                tracing::info!("✓ Updated team: {}", team_name);
+                tracing::info!("✓ Updated fleet: {}", fleet_name);
             } else {
                 tracing::info!(
-                    "  Team '{}' already has baseline '{}' - no changes needed",
-                    team_name,
+                    "  Fleet '{}' already has baseline '{}' - no changes needed",
+                    fleet_name,
                     self.baseline_name
                 );
             }
@@ -157,8 +181,12 @@ impl TeamUpdater {
         Ok(())
     }
 
-    /// Append baseline profiles using line-based editing.
-    /// Returns `Some(modified)` if changes were made, `None` if all already present.
+    /// Append baseline profiles into `controls.apple_settings.configuration_profiles`
+    /// (current Fleet GitOps schema) using comment-preserving line editing.
+    ///
+    /// In glob mode the whole baseline is attached as a single
+    /// `*.mobileconfig` entry; otherwise one entry per profile is emitted.
+    /// Returns `Some(modified)` if changes were made, `None` if already present.
     fn append_profiles(&self, content: &str) -> Result<Option<String>> {
         let baseline_profiles = self.get_baseline_profiles()?;
 
@@ -167,28 +195,44 @@ impl TeamUpdater {
             return Ok(None);
         }
 
-        // Filter out profiles already present
         let label_name = format!("mscp-{}", self.baseline_name);
-        let mut entries: Vec<Vec<String>> = Vec::new();
 
-        for profile_path in &baseline_profiles {
-            if !content.contains(profile_path) {
-                entries.push(yaml_edit::format_profile_entry(
-                    profile_path,
-                    None,
-                    Some(std::slice::from_ref(&label_name)),
-                    None,
-                    6, // standard indent for custom_settings entries
-                ));
+        let entries: Vec<yaml_edit::ProfileListEntry> = if self.glob {
+            // One glob entry covering the baseline's profile directory.
+            let glob_path = glob_dir_from_profiles(&baseline_profiles)?;
+            if content.contains(&glob_path) {
+                return Ok(None);
             }
-        }
+            vec![yaml_edit::ProfileListEntry {
+                path: glob_path,
+                glob: true,
+                labels_include_all: vec![label_name],
+            }]
+        } else {
+            // One literal entry per profile, skipping any already present.
+            baseline_profiles
+                .iter()
+                .filter(|path| !content.contains(path.as_str()))
+                .map(|path| yaml_edit::ProfileListEntry {
+                    path: path.clone(),
+                    glob: false,
+                    labels_include_all: vec![label_name.clone()],
+                })
+                .collect()
+        };
 
         if entries.is_empty() {
             return Ok(None);
         }
 
-        tracing::info!("  Adding {} profiles", entries.len());
-        Ok(Some(yaml_edit::append_custom_settings(content, &entries)))
+        tracing::info!(
+            "  Adding {} profile entr{}",
+            entries.len(),
+            if entries.len() == 1 { "y" } else { "ies" }
+        );
+        Ok(Some(yaml_edit::append_apple_configuration_profiles(
+            content, &entries,
+        )))
     }
 
     /// Append baseline scripts using line-based editing.
@@ -299,7 +343,7 @@ impl TeamUpdater {
     /// Fleet v4.83+: baseline.toml lives at `mscp/{name}/baseline.toml` and
     /// stores profile paths relative from there (e.g.
     /// `../../platforms/macos/configuration-profiles/{name}/file.mobileconfig`).
-    /// Team YAML lives one level shallower (`fleets/{team}.yml`), so we drop
+    /// Fleet YAML lives one level shallower (`fleets/{fleet}.yml`), so we drop
     /// one leading `../` to convert.
     fn get_baseline_profiles(&self) -> Result<Vec<String>> {
         let baseline_file = self
@@ -318,7 +362,7 @@ impl TeamUpdater {
         let mut profiles = Vec::new();
 
         for profile in baseline.profiles {
-            profiles.push(baseline_path_to_team_path(&profile.path));
+            profiles.push(baseline_path_to_fleet_path(&profile.path));
         }
 
         Ok(profiles)
@@ -348,39 +392,53 @@ impl TeamUpdater {
                 .cloned()
                 .unwrap_or_else(|| format!("mscp-{}", self.baseline_name));
 
-            scripts.push((baseline_path_to_team_path(&script.path), label));
+            scripts.push((baseline_path_to_fleet_path(&script.path), label));
         }
 
         Ok(scripts)
     }
 
-    /// List available team files
-    fn list_available_teams(&self) -> Result<Vec<String>> {
-        let teams_dir = self.output_base.join("fleets");
+    /// List available fleet files
+    fn list_available_fleets(&self) -> Result<Vec<String>> {
+        let fleets_dir = self.output_base.join("fleets");
 
-        if !teams_dir.exists() {
+        if !fleets_dir.exists() {
             return Ok(vec![]);
         }
 
-        let mut teams = Vec::new();
+        let mut fleets = Vec::new();
 
-        for entry in std::fs::read_dir(&teams_dir)? {
+        for entry in std::fs::read_dir(&fleets_dir)? {
             let entry = entry?;
             let path = entry.path();
 
             if path.extension().and_then(|s| s.to_str()) == Some("yml")
                 && let Some(name) = path.file_stem().and_then(|s| s.to_str())
             {
-                // Skip example teams
+                // Skip example fleets
                 if !path.to_string_lossy().contains("example") {
-                    teams.push(name.to_string());
+                    fleets.push(name.to_string());
                 }
             }
         }
 
-        teams.sort();
-        Ok(teams)
+        fleets.sort();
+        Ok(fleets)
     }
+}
+
+/// Derive a single `*.mobileconfig` glob path from a baseline's profile
+/// list. All profiles in one baseline share a directory, so the glob is
+/// that common parent directory plus `/*.mobileconfig`.
+fn glob_dir_from_profiles(profiles: &[String]) -> Result<String> {
+    let first = profiles
+        .first()
+        .context("baseline has no profiles to derive a glob from")?;
+    let dir = std::path::Path::new(first)
+        .parent()
+        .and_then(|p| p.to_str())
+        .with_context(|| format!("profile path has no parent directory: {first}"))?;
+    Ok(format!("{dir}/*.mobileconfig"))
 }
 
 #[cfg(test)]
@@ -391,23 +449,23 @@ mod tests {
     #[test]
     fn test_profile_path_conversion() {
         // Fleet v4.83+: baseline.toml at mscp/{name}/baseline.toml stores
-        // paths relative from there (`../../platforms/...`). Team YAML at
-        // fleets/{team}.yml is one level shallower, so the helper drops
+        // paths relative from there (`../../platforms/...`). Fleet YAML at
+        // fleets/{fleet}.yml is one level shallower, so the helper drops
         // one leading `../`.
         let baseline_relative = "../../platforms/macos/configuration-profiles/800-53r5_high/com.apple.security.firewall.mobileconfig";
         let expected = "../platforms/macos/configuration-profiles/800-53r5_high/com.apple.security.firewall.mobileconfig";
-        assert_eq!(baseline_path_to_team_path(baseline_relative), expected);
+        assert_eq!(baseline_path_to_fleet_path(baseline_relative), expected);
     }
 
     #[test]
-    fn test_validate_teams_missing() {
+    fn test_validate_fleets_missing() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let teams_dir = tmp.path().join("fleets");
-        fs::create_dir_all(&teams_dir).unwrap();
-        fs::write(teams_dir.join("alpha.yml"), "name: alpha\n").unwrap();
+        let fleets_dir = tmp.path().join("fleets");
+        fs::create_dir_all(&fleets_dir).unwrap();
+        fs::write(fleets_dir.join("alpha.yml"), "name: alpha\n").unwrap();
 
-        let updater = TeamUpdater::new(tmp.path(), "cis_lvl2".to_string());
-        let result = updater.validate_teams(&["alpha".to_string(), "nonexistent".to_string()]);
+        let updater = FleetUpdater::new(tmp.path(), "cis_lvl2".to_string());
+        let result = updater.validate_fleets(&["alpha".to_string(), "nonexistent".to_string()]);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("nonexistent"));
@@ -415,17 +473,17 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_teams_all_present() {
+    fn test_validate_fleets_all_present() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let teams_dir = tmp.path().join("fleets");
-        fs::create_dir_all(&teams_dir).unwrap();
-        fs::write(teams_dir.join("alpha.yml"), "name: alpha\n").unwrap();
-        fs::write(teams_dir.join("beta.yml"), "name: beta\n").unwrap();
+        let fleets_dir = tmp.path().join("fleets");
+        fs::create_dir_all(&fleets_dir).unwrap();
+        fs::write(fleets_dir.join("alpha.yml"), "name: alpha\n").unwrap();
+        fs::write(fleets_dir.join("beta.yml"), "name: beta\n").unwrap();
 
-        let updater = TeamUpdater::new(tmp.path(), "cis_lvl2".to_string());
+        let updater = FleetUpdater::new(tmp.path(), "cis_lvl2".to_string());
         assert!(
             updater
-                .validate_teams(&["alpha".to_string(), "beta".to_string()])
+                .validate_fleets(&["alpha".to_string(), "beta".to_string()])
                 .is_ok()
         );
     }
@@ -440,7 +498,7 @@ mod tests {
             "# Fleet GitOps default configuration\norg_settings:\n  org_name: Test\n\n# Labels for scoping\nlabels:\n  - path: ./labels/existing.yml\n",
         ).unwrap();
 
-        let updater = TeamUpdater::new(tmp.path(), "cis_lvl2".to_string());
+        let updater = FleetUpdater::new(tmp.path(), "cis_lvl2".to_string());
         updater.add_labels_to_default().unwrap();
 
         let content = fs::read_to_string(&default_file).unwrap();
@@ -463,7 +521,7 @@ mod tests {
         )
         .unwrap();
 
-        let updater = TeamUpdater::new(tmp.path(), "cis_lvl2".to_string());
+        let updater = FleetUpdater::new(tmp.path(), "cis_lvl2".to_string());
         updater.add_labels_to_default().unwrap();
 
         let content = fs::read_to_string(&default_file).unwrap();
@@ -473,9 +531,9 @@ mod tests {
 
     #[test]
     fn test_append_profiles_preserves_comments() {
-        let content = "# Team: Blue\nname: fleet-air-blue\n\n# Controls section\ncontrols:\n  macos_settings:\n    custom_settings:\n      - path: ../lib/macos/configuration-profiles/existing.mobileconfig\n";
+        let content = "# Fleet: Blue\nname: fleet-air-blue\n\n# Controls section\ncontrols:\n  apple_settings:\n    configuration_profiles:\n      - path: ../lib/macos/configuration-profiles/existing.mobileconfig\n";
 
-        let updater = TeamUpdater::new("/tmp/test", "cis_lvl2".to_string());
+        let updater = FleetUpdater::new("/tmp/test", "cis_lvl2".to_string());
         // append_profiles reads from baseline.toml which doesn't exist — returns None
         let result = updater.append_profiles(content).unwrap();
         assert!(result.is_none());
@@ -483,9 +541,9 @@ mod tests {
 
     #[test]
     fn test_append_scripts_preserves_comments() {
-        let content = "# Team: Blue\nname: fleet-air-blue\n\n# Controls section\ncontrols:\n  scripts:\n    - path: ../lib/macos/scripts/existing.sh\n";
+        let content = "# Fleet: Blue\nname: fleet-air-blue\n\n# Controls section\ncontrols:\n  scripts:\n    - path: ../lib/macos/scripts/existing.sh\n";
 
-        let updater = TeamUpdater::new("/tmp/test", "cis_lvl2".to_string());
+        let updater = FleetUpdater::new("/tmp/test", "cis_lvl2".to_string());
         let result = updater.append_scripts(content).unwrap();
         assert!(result.is_none());
     }

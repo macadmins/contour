@@ -50,7 +50,8 @@ pub fn generate_baseline(
     munki_compliance_options: Option<MunkiComplianceOptions>,
     munki_script_options: Option<MunkiScriptOptions>,
     no_labels: bool,
-    team_names: Option<Vec<String>>,
+    fleet_names: Option<Vec<String>>,
+    fleet_glob: bool,
     fleet_mode: bool,
     jamf_exclude_conflicts: bool,
     generate_ddm: bool,
@@ -219,34 +220,35 @@ pub fn generate_baseline(
         }
     }
 
-    // Step 3: Update team files if requested
-    if let Some(teams) = team_names {
+    // Step 3: Update fleet files if requested
+    if let Some(teams) = fleet_names {
         // Validate teams upfront before doing any work
         {
-            use crate::updaters::TeamUpdater;
-            let updater = TeamUpdater::new(&output_path, baseline_name.clone());
-            updater.validate_teams(&teams)?;
+            use crate::updaters::FleetUpdater;
+            let updater = FleetUpdater::new(&output_path, baseline_name.clone());
+            updater.validate_fleets(&teams)?;
         };
 
         if dry_run {
             if output_mode == OutputMode::Human && !batch_mode {
-                println!("\nWould update team files:");
+                println!("\nWould update fleet files:");
                 for team in &teams {
-                    println!("  • Add baseline to team: {team}");
+                    println!("  • Add baseline to fleet: {team}");
                 }
                 println!("  • Update default.yml with labels");
             }
         } else {
-            tracing::info!("Updating team files...");
-            use crate::updaters::TeamUpdater;
+            tracing::info!("Updating fleet files...");
+            use crate::updaters::FleetUpdater;
 
-            let updater = TeamUpdater::new(&output_path, baseline_name.clone());
+            let updater =
+                FleetUpdater::new(&output_path, baseline_name.clone()).with_glob(fleet_glob);
 
             // Add labels to default.yml
             updater.add_labels_to_default()?;
 
             // Add baseline to specified teams
-            updater.add_to_teams(&teams)?;
+            updater.add_to_fleets(&teams)?;
 
             if output_mode == OutputMode::Human && !batch_mode {
                 println!("{}", "✓ Team files updated successfully".green());
@@ -1067,7 +1069,8 @@ pub fn generate_all_baselines(
                     munki_compliance_options.clone(),
                     munki_script_options.clone(),
                     false, // no_labels (default to generating labels)
-                    None,  // team_names - not used in generate-all mode
+                    None,  // fleet_names - not used in generate-all mode
+                    false, // fleet_glob - not used in generate-all mode
                     fleet_mode,
                     jamf_exclude_conflicts,
                     generate_ddm,
@@ -1120,7 +1123,8 @@ pub fn generate_all_baselines(
                 munki_compliance_options.clone(),
                 munki_script_options.clone(),
                 false, // no_labels (default to generating labels)
-                None,  // team_names - not used in generate-all mode
+                None,  // fleet_names - not used in generate-all mode
+                false, // fleet_glob - not used in generate-all mode
                 fleet_mode,
                 jamf_exclude_conflicts,
                 generate_ddm,

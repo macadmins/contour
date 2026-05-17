@@ -86,7 +86,7 @@ pub struct ConfiguredBaselineInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub team: Option<String>,
+    pub fleet: Option<String>,
 }
 
 /// mSCP repository information
@@ -238,7 +238,7 @@ fn gather_project_info(config_path: &Path, config_dir: &Path) -> Result<ProjectI
                     name: b.name.clone(),
                     enabled: b.enabled,
                     branch: b.branch.clone(),
-                    team: b.team.clone(),
+                    fleet: b.fleet.clone(),
                 })
                 .collect()
         })
@@ -473,8 +473,8 @@ fn print_human_output(info: &ProjectInfo, config_dir: &Path) {
             if let Some(branch) = &baseline.branch {
                 details.push(format!("branch: {branch}"));
             }
-            if let Some(team) = &baseline.team {
-                details.push(format!("team: {team}"));
+            if let Some(fleet) = &baseline.fleet {
+                details.push(format!("fleet: {fleet}"));
             }
             if !baseline.enabled {
                 details.push("disabled".to_string());

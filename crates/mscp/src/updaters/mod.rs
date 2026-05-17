@@ -1,3 +1,3 @@
-pub mod team;
+pub mod fleet;
 
-pub use team::TeamUpdater;
+pub use fleet::FleetUpdater;

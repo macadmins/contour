@@ -12,8 +12,11 @@ Aimed at Mac admins deploying security compliance baselines across Apple platfor
 # Initialize a project with Fleet mode
 contour mscp init --org com.yourorg --name "Your Org" --fleet --sync
 
-# Generate a baseline
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output --fleet-mode
+# Generate a baseline - for Fleet with DDM declarations
+contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output --fleet-mode --generate-ddm --remove-consent-text 
+
+# Generate a baseline - for Jamf with consent text removed
+contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output --jamf-mode --remove-consent-text
 
 # Or generate all configured baselines at once
 contour mscp generate-all -c mscp.toml
@@ -252,9 +255,24 @@ contour mscp generate [flags]
 |------|-------------|---------|
 | `--fleet-mode` | Enable Fleet conflict filtering | `false` |
 | `--no-labels` | Skip generating Fleet label definitions | `false` |
-| `--teams <TEAMS>` | Teams to add baseline to (comma-separated) | none |
+| `--fleets <FLEETS>` | Fleets to add the baseline to (comma-separated) | none |
+| `--glob` | With `--fleets`, attach the baseline as one `*.mobileconfig` glob entry instead of one entry per profile | `false` |
 | `--script-mode <MODE>` | `combined`, `granular`, `bundled`, or `both` | `bundled` |
 | `--fragment` | Generate Fleet fragment directory | `false` |
+
+`--fleets` appends the baseline into each named fleet file: profiles go
+into `controls.apple_settings.configuration_profiles` (current Fleet
+GitOps schema), scripts into `controls.scripts`, and the baseline's label
+into `default.yml`. The named fleet files must already exist. Edits are
+comment- and formatting-preserving, and **fail-closed** — if an edit
+would produce invalid YAML the fleet file is left byte-for-byte untouched
+and the run errors, so an existing fleet file is never corrupted.
+
+`--glob` emits a single `- paths: …/<baseline>/*.mobileconfig` entry
+(Fleet's glob form — note `paths:`, not `path:`) instead of one `- path:`
+entry per profile. The glob is scoped to the baseline's own profile
+directory, so it never matches profiles belonging to other baselines or
+the operator's existing entries.
 
 **Munki options (experimental):**
 
@@ -278,7 +296,11 @@ contour mscp generate [flags]
 ```bash
 # Generate CIS Level 1 for Fleet with DDM
 contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output \
-  --fleet-mode --generate-ddm --org com.acme --teams "Engineering,Security"
+  --fleet-mode --generate-ddm --org com.acme --fleets "Engineering,Security"
+
+# Generate 800-53 High and attach it to existing fleet files as a glob
+contour mscp generate -m ./macos_security -b 800-53r5_high -o ./output \
+  --fleet-mode --fleets "workstations,servers" --glob
 
 # Generate STIG for Jamf Pro
 contour mscp generate -m ./macos_security -b stig -o ./output \
@@ -431,7 +453,7 @@ contour mscp deduplicate [flags]
 | `-o, --output <DIR>` | Output directory containing GitOps structure | **required** |
 | `-b, --baselines <NAMES>` | Baselines to deduplicate (comma-separated) | all baselines |
 | `-p, --platform <PLATFORM>` | Platform (`macOS`, `iOS`, `visionOS`) | `macOS` |
-| `--jamf-mode` | Generate Jamf Pro Smart Group scoping templates | `false` |
+| `--jamf-mode` | Also emit Jamf Smart Group scoping templates (the Jamf counterpart to Fleet labels) for the deduplicated baselines | `false` |
 | `--dry-run` | Preview without making changes | `false` |
 
 ```bash
@@ -454,7 +476,7 @@ contour mscp clean [flags]
 |------|-------------|---------|
 | `-b, --baseline <NAME>` | Baseline name to remove | **required** |
 | `-o, --output <DIR>` | Output directory | **required** |
-| `-f, --force` | Force removal even if referenced by team files | `false` |
+| `-f, --force` | Force removal even if referenced by fleet files | `false` |
 
 ```bash
 contour mscp clean -b cis_lvl1 -o ./output
@@ -462,7 +484,7 @@ contour mscp clean -b cis_lvl1 -o ./output
 
 #### `mscp migrate`
 
-Update team file references when moving from one baseline to another.
+Update fleet file references when moving from one baseline to another.
 
 ```
 contour mscp migrate [flags]
@@ -472,13 +494,13 @@ contour mscp migrate [flags]
 |------|-------------|---------|
 | `--from <NAME>` | Baseline to migrate from | **required** |
 | `--to <NAME>` | Baseline to migrate to | **required** |
-| `-t, --team <TEAM>` | Team file to migrate | **required** |
+| `-f, --fleet <FLEET>` | Fleet file to migrate | **required** |
 | `-o, --output <DIR>` | Output directory | **required** |
 | `--no-backup` | Skip creating backup file | `false` |
 
 ```bash
-# Migrate team from CIS Level 1 to Level 2
-contour mscp migrate --from cis_lvl1 --to cis_lvl2 -t engineering -o ./output
+# Migrate a fleet from CIS Level 1 to Level 2
+contour mscp migrate --from cis_lvl1 --to cis_lvl2 -f engineering -o ./output
 ```
 
 ---
@@ -798,12 +820,12 @@ contour mscp schema rule os_airdrop_disable --json
 
 ### Single baseline for Fleet
 
-Generate one baseline, add to a team, and verify:
+Generate one baseline, add it to a fleet, and verify:
 
 ```bash
 contour mscp init --org com.acme --fleet --sync
 contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output \
-  --fleet-mode --teams "Engineering" --org com.acme
+  --fleet-mode --fleets "Engineering" --org com.acme
 contour mscp verify -o ./output
 ```
 
@@ -902,10 +924,10 @@ contour mscp diff -o ./output -b cis_lvl1 -f markdown
 
 ### Baseline migration
 
-Move a team from one baseline to another:
+Move a fleet from one baseline to another:
 
 ```bash
-contour mscp migrate --from cis_lvl1 --to cis_lvl2 -t engineering -o ./output
+contour mscp migrate --from cis_lvl1 --to cis_lvl2 -f engineering -o ./output
 contour mscp verify -o ./output
 ```
 

@@ -17,7 +17,7 @@ pub struct ConfigDerivedOptions {
     pub structure: OutputStructure,
     pub jamf_exclude_conflicts: bool,
     pub generate_ddm: bool,
-    pub team_names: Option<Vec<String>>,
+    pub fleet_names: Option<Vec<String>>,
 }
 
 /// Build option bundle from config for a single baseline.
@@ -101,7 +101,7 @@ pub fn build_options_from_config(
         structure,
         jamf_exclude_conflicts: config.settings.jamf.exclude_conflicts,
         generate_ddm: config.settings.generate_ddm,
-        team_names: baseline_config.team.as_ref().map(|t| vec![t.clone()]),
+        fleet_names: baseline_config.fleet.as_ref().map(|t| vec![t.clone()]),
     }
 }
 
@@ -142,8 +142,8 @@ pub fn generate_from_config(config: Config) -> Result<()> {
         if !baseline_config.excluded_rules.is_empty() {
             println!("  Excluded rules: {}", baseline_config.excluded_rules.len());
         }
-        if let Some(ref team) = baseline_config.team {
-            println!("  Team: {team}");
+        if let Some(ref fleet) = baseline_config.fleet {
+            println!("  Fleet: {fleet}");
         }
 
         // Switch branch if specified
@@ -163,7 +163,8 @@ pub fn generate_from_config(config: Config) -> Result<()> {
             opts.munki_compliance_options,
             opts.munki_script_options,
             opts.no_labels,
-            opts.team_names,
+            opts.fleet_names,
+            false, // fleet_glob — --glob is a CLI-flag-mode option
             opts.fleet_mode,
             opts.jamf_exclude_conflicts,
             opts.generate_ddm,

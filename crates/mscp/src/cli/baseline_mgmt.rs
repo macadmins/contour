@@ -89,10 +89,10 @@ pub fn clean_baseline(baseline: String, output: PathBuf, force: bool) -> Result<
     }
 }
 
-pub fn migrate_team_file(
+pub fn migrate_fleet_file(
     from: String,
     to: String,
-    team: PathBuf,
+    fleet: PathBuf,
     output: PathBuf,
     create_backup: bool,
 ) -> Result<()> {
@@ -100,22 +100,22 @@ pub fn migrate_team_file(
 
     println!(
         "{} '{}' → '{}'...",
-        "Migrating team file from".cyan(),
+        "Migrating fleet file from".cyan(),
         from,
         to
     );
-    println!("{} {}", "Team file:".dimmed(), team.display());
+    println!("{} {}", "Fleet file:".dimmed(), fleet.display());
 
-    // Resolve team file path relative to output if needed
-    let team_path = if team.is_absolute() {
-        team
+    // Resolve fleet file path relative to output if needed
+    let fleet_path = if fleet.is_absolute() {
+        fleet
     } else {
-        output.join("fleets").join(&team)
+        output.join("fleets").join(&fleet)
     };
 
-    match manager.migrate_team_file(&team_path, &from, &to, create_backup) {
+    match manager.migrate_fleet_file(&fleet_path, &from, &to, create_backup) {
         Ok(report) => {
-            println!("\n{}", "✓ Successfully migrated team file".green());
+            println!("\n{}", "✓ Successfully migrated fleet file".green());
             println!(
                 "  {} {} path reference(s) updated",
                 "-".dimmed(),
@@ -128,7 +128,7 @@ pub fn migrate_team_file(
             );
 
             if create_backup {
-                let backup_path = team_path.with_extension("yml.bak");
+                let backup_path = fleet_path.with_extension("yml.bak");
                 println!(
                     "  {} Backup created: {}",
                     "-".dimmed(),
