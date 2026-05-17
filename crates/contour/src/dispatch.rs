@@ -10,7 +10,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{Cli, Commands, TrainerTool};
 use contour_core::trainer::workflows::{
-    MscpWorkflow, PppcWorkflow, ProfileWorkflow, SantaWorkflow,
+    BtmWorkflow, ConfigWorkflow, MscpWorkflow, PppcWorkflow, ProfileWorkflow, SantaWorkflow,
 };
 use contour_core::trainer::{TrainerContext, TrainerWorkflow};
 
@@ -218,6 +218,14 @@ fn dispatch_trainer(tool: &TrainerTool, cli: &Cli) -> Result<()> {
         }
         TrainerTool::Profile => {
             let workflow = ProfileWorkflow::default_workflow();
+            workflow.run(&ctx)
+        }
+        TrainerTool::Btm => {
+            let workflow = BtmWorkflow::default_workflow();
+            workflow.run(&ctx)
+        }
+        TrainerTool::Config => {
+            let workflow = ConfigWorkflow::default_workflow();
             workflow.run(&ctx)
         }
     }
