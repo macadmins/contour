@@ -11,6 +11,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+mod completions;
 mod dispatch;
 mod init;
 mod osquery;
@@ -278,27 +279,31 @@ pub enum Commands {
         command: Option<String>,
     },
 
-    /// Generate shell completions
-    #[command(
-        hide = true,
-        after_long_help = "\
-Install completions for your shell:
-
-  Zsh:
-    contour completions zsh > ~/.zfunc/_contour
-    autoload -Uz compinit && compinit
-
-  Bash:
-    contour completions bash > ~/.bash_completion.d/contour
-    source ~/.bash_completion.d/contour
-
-  Fish:
-    contour completions fish > ~/.config/fish/completions/contour.fish"
-    )]
+    /// Shell completions — install guide, installer, or raw script
+    #[command(long_about = "Set up shell tab-completion for contour.\n\
+                      \n\
+                      With no shell argument the current shell is detected from\n\
+                      $SHELL and confirmed interactively. By default a per-shell\n\
+                      install guide is printed; `--install` writes the completion\n\
+                      file to its conventional location; `--script` emits only the\n\
+                      raw completion script (for piping or packaging).\n\
+                      \n\
+                      Supported shells: zsh, bash, fish.\n\
+                      \n\
+                      Examples:\n  \
+                      contour completions                 # detect + interactive guide\n  \
+                      contour completions zsh --install   # write the completion file\n  \
+                      contour completions fish --script > ~/.config/fish/completions/contour.fish")]
     Completions {
-        /// Target shell
+        /// Target shell (zsh, bash, fish). Omit to detect and pick interactively.
         #[arg(value_enum)]
-        shell: clap_complete::Shell,
+        shell: Option<crate::completions::ShellKind>,
+        /// Write the completion file to its conventional location
+        #[arg(long)]
+        install: bool,
+        /// Emit only the raw completion script to stdout (for piping/packaging)
+        #[arg(long, conflicts_with = "install")]
+        script: bool,
     },
 }
 
