@@ -1758,6 +1758,15 @@ fn build_interactive_recipe(
 }
 
 /// Build a plist Dictionary from a schema manifest, applying any field overrides.
+/// ProfileManifests / ProfileCreator metadata keys — `PFC_*`
+/// (ProfileCreator widget state, e.g. `PFC_SegmentedControl_0`) and
+/// `pfm_*` (manifest metadata). Some scraped schemas carry these as if
+/// they were payload keys; they are editor artifacts, never real Apple
+/// payload keys, and must not be emitted into generated profiles.
+fn is_profilemanifests_metadata_key(name: &str) -> bool {
+    name.starts_with("PFC_") || name.starts_with("pfm_")
+}
+
 fn build_payload_from_schema(
     manifest: &crate::schema::PayloadManifest,
     overrides: &std::collections::BTreeMap<String, toml::Value>,
@@ -1801,6 +1810,10 @@ fn build_payload_from_schema(
                 for ci in child_indices {
                     let child_name = &manifest.field_order[ci];
                     let child_field = &manifest.fields[child_name];
+
+                    if is_profilemanifests_metadata_key(child_name) {
+                        continue;
+                    }
 
                     // Check override
                     if let Some(ov) = overrides.get(child_name) {
@@ -1862,6 +1875,13 @@ fn build_payload_from_schema(
             continue;
         }
 
+        // ProfileManifests/ProfileCreator metadata keys are editor
+        // artifacts, never real Apple payload keys — never emit them,
+        // even when a scraped schema marks them required.
+        if is_profilemanifests_metadata_key(field_name) {
+            continue;
+        }
+
         // Check override
         if let Some(override_val) = overrides.get(field_name) {
             apply_nested_field(&mut dict, field_name, toml_to_plist_resolved(override_val));
@@ -1895,6 +1915,77 @@ mod tests {
     fn test_toml_to_plist_string() {
         let val = toml::Value::String("hello".into());
         assert_eq!(toml_to_plist(&val), Value::String("hello".into()));
+    }
+
+    #[test]
+    fn test_is_profilemanifests_metadata_key() {
+        assert!(is_profilemanifests_metadata_key("PFC_SegmentedControl_0"));
+        assert!(is_profilemanifests_metadata_key("pfm_title"));
+        assert!(!is_profilemanifests_metadata_key("DisabledPreferencePanes"));
+        assert!(!is_profilemanifests_metadata_key("allowAirDrop"));
+    }
+
+    #[test]
+    fn test_build_payload_skips_profilemanifests_metadata() {
+        use crate::schema::PayloadManifest;
+        use crate::schema::types::{FieldFlags, Platforms};
+
+        let field = |name: &str| FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Boolean,
+            // Required on purpose — a scraped schema can wrongly mark the
+            // ProfileCreator artifact required; the generator must still
+            // drop it.
+            flags: FieldFlags {
+                required: true,
+                ..FieldFlags::default()
+            },
+            title: String::new(),
+            description: String::new(),
+            default: None,
+            allowed_values: vec![],
+            depth: 0,
+            parent_key: None,
+            platforms: vec![],
+            min_version: None,
+            deprecated_in: None,
+            introduced_by_platform: std::collections::HashMap::new(),
+            deprecated_by_platform: std::collections::HashMap::new(),
+            combinetype: None,
+        };
+
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("allowAirDrop".to_string(), field("allowAirDrop"));
+        fields.insert(
+            "PFC_SegmentedControl_0".to_string(),
+            field("PFC_SegmentedControl_0"),
+        );
+        let manifest = PayloadManifest {
+            payload_type: "com.apple.applicationaccess".to_string(),
+            title: "Restrictions".to_string(),
+            description: String::new(),
+            platforms: Platforms::parse("m"),
+            min_versions: std::collections::HashMap::new(),
+            os_support: std::collections::HashMap::new(),
+            apply_mode: None,
+            category: "apple".to_string(),
+            fields,
+            field_order: vec![
+                "allowAirDrop".to_string(),
+                "PFC_SegmentedControl_0".to_string(),
+            ],
+            segments: vec![],
+        };
+
+        let dict = build_payload_from_schema(&manifest, &std::collections::BTreeMap::new(), false);
+        assert!(
+            dict.contains_key("allowAirDrop"),
+            "real key must be emitted"
+        );
+        assert!(
+            !dict.contains_key("PFC_SegmentedControl_0"),
+            "ProfileCreator metadata key must not leak into generated profiles"
+        );
     }
 
     #[test]

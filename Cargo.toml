@@ -23,7 +23,7 @@ clap_complete = "4.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 yaml_serde = "0.10"
-toml = "0.9"
+toml = "1"
 plist = "1.8"
 
 # Error handling
@@ -57,7 +57,7 @@ chrono = { version = "0.4", features = ["serde"] }
 regex = "1.12"
 
 # Validation
-jsonschema = "0.40"
+jsonschema = "0.46"
 
 # Git (for mscp)
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-openssl", "vendored-libgit2"] }
@@ -69,16 +69,16 @@ inquire = "0.9"
 csv = "1.4"
 
 # CEL (for santa bundle classification)
-cel-interpreter = "0.8"
+cel-interpreter = "0.10"
 
 # Arrow/Parquet (for mdm-schema)
-arrow = "54"
-parquet = { version = "54", features = ["arrow"] }
+arrow = "58"
+parquet = { version = "58", features = ["arrow"] }
 bytes = "1"
 indexmap = "2"
 
 # Diff
-similar = "2.7"
+similar = "3"
 
 # Directories
 dirs = "6.0"
