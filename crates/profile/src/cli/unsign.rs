@@ -502,12 +502,10 @@ fn unsign_file(input: &Path, output: &Path, _config: Option<&ProfileConfig>) -> 
         return Ok(());
     }
 
-    // Fallback to manual extraction
+    // Fallback to manual, in-memory extraction.
     let data = fs::read(input).with_context(|| format!("Failed to read file: {input_str}"))?;
 
-    let unsigned_data = extract_unsigned_profile(&data)?;
-
-    let formatted_data = reformat_xml(&unsigned_data)?;
+    let formatted_data = unsign_bytes(&data)?;
 
     fs::write(output, &formatted_data)
         .with_context(|| format!("Failed to write output: {output_str}"))?;
@@ -530,6 +528,15 @@ fn try_security_cms(input: &str, output: &str) -> Result<bool> {
         }
         Err(_) => Ok(false),
     }
+}
+
+/// Strip a CMS/PKCS#7 signature from profile `data` in memory, returning
+/// the reformatted inner `.mobileconfig` XML. Bare XML input is returned
+/// reformatted but otherwise unchanged. This is the in-memory core shared
+/// by `unsign` (file fallback path) and `command decode`.
+pub(crate) fn unsign_bytes(data: &[u8]) -> Result<Vec<u8>> {
+    let unsigned = extract_unsigned_profile(data)?;
+    reformat_xml(&unsigned)
 }
 
 fn extract_unsigned_profile(data: &[u8]) -> Result<Vec<u8>> {
@@ -651,5 +658,30 @@ mod tests {
             output,
             Path::new("/some/path/profile-unsigned.mobileconfig")
         );
+    }
+
+    #[test]
+    fn test_unsign_bytes_passthrough_xml() {
+        let xml = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <plist version=\"1.0\"><dict><key>PayloadType</key>\
+            <string>Configuration</string></dict></plist>";
+        let out = unsign_bytes(xml).expect("bare XML should pass through");
+        assert!(out.starts_with(b"<?xml"));
+        let v: plist::Value = plist::from_bytes(&out).unwrap();
+        assert!(v.as_dictionary().is_some());
+    }
+
+    #[test]
+    fn test_unsign_bytes_extracts_embedded_xml() {
+        // A definite-length DER SEQUENCE prefix followed by an embedded XML
+        // profile — mimics how the inner profile sits inside CMS bytes.
+        let xml = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>\
+            <key>PayloadType</key><string>Configuration</string></dict></plist>";
+        let mut blob = vec![0x30u8, 0x82, 0x00, 0x10, 0x06, 0x09, 0x2a, 0x00, 0x00, 0x00];
+        blob.extend_from_slice(xml);
+        let out = unsign_bytes(&blob).expect("should carve XML out of the blob");
+        assert!(out.starts_with(b"<?xml"));
+        let v: plist::Value = plist::from_bytes(&out).unwrap();
+        assert!(v.as_dictionary().is_some());
     }
 }
