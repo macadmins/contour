@@ -849,14 +849,15 @@ fn is_binary_plist(data: &[u8]) -> bool {
     data.len() >= 6 && &data[0..6] == b"bplist"
 }
 
-/// Check if data is a signed PKCS#7 profile
+/// Check if data is a signed PKCS#7 profile.
 fn is_signed_profile(data: &[u8]) -> bool {
-    // PKCS#7/CMS signed data starts with ASN.1 SEQUENCE (0x30)
-    // followed by length encoding (0x80 for indefinite, or other values)
+    // CMS/PKCS#7 signed data is a DER SEQUENCE: tag 0x30, then a length
+    // octet — 0x80 (indefinite) or 0x81/0x82/0x83 (definite, 1-3 length
+    // bytes). Real MDM payloads are definite-length.
     if data.len() < 10 {
         return false;
     }
-    data[0] == 0x30 && (data[1] == 0x80 || data[1] == 0x82 || data[1] == 0x83)
+    data[0] == 0x30 && matches!(data[1], 0x80..=0x83)
 }
 
 /// Unsign profile using macOS security cms command
@@ -1774,5 +1775,26 @@ mod tests {
         let version_pos = restored.find("<key>PayloadVersion</key>").unwrap();
         let version_comment_pos = restored.find("<!-- Version info -->").unwrap();
         assert!(version_comment_pos < version_pos);
+    }
+
+    #[test]
+    fn test_is_signed_profile_der_lengths() {
+        // 0x81 (definite-length, 1 length byte)
+        assert!(is_signed_profile(&[0x30, 0x81, 0xFF, 0, 0, 0, 0, 0, 0, 0]));
+
+        // 0x82 (definite-length, 2 length bytes)
+        assert!(is_signed_profile(&[0x30, 0x82, 0, 0, 0, 0, 0, 0, 0, 0]));
+
+        // 0x80 (indefinite-length)
+        assert!(is_signed_profile(&[0x30, 0x80, 0, 0, 0, 0, 0, 0, 0, 0]));
+
+        // 0x83 (definite-length, 3 length bytes)
+        assert!(is_signed_profile(&[0x30, 0x83, 0, 0, 0, 0, 0, 0, 0, 0]));
+
+        // Not a SEQUENCE tag
+        assert!(!is_signed_profile(b"<?xml version=\"1.0\"?>"));
+
+        // Too short
+        assert!(!is_signed_profile(&[0x30, 0x81]));
     }
 }
