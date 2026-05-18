@@ -471,6 +471,13 @@ pub fn handle_command_decode(
     output: Option<&str>,
     output_mode: OutputMode,
 ) -> Result<()> {
+    if output_mode == OutputMode::Json && output.is_some() {
+        anyhow::bail!(
+            "`--output` and `--json` cannot be combined: `--json` emits the profile \
+             inside the JSON object on stdout. Use one or the other."
+        );
+    }
+
     let bytes = if input == "-" {
         let mut buf = Vec::new();
         std::io::stdin()
