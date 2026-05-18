@@ -661,6 +661,9 @@ fn run(cli: Cli) -> Result<()> {
             CommandAction::Info { command_type } => {
                 cli::command::handle_command_info(&command_type, output_mode)?;
             }
+            CommandAction::Decode { input, output } => {
+                cli::command::handle_command_decode(&input, output.as_deref(), output_mode)?;
+            }
         },
         Commands::Synthesize {
             paths,

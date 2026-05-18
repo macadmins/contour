@@ -1208,6 +1208,14 @@ pub enum CommandAction {
         /// Command type
         command_type: String,
     },
+    /// Decode an MDM InstallProfile command into its inner profile
+    Decode {
+        /// MDM command plist file, or `-` to read from stdin
+        input: String,
+        /// Write the inner profile to this file (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
