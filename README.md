@@ -33,16 +33,22 @@ Two modes — hand it to an AI agent, or run the CLI directly on macOS or Linux.
 
 ### As an AI skill
 
-Because validation is baked into every generator, Contour is safe to hand to an agent. Install it as a skill for Claude Code (and similar):
+Because validation is baked into every generator, Contour is safe to hand to an AI agent. Install it as a skill for Claude Code (and similar), or let the agent call the CLI directly:
 
 ```bash
+# Install as a Claude Code skill — agent receives Apple schema and SOP routing
 contour setup-agent
+
+# Or let agent call the CLI directly — enables easy discovery of commands index and usage
+contour help-ai
 ```
 
-The agent gets the Apple schema, routed SOPs for each task, and a generator that refuses to write a broken file. You ask in plain English; the agent picks the right command and the tool keeps it straight — and it grounds osquery queries against the real embedded schema instead of guessing table and column names.
+The AI agent gets the Apple schema, routed SOPs for each task, and a generator that refuses to write a broken file. You ask in plain English; the agent picks the right command and Contour keeps it straight — grounding Apple device-management profiles, mSCP compliance rules, and osquery queries against the real embedded schema instead of guessing table or column names.
+
+Contour is a CLI, not an MCP tool — the agent invokes Contour with a selector and receives exactly the schema fragment embedded in the binary. No large context window to collapse, no MCP orchestration, no web fetches — just the precise schema slice the agent requested.
 
 ```bash
-contour help-ai                     # what the agent sees: command index + SOP routing
+# CLI routing for AI agents using designated SOPs
 contour help-ai --sop profile       # profile generation SOP
 contour help-ai --sop osquery       # osquery schema lookup + query patterns
 contour help-ai --sop fleet-migrate # GitOps repo migration SOP
