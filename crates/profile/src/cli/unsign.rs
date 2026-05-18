@@ -552,12 +552,15 @@ fn is_xml_profile(data: &[u8]) -> bool {
     data.starts_with(b"<?xml") || data.starts_with(b"<plist")
 }
 
-fn is_signed_profile(data: &[u8]) -> bool {
+pub(crate) fn is_signed_profile(data: &[u8]) -> bool {
     if data.len() < 10 {
         return false;
     }
-
-    data[0] == 0x30 && data[1] == 0x80
+    // A signed profile is CMS/PKCS#7 wrapped in a DER SEQUENCE. Byte 0 is
+    // the SEQUENCE tag (0x30); byte 1 is the length octet: 0x80 is the
+    // indefinite form, 0x81/0x82/0x83 are definite forms with 1-3 length
+    // bytes. Real MDM `InstallProfile` payloads are definite-length.
+    data[0] == 0x30 && matches!(data[1], 0x80..=0x83)
 }
 
 fn extract_xml_from_pkcs7_improved(data: &[u8]) -> Result<Vec<u8>> {
@@ -620,16 +623,17 @@ mod tests {
 
     #[test]
     fn test_is_signed_profile() {
-        // Signed profile starts with 0x30 0x80 and needs at least 10 bytes
+        // Indefinite-length DER (0x30 0x80)
+        assert!(is_signed_profile(&[0x30, 0x80, 0, 0, 0, 0, 0, 0, 0, 0]));
+        // Definite-length DER — real Fleet InstallProfile payloads (0x30 0x82 ..)
         assert!(is_signed_profile(&[
-            0x30, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+            0x30, 0x82, 0x12, 0x1E, 0, 0, 0, 0, 0, 0
         ]));
-        // XML profile (starts with <?)
-        assert!(!is_signed_profile(&[
-            0x3C, 0x3F, 0x78, 0x6D, 0x6C, 0x20, 0x76, 0x65, 0x72, 0x73
-        ]));
-        // Too short data
-        assert!(!is_signed_profile(&[0x30, 0x80, 0x00, 0x00]));
+        assert!(is_signed_profile(&[0x30, 0x81, 0xFF, 0, 0, 0, 0, 0, 0, 0]));
+        // XML profile must not be mistaken for signed
+        assert!(!is_signed_profile(b"<?xml version=\"1.0\"?>"));
+        // Too-short input
+        assert!(!is_signed_profile(&[0x30, 0x82, 0x00, 0x04]));
     }
 
     #[test]
