@@ -487,11 +487,13 @@ pub fn handle_command_decode(
     let decoded = decode_command(&bytes)?;
 
     if output_mode == OutputMode::Json {
+        let profile_str =
+            std::str::from_utf8(&decoded.profile).context("Inner profile is not valid UTF-8")?;
         let obj = serde_json::json!({
             "command_uuid": decoded.command_uuid,
             "request_type": decoded.request_type,
             "signed": decoded.signed,
-            "profile": String::from_utf8_lossy(&decoded.profile),
+            "profile": profile_str,
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
         return Ok(());
