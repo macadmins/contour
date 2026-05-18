@@ -778,6 +778,13 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             CommandAction::Info { command_type } => {
                 profile::cli::command::handle_command_info(&command_type, output_mode)?;
             }
+            CommandAction::Decode { input, output } => {
+                profile::cli::command::handle_command_decode(
+                    &input,
+                    output.as_deref(),
+                    output_mode,
+                )?;
+            }
         },
         Commands::Synthesize {
             paths,
