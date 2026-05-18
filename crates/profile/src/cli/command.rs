@@ -4,12 +4,13 @@
 //! Uses embedded capabilities (65 unique MDM command types) from the
 //! `capabilities.parquet` dataset.
 
+use crate::cli::unsign::{is_signed_profile, unsign_bytes};
 use crate::output::OutputMode;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use inquire::{Confirm, Select, Text};
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{Read, Write};
 
 /// A deduplicated MDM command entry.
 #[derive(Debug)]
@@ -403,6 +404,132 @@ fn parse_plist_value(value: &str) -> plist::Value {
     }
 }
 
+/// The decomposed result of an MDM `InstallProfile` command.
+#[derive(Debug)]
+pub struct DecodedCommand {
+    /// `CommandUUID` from the command, when present.
+    pub command_uuid: Option<String>,
+    /// `Command.RequestType` — always `InstallProfile` for a successful decode.
+    pub request_type: String,
+    /// Whether the payload was CMS/PKCS#7 signed (vs. a bare XML profile).
+    pub signed: bool,
+    /// The inner `.mobileconfig` XML.
+    pub profile: Vec<u8>,
+}
+
+/// Decode an MDM command plist into its inner configuration profile.
+///
+/// Expects an `InstallProfile` command whose `Command.Payload` is a
+/// CMS-signed (or, rarely, a bare XML) `.mobileconfig`.
+pub fn decode_command(input: &[u8]) -> Result<DecodedCommand> {
+    let root: plist::Value = plist::from_bytes(input).context("Input is not a valid plist")?;
+    let dict = root
+        .as_dictionary()
+        .context("MDM command is not a plist dictionary")?;
+
+    let command_uuid = dict
+        .get("CommandUUID")
+        .and_then(plist::Value::as_string)
+        .map(str::to_string);
+
+    let command = dict
+        .get("Command")
+        .and_then(plist::Value::as_dictionary)
+        .context("MDM command has no `Command` dictionary")?;
+
+    let request_type = command
+        .get("RequestType")
+        .and_then(plist::Value::as_string)
+        .context("`Command` has no `RequestType`")?
+        .to_string();
+
+    if request_type != "InstallProfile" {
+        anyhow::bail!("`command decode` only supports `InstallProfile`, got `{request_type}`");
+    }
+
+    let payload = command
+        .get("Payload")
+        .and_then(plist::Value::as_data)
+        .context("InstallProfile command has no `Payload` data")?;
+
+    let signed = is_signed_profile(payload);
+    let profile = unsign_bytes(payload)
+        .context("Failed to extract the inner profile from the command payload")?;
+
+    Ok(DecodedCommand {
+        command_uuid,
+        request_type,
+        signed,
+        profile,
+    })
+}
+
+/// Handle `command decode` — decompose an MDM `InstallProfile` command into
+/// its inner profile. `input` is a file path, or `-` to read from stdin.
+pub fn handle_command_decode(
+    input: &str,
+    output: Option<&str>,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let bytes = if input == "-" {
+        let mut buf = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut buf)
+            .context("Failed to read MDM command from stdin")?;
+        if buf.is_empty() {
+            anyhow::bail!("No input received on stdin");
+        }
+        buf
+    } else {
+        std::fs::read(input).with_context(|| format!("Failed to read MDM command file: {input}"))?
+    };
+
+    let decoded = decode_command(&bytes)?;
+
+    if output_mode == OutputMode::Json {
+        let obj = serde_json::json!({
+            "command_uuid": decoded.command_uuid,
+            "request_type": decoded.request_type,
+            "signed": decoded.signed,
+            "profile": String::from_utf8_lossy(&decoded.profile),
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+        return Ok(());
+    }
+
+    // Rich header -> stderr, so stdout stays pipe-clean.
+    eprintln!("{} {}", "RequestType:".cyan(), decoded.request_type);
+    eprintln!(
+        "{} {}",
+        "CommandUUID:".cyan(),
+        decoded.command_uuid.as_deref().unwrap_or("(none)")
+    );
+    eprintln!(
+        "{}   {}",
+        "Signature:".cyan(),
+        if decoded.signed {
+            "signed (CMS/PKCS#7)"
+        } else {
+            "unsigned"
+        }
+    );
+
+    match output {
+        Some(path) => {
+            std::fs::write(path, &decoded.profile)
+                .with_context(|| format!("Failed to write inner profile: {path}"))?;
+            eprintln!("{} inner profile written to {path}", "✓".green());
+        }
+        None => {
+            std::io::stdout()
+                .write_all(&decoded.profile)
+                .context("Failed to write inner profile to stdout")?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Convert a payload type to kebab-case for default filenames.
 fn to_kebab_case(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 4);
@@ -762,5 +889,82 @@ mod tests {
         // Smoke test: list should not error
         let result = handle_command_list(OutputMode::Json);
         assert!(result.is_ok(), "handle_command_list should succeed");
+    }
+
+    /// Build an InstallProfile command plist with the given inner payload.
+    fn build_install_profile_command(uuid: &str, payload: &[u8]) -> Vec<u8> {
+        let mut command = plist::Dictionary::new();
+        command.insert(
+            "RequestType".into(),
+            plist::Value::String("InstallProfile".into()),
+        );
+        command.insert("Payload".into(), plist::Value::Data(payload.to_vec()));
+        let mut root = plist::Dictionary::new();
+        root.insert("CommandUUID".into(), plist::Value::String(uuid.into()));
+        root.insert("Command".into(), plist::Value::Dictionary(command));
+        let mut buf = Vec::new();
+        plist::to_writer_xml(&mut buf, &plist::Value::Dictionary(root)).unwrap();
+        buf
+    }
+
+    #[test]
+    fn test_decode_command_unsigned_payload() {
+        let inner = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>\
+            <key>PayloadType</key><string>Configuration</string>\
+            <key>PayloadIdentifier</key><string>com.example.test</string></dict></plist>";
+        let cmd = build_install_profile_command("ABC-123", inner);
+
+        let decoded = decode_command(&cmd).expect("decode should succeed");
+
+        assert_eq!(decoded.request_type, "InstallProfile");
+        assert_eq!(decoded.command_uuid.as_deref(), Some("ABC-123"));
+        assert!(!decoded.signed);
+        assert!(decoded.profile.starts_with(b"<?xml"));
+        let v: plist::Value = plist::from_bytes(&decoded.profile).unwrap();
+        assert_eq!(
+            v.as_dictionary()
+                .unwrap()
+                .get("PayloadIdentifier")
+                .and_then(plist::Value::as_string),
+            Some("com.example.test"),
+        );
+    }
+
+    #[test]
+    fn test_decode_command_rejects_non_install_profile() {
+        let mut command = plist::Dictionary::new();
+        command.insert(
+            "RequestType".into(),
+            plist::Value::String("DeviceInformation".into()),
+        );
+        let mut root = plist::Dictionary::new();
+        root.insert("Command".into(), plist::Value::Dictionary(command));
+        let mut cmd = Vec::new();
+        plist::to_writer_xml(&mut cmd, &plist::Value::Dictionary(root)).unwrap();
+
+        let err = decode_command(&cmd).unwrap_err();
+        assert!(
+            err.to_string().contains("DeviceInformation"),
+            "error should name the actual RequestType: {err}"
+        );
+    }
+
+    #[test]
+    fn test_decode_command_missing_payload() {
+        let mut command = plist::Dictionary::new();
+        command.insert(
+            "RequestType".into(),
+            plist::Value::String("InstallProfile".into()),
+        );
+        let mut root = plist::Dictionary::new();
+        root.insert("Command".into(), plist::Value::Dictionary(command));
+        let mut cmd = Vec::new();
+        plist::to_writer_xml(&mut cmd, &plist::Value::Dictionary(root)).unwrap();
+
+        let err = decode_command(&cmd).unwrap_err();
+        assert!(
+            err.to_string().contains("Payload"),
+            "error should mention the missing Payload: {err}"
+        );
     }
 }
