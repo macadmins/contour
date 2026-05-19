@@ -17,6 +17,19 @@ fn col<'a>(
         .ok_or_else(|| anyhow::anyhow!("missing column '{name}' in Parquet schema"))
 }
 
+/// Read a per-key `supportedOS` string column. The producer writes the
+/// `n/a` sentinel when a key is unsupported on a platform; treat that —
+/// and SQL NULL — alike as "absent" so the key gets no map entry there.
+fn key_os_value(arr: &arrow::array::StringArray, row: usize) -> Option<String> {
+    if arr.is_null(row) {
+        return None;
+    }
+    match arr.value(row) {
+        "n/a" => None,
+        v => Some(v.to_string()),
+    }
+}
+
 /// Arrow schema for `capabilities.parquet`.
 ///
 /// One row per (payload_type, platform, key) combination.
@@ -61,6 +74,13 @@ pub fn schema() -> Schema {
         Field::new("subtype", DataType::Utf8, true),
         Field::new("asset_types", DataType::Utf8, true),
         Field::new("format", DataType::Utf8, true),
+        // Per-key supportedOS — the key's own introduced/deprecated/
+        // supervised, distinct from the payload-level columns above.
+        // `key_introduced`/`key_deprecated` carry the `n/a` sentinel when
+        // the key is unsupported on a platform.
+        Field::new("key_introduced", DataType::Utf8, true),
+        Field::new("key_deprecated", DataType::Utf8, true),
+        Field::new("key_supervised", DataType::Boolean, true),
         // Windows CSP / manifest provenance
         Field::new("csp_name", DataType::Utf8, true),
         Field::new("manifest_source", DataType::Utf8, true),
@@ -123,6 +143,10 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         let subtypes = col(&batch, "subtype")?.as_string::<i32>();
         let asset_types = col(&batch, "asset_types")?.as_string::<i32>();
         let formats = col(&batch, "format")?.as_string::<i32>();
+        // Per-key supportedOS columns — the key's own metadata.
+        let key_introduced_col = col(&batch, "key_introduced")?.as_string::<i32>();
+        let key_deprecated_col = col(&batch, "key_deprecated")?.as_string::<i32>();
+        let key_supervised_col = col(&batch, "key_supervised")?.as_boolean();
         // csp_name / manifest_source may be absent in older data
         let csp_names = batch
             .column_by_name("csp_name")
@@ -280,15 +304,17 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                 "watchOS" => Platform::WatchOS,
                 _ => Platform::MacOS,
             };
-            let row_introduced = if introduced.is_null(row) {
+            // Per-key supportedOS — the key's OWN introduced/deprecated/
+            // supervised, NOT the payload-level `introduced`/`deprecated`
+            // columns (those feed `OsSupport` above). `key_os_value`
+            // drops the `n/a` sentinel so a platform on which the key is
+            // unsupported gets no map entry at all.
+            let row_introduced = key_os_value(key_introduced_col, row);
+            let row_deprecated = key_os_value(key_deprecated_col, row);
+            let row_supervised = if key_supervised_col.is_null(row) {
                 None
             } else {
-                Some(introduced.value(row).to_string())
-            };
-            let row_deprecated = if deprecated.is_null(row) {
-                None
-            } else {
-                Some(deprecated.value(row).to_string())
+                Some(key_supervised_col.value(row))
             };
 
             if let Some(existing) = cap.keys.iter_mut().find(|k| k.name == key_name) {
@@ -297,6 +323,9 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                 }
                 if let Some(v) = row_deprecated {
                     existing.deprecated.entry(row_platform).or_insert(v);
+                }
+                if let Some(s) = row_supervised {
+                    existing.supervised.entry(row_platform).or_insert(s);
                 }
                 continue;
             }
@@ -308,6 +337,10 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
             let mut deprecated_map = std::collections::HashMap::new();
             if let Some(v) = row_deprecated {
                 deprecated_map.insert(row_platform, v);
+            }
+            let mut supervised_map = std::collections::HashMap::new();
+            if let Some(s) = row_supervised {
+                supervised_map.insert(row_platform, s);
             }
 
             cap.keys.push(PayloadKey {
@@ -338,6 +371,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                 range_list: None,
                 introduced: introduced_map,
                 deprecated: deprecated_map,
+                supervised: supervised_map,
                 parent_key: if parent_keys.is_null(row) {
                     None
                 } else {
