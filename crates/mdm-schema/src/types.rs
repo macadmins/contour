@@ -185,12 +185,16 @@ pub struct PayloadKey {
     pub range_max: Option<f64>,
     /// Allowed values for enumerated types.
     pub range_list: Option<Vec<String>>,
-    /// OS version when this key was introduced, per platform.
-    /// Empty map means the parquet had no per-OS introduced data for any
-    /// row touching this key.
+    /// OS version when this key was introduced, per platform — the key's
+    /// own `supportedOS`, not the payload's. A platform is absent from the
+    /// map when the key is `n/a` (unsupported) there; an entirely empty
+    /// map means the parquet carried no per-key data for this key.
     pub introduced: std::collections::HashMap<Platform, String>,
     /// OS version when this key was deprecated, per platform.
     pub deprecated: std::collections::HashMap<Platform, String>,
+    /// Whether the key requires a supervised device, per platform.
+    /// Populated from the key's own `supportedOS.<platform>.supervised`.
+    pub supervised: std::collections::HashMap<Platform, bool>,
     /// Dot-path to parent key, `None` for top-level keys.
     pub parent_key: Option<String>,
     /// Nesting depth: 0 for top-level, 1+ for subkeys.

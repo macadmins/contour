@@ -416,7 +416,9 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             field_type,
             flags: FieldFlags {
                 required: key.presence == "required",
-                supervised: false,
+                // Supervised-gated if the key's own supportedOS marks it
+                // supervised on any platform it supports.
+                supervised: key.supervised.values().any(|&s| s),
                 sensitive: false,
             },
             title: key.key_title.clone().unwrap_or_default(),
@@ -708,6 +710,61 @@ mod tests {
         assert!(
             passcode_ddm.is_some(),
             "Should have DDM passcode declaration"
+        );
+    }
+
+    #[test]
+    fn test_capability_key_os_support_is_per_key_not_payload_level() {
+        // Regression: per-key `introduced` / `supervised` must come from the
+        // key's own `supportedOS`, not the payload's. Verified against
+        // apple/device-management `com.apple.applicationaccess.yaml`:
+        // `allowListedAppBundleIDs` is iOS 15.0 (supervised), tvOS 15.0
+        // (supervised), and n/a on macOS / watchOS / visionOS.
+        let manifests = load_embedded().expect("Failed to load embedded manifests");
+        let aa = manifests
+            .iter()
+            .find(|m| m.payload_type == "com.apple.applicationaccess")
+            .expect("applicationaccess manifest");
+        let f = aa
+            .fields
+            .get("allowListedAppBundleIDs")
+            .expect("allowListedAppBundleIDs field");
+
+        assert_eq!(
+            f.introduced_by_platform
+                .get(&Platform::Ios)
+                .map(String::as_str),
+            Some("15.0"),
+            "iOS introduced must be the key's own 15.0, not the payload's 4.0"
+        );
+        assert_eq!(
+            f.introduced_by_platform
+                .get(&Platform::TvOS)
+                .map(String::as_str),
+            Some("15.0"),
+        );
+        assert!(
+            !f.introduced_by_platform.contains_key(&Platform::MacOS),
+            "macOS is n/a for this key — it must not inherit the payload's 10.7"
+        );
+        assert!(
+            !f.introduced_by_platform.contains_key(&Platform::WatchOS),
+            "watchOS is n/a for this key"
+        );
+        assert!(
+            f.flags.supervised,
+            "allowListedAppBundleIDs is supervised-only — must not report false"
+        );
+
+        // Deprecated alias: per-key `deprecated` must surface too.
+        let w = aa
+            .fields
+            .get("whitelistedAppBundleIDs")
+            .expect("whitelistedAppBundleIDs field");
+        assert_eq!(
+            w.deprecated_in.as_deref(),
+            Some("15.0"),
+            "whitelistedAppBundleIDs was deprecated in iOS/tvOS 15.0"
         );
     }
 

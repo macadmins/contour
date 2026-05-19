@@ -2169,11 +2169,14 @@ fn trap_64_info_field_carries_combinetype_when_present() {
 fn trap_66_info_field_introduced_by_platform_is_per_os_map() {
     // Per-OS field-level introduced/deprecated (Gap #3): the embedded
     // parquet has rows keyed by (payload_type, platform, key). The
-    // reader now merges into a per-platform map so agents can answer
-    // "when did this key land on iOS vs macOS?" without losing data.
+    // reader merges into a per-platform map so agents can answer "when
+    // did this key land on iOS vs macOS?" — and the values must be the
+    // KEY's own supportedOS, not the payload's.
     //
-    // Without --os: introduced_by_platform is a JSON object keyed by
-    // platform name with > 1 entries for any cross-platform key.
+    // `allowAccountModification` lands on iOS 7.0 and macOS 14.0 — both
+    // distinct from the payload-level com.apple.applicationaccess
+    // versions (iOS 4.0 / macOS 10.7), so a regression to payload-level
+    // inheritance fails this test loudly.
     let output = Command::cargo_bin("profile")
         .unwrap()
         .args(["info", "com.apple.applicationaccess", "--full", "--json"])
@@ -2181,27 +2184,29 @@ fn trap_66_info_field_introduced_by_platform_is_per_os_map() {
         .unwrap();
     assert!(output.status.success());
     let parsed: Value = serde_json::from_slice(&output.stdout).expect("JSON");
-    let safari = parsed["fields"]
+    let field = parsed["fields"]
         .as_array()
         .expect("fields array")
         .iter()
-        .find(|f| f["name"] == "safariAcceptCookies")
-        .expect("safariAcceptCookies must exist");
+        .find(|f| f["name"] == "allowAccountModification")
+        .expect("allowAccountModification must exist");
 
-    let intro = safari["introduced_by_platform"]
+    let intro = field["introduced_by_platform"]
         .as_object()
         .expect("introduced_by_platform is a map (no --os)");
     assert!(
         intro.len() > 1,
-        "safariAcceptCookies is on multiple platforms; expected >1 entries, got {intro:?}"
+        "allowAccountModification is on multiple platforms; expected >1 entries, got {intro:?}"
     );
-    assert!(
-        intro.contains_key("iOS"),
-        "must include iOS entry; got {intro:?}"
+    assert_eq!(
+        intro.get("iOS").and_then(|v| v.as_str()),
+        Some("7.0"),
+        "iOS must be the key's own 7.0, not the payload's 4.0; got {intro:?}"
     );
-    assert!(
-        intro.contains_key("macOS"),
-        "must include macOS entry; got {intro:?}"
+    assert_eq!(
+        intro.get("macOS").and_then(|v| v.as_str()),
+        Some("14.0"),
+        "macOS must be the key's own 14.0, not the payload's 10.7; got {intro:?}"
     );
 
     // With --os iOS: the map collapses to a flat string so jq
@@ -2219,13 +2224,13 @@ fn trap_66_info_field_introduced_by_platform_is_per_os_map() {
         .output()
         .unwrap();
     let scoped_parsed: Value = serde_json::from_slice(&scoped.stdout).expect("JSON");
-    let scoped_safari = scoped_parsed["fields"]
+    let scoped_field = scoped_parsed["fields"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|f| f["name"] == "safariAcceptCookies")
-        .expect("safariAcceptCookies in --os iOS output");
-    let scoped_intro = scoped_safari["introduced_by_platform"]
+        .find(|f| f["name"] == "allowAccountModification")
+        .expect("allowAccountModification in --os iOS output");
+    let scoped_intro = scoped_field["introduced_by_platform"]
         .as_str()
         .expect("--os scope flattens introduced_by_platform to a string");
     assert_eq!(
