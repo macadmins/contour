@@ -287,6 +287,17 @@ pub fn init_project<P: AsRef<Path>>(
     if sync {
         let mscp_path = output.join("macos_security");
         sync_mscp_repo(&mscp_path, branch)?;
+
+        // Clarify which mSCP layout the synced repo carries — `dev_2.0`
+        // is 2.0, `tahoe` and other macOS-version branches are 1.x.
+        match crate::layout::MscpLayout::detect(&mscp_path) {
+            Ok(layout) => {
+                println!("  ✓ Detected mSCP layout: {}", layout.display_name());
+            }
+            Err(e) => {
+                println!("  ⚠ Could not detect mSCP layout: {e}");
+            }
+        }
     }
 
     // Detect mSCP repo (synced or pre-existing) and pick baselines
@@ -413,8 +424,14 @@ pub fn init_project<P: AsRef<Path>>(
             );
             println!("     (--config picks up [settings.munki]/[settings.jamf]/[settings.fleet])");
         } else {
-            println!("  1. Clone mSCP: git clone https://github.com/usnistgov/macos_security.git");
-            println!("  2. Or re-run with: contour mscp init --sync --branch {branch}");
+            println!(
+                "  1. Clone mSCP 2.0: git clone -b dev_2.0 https://github.com/usnistgov/macos_security.git"
+            );
+            if branch == "dev_2.0" {
+                println!("  2. Or re-run with: contour mscp init --sync");
+            } else {
+                println!("  2. Or re-run with: contour mscp init --sync --branch {branch}");
+            }
             println!("  3. Configure baselines in mscp.toml");
         }
     }
