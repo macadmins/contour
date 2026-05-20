@@ -977,7 +977,7 @@ mod tests {
             s("B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E"),
         );
         p.insert("PayloadVersion".into(), Value::Integer(1.into()));
-        p.insert(key.into(), Value::Boolean(true));
+        p.insert(key, Value::Boolean(true));
         let mut top = Dictionary::new();
         top.insert("PayloadType".into(), s("Configuration"));
         top.insert(

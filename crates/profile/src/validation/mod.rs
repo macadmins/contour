@@ -590,7 +590,7 @@ mod tests {
         let profile = create_test_profile();
         let result = rules.validate(&profile);
 
-        assert!(result.is_err()); // Invalid regex should error
+        result.unwrap_err(); // Invalid regex should error
     }
 
     #[test]
@@ -1137,7 +1137,7 @@ pattern = "^com\\.example\\..*$"
     #[test]
     fn test_validation_rules_load_nonexistent_file() {
         let result = ValidationRules::load(Path::new("/nonexistent/file.toml"));
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -1146,7 +1146,7 @@ pattern = "^com\\.example\\..*$"
         file.write_all(b"not valid toml [[[").unwrap();
 
         let result = ValidationRules::load(file.path());
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     // ========== Combined Rules Tests ==========

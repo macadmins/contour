@@ -341,7 +341,7 @@ mod tests {
         let rules = RuleSet::new();
         let options = GeneratorOptions::default();
         let result = generate(&rules, &options);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]

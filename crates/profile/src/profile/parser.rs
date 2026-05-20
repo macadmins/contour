@@ -1000,7 +1000,7 @@ mod tests {
     #[test]
     fn test_detect_format_file_not_found() {
         let result = PlistFormat::detect("/nonexistent/file.mobileconfig");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -1009,7 +1009,7 @@ mod tests {
         file.write_all(b"short").unwrap();
 
         let result = PlistFormat::detect(file.path().to_str().unwrap());
-        assert!(result.is_err()); // Less than 8 bytes
+        result.unwrap_err(); // Less than 8 bytes
     }
 
     // ========== parse_profile Tests ==========
@@ -1056,7 +1056,7 @@ mod tests {
         file.write_all(b"not a valid plist").unwrap();
 
         let result = parse_profile(file.path().to_str().unwrap());
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -1073,7 +1073,7 @@ mod tests {
         file.write_all(incomplete_plist.as_bytes()).unwrap();
 
         let result = parse_profile(file.path().to_str().unwrap());
-        assert!(result.is_err()); // Missing required fields
+        result.unwrap_err(); // Missing required fields
     }
 
     // ========== parse_profile_with_format Tests ==========
@@ -1281,7 +1281,7 @@ mod tests {
     #[test]
     fn test_parse_profile_from_bytes_invalid() {
         let result = parse_profile_from_bytes(b"invalid data");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     // ========== extract_xml_from_pkcs7 Tests ==========
@@ -1358,7 +1358,7 @@ mod tests {
     #[test]
     fn test_parse_profile_auto_unsign_file_not_found() {
         let result = parse_profile_auto_unsign("/nonexistent/file.mobileconfig");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     // ========== Profile with PayloadContent Tests ==========
@@ -1595,7 +1595,7 @@ mod tests {
     #[test]
     fn test_parse_lenient_truly_broken_still_fails() {
         let result = parse_profile_lenient_from_bytes(b"not a plist at all");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]

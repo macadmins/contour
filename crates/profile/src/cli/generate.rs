@@ -896,8 +896,8 @@ pub fn handle_generate_recipe(
         if let Some(custom) = &secrets_cfg.dotenv {
             dotenv_files.push(PathBuf::from(custom));
         }
-        load_dotenv(&dotenv_files);
-    }
+        load_dotenv(&dotenv_files)
+    };
 
     // Vars precedence: anchor config < CWD config < CLI `--vars`.
     let mut var_map: HashMap<String, String> =
@@ -2170,7 +2170,7 @@ mod tests {
     #[test]
     fn test_resolve_value_file_missing() {
         let result = resolve_value("file:/nonexistent/path/cert.cer");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]

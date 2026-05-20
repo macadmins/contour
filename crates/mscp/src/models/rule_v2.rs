@@ -373,7 +373,7 @@ ddm_info:
     Download: AlwaysOn
 "#;
 
-    const SAMPLE_MOBILECONFIG_RULE: &str = r#"
+    const SAMPLE_MOBILECONFIG_RULE: &str = r"
 id: system_settings_screensaver_password_enforce
 title: Enforce Password On Screensaver
 discussion: A screensaver _MUST_ require a password.
@@ -395,7 +395,7 @@ mobileconfig_info:
     PayloadContent:
       - askForPassword: true
         askForPasswordDelay: 5
-"#;
+";
 
     #[test]
     fn parses_ddm_rule_with_enforcement_info() {

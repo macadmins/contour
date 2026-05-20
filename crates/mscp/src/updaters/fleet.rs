@@ -481,11 +481,8 @@ mod tests {
         fs::write(fleets_dir.join("beta.yml"), "name: beta\n").unwrap();
 
         let updater = FleetUpdater::new(tmp.path(), "cis_lvl2".to_string());
-        assert!(
-            updater
-                .validate_fleets(&["alpha".to_string(), "beta".to_string()])
-                .is_ok()
-        );
+        updater
+                .validate_fleets(&["alpha".to_string(), "beta".to_string()]).unwrap();
     }
 
     #[test]

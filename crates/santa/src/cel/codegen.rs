@@ -457,20 +457,20 @@ mod tests {
             &CelResult::Blocklist,
             Some(&CelResult::Allowlist),
         );
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
     fn test_cel_result_from_str() {
-        assert!(CelResult::from_name("allowlist").is_ok());
-        assert!(CelResult::from_name("blocklist").is_ok());
-        assert!(CelResult::from_name("allow").is_ok());
-        assert!(CelResult::from_name("block").is_ok());
-        assert!(CelResult::from_name("allowlist-compiler").is_ok());
-        assert!(CelResult::from_name("silent-blocklist").is_ok());
-        assert!(CelResult::from_name("require-touch-id").is_ok());
-        assert!(CelResult::from_name("require-touch-id-only").is_ok());
-        assert!(CelResult::from_name("invalid").is_err());
+        CelResult::from_name("allowlist").unwrap();
+        CelResult::from_name("blocklist").unwrap();
+        CelResult::from_name("allow").unwrap();
+        CelResult::from_name("block").unwrap();
+        CelResult::from_name("allowlist-compiler").unwrap();
+        CelResult::from_name("silent-blocklist").unwrap();
+        CelResult::from_name("require-touch-id").unwrap();
+        CelResult::from_name("require-touch-id-only").unwrap();
+        CelResult::from_name("invalid").unwrap_err();
     }
 
     #[test]

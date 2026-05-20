@@ -382,7 +382,7 @@ mod tests {
     fn test_parse_manifest_line_invalid_too_few_fields() {
         let line = "M|com.example|Test|Desc";
         let result = parse_manifest_line(line);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     // ========== Key Line Tests ==========
@@ -509,7 +509,7 @@ mod tests {
     fn test_parse_key_line_invalid_too_few_fields() {
         let line = "K|Name|s|R";
         let result = parse_key_line(line);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]

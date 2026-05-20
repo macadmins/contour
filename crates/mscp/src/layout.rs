@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 /// Named mSCP repository layout versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum MscpLayout {
     /// 1.x — flat rule schema with top-level `tags`, `check`, `fix`,
     /// `result`, `mobileconfig_info` (dict shape), and per-baseline YAML
@@ -24,6 +25,7 @@ pub enum MscpLayout {
     /// 2.0 — multi-OS rule schema with `platforms.{macOS,iOS,visionOS}.<version>`,
     /// nested `enforcement_info`, array-shaped `mobileconfig_info`, and
     /// dynamic baselines derived from `platforms.X.benchmarks[]`.
+    #[default]
     V2x,
 }
 
@@ -137,14 +139,6 @@ impl MscpLayout {
     }
 }
 
-impl Default for MscpLayout {
-    fn default() -> Self {
-        // 2.0 is the current standard layout; auto-detection
-        // (`detect`/`detect_or_from`) still falls back to 1.x for older
-        // checkouts, so this default only applies when nothing is known.
-        Self::V2x
-    }
-}
 
 impl fmt::Display for MscpLayout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

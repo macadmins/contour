@@ -833,7 +833,7 @@ mod tests {
 
         // Should not error on empty/nonexistent file
         let result = constraints_list(ConstraintType::Fleet, Some(path), OutputMode::Json);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -843,6 +843,6 @@ mod tests {
 
         // Should not error on empty/nonexistent file
         let result = constraints_list_scripts(ConstraintType::Jamf, Some(path), OutputMode::Json);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 }
