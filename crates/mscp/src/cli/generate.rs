@@ -1793,7 +1793,6 @@ pub fn list_baselines(output: PathBuf, output_mode: OutputMode) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn test_highest_baseline_version_picks_newest() {

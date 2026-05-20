@@ -960,7 +960,7 @@ pub fn handle_generate_recipe(
     } else if let Some(c) = config {
         c.organization.domain.clone()
     } else {
-        contour_core::config::resolve_org_with_anchor(None, anchor_ref).map_err(|_| {
+        contour_core::config::resolve_org_with_anchor(None, anchor_ref).map_err(|_e| {
             anyhow::anyhow!(
                 "--org is required (e.g., --org com.yourorg)\n\
                  Alternatively, set organization.domain in profile.toml or .contour/config.toml"

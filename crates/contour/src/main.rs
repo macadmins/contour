@@ -43,6 +43,10 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "constructed once per process from CLI parsing; boxing the largest variant would force the dispatch sites to deref through a Box for no measurable benefit"
+)]
 pub enum Commands {
     /// Apple configuration profile toolkit (normalize, validate, sign, etc.)
     Profile {

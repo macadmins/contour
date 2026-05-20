@@ -61,8 +61,8 @@ pub struct PlatformOs {
 }
 
 impl<'de> Deserialize<'de> for PlatformOs {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        let map: BTreeMap<String, Value> = BTreeMap::deserialize(d)?;
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let map: BTreeMap<String, Value> = BTreeMap::deserialize(deserializer)?;
         let mut out = PlatformOs::default();
         for (k, v) in map {
             match k.as_str() {
@@ -85,11 +85,11 @@ impl<'de> Deserialize<'de> for PlatformOs {
 }
 
 impl Serialize for PlatformOs {
-    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         let len = self.versions.len()
             + usize::from(self.enforcement_info.is_some())
             + usize::from(self.introduced.is_some());
-        let mut map = s.serialize_map(Some(len))?;
+        let mut map = serializer.serialize_map(Some(len))?;
         if let Some(ref ei) = self.enforcement_info {
             map.serialize_entry("enforcement_info", ei)?;
         }

@@ -65,7 +65,11 @@ pub struct RecipeSummary {
 /// because the bare-name path is a fallback.
 pub fn load_recipe_smart(selector: &str, recipe_path: Option<&str>) -> Result<(String, Recipe)> {
     let p = Path::new(selector);
-    let looks_path = selector.contains('/') || selector.ends_with(".toml") || p.is_file();
+    let looks_path = selector.contains('/')
+        || Path::new(selector)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
+        || p.is_file();
     if looks_path {
         if !p.is_file() {
             anyhow::bail!(

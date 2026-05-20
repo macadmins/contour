@@ -206,7 +206,7 @@ pub use contour_core::{resolve_output_dir, sanitize_filename};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BtmAppEntry, BtmRule};
+    use crate::config::BtmRule;
 
     #[test]
     fn test_service_management_profile_from_code_req() {
