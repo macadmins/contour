@@ -482,7 +482,8 @@ mod tests {
 
         let updater = FleetUpdater::new(tmp.path(), "cis_lvl2".to_string());
         updater
-                .validate_fleets(&["alpha".to_string(), "beta".to_string()]).unwrap();
+            .validate_fleets(&["alpha".to_string(), "beta".to_string()])
+            .unwrap();
     }
 
     #[test]

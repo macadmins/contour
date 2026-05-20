@@ -10,15 +10,14 @@
 #   * `cargo fmt --all --check`             — formatting hygiene
 #   * `RUSTFLAGS=-D warnings cargo build --workspace`  — lib + bin warning-free
 #   * `RUSTFLAGS=-D warnings cargo build --release -p contour`  — release.yml parity
+#   * `cargo clippy --workspace --all-targets -- -D warnings`  — strict clippy
+#     across lib + bins + tests + examples
 #
 # What this does NOT check:
 #   * `cargo test` under `-D warnings` — many test-code lints (snake_case
 #     in test names, dead-code in test helpers, `#[expect]` unfulfilled
 #     under test compilation) aren't currently CI-gated. Add them when
 #     a test workflow lands.
-#   * Strict `clippy` (`-D warnings` only catches rustc, not clippy).
-#     `cargo clippy --all-targets -- -D warnings` would, but trips
-#     ~60 pre-existing test-style errors. Not enabled here.
 #
 # Usage: ./scripts/ci-check.sh
 set -euo pipefail
@@ -35,5 +34,8 @@ cargo build --workspace
 
 echo "==> cargo build --release -p contour (release.yml parity)"
 cargo build --release -p contour
+
+echo "==> cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
 
 echo "==> all CI-parity checks passed"

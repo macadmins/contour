@@ -15,8 +15,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// Named mSCP repository layout versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MscpLayout {
     /// 1.x — flat rule schema with top-level `tags`, `check`, `fix`,
     /// `result`, `mobileconfig_info` (dict shape), and per-baseline YAML
@@ -138,7 +137,6 @@ impl MscpLayout {
         }
     }
 }
-
 
 impl fmt::Display for MscpLayout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
