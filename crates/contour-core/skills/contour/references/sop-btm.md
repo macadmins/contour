@@ -81,11 +81,10 @@ STEP 1 — Validate the policy file:
 STEP 2 — Generate the output:
   flags = ["-o", output_dir, "--json"]
   if target == "ddm":
-    # CLI quirk: --ddm only emits .json declarations when paired with
-    # --per-app. Combined mode (the default) silently produces a single
-    # .mobileconfig regardless of --ddm. Pin --per-app whenever target
-    # is ddm so the output matches the SOP's promise.
-    flags += ["--ddm", "--per-app"]
+    # `--ddm` emits one `.json` DDM declaration per app in combined
+    # (default) and `--per-app` mode alike — DDM is per-declaration by
+    # nature, so `--per-app` is effectively a no-op under `--ddm`.
+    flags += ["--ddm"]
   if fragment:
     flags += ["--fragment"]
   result = contour btm generate {btm_toml} {flags...}
