@@ -91,6 +91,18 @@ pub fn build_options_from_config(
     // Fleet mode enabled when structure is pluggable or explicitly enabled
     let fleet_mode = config.settings.fleet.enabled || structure == OutputStructure::Pluggable;
 
+    // The Fleet updater only fires when we're producing Fleet output —
+    // i.e. `[settings.fleet] enabled = true` OR `[output] structure = "pluggable"`.
+    // A bare `[[baselines]] fleet = "..."` field should NOT pull the updater
+    // in when the user targeted Jamf (`flat`) or Munki (`nested`), otherwise
+    // a missing `fleets/<name>.yml` aborts the whole run for an MDM that
+    // doesn't even consume that file.
+    let fleet_names = if fleet_mode {
+        baseline_config.fleet.as_ref().map(|t| vec![t.clone()])
+    } else {
+        None
+    };
+
     ConfigDerivedOptions {
         profile_options,
         jamf_options,
@@ -101,13 +113,15 @@ pub fn build_options_from_config(
         structure,
         jamf_exclude_conflicts: config.settings.jamf.exclude_conflicts,
         generate_ddm: config.settings.generate_ddm,
-        fleet_names: baseline_config.fleet.as_ref().map(|t| vec![t.clone()]),
+        fleet_names,
     }
 }
 
 /// Generate baselines from config file
 pub fn generate_from_config(config: Config) -> Result<()> {
     tracing::info!("Generating baselines from configuration");
+
+    warn_dual_mdm_enabled(&config);
 
     // Determine Python method
     let python_method = match config.settings.python_method.as_str() {
@@ -191,4 +205,104 @@ pub fn generate_from_config(config: Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Emit a one-line stderr warning when both `[settings.jamf] enabled` and
+/// `[settings.fleet] enabled` are true. The two flags are orthogonal —
+/// `jamf` shapes profile content, `fleet` shapes output bundling — and a
+/// user can legitimately want both. But the combination is rarely
+/// intentional, so we surface the resulting layout so a misconfiguration
+/// becomes obvious in the build log instead of producing surprising output.
+fn warn_dual_mdm_enabled(config: &Config) {
+    if config.settings.jamf.enabled && config.settings.fleet.enabled {
+        tracing::warn!(
+            "Both `[settings.jamf] enabled` and `[settings.fleet] enabled` are true. \
+             Producing Jamf-shaped profiles inside the `{}` GitOps layout. \
+             Disable one in mscp.toml if that's not what you want.",
+            config.output.structure
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{GitopsGlobConfig, LabelConfig};
+    use std::collections::HashMap;
+
+    /// Build a minimal `BaselineConfig` for tests — `BaselineConfig` has
+    /// no `Default`, so each test would otherwise repeat this scaffold.
+    fn baseline_with_fleet(fleet: Option<&str>) -> BaselineConfig {
+        BaselineConfig {
+            name: "cis_lvl1".to_string(),
+            enabled: true,
+            branch: None,
+            fleet: fleet.map(str::to_string),
+            labels: LabelConfig::default(),
+            excluded_rules: vec![],
+            metadata: HashMap::default(),
+            gitops_glob: GitopsGlobConfig::default(),
+        }
+    }
+
+    #[test]
+    fn fleet_names_dropped_when_structure_is_flat_and_fleet_disabled() {
+        // Jamf-typical setup: `output.structure = "flat"`, fleet disabled.
+        // Even with a per-baseline `fleet = "workstations"` set, the
+        // Fleet updater must not fire — otherwise a Jamf-only run aborts
+        // on a missing `fleets/workstations.yml`.
+        let mut config = Config::default();
+        config.output.structure = OutputStructure::Flat;
+        config.settings.fleet.enabled = false;
+
+        let opts = build_options_from_config(&config, &baseline_with_fleet(Some("workstations")));
+
+        assert!(
+            opts.fleet_names.is_none(),
+            "fleet_names must be None when fleet_mode is off; got {:?}",
+            opts.fleet_names
+        );
+        assert!(!opts.fleet_mode);
+    }
+
+    #[test]
+    fn fleet_names_propagated_when_structure_is_pluggable() {
+        // Default Pluggable structure means fleet_mode is on, so the
+        // per-baseline fleet field must propagate.
+        let mut config = Config::default();
+        config.output.structure = OutputStructure::Pluggable;
+
+        let opts = build_options_from_config(&config, &baseline_with_fleet(Some("workstations")));
+
+        assert_eq!(
+            opts.fleet_names.as_deref(),
+            Some(&["workstations".to_string()][..])
+        );
+        assert!(opts.fleet_mode);
+    }
+
+    #[test]
+    fn fleet_names_propagated_when_flat_but_fleet_explicitly_enabled() {
+        // Edge case: user picked Flat structure but also set
+        // `[settings.fleet] enabled = true`. They asked for both — let
+        // the updater run.
+        let mut config = Config::default();
+        config.output.structure = OutputStructure::Flat;
+        config.settings.fleet.enabled = true;
+
+        let opts = build_options_from_config(&config, &baseline_with_fleet(Some("workstations")));
+
+        assert_eq!(
+            opts.fleet_names.as_deref(),
+            Some(&["workstations".to_string()][..])
+        );
+        assert!(opts.fleet_mode);
+    }
+
+    #[test]
+    fn fleet_names_none_when_baseline_fleet_field_unset() {
+        let config = Config::default();
+        let opts = build_options_from_config(&config, &baseline_with_fleet(None));
+        assert!(opts.fleet_names.is_none());
+    }
 }

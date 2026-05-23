@@ -48,7 +48,7 @@ pub fn odv_init(
                 println!("  1. Edit {} to customize values", file_path.display());
                 println!("  2. Set custom_value for any ODV you want to override");
                 println!(
-                    "  3. Run: contour mscp generate --baseline {} --odv {}",
+                    "  3. Run: contour mscp generate --keyword {} --odv {}",
                     baseline,
                     file_path.display()
                 );
@@ -172,7 +172,7 @@ pub fn odv_list(
                     "Tip:".yellow()
                 );
                 println!(
-                    "  contour mscp odv init --mscp-repo {} --baseline {}",
+                    "  contour mscp odv init --mscp-repo {} --keyword {}",
                     mscp_repo.display(),
                     baseline
                 );
@@ -230,7 +230,7 @@ pub fn odv_edit(overrides_path: PathBuf, output_mode: OutputMode) -> Result<()> 
                 );
                 eprintln!();
                 eprintln!("Create one first with:");
-                eprintln!("  contour mscp odv init --mscp-repo <PATH> --baseline <NAME>");
+                eprintln!("  contour mscp odv init --mscp-repo <PATH> --keyword <NAME>");
             }
             OutputMode::Json => {
                 let json = serde_json::json!({
