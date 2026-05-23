@@ -108,8 +108,8 @@ pub enum Commands {
         branch: String,
 
         /// Baselines to enable (comma-separated, used with --sync)
-        #[arg(long, value_delimiter = ',')]
-        baselines: Option<Vec<String>>,
+        #[arg(long = "keywords", visible_alias = "baselines", value_delimiter = ',')]
+        keywords: Option<Vec<String>>,
     },
 
     /// Process pre-built mSCP baseline output (advanced — most users want `generate`)
@@ -131,8 +131,13 @@ pub enum Commands {
         output: PathBuf,
 
         /// Baseline name (e.g., `cis_lvl1`, 800-53r5_high)
-        #[arg(short, long)]
-        baseline: String,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: String,
 
         /// Path to mSCP repository (for Git version tracking)
         #[arg(short, long)]
@@ -273,8 +278,13 @@ pub enum Commands {
         branch: Option<String>,
 
         /// Baseline name to generate (e.g., `cis_lvl1`, 800-53r5_high)
-        #[arg(short, long)]
-        baseline: String,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: String,
 
         /// mSCP repository layout: `auto` (sniff the rule schema),
         /// `1.x` (flat `baselines/<name>.yaml`), or `2.0` (multi-OS,
@@ -352,7 +362,7 @@ pub enum Commands {
         #[arg(long, help_heading = "Jamf Pro Options", default_value = None)]
         description_format: Option<String>,
 
-        /// [MSCP] Generate DDM (Declarative Device Management) artifacts (pass -D flag to mSCP)
+        /// [MSCP] Generate DDM (Declarative Device Management) artifacts (passes `--ddm` to mSCP)
         #[arg(long, help_heading = "mSCP Generation Options")]
         generate_ddm: bool,
 
@@ -468,8 +478,14 @@ pub enum Commands {
         mscp_repo: Option<PathBuf>,
 
         /// Baseline names to generate (comma-separated, ignored if --config is used)
-        #[arg(short, long, value_delimiter = ',')]
-        baselines: Option<Vec<String>>,
+        #[arg(
+            short = 'k',
+            long = "keywords",
+            visible_alias = "baselines",
+            short_alias = 'b',
+            value_delimiter = ','
+        )]
+        keywords: Option<Vec<String>>,
 
         /// Output directory for Fleet `GitOps` structure (ignored if --config is used)
         #[arg(short, long)]
@@ -487,7 +503,7 @@ pub enum Commands {
         #[arg(long)]
         use_container: bool,
 
-        /// [MSCP] Generate DDM (Declarative Device Management) artifacts (pass -D flag to mSCP)
+        /// [MSCP] Generate DDM (Declarative Device Management) artifacts (passes `--ddm` to mSCP)
         #[arg(long, help_heading = "mSCP Generation Options")]
         generate_ddm: bool,
 
@@ -551,8 +567,13 @@ pub enum Commands {
         output: PathBuf,
 
         /// Optional baseline name to filter diff
-        #[arg(short, long)]
-        baseline: Option<String>,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: Option<String>,
 
         /// Output format
         #[arg(short, long, default_value = "console")]
@@ -581,8 +602,14 @@ pub enum Commands {
         output: PathBuf,
 
         /// Baseline names to deduplicate (comma-separated). If not specified, scans all baselines.
-        #[arg(short, long, value_delimiter = ',')]
-        baselines: Option<Vec<String>>,
+        #[arg(
+            short = 'k',
+            long = "keywords",
+            visible_alias = "baselines",
+            short_alias = 'b',
+            value_delimiter = ','
+        )]
+        keywords: Option<Vec<String>>,
 
         /// Platform (macOS, iOS, visionOS)
         #[arg(short, long, default_value = "macOS")]
@@ -618,8 +645,13 @@ pub enum Commands {
         mscp_repo: Option<PathBuf>,
 
         /// Baseline name (e.g., `cis_lvl1`, 800-53r5_high)
-        #[arg(short, long)]
-        baseline: String,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: String,
 
         /// Output directory for scripts
         #[arg(short, long)]
@@ -645,8 +677,13 @@ pub enum Commands {
     /// Clean (remove) a baseline and associated files
     Clean {
         /// Baseline name to remove
-        #[arg(short, long)]
-        baseline: String,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: String,
 
         /// Output directory containing Fleet `GitOps` structure
         #[arg(short, long)]
@@ -734,8 +771,13 @@ pub enum Commands {
         mscp_repo: PathBuf,
 
         /// Baseline name (e.g., `cis_lvl1`, `800-53r5_high`).
-        #[arg(short, long)]
-        baseline: String,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: String,
 
         /// Output recipe TOML path (defaults to `<baseline>.toml`).
         #[arg(short, long)]
@@ -817,8 +859,13 @@ pub enum SchemaAction {
     /// List rules for a specific baseline and platform
     Rules {
         /// Baseline name (e.g., cis_lvl1, 800-53r5_high)
-        #[arg(short, long)]
-        baseline: String,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: String,
 
         /// Platform (e.g., macOS, iOS, visionOS)
         #[arg(short, long, default_value = "macOS")]
@@ -832,8 +879,8 @@ pub enum SchemaAction {
     Compare {
         /// Path to mSCP repository
         mscp_repo: PathBuf,
-        /// Baseline to compare
-        baseline: String,
+        /// mSCP keyword tag to compare (e.g. `cis_lvl1`)
+        keyword: String,
         /// Platform filter
         #[arg(long, default_value = "macOS")]
         platform: String,
@@ -918,8 +965,13 @@ pub enum ConstraintsAction {
         mscp_repo: Option<PathBuf>,
 
         /// Specific baseline to scan for profiles (scans all if not specified)
-        #[arg(short, long)]
-        baseline: Option<String>,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: Option<String>,
     },
 
     /// Remove profiles from exclusion list
@@ -937,8 +989,13 @@ pub enum ConstraintsAction {
         mscp_repo: Option<PathBuf>,
 
         /// Baseline name (ignored for remove, accepted for consistency)
-        #[arg(short, long)]
-        baseline: Option<String>,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: Option<String>,
     },
 
     /// List currently excluded profiles
@@ -956,8 +1013,13 @@ pub enum ConstraintsAction {
         mscp_repo: Option<PathBuf>,
 
         /// Baseline name (ignored for list, accepted for consistency)
-        #[arg(short, long)]
-        baseline: Option<String>,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: Option<String>,
     },
 
     /// Add scripts to exclusion list via fuzzy search
@@ -975,8 +1037,13 @@ pub enum ConstraintsAction {
         mscp_repo: Option<PathBuf>,
 
         /// Specific baseline to scan for scripts (scans all if not specified)
-        #[arg(short, long)]
-        baseline: Option<String>,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: Option<String>,
     },
 
     /// Remove scripts from exclusion list
@@ -994,8 +1061,13 @@ pub enum ConstraintsAction {
         mscp_repo: Option<PathBuf>,
 
         /// Baseline name (ignored for remove, accepted for consistency)
-        #[arg(short, long)]
-        baseline: Option<String>,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: Option<String>,
     },
 
     /// List currently excluded scripts
@@ -1013,8 +1085,13 @@ pub enum ConstraintsAction {
         mscp_repo: Option<PathBuf>,
 
         /// Baseline name (ignored for list, accepted for consistency)
-        #[arg(short, long)]
-        baseline: Option<String>,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: Option<String>,
     },
 
     /// Add category-based exclusions (interactive picker or direct via --exclude)
@@ -1032,8 +1109,13 @@ pub enum ConstraintsAction {
         mscp_repo: Option<PathBuf>,
 
         /// Baseline to resolve categories against
-        #[arg(short, long)]
-        baseline: String,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: String,
 
         /// Categories to exclude (comma-separated, skips interactive picker)
         #[arg(short, long, value_delimiter = ',')]
@@ -1051,8 +1133,13 @@ pub enum OdvAction {
         mscp_repo: PathBuf,
 
         /// Baseline name (e.g., `cis_lvl1`, 800-53r5_high)
-        #[arg(short, long)]
-        baseline: String,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: String,
 
         /// Output directory for ODV override file
         #[arg(short, long, default_value = ".")]
@@ -1066,8 +1153,13 @@ pub enum OdvAction {
         mscp_repo: PathBuf,
 
         /// Baseline name (e.g., `cis_lvl1`, 800-53r5_high)
-        #[arg(short, long)]
-        baseline: String,
+        #[arg(
+            short = 'k',
+            long = "keyword",
+            visible_alias = "baseline",
+            short_alias = 'b'
+        )]
+        keyword: String,
 
         /// Path to ODV override file (auto-detected as `odv_<baseline>.yaml` if not specified)
         #[arg(short = 'O', long)]

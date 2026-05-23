@@ -52,9 +52,18 @@ impl FleetUpdater {
         if !missing.is_empty() {
             let available = self.list_available_fleets()?;
             anyhow::bail!(
-                "Fleet files not found: {}\nAvailable fleets: {}",
-                missing.join(", "),
-                if available.is_empty() {
+                "Fleet files not found: {missing}\n\
+                 Available fleets: {available}\n\
+                 \n\
+                 The fleet is referenced by `[[baselines]].fleet` in mscp.toml \
+                 but no `output/fleets/<name>.yml` exists for it. Either:\n  \
+                 • Re-run `contour mscp init` to scaffold a stub for every \
+                 referenced fleet, or\n  \
+                 • Remove the `fleet = \"...\"` line from the baseline if you \
+                 don't want Fleet aggregation, or\n  \
+                 • Scaffold the file yourself (e.g. via `fleetctl new`).",
+                missing = missing.join(", "),
+                available = if available.is_empty() {
                     "(none)".to_string()
                 } else {
                     available.join(", ")
@@ -441,10 +450,77 @@ fn glob_dir_from_profiles(profiles: &[String]) -> Result<String> {
     Ok(format!("{dir}/*.mobileconfig"))
 }
 
+/// Minimal Fleet GitOps stub for `fleets/<name>.yml`, written by
+/// `mscp init` when a baseline references a fleet that doesn't yet
+/// exist. All seven top-level keys (`name`, `controls`, `policies`,
+/// `reports`, `agent_options`, `settings`, `software`) are present so
+/// `fleetctl gitops` parses the file as-is, but bodies are empty so the
+/// operator must fill in agent_options, secrets, and host labels before
+/// deploying.
+///
+/// The `agent_options.path` is the standard `../platforms/all/agent-options.yml`
+/// emitted by mSCP — it resolves once the first `mscp generate` runs.
+pub fn fleet_stub_yaml(fleet_name: &str) -> String {
+    format!(
+        "# Fleet GitOps - {fleet_name} fleet (scaffolded by `contour mscp init`)\n\
+         #\n\
+         # `[[baselines]].fleet = \"{fleet_name}\"` in mscp.toml references this\n\
+         # file. `contour mscp generate` will append each baseline's profiles\n\
+         # and scripts to the sections below. Before running `fleetctl gitops`:\n\
+         #   - Set the policies, reports, and host-label targeting for this fleet\n\
+         #   - Wire in any required `secrets:` (e.g. enroll secret)\n\
+         #   - Confirm `agent_options.path` matches your repo layout\n\
+         #\n\
+         # See: https://fleetdm.com/docs/configuration/yaml-files#teams\n\
+         \n\
+         name: {fleet_name}\n\
+         controls:\n  \
+           macos_settings:\n    \
+             custom_settings: []\n\
+         policies: []\n\
+         reports: []\n\
+         agent_options:\n  \
+           path: ../platforms/all/agent-options.yml\n\
+         settings: {{}}\n\
+         software: {{}}\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn fleet_stub_yaml_is_well_formed() {
+        // The stub must parse as YAML (so `fleetctl gitops` won't reject
+        // it) and include every top-level key Fleet GitOps requires.
+        let body = fleet_stub_yaml("workstations");
+        let parsed: yaml_serde::Value =
+            yaml_serde::from_str(&body).expect("stub must parse as YAML");
+
+        let map = parsed.as_mapping().expect("top-level must be a mapping");
+        for key in [
+            "name",
+            "controls",
+            "policies",
+            "reports",
+            "agent_options",
+            "settings",
+            "software",
+        ] {
+            assert!(
+                map.contains_key(yaml_serde::Value::String(key.to_string())),
+                "stub missing required top-level key `{key}`"
+            );
+        }
+        assert_eq!(
+            map.get(yaml_serde::Value::String("name".to_string()))
+                .and_then(yaml_serde::Value::as_str),
+            Some("workstations"),
+            "stub `name` must match the fleet name"
+        );
+    }
 
     #[test]
     fn test_profile_path_conversion() {

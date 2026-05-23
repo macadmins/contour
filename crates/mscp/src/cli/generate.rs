@@ -51,6 +51,22 @@ const MSCP_CONTAINER_BUILD_DIR: &str = "/mscp/build";
 /// `UV_PYTHON` before running contour.
 const MSCP_PYTHON_VERSION: &str = "3.13";
 
+/// mSCP flag that asks `generate_guidance.py` to emit declarative
+/// management (DDM) artifacts alongside profiles.
+///
+/// Both layouts accept the long form `--ddm`, but the short forms differ
+/// and the wrong one is silently miscompiled into the wrong feature:
+///
+/// - mSCP **1.x** (`tahoe` branch): `-D` is `--ddm`.
+/// - mSCP **2.0** (`dev_2.0` branch — contour's default since
+///   v0.3.0-beta.3): `-D` was repurposed for `--debug` (hidden via
+///   `argparse.SUPPRESS`), and `-d`/`--ddm` is the DDM flag. Passing
+///   `-D` on 2.0 silently enables debug mode and produces zero DDM
+///   artifacts.
+///
+/// Using the unambiguous long form keeps the call site layout-agnostic.
+const MSCP_DDM_FLAG: &str = "--ddm";
+
 /// Generate command - wrapper mode (calls mSCP then processes)
 #[expect(
     clippy::too_many_arguments,
@@ -158,7 +174,7 @@ pub fn generate_baseline(
                         profile_count += 1;
                     } else if ext == "sh" {
                         script_count += 1;
-                    } else if ext == "json" && path.to_string_lossy().contains("declaration") {
+                    } else if ext == "json" && path.to_string_lossy().contains("declarative") {
                         ddm_count += 1;
                     }
                 }
@@ -240,7 +256,7 @@ pub fn generate_baseline(
                     result.profiles_generated += 1;
                 } else if ext == "sh" {
                     result.scripts_generated += 1;
-                } else if ext == "json" && entry.path().to_string_lossy().contains("declaration") {
+                } else if ext == "json" && entry.path().to_string_lossy().contains("declarative") {
                     result.ddm_artifacts += 1;
                 }
             }
@@ -562,8 +578,8 @@ fn run_mscp_generation(
         PythonMethod::Python3 => {
             let mut cmd_args = vec!["-p", "-s"];
             if generate_ddm {
-                tracing::info!("Adding -D flag to generate DDM artifacts");
-                cmd_args.push("-D");
+                tracing::info!("Adding {MSCP_DDM_FLAG} flag to generate DDM artifacts");
+                cmd_args.push(MSCP_DDM_FLAG);
             }
 
             tracing::info!(
@@ -578,7 +594,7 @@ fn run_mscp_generation(
             cmd.arg(script_relative).arg("-p").arg("-s");
 
             if generate_ddm {
-                cmd.arg("-D");
+                cmd.arg(MSCP_DDM_FLAG);
             }
 
             cmd.arg(&baseline_yaml_relative)
@@ -596,8 +612,8 @@ fn run_mscp_generation(
 
             let mut cmd_args = vec!["-p", "-s"];
             if generate_ddm {
-                tracing::info!("Adding -D flag to generate DDM artifacts");
-                cmd_args.push("-D");
+                tracing::info!("Adding {MSCP_DDM_FLAG} flag to generate DDM artifacts");
+                cmd_args.push(MSCP_DDM_FLAG);
             }
 
             tracing::info!(
@@ -627,7 +643,7 @@ fn run_mscp_generation(
                 .arg("-s");
 
             if generate_ddm {
-                cmd.arg("-D");
+                cmd.arg(MSCP_DDM_FLAG);
             }
 
             cmd.arg(&baseline_yaml_relative)
@@ -903,7 +919,7 @@ pub fn container_init(
     println!();
     println!("🚀 Usage:");
     println!(
-        "   contour mscp generate --mscp-repo {} --baseline cis_lvl1 --output ./output --use-container",
+        "   contour mscp generate --mscp-repo {} --keyword cis_lvl1 --output ./output --use-container",
         mscp_repo.display()
     );
     println!();
@@ -1027,103 +1043,168 @@ pub fn test_container(image: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Run mSCP generation using container
+/// Bail with a clear next-step if the operator's local mSCP repo is on
+/// a different layout than the container image expects. The default
+/// image (`ghcr.io/brodjieski/mscp_2.0:latest`) bakes in 2.0 scripts
+/// that can't read 1.x rule semantics; running them against a 1.x repo
+/// fails with a confusing "build output not found" *after* the
+/// container exits. Failing fast here surfaces the actual problem and
+/// tells the operator how to switch.
+///
+/// Only enforced when a local repo with a `rules/` directory exists —
+/// bare container mode (no local mSCP checkout) still works against
+/// the image's baked-in baselines/rules.
+fn assert_compatible_layout(mscp_repo_abs: &Path, image: &str) -> Result<()> {
+    if !mscp_repo_abs.join("rules").exists() {
+        return Ok(());
+    }
+    let Ok(layout) = crate::layout::MscpLayout::detect(mscp_repo_abs) else {
+        // `rules/` exists but layout detection failed — let the script
+        // produce its own error rather than guessing here.
+        return Ok(());
+    };
+
+    if layout == crate::layout::MscpLayout::V1x && image.contains("mscp_2.0") {
+        anyhow::bail!(
+            "Local mSCP repo at `{repo}` is on the 1.x layout (flat \
+             `baselines/<name>.yaml`), but the default container image \
+             `{image}` is mSCP 2.0. The image's 2.0 scripts can't read 1.x \
+             rules, so the run would fail with a confusing error after the \
+             container exits.\n\n\
+             Fix by switching the local repo to 2.0:\n  \
+             git -C {repo} fetch origin dev_2.0:dev_2.0 && \\\n  \
+             git -C {repo} checkout dev_2.0\n\n\
+             Or drop `--use-container` and use the local Python interpreter \
+             (`--use-uv` / `--use-python3`), which works with either layout.",
+            repo = mscp_repo_abs.display(),
+            image = image,
+        );
+    }
+    Ok(())
+}
+
+/// Run mSCP generation using container.
+///
+/// Layout-aware: when a local mSCP repo is present, the operator's
+/// `rules/`, `baselines/`, `custom/`, and `includes/` subdirectories
+/// are bind-mounted over the image's baked-in copies (read-only). The
+/// image keeps its Python venv, scripts/, src/, and templates/; the
+/// operator's customisations become visible to the script.
+///
+/// The default image (`mscp_2.0:latest`) bakes in mSCP 2.0 scripts that
+/// don't understand 1.x rule semantics. So before mounting, the local
+/// repo's layout must match the image's layout — otherwise bail with a
+/// clear next-step instead of producing a confusing "build output not
+/// found" error after the container runs.
 fn run_mscp_container(
     mscp_repo_path: &PathBuf,
     baseline_yaml_relative: &str,
     generate_ddm: bool,
 ) -> Result<()> {
-    let runtime = detect_container_runtime().ok_or_else(|| {
-        anyhow::anyhow!("No container runtime found. Install Docker or Apple container tool.")
-    })?;
-
     let image = DEFAULT_MSCP_CONTAINER_IMAGE;
 
-    // Ensure output directory exists
-    let build_dir = mscp_repo_path.join("build");
-    fs::create_dir_all(&build_dir)?;
-
-    // Get absolute path for volume mount
+    // Get absolute path (best effort — if the repo path doesn't exist
+    // yet, fall back to the caller's value; we'll re-check after creating
+    // build/).
     let mscp_repo_abs = mscp_repo_path
         .canonicalize()
         .unwrap_or_else(|_| mscp_repo_path.clone());
 
+    // Layout safety check first — runs without needing a container
+    // runtime, so it fails fast with an actionable message even on a
+    // machine without Docker/Apple container.
+    assert_compatible_layout(&mscp_repo_abs, image)?;
+
+    let runtime = detect_container_runtime().ok_or_else(|| {
+        anyhow::anyhow!("No container runtime found. Install Docker or Apple container tool.")
+    })?;
+
+    // Ensure output directory exists (after layout check so we don't
+    // create an empty build/ when we're about to bail).
+    let build_dir = mscp_repo_path.join("build");
+    fs::create_dir_all(&build_dir)?;
+
+    // Build the bind-mount list. `build/` always gets mounted (that's
+    // where the script writes its output). The operator-editable
+    // subdirs are mounted only when present on disk, read-only to
+    // protect them from container-side writes.
+    let build_dir_canonical = build_dir
+        .canonicalize()
+        .unwrap_or_else(|_| build_dir.clone());
+    let mut bind_mounts: Vec<(String, String, bool)> = vec![(
+        build_dir_canonical.display().to_string(),
+        MSCP_CONTAINER_BUILD_DIR.to_string(),
+        false, // build/ must be writable — the script writes its output here
+    )];
+    for sub in ["rules", "baselines", "custom", "includes"] {
+        let host_path = mscp_repo_abs.join(sub);
+        if host_path.exists() {
+            bind_mounts.push((
+                host_path.display().to_string(),
+                format!("/mscp/{sub}"),
+                true, // operator's source is read-only inside the container
+            ));
+        }
+    }
+
     tracing::info!(
-        "Running mSCP generation in container ({:?}): baseline={}",
+        "Running mSCP generation in container ({:?}): baseline={}, {} bind mount(s)",
         runtime,
-        baseline_yaml_relative
+        baseline_yaml_relative,
+        bind_mounts.len()
     );
+
+    // Both Docker and `container` accept `-v host:target[:ro]`; only
+    // the long flag differs ('container' uses `--volume`).
+    let (cmd_name, vol_flag) = match runtime {
+        ContainerRuntime::Docker => ("docker", "-v"),
+        ContainerRuntime::AppleContainer => ("container", "--volume"),
+    };
 
     let mut cmd_args = vec!["-p", "-s"];
     if generate_ddm {
-        cmd_args.push("-D");
+        cmd_args.push(MSCP_DDM_FLAG);
     }
 
-    let output = match runtime {
-        ContainerRuntime::Docker => {
-            // Docker: mount local build dir to the image's build path
-            let mut cmd = Command::new("docker");
-            cmd.arg("run")
-                .arg("--rm")
-                .arg("-v")
-                .arg(format!(
-                    "{}:{MSCP_CONTAINER_BUILD_DIR}",
-                    build_dir.display()
-                ))
-                .arg(image)
-                .arg("python3")
-                .arg("scripts/generate_guidance.py")
-                .arg("-p")
-                .arg("-s");
-
-            if generate_ddm {
-                cmd.arg("-D");
+    let output = {
+        let mut cmd = Command::new(cmd_name);
+        cmd.arg("run").arg("--rm");
+        for (host, target, read_only) in &bind_mounts {
+            cmd.arg(vol_flag);
+            if *read_only {
+                cmd.arg(format!("{host}:{target}:ro"));
+            } else {
+                cmd.arg(format!("{host}:{target}"));
             }
-
-            cmd.arg(baseline_yaml_relative);
-
-            tracing::info!(
-                "Executing: docker run --rm -v {}:{MSCP_CONTAINER_BUILD_DIR} {} python3 scripts/generate_guidance.py {} {}",
-                build_dir.display(),
-                image,
-                cmd_args.join(" "),
-                baseline_yaml_relative
-            );
-
-            cmd.output().context("Failed to execute docker run")?
         }
-        ContainerRuntime::AppleContainer => {
-            // Apple container tool
-            let mut cmd = Command::new("container");
-            cmd.arg("run")
-                .arg("--rm")
-                .arg("--volume")
-                .arg(format!(
-                    "{}:{MSCP_CONTAINER_BUILD_DIR}",
-                    build_dir.display()
-                ))
-                .arg(image)
-                .arg("python3")
-                .arg("scripts/generate_guidance.py")
-                .arg("-p")
-                .arg("-s");
+        cmd.arg(image)
+            .arg("python3")
+            .arg("scripts/generate_guidance.py")
+            .arg("-p")
+            .arg("-s");
 
-            if generate_ddm {
-                cmd.arg("-D");
-            }
-
-            cmd.arg(baseline_yaml_relative);
-
-            tracing::info!(
-                "Executing: container run --rm --volume {}:{MSCP_CONTAINER_BUILD_DIR} {} python3 scripts/generate_guidance.py {} {}",
-                mscp_repo_abs.display(),
-                image,
-                cmd_args.join(" "),
-                baseline_yaml_relative
-            );
-
-            cmd.output().context("Failed to execute container run")?
+        if generate_ddm {
+            cmd.arg(MSCP_DDM_FLAG);
         }
+
+        cmd.arg(baseline_yaml_relative);
+
+        tracing::info!(
+            "Executing: {cmd_name} run --rm {mounts} {image} python3 scripts/generate_guidance.py {args} {baseline_yaml_relative}",
+            mounts = bind_mounts
+                .iter()
+                .map(|(h, t, ro)| if *ro {
+                    format!("{vol_flag} {h}:{t}:ro")
+                } else {
+                    format!("{vol_flag} {h}:{t}")
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+            args = cmd_args.join(" "),
+        );
+
+        cmd.output()
+            .with_context(|| format!("Failed to execute {cmd_name} run"))?
     };
 
     if !output.status.success() {
@@ -1571,7 +1652,7 @@ pub fn list_available_baselines(mscp_repo_path: PathBuf, output_mode: OutputMode
     println!();
     println!("{}", "Usage:".bold());
     println!(
-        "  contour mscp generate --mscp-repo {} --baseline {} --output ./output",
+        "  contour mscp generate --mscp-repo {} --keyword {} --output ./output",
         mscp_repo_path.display(),
         "<NAME>".cyan()
     );
@@ -1817,5 +1898,93 @@ mod tests {
         fs::create_dir_all(tmp.path().join("baselines/ios")).unwrap();
         let err = highest_baseline_version(tmp.path(), "800-53r5_high", "ios").unwrap_err();
         assert!(err.to_string().contains("no mSCP 2.0 baseline files"));
+    }
+
+    /// Build a fake mSCP repo on disk just complete enough for
+    /// `MscpLayout::detect` to classify it. The detector keys on
+    /// flat `rules/*.yaml` (1.x) vs `rules/<os>/` subdirs (2.0).
+    fn fake_repo(tmp: &Path, layout: crate::layout::MscpLayout) -> &Path {
+        fs::create_dir_all(tmp.join("rules")).unwrap();
+        match layout {
+            crate::layout::MscpLayout::V1x => {
+                // 1.x: flat rule YAML directly under rules/
+                fs::write(
+                    tmp.join("rules/os_sample.yaml"),
+                    "id: os_sample\ntitle: sample\n",
+                )
+                .unwrap();
+                fs::create_dir_all(tmp.join("baselines")).unwrap();
+                fs::write(tmp.join("baselines/cis_lvl1.yaml"), "title: sample\n").unwrap();
+            }
+            crate::layout::MscpLayout::V2x => {
+                // 2.0: the discriminating signal in MscpLayout::detect is
+                // the top-level `platforms` key. Per-OS sub-tree layout
+                // matters for path resolution; the detect probe only
+                // reads the first rule.
+                fs::create_dir_all(tmp.join("rules/macos")).unwrap();
+                fs::write(
+                    tmp.join("rules/macos/os_sample.yaml"),
+                    "id: os_sample\ntitle: sample\nplatforms:\n  macos:\n    enforcement_info: {}\n",
+                )
+                .unwrap();
+                fs::create_dir_all(tmp.join("baselines/macos")).unwrap();
+                fs::write(
+                    tmp.join("baselines/macos/cis_lvl1_macos_26.0.yaml"),
+                    "title: sample\n",
+                )
+                .unwrap();
+            }
+        }
+        tmp
+    }
+
+    #[test]
+    fn assert_compatible_layout_bails_when_1x_repo_meets_2_0_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = fake_repo(tmp.path(), crate::layout::MscpLayout::V1x);
+
+        let err = assert_compatible_layout(repo, "ghcr.io/brodjieski/mscp_2.0:latest")
+            .expect_err("1.x repo + 2.0 image must bail");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("1.x layout"),
+            "error must name the layout: {msg}"
+        );
+        assert!(
+            msg.contains("dev_2.0"),
+            "error must point at the dev_2.0 branch: {msg}"
+        );
+        assert!(
+            msg.contains("--use-uv") || msg.contains("--use-python3"),
+            "error must offer the non-container fallback: {msg}"
+        );
+    }
+
+    #[test]
+    fn assert_compatible_layout_passes_when_2_0_repo_meets_2_0_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = fake_repo(tmp.path(), crate::layout::MscpLayout::V2x);
+        assert_compatible_layout(repo, "ghcr.io/brodjieski/mscp_2.0:latest")
+            .expect("2.0 repo + 2.0 image must pass");
+    }
+
+    #[test]
+    fn assert_compatible_layout_skips_check_when_no_local_repo() {
+        // Container-only mode (no local rules/ dir) should pass — the
+        // image's baked-in source is the only source of truth.
+        let tmp = tempfile::tempdir().unwrap();
+        assert_compatible_layout(tmp.path(), "ghcr.io/brodjieski/mscp_2.0:latest")
+            .expect("bare container mode must skip the layout check");
+    }
+
+    #[test]
+    fn assert_compatible_layout_passes_when_image_is_not_2_0() {
+        // A 1.x repo paired with a non-2.0 image is the legacy
+        // compatible combination and must not be blocked.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = fake_repo(tmp.path(), crate::layout::MscpLayout::V1x);
+        assert_compatible_layout(repo, "ghcr.io/brodjieski/mscp:latest")
+            .expect("1.x repo + non-2.0 image must pass");
     }
 }
