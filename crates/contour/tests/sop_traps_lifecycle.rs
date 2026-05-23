@@ -380,17 +380,17 @@ services = ["camera", "microphone"]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trap 31: `btm generate --ddm` ALONE (combined mode, the default) emits a
-//          single `.mobileconfig` file — NOT `.json` declarations. To get
-//          declarations the agent MUST pair `--ddm` with `--per-app`. Pin
-//          this so the SOP's STEP 2 (which now passes both) cannot drift.
+// Trap 31: `btm generate --ddm` emits one `.json` DDM declaration per app —
+//          in BOTH combined (default) and `--per-app` mode. DDM is inherently
+//          per-declaration, so `--per-app` is effectively a no-op once `--ddm`
+//          is set.
 // SOP procedure: generate_btm_profile / STEP 2
-// Catches: an agent reading "DDM declaration JSON for macOS 15+" in the
-// SOP and passing only `--ddm` will silently ship .mobileconfig and the
-// declarative channel will receive nothing.
+// Regression guard: before 8a3d742, combined-mode `--ddm` silently dropped
+// the flag and wrote a `.mobileconfig` instead — the historical "quirk" the
+// SOP used to document. If anything reverts that, this test fails.
 // ─────────────────────────────────────────────────────────────────────────────
 #[test]
-fn trap_31_btm_ddm_alone_does_not_emit_json_combined_mode_quirk() {
+fn trap_31_btm_ddm_emits_per_app_json_in_both_modes() {
     let dir = tempfile::tempdir().unwrap();
     let toml = dir.path().join("btm.toml");
     let out_combined = dir.path().join("out-combined");
@@ -418,71 +418,69 @@ rule_value = "BQR82RBBHL"
     )
     .unwrap();
 
-    // Combined mode (default): `--ddm` alone is silently ignored.
-    let combined = Command::cargo_bin("contour")
-        .unwrap()
-        .args([
-            "btm",
-            "generate",
-            toml.to_str().unwrap(),
-            "--ddm",
-            "-o",
-            out_combined.to_str().unwrap(),
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    assert!(combined.status.success(), "btm generate --ddm exits 0");
+    let run = |args: &[&str]| {
+        let out = Command::cargo_bin("contour")
+            .unwrap()
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "btm generate exited non-zero; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
 
-    let combined_json = fs::read_dir(&out_combined)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|s| s.to_str())
-                .is_some_and(|s| s == "json")
-        })
-        .count();
+    // Combined (default) — emits per-app .json declarations under --ddm.
+    run(&[
+        "btm",
+        "generate",
+        toml.to_str().unwrap(),
+        "--ddm",
+        "-o",
+        out_combined.to_str().unwrap(),
+        "--json",
+    ]);
+
+    // --per-app — identical output: per-app is a no-op once --ddm is set.
+    run(&[
+        "btm",
+        "generate",
+        toml.to_str().unwrap(),
+        "--ddm",
+        "--per-app",
+        "-o",
+        out_per_app.to_str().unwrap(),
+        "--json",
+    ]);
+
+    let count_ext = |dir: &std::path::Path, ext: &str| -> usize {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some(ext))
+            .count()
+    };
+
+    // Both modes: exactly one .json per app, zero .mobileconfig.
     assert_eq!(
-        combined_json, 0,
-        "combined-mode --ddm currently emits .mobileconfig, not .json — \
-         if this changes, the SOP's STEP 2 quirk note can be removed"
+        count_ext(&out_combined, "json"),
+        1,
+        "combined --ddm must emit one .json per app"
     );
-
-    // Per-app + DDM: actually emits .json declarations.
-    let per_app = Command::cargo_bin("contour")
-        .unwrap()
-        .args([
-            "btm",
-            "generate",
-            toml.to_str().unwrap(),
-            "--ddm",
-            "--per-app",
-            "-o",
-            out_per_app.to_str().unwrap(),
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        per_app.status.success(),
-        "btm generate --ddm --per-app exits 0; stderr: {}",
-        String::from_utf8_lossy(&per_app.stderr)
+    assert_eq!(
+        count_ext(&out_combined, "mobileconfig"),
+        0,
+        "combined --ddm must not emit .mobileconfig"
     );
-
-    let per_app_json = fs::read_dir(&out_per_app)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|s| s.to_str())
-                .is_some_and(|s| s == "json")
-        })
-        .count();
-    assert!(
-        per_app_json >= 1,
-        "--ddm --per-app MUST emit at least one .json declaration; got {per_app_json}"
+    assert_eq!(
+        count_ext(&out_per_app, "json"),
+        1,
+        "--per-app --ddm must emit one .json per app"
+    );
+    assert_eq!(
+        count_ext(&out_per_app, "mobileconfig"),
+        0,
+        "--per-app --ddm must not emit .mobileconfig"
     );
 }
