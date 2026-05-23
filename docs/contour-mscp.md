@@ -13,14 +13,23 @@ Aimed at Mac admins deploying security compliance baselines across Apple platfor
 contour mscp init --org com.yourorg --name "Your Org" --fleet --sync
 
 # Generate a baseline - for Fleet with DDM declarations
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output --fleet-mode --generate-ddm --remove-consent-text 
+contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output --fleet-mode --generate-ddm --remove-consent-text 
 
 # Generate a baseline - for Jamf with consent text removed
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output --jamf-mode --remove-consent-text
+contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output --jamf-mode --remove-consent-text
 
 # Or generate all configured baselines at once
 contour mscp generate-all -c mscp.toml
 ```
+
+> **Selecting a baseline: `--keyword` / `-k`.** Across every mscp
+> subcommand, the flag that names which baseline to act on is
+> `--keyword` / `-k` (mSCP 2.0 calls this tag a *keyword* — the value
+> that selects rules, e.g. `cis_lvl1`). The earlier `--baseline` / `-b`
+> spelling remains a permanent alias, so existing scripts keep working
+> unchanged. The plural form (`init`, `generate-all`, `deduplicate`) is
+> `--keywords` / `-k`, aliased from `--baselines`. Examples below use the
+> `-k` / `--keyword` primary form.
 
 ## Configuration
 
@@ -36,12 +45,25 @@ options, with `jamf` / `fleet` / `munki` sub-tables), **`[[baselines]]`**
 (one per baseline to generate), **`[output]`** (directory layout), and
 **`[validation]`**. A representative file:
 
+> **TOML keys use underscores; CLI flags use hyphens — and the names
+> aren't always a 1:1 swap.** A `mscp.toml` key and the equivalent CLI
+> flag set the same option but spell it differently. Most are a plain
+> underscore→hyphen change (`deterministic_uuids` ↔ `--deterministic-uuids`,
+> `no_creation_date` ↔ `--no-creation-date`), but some CLI flags add a
+> mode prefix — `[settings.jamf] exclude_conflicts` is
+> `--jamf-exclude-conflicts` on the command line. Treat each surface as
+> authoritative for itself: use the underscore key tables below for
+> `mscp.toml`, and run `contour mscp <command> --help` (or the flag tables
+> under [Commands](#commands)) for the exact CLI spelling. A hyphenated
+> key in `mscp.toml` is silently ignored (unknown field) and falls back
+> to its default.
+
 ```toml
 [settings]
 mscp_repo = "./macos_security"   # Path to the mSCP repository checkout
 output_dir = "./output"          # Where generated config is written
 python_method = "auto"           # auto | uv | python3
-generate_ddm = false             # Pass -D to the mSCP build script
+generate_ddm = false             # Pass --ddm to the mSCP build script
 
 [settings.organization]
 domain = "com.yourorg"           # Reverse-domain identifier prefix
@@ -66,12 +88,12 @@ script_nopkg = false
 [[baselines]]
 name = "cis_lvl1"
 enabled = true
-branch = "origin/tahoe"          # Git branch — determines platform/OS
+branch = "dev_2.0"               # mSCP branch (dev_2.0 = 2.0 layout; tahoe = legacy 1.x)
 
 [[baselines]]
 name = "800-53r5_moderate"
 enabled = true
-branch = "origin/tahoe"
+branch = "dev_2.0"
 excluded_rules = []
 [baselines.labels]
 include_any = ["compliance-moderate"]
@@ -97,7 +119,7 @@ Global generation settings shared by every baseline.
 | `output_dir` | path | `./output` | Directory generated config is written to. Any path works; `mscp init` scaffolds `./output`. |
 | `python_method` | string | `auto` | How to run the mSCP build script: `auto`, `uv`, or `python3`. |
 | `verbose` | bool | `false` | Verbose logging. |
-| `generate_ddm` | bool | `false` | Pass `-D` to the mSCP script so it also emits DDM declarations. |
+| `generate_ddm` | bool | `false` | Pass `--ddm` to the mSCP script so it also emits DDM declarations. |
 
 #### `[settings.organization]`
 
@@ -302,7 +324,7 @@ Fleet GitOps structure either way:
 
 Pass `--mscp-version 1.x` or `2.0` to skip detection when the heuristic
 cannot decide (e.g. an empty or non-standard checkout). With a 2.0 repo,
-`generate -b 800-53r5_high --os macos` builds
+`generate -k 800-53r5_high --os macos` builds
 `baselines/macos/800-53r5_high_macos_26.0.yaml` (newest version) — no
 need to know the exact filename.
 
@@ -352,13 +374,13 @@ contour mscp init [flags]
 | `--jamf` | Enable Jamf Pro mode (sets `output.structure = "flat"`) | `false` |
 | `--munki` | Enable Munki integration (sets `output.structure = "nested"`) | `false` |
 | `--sync` | Clone/sync mSCP repository | `false` |
-| `--branch <BRANCH>` | mSCP branch to clone | `tahoe` |
-| `--baselines <BASELINES>` | Baselines to enable (comma-separated, used with `--sync`) | none |
+| `--branch <BRANCH>` | mSCP branch to clone (`dev_2.0` = mSCP 2.0 layout; `tahoe` and macOS-version branches = legacy 1.x) | `dev_2.0` |
+| `--keywords <BASELINES>` | Baselines to enable (comma-separated, used with `--sync`) | none |
 | `--force` | Overwrite existing configuration | `false` |
 
 ```bash
 # Full setup: init config, clone mSCP, enable baselines
-contour mscp init --org com.acme --name "Acme Corp" --fleet --sync --baselines cis_lvl1,cis_lvl2
+contour mscp init --org com.acme --name "Acme Corp" --fleet --sync --keywords cis_lvl1,cis_lvl2
 ```
 
 #### `mscp list-baselines`
@@ -392,7 +414,7 @@ contour mscp generate [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | **required** |
-| `-b, --baseline <NAME>` | Baseline name (e.g., `cis_lvl1`) | **required** |
+| `-k, --keyword <NAME>` | Baseline name (e.g., `cis_lvl1`) | **required** |
 | `-o, --output <DIR>` | Output directory | **required** |
 | `--branch <BRANCH>` | Git branch (determines platform/OS) | repo default |
 | `--mscp-version <VER>` | mSCP layout: `auto`, `1.x`, or `2.0` (see [mSCP repository layout](#mscp-repository-layout--1x-vs-20)) | `auto` |
@@ -419,7 +441,7 @@ contour mscp generate [flags]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--generate-ddm` | Generate DDM declarations (pass `-D` to mSCP) | `false` |
+| `--generate-ddm` | Generate DDM declarations (passes `--ddm` to mSCP) | `false` |
 | `--use-uv` | Use `uv run` instead of `python3` | auto-detected |
 | `--use-python3` | Force `python3` | auto-detected |
 | `--use-container` | Run mSCP in a container | `false` |
@@ -481,15 +503,15 @@ the operator's existing entries.
 
 ```bash
 # Generate CIS Level 1 for Fleet with DDM
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output \
+contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output \
   --fleet-mode --generate-ddm --org com.acme --fleets "Engineering,Security"
 
 # Generate 800-53 High and attach it to existing fleet files as a glob
-contour mscp generate -m ./macos_security -b 800-53r5_high -o ./output \
+contour mscp generate -m ./macos_security -k 800-53r5_high -o ./output \
   --fleet-mode --fleets "workstations,servers" --glob
 
 # Generate STIG for Jamf Pro
-contour mscp generate -m ./macos_security -b stig -o ./output \
+contour mscp generate -m ./macos_security -k stig -o ./output \
   --jamf-mode --deterministic-uuids --jamf-exclude-conflicts
 ```
 
@@ -505,7 +527,7 @@ contour mscp generate-all [flags]
 |------|-------------|---------|
 | `-c, --config <CONFIG>` | Path to configuration file | none |
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository (ignored if `--config`) | none |
-| `-b, --baselines <NAMES>` | Baselines to generate (comma-separated, ignored if `--config`) | none |
+| `-k, --keywords <NAMES>` | Baselines to generate (comma-separated, ignored if `--config`) | none |
 | `-o, --output <DIR>` | Output directory (ignored if `--config`) | none |
 | `--no-parallel` | Disable parallel processing | `false` |
 | `--dry-run` | Preview without writing files | `false` |
@@ -517,7 +539,7 @@ Also accepts: `--generate-ddm`, `--deterministic-uuids`, `--jamf-mode`, `--no-cr
 contour mscp generate-all -c mscp.toml
 
 # Or specify baselines directly
-contour mscp generate-all -m ./macos_security -b cis_lvl1,cis_lvl2,stig -o ./output --fleet-mode
+contour mscp generate-all -m ./macos_security -k cis_lvl1,cis_lvl2,stig -o ./output --fleet-mode
 ```
 
 #### `mscp process`
@@ -534,7 +556,7 @@ contour mscp process [flags]
 |------|-------------|---------|
 | `-i, --input <PATH>` | Path to mSCP build output directory (e.g., `./macos_security/build/cis_lvl1`) | **required** |
 | `-o, --output <DIR>` | Output directory | **required** |
-| `-b, --baseline <NAME>` | Baseline name | **required** |
+| `-k, --keyword <NAME>` | Baseline name | **required** |
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository (for Git version tracking) | none |
 | `--dry-run` | Preview without writing files | `false` |
 
@@ -542,7 +564,7 @@ Also accepts all profile options (`--deterministic-uuids`, `--org`, `--org-name`
 
 ```bash
 # Process pre-built output
-contour mscp process -i ./macos_security/build/cis_lvl1 -o ./output -b cis_lvl1 --fleet-mode
+contour mscp process -i ./macos_security/build/cis_lvl1 -o ./output -k cis_lvl1 --fleet-mode
 ```
 
 #### `mscp recipe`
@@ -564,13 +586,13 @@ drop into a recipe library and render with `contour profile generate
 Python toolchain.
 
 ```
-contour mscp recipe -r <MSCP_REPO> -b <BASELINE> [flags]
+contour mscp recipe -r <MSCP_REPO> -k <KEYWORD> [flags]
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-r, --mscp-repo <PATH>` | Path to the mSCP repository (the directory containing `rules/`) | **required** |
-| `-b, --baseline <NAME>` | Baseline name (e.g., `cis_lvl1`, `800-53r5_high`) | **required** |
+| `-k, --keyword <NAME>` | Baseline name (e.g., `cis_lvl1`, `800-53r5_high`) | **required** |
 | `-o, --output <PATH>` | Output recipe TOML path | `<baseline>.toml` |
 | `--org <VENDOR>` | Organization vendor string written to the recipe header | none |
 | `--odv-mode <MODE>` | How to render `$ODV` placeholders: `variable` or `inline` | `variable` |
@@ -588,7 +610,7 @@ recipes that need no editable surface.
 
 ```bash
 # Build a recipe from the CIS Level 1 baseline, then render it
-contour mscp recipe -r ./macos_security -b cis_lvl1 -o ./recipes/cis_lvl1.toml --org com.acme
+contour mscp recipe -r ./macos_security -k cis_lvl1 -o ./recipes/cis_lvl1.toml --org com.acme
 contour profile generate --recipe ./recipes/cis_lvl1.toml --org com.acme -o build
 ```
 
@@ -637,7 +659,7 @@ contour mscp diff [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-o, --output <DIR>` | Output directory containing GitOps structure | **required** |
-| `-b, --baseline <NAME>` | Filter to specific baseline | all baselines |
+| `-k, --keyword <NAME>` | Filter to specific baseline | all baselines |
 | `-f, --format <FORMAT>` | `console` or `markdown` | `console` |
 
 ```bash
@@ -645,7 +667,7 @@ contour mscp diff [flags]
 contour mscp diff -o ./output -f markdown
 
 # Diff a specific baseline
-contour mscp diff -o ./output -b cis_lvl1
+contour mscp diff -o ./output -k cis_lvl1
 ```
 
 #### `mscp verify`
@@ -684,7 +706,7 @@ contour mscp deduplicate [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-o, --output <DIR>` | Output directory containing GitOps structure | **required** |
-| `-b, --baselines <NAMES>` | Baselines to deduplicate (comma-separated) | all baselines |
+| `-k, --keywords <NAMES>` | Baselines to deduplicate (comma-separated) | all baselines |
 | `-p, --platform <PLATFORM>` | Platform (`macOS`, `iOS`, `visionOS`) | `macOS` |
 | `--jamf-mode` | Also emit Jamf Smart Group scoping templates (the Jamf counterpart to Fleet labels) for the deduplicated baselines | `false` |
 | `--dry-run` | Preview without making changes | `false` |
@@ -694,7 +716,7 @@ contour mscp deduplicate [flags]
 contour mscp deduplicate -o ./output --dry-run
 
 # Deduplicate specific baselines
-contour mscp deduplicate -o ./output -b cis_lvl1,cis_lvl2
+contour mscp deduplicate -o ./output -k cis_lvl1,cis_lvl2
 ```
 
 #### `mscp clean`
@@ -707,12 +729,12 @@ contour mscp clean [flags]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-b, --baseline <NAME>` | Baseline name to remove | **required** |
+| `-k, --keyword <NAME>` | Baseline name to remove | **required** |
 | `-o, --output <DIR>` | Output directory | **required** |
 | `-f, --force` | Force removal even if referenced by fleet files | `false` |
 
 ```bash
-contour mscp clean -b cis_lvl1 -o ./output
+contour mscp clean -k cis_lvl1 -o ./output
 ```
 
 #### `mscp migrate`
@@ -757,10 +779,10 @@ contour mscp constraints add [flags]
 | `-t, --type <TYPE>` | Constraint type: `fleet`, `jamf`, `munki` | `fleet` |
 | `-c, --constraints <PATH>` | Path to constraints file | auto-detected |
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository for profile discovery | none |
-| `-b, --baseline <NAME>` | Baseline to scan for profiles | all baselines |
+| `-k, --keyword <NAME>` | Baseline to scan for profiles | all baselines |
 
 ```bash
-contour mscp constraints add -t fleet -m ./macos_security -b cis_lvl1
+contour mscp constraints add -t fleet -m ./macos_security -k cis_lvl1
 ```
 
 #### `mscp constraints add-categories`
@@ -773,7 +795,7 @@ contour mscp constraints add-categories [flags]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-b, --baseline <NAME>` | Baseline to resolve categories against | **required** |
+| `-k, --keyword <NAME>` | Baseline to resolve categories against | **required** |
 | `-e, --exclude <CATEGORIES>` | Categories to exclude (comma-separated, skips interactive picker) | interactive |
 | `-t, --type <TYPE>` | Constraint type: `fleet`, `jamf`, `munki` | `fleet` |
 | `-c, --constraints <PATH>` | Path to constraints file | auto-detected |
@@ -781,10 +803,10 @@ contour mscp constraints add-categories [flags]
 
 ```bash
 # Interactive category picker
-contour mscp constraints add-categories -b cis_lvl1 -m ./macos_security
+contour mscp constraints add-categories -k cis_lvl1 -m ./macos_security
 
 # Direct exclusion
-contour mscp constraints add-categories -b cis_lvl1 -e audit,smartcard
+contour mscp constraints add-categories -k cis_lvl1 -e audit,smartcard
 ```
 
 #### `mscp constraints add-script`
@@ -800,7 +822,7 @@ contour mscp constraints add-script [flags]
 | `-t, --type <TYPE>` | Constraint type: `fleet`, `jamf`, `munki` | `jamf` |
 | `-c, --constraints <PATH>` | Path to constraints file | auto-detected |
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | none |
-| `-b, --baseline <NAME>` | Baseline to scan | all baselines |
+| `-k, --keyword <NAME>` | Baseline to scan | all baselines |
 
 #### `mscp constraints list` / `mscp constraints list-scripts`
 
@@ -839,11 +861,11 @@ contour mscp odv init [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | **required** |
-| `-b, --baseline <NAME>` | Baseline name | **required** |
+| `-k, --keyword <NAME>` | Baseline name | **required** |
 | `-o, --output <DIR>` | Output directory for override file | `.` |
 
 ```bash
-contour mscp odv init -m ./macos_security -b cis_lvl1
+contour mscp odv init -m ./macos_security -k cis_lvl1
 # Creates: odv_cis_lvl1.yaml
 ```
 
@@ -858,11 +880,11 @@ contour mscp odv list [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | **required** |
-| `-b, --baseline <NAME>` | Baseline name | **required** |
+| `-k, --keyword <NAME>` | Baseline name | **required** |
 | `-O, --overrides <PATH>` | ODV override file | auto-detected as `odv_<baseline>.yaml` |
 
 ```bash
-contour mscp odv list -m ./macos_security -b cis_lvl1
+contour mscp odv list -m ./macos_security -k cis_lvl1
 ```
 
 #### `mscp odv edit`
@@ -892,7 +914,7 @@ contour mscp extract-scripts [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | **required** |
-| `-b, --baseline <NAME>` | Baseline name | **required** |
+| `-k, --keyword <NAME>` | Baseline name | **required** |
 | `-o, --output <DIR>` | Output directory for scripts | **required** |
 | `--flat` | Flat output (no category subdirectories) | `false` |
 | `--constraints <PATH>` | Constraints file for script exclusions | none |
@@ -901,10 +923,10 @@ contour mscp extract-scripts [flags]
 
 ```bash
 # Extract with category organization
-contour mscp extract-scripts -m ./macos_security -b cis_lvl1 -o ./scripts
+contour mscp extract-scripts -m ./macos_security -k cis_lvl1 -o ./scripts
 
 # Flat output with ODV overrides
-contour mscp extract-scripts -m ./macos_security -b stig -o ./scripts --flat --odv odv_stig.yaml
+contour mscp extract-scripts -m ./macos_security -k stig -o ./scripts --flat --odv odv_stig.yaml
 ```
 
 ---
@@ -924,13 +946,13 @@ contour mscp container init [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | `./macos_security` |
-| `--branch <BRANCH>` | Git branch to use | `tahoe` |
+| `--branch <BRANCH>` | Git branch to use (`dev_2.0` = mSCP 2.0 layout; `tahoe` / `sequoia` / `sonoma` = legacy 1.x) | `dev_2.0` |
 | `-t, --tag <TAG>` | Custom image name/tag | `mscp:local` |
 | `--no-build` | Only create Dockerfile, don't build | `false` |
 | `--docker` | Force Docker runtime | auto-detect |
 
 ```bash
-contour mscp container init -m ./macos_security --branch tahoe
+contour mscp container init -m ./macos_security --branch dev_2.0
 ```
 
 #### `mscp container pull`
@@ -984,16 +1006,16 @@ contour mscp schema baselines --json
 List rules in a specific baseline (and optional platform).
 
 ```
-contour mscp schema rules --baseline <NAME> [--platform <PLATFORM>]
+contour mscp schema rules --keyword <NAME> [--platform <PLATFORM>]
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-b, --baseline <NAME>` | Baseline name (e.g., `cis_lvl1`, `800-53r5_high`) | **required** |
+| `-k, --keyword <NAME>` | Baseline name (e.g., `cis_lvl1`, `800-53r5_high`) | **required** |
 | `-p, --platform <PLATFORM>` | Platform: `macOS`, `iOS`, `visionOS` | `macOS` |
 
 ```bash
-contour mscp schema rules --baseline cis_lvl1 --json
+contour mscp schema rules --keyword cis_lvl1 --json
 ```
 
 #### `mscp schema stats`
@@ -1057,7 +1079,7 @@ Generate one baseline, add it to a fleet, and verify:
 
 ```bash
 contour mscp init --org com.acme --fleet --sync
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output \
+contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output \
   --fleet-mode --fleets "Engineering" --org com.acme
 contour mscp verify -o ./output
 ```
@@ -1067,9 +1089,9 @@ contour mscp verify -o ./output
 Generate several baselines, then deduplicate shared profiles:
 
 ```bash
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output --fleet-mode
-contour mscp generate -m ./macos_security -b cis_lvl2 -o ./output --fleet-mode
-contour mscp generate -m ./macos_security -b stig -o ./output --fleet-mode
+contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output --fleet-mode
+contour mscp generate -m ./macos_security -k cis_lvl2 -o ./output --fleet-mode
+contour mscp generate -m ./macos_security -k stig -o ./output --fleet-mode
 contour mscp deduplicate -o ./output
 ```
 
@@ -1078,7 +1100,7 @@ contour mscp deduplicate -o ./output
 Generate with Jamf-specific CLI flags (one-off use):
 
 ```bash
-contour mscp generate -m ./macos_security -b 800-53r5_moderate -o ./output \
+contour mscp generate -m ./macos_security -k 800-53r5_moderate -o ./output \
   --jamf-mode --deterministic-uuids --jamf-exclude-conflicts \
   --org com.acme --org-name "Acme Corp"
 ```
@@ -1090,7 +1112,7 @@ Or set `output.structure = "flat"` and `[settings.jamf]` in `mscp.toml` to avoid
 Define everything in `mscp.toml` and generate all at once. The `output.structure` setting drives the layout — no need for `--fleet-mode` or `--jamf-mode` flags:
 
 ```bash
-contour mscp init --org com.acme --fleet --sync --baselines cis_lvl1,cis_lvl2,stig
+contour mscp init --org com.acme --fleet --sync --keywords cis_lvl1,cis_lvl2,stig
 # Edit mscp.toml to customize settings (output.structure = "pluggable" set by --fleet)
 contour mscp generate-all -c mscp.toml
 contour mscp deduplicate -o ./output
@@ -1100,7 +1122,7 @@ contour mscp verify -o ./output
 For Jamf Pro, init with `--jamf` sets `output.structure = "flat"` and enables Jamf postprocessing:
 
 ```bash
-contour mscp init --org com.acme --jamf --sync --baselines cis_lvl1,stig
+contour mscp init --org com.acme --jamf --sync --keywords cis_lvl1,stig
 contour mscp generate-all -c mscp.toml
 ```
 
@@ -1110,13 +1132,13 @@ Override default parameter values for your organization:
 
 ```bash
 # Create ODV template
-contour mscp odv init -m ./macos_security -b cis_lvl1
+contour mscp odv init -m ./macos_security -k cis_lvl1
 
 # Edit values (e.g., set minimum password length to 14)
 contour mscp odv edit --overrides odv_cis_lvl1.yaml
 
 # Generate with overrides applied
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output \
+contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output \
   --fleet-mode --odv odv_cis_lvl1.yaml
 ```
 
@@ -1126,10 +1148,10 @@ Skip audit or smartcard rules that don't apply to your environment:
 
 ```bash
 # Interactive category picker
-contour mscp constraints add-categories -b cis_lvl1 -m ./macos_security
+contour mscp constraints add-categories -k cis_lvl1 -m ./macos_security
 
 # Or direct exclusion during generation
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output \
+contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output \
   --fleet-mode --exclude audit,smartcard
 ```
 
@@ -1138,8 +1160,8 @@ contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output \
 Extract fix scripts for manual deployment (e.g., via Munki or standalone):
 
 ```bash
-contour mscp extract-scripts -m ./macos_security -b stig -o ./scripts
-contour mscp extract-scripts -m ./macos_security -b stig -o ./scripts-flat --flat
+contour mscp extract-scripts -m ./macos_security -k stig -o ./scripts
+contour mscp extract-scripts -m ./macos_security -k stig -o ./scripts-flat --flat
 ```
 
 ### Version tracking
@@ -1148,11 +1170,11 @@ Track changes across regenerations:
 
 ```bash
 # Generate (version info is tracked automatically)
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output --fleet-mode
+contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output --fleet-mode
 
 # Later, regenerate and see what changed
-contour mscp generate -m ./macos_security -b cis_lvl1 -o ./output --fleet-mode
-contour mscp diff -o ./output -b cis_lvl1 -f markdown
+contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output --fleet-mode
+contour mscp diff -o ./output -k cis_lvl1 -f markdown
 ```
 
 ### Baseline migration
@@ -1162,6 +1184,145 @@ Move a fleet from one baseline to another:
 ```bash
 contour mscp migrate --from cis_lvl1 --to cis_lvl2 -f engineering -o ./output
 contour mscp verify -o ./output
+```
+
+---
+
+## Extended CLI Examples
+
+Full, copy-pasteable command lines using the long-form CLI. These mirror
+runs validated against an mSCP **2.0** checkout (`dev_2.0`) and show the
+key flags in realistic combinations. They use the primary `--keyword`
+form; substitute `--baseline` if you prefer the alias.
+
+### Fleet GitOps: CIS Level 1 with DDM, via a local 2.0 checkout
+
+```bash
+# Clone the mSCP 2.0 layout and scaffold the project
+contour mscp init --org com.acme --name "Acme Corp" --fleet --sync
+
+# Build cis_lvl1 with profiles, scripts, AND declarative-management
+# artifacts. --use-uv runs the 2.0 Python toolchain under a pinned
+# Python 3.13 (avoids the Pillow-on-3.14 source-build failure).
+contour mscp generate \
+  --mscp-repo ./macos_security \
+  --keyword cis_lvl1 \
+  --output ./output \
+  --use-uv \
+  --fleet-mode \
+  --generate-ddm \
+  --org com.acme --org-name "Acme Corp"
+
+# Inspect what landed
+contour mscp list --output ./output
+contour mscp verify --output ./output
+```
+
+Expected artifacts for `cis_lvl1` (macOS, current OS version): 14
+configuration profiles, 6 bundled scripts, and 13 DDM `.json`
+declarations under
+`output/lib/mscp/cis_lvl1/declarative/{activations,configurations,assets}/`.
+The summary panel reports all three artifact classes — if **DDM
+Artifacts** is absent, `--generate-ddm` wasn't passed.
+
+### Jamf Pro: one-shot generation with full post-processing
+
+```bash
+# Flat layout, deterministic UUIDs, consent text stripped, conflicting
+# profiles excluded. No mscp.toml needed for a one-off.
+contour mscp generate \
+  --mscp-repo ./macos_security \
+  --keyword 800-53r5_moderate \
+  --output ./output-jamf \
+  --use-uv \
+  --jamf-mode \
+  --deterministic-uuids \
+  --no-creation-date \
+  --remove-consent-text \
+  --jamf-exclude-conflicts \
+  --org com.acme --org-name "Acme Corp"
+```
+
+Output lands under `output-jamf/800-53r5_moderate/{profiles,scripts}/`
+(add `--generate-ddm` for a `declarative/` subdirectory). Note the CLI
+flag is `--jamf-exclude-conflicts`, but the equivalent `mscp.toml` key is
+`[settings.jamf] exclude_conflicts` — see the
+[flag-naming note](#mscptoml).
+
+### Container: run mSCP without a local Python toolchain
+
+```bash
+# Requires Docker or Apple's `container` tool, and a 2.0 local checkout
+# (the default image ghcr.io/brodjieski/mscp_2.0:latest is mSCP 2.0).
+# contour bind-mounts your rules/ and baselines/ into the image.
+contour mscp generate \
+  --mscp-repo ./macos_security \
+  --keyword cis_lvl1 \
+  --output ./output \
+  --use-container \
+  --fleet-mode \
+  --generate-ddm
+```
+
+If your checkout is still on the legacy 1.x layout, this fails fast with
+a message telling you to `git checkout dev_2.0` (the 2.0 image can't read
+1.x rules) or to drop `--use-container` and use `--use-uv` /
+`--use-python3` instead, which work with either layout.
+
+### Recipe pipeline: aggregate a baseline, then render it
+
+```bash
+# `recipe` reads rule YAML directly — no Python build, no container.
+contour mscp recipe \
+  --mscp-repo ./macos_security \
+  --keyword cis_lvl1 \
+  --output ./recipes/cis_lvl1.toml \
+  --org com.acme
+
+# Edit ./recipes/cis_lvl1.toml's [odv] table to set org values, then render
+contour profile generate --recipe ./recipes/cis_lvl1.toml --org com.acme -o ./build
+```
+
+A fully declarative baseline produces `[[ddm]]` blocks with no
+`[[profile]]` blocks; a mixed baseline produces both. ODV placeholders
+land in a top-level `[odv]` table (edit once, every reference picks it
+up) unless you pass `--odv-mode inline`.
+
+### Config-driven: many baselines in one run
+
+```bash
+# init writes mscp.toml (output.structure = "pluggable" from --fleet) and,
+# when a baseline references a fleet, scaffolds output/fleets/<name>.yml.
+contour mscp init --org com.acme --fleet --sync --keywords cis_lvl1,cis_lvl2,stig
+
+# Enable [settings] generate_ddm = true in mscp.toml for DDM across all,
+# then generate every enabled baseline:
+contour mscp generate-all --config mscp.toml
+contour mscp deduplicate --output ./output
+contour mscp verify --output ./output
+```
+
+### Targeting a specific OS / version on a 2.0 repo
+
+```bash
+# 2.0 repos carry multiple OSes; --os selects the platform and
+# --os-version pins the rule set (highest available if omitted).
+contour mscp generate \
+  --mscp-repo ./macos_security \
+  --keyword 800-53r5_high \
+  --output ./output \
+  --use-uv \
+  --os macos \
+  --os-version 26.0 \
+  --fleet-mode
+
+# iOS baseline from the same repo
+contour mscp generate \
+  --mscp-repo ./macos_security \
+  --keyword ios_stig \
+  --output ./output-ios \
+  --use-uv \
+  --os ios
 ```
 
 ---
