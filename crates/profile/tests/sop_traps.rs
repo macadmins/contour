@@ -3137,7 +3137,12 @@ fn trap_77_library_import_directory_with_data_and_placeholders() {
         .unwrap()
         .filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| n.ends_with(".toml") && n.contains("lock-screen"))
+        .filter(|n| {
+            std::path::Path::new(n)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
+                && n.contains("lock-screen")
+        })
         .collect();
     assert_eq!(
         lock_recipes.len(),
@@ -3174,7 +3179,12 @@ fn trap_77_library_import_directory_with_data_and_placeholders() {
         .find(|p| {
             p.file_name()
                 .and_then(|s| s.to_str())
-                .map(|n| n.ends_with(".toml") && n.contains("lock-screen"))
+                .map(|n| {
+                    std::path::Path::new(n)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
+                        && n.contains("lock-screen")
+                })
                 .unwrap_or(false)
         })
         .expect("at least one lock-screen recipe");

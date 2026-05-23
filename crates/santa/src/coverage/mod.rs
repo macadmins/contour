@@ -276,7 +276,7 @@ mod tests {
         let apps = sample_apps();
 
         let result = analyzer.analyze(&bundles, &apps);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]

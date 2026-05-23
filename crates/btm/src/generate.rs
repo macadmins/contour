@@ -206,7 +206,7 @@ pub use contour_core::{resolve_output_dir, sanitize_filename};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BtmAppEntry, BtmRule};
+    use crate::config::BtmRule;
 
     #[test]
     fn test_service_management_profile_from_code_req() {
@@ -279,7 +279,7 @@ mod tests {
             rules: vec![],
         };
         let result = generate_service_management_profile(&app, "com.example");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -377,7 +377,7 @@ mod tests {
     fn test_combined_service_management_empty_apps() {
         let apps: Vec<BtmAppEntry> = vec![];
         let result = generate_combined_service_management_profile(&apps, "com.example", None);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]

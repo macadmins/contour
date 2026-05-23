@@ -85,6 +85,6 @@ mod tests {
     #[test]
     fn test_validate_config_valid() {
         let config = Config::default();
-        assert!(validate_config(&config).is_ok());
+        validate_config(&config).unwrap();
     }
 }

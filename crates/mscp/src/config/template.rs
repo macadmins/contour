@@ -21,14 +21,19 @@ pub fn generate_template<P: AsRef<Path>>(output_path: P) -> Result<()> {
         munki: false,
         baselines: None,
     };
-    generate_template_with_options(output_path, &options)
+    generate_template_with_options(output_path, &options).map(|_| ())
 }
 
-/// Generate a template configuration file with organization options
+/// Generate a template configuration file with organization options.
+///
+/// Returns the [`Config`] that was serialized to disk so callers can
+/// introspect it (e.g. `mscp init` scaffolds a `fleets/<name>.yml` stub
+/// for each unique `[[baselines]].fleet` value the template ended up
+/// with).
 pub fn generate_template_with_options<P: AsRef<Path>>(
     output_path: P,
     options: &InitOptions,
-) -> Result<()> {
+) -> Result<Config> {
     let output_path = output_path.as_ref();
 
     let template = create_template_config(options);
@@ -40,7 +45,22 @@ pub fn generate_template_with_options<P: AsRef<Path>>(
     fs::write(output_path, commented_toml)?;
     tracing::info!("Generated template config at: {}", output_path.display());
 
-    Ok(())
+    Ok(template)
+}
+
+/// Unique, sorted fleet names referenced by `[[baselines]].fleet` in the
+/// given config. Used by `mscp init` to scaffold matching stub files in
+/// `output/fleets/` so `mscp generate` doesn't trip the FleetUpdater
+/// validation on the first run.
+pub fn referenced_fleet_names(config: &Config) -> Vec<String> {
+    let mut names: Vec<String> = config
+        .baselines
+        .iter()
+        .filter_map(|b| b.fleet.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// Build a label name from domain and baseline name.
@@ -88,7 +108,12 @@ fn create_template_config(options: &InitOptions) -> Config {
                 name: "cis_lvl1".to_string(),
                 enabled: true,
                 branch: None,
-                fleet: Some("workstations".to_string()),
+                // Default: no Fleet aggregation. Set to a fleet name (e.g.
+                // "workstations") to have `mscp generate` append this
+                // baseline's profiles + scripts to `fleets/<name>.yml`.
+                // Re-run `mscp init` after editing so a matching stub gets
+                // scaffolded in `output/fleets/`.
+                fleet: None,
                 labels: LabelConfig {
                     include_all: vec![format!("{domain}.mscp.cis-lvl1")],
                     include_any: vec![],
@@ -109,7 +134,7 @@ fn create_template_config(options: &InitOptions) -> Config {
                 name: "800-53r5_moderate".to_string(),
                 enabled: false,
                 branch: None,
-                fleet: Some("servers".to_string()),
+                fleet: None,
                 labels: LabelConfig {
                     include_all: vec![format!("{domain}.mscp.800-53-moderate")],
                     include_any: vec![],
@@ -194,13 +219,17 @@ fn add_comments(toml_str: &str) -> String {
 #   domain: Reverse-domain identifier for PayloadIdentifier (e.g., "me.macadmin")
 #   name: Organization display name for PayloadOrganization (e.g., "Macadmin")
 #
+# settings.mscp_repo: Path to a local macos_security checkout.
+#   `contour mscp init --sync` clones the mSCP 2.0 layout (the dev_2.0
+#   branch) here; `mscp generate` auto-detects 1.x vs 2.0 from the repo.
+#
 # settings.python_method: "auto" | "uv" | "python3"
 #   - auto: Automatically detect (prefers uv if available)
 #   - uv: Force use of uv run
 #   - python3: Force use of python3
 #
 # settings.generate_ddm: true | false
-#   - Enable to pass -D flag to mSCP for DDM artifacts
+#   - Enable to pass --ddm to mSCP for declarative-management artifacts
 #
 # MDM Modes (can be combined):
 #   [settings.fleet] enabled = true — Enable Fleet GitOps mode
@@ -217,7 +246,11 @@ fn add_comments(toml_str: &str) -> String {
 #   name: Baseline name from mSCP baselines/ directory
 #   enabled: true | false
 #   branch: Optional git branch (e.g., "sequoia", "ios_18")
-#   fleet: Optional fleet name
+#   fleet: Optional fleet name. When set, `mscp generate` appends this
+#     baseline's profiles + scripts to `output/fleets/<name>.yml`. The
+#     stub file is scaffolded by `contour mscp init` (or `init --sync`)
+#     when [settings.fleet] is enabled — fill in agent_options, secrets,
+#     and host labels before running `fleetctl gitops`.
 #   [baselines.labels]: Label targeting for progressive rollout
 #     include_all: All these labels must be present
 #     include_any: At least one of these labels must be present

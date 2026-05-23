@@ -1893,17 +1893,17 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             munki,
             sync,
             branch,
-            baselines,
+            keywords,
         } => {
             mscp::cli::init_project(
-                &output, org, name, force, fleet, jamf, munki, sync, &branch, baselines, json,
+                &output, org, name, force, fleet, jamf, munki, sync, &branch, keywords, json,
             )?;
         }
 
         Commands::Process {
             input,
             output,
-            baseline,
+            keyword,
             mscp_repo,
             jamf_mode,
             deterministic_uuids,
@@ -1962,7 +1962,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 Some(mscp::transformers::JamfOptions {
                     no_creation_date,
                     identical_payload_uuid,
-                    baseline: Some(baseline.clone()),
+                    baseline: Some(keyword.clone()),
                     domain: org,
                     org_name,
                     description_format,
@@ -1992,7 +1992,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             mscp::cli::process_baseline(
                 input,
                 output,
-                baseline,
+                keyword,
                 mscp_repo,
                 profile_options,
                 jamf_options,
@@ -2015,7 +2015,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             config: config_path,
             mscp_repo,
             branch,
-            baseline,
+            keyword,
             mscp_version,
             os,
             os_version,
@@ -2063,7 +2063,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 None // Auto-detect
             };
 
-            // Config-driven generation: load mscp.toml, derive options for this baseline.
+            // Config-driven generation: load mscp.toml, derive options for this keyword.
             if let Some(config_file) = config_path {
                 let mut loaded_config = mscp::config::load_config(&config_file)?;
 
@@ -2078,11 +2078,11 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 let baseline_config = loaded_config
                     .baselines
                     .iter()
-                    .find(|b| b.name == baseline)
+                    .find(|b| b.name == keyword)
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "baseline '{}' not found in {}; available baselines: {}",
-                            baseline,
+                            "keyword '{}' not found in {}; available baselines: {}",
+                            keyword,
                             config_file.display(),
                             loaded_config
                                 .baselines
@@ -2108,7 +2108,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 
                 mscp::cli::generate_baseline(
                     mscp_repo,
-                    baseline,
+                    keyword,
                     output,
                     python_method,
                     opts.profile_options,
@@ -2123,7 +2123,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                     opts.generate_ddm,
                     dry_run,
                     output_mode,
-                    false, // batch_mode = false for single baseline
+                    false, // batch_mode = false for single keyword
                     script_mode.into(),
                     exclude,
                     fragment,
@@ -2177,7 +2177,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 Some(mscp::transformers::JamfOptions {
                     no_creation_date,
                     identical_payload_uuid,
-                    baseline: Some(baseline.clone()),
+                    baseline: Some(keyword.clone()),
                     domain: org,
                     org_name,
                     description_format,
@@ -2210,7 +2210,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 
             mscp::cli::generate_baseline(
                 mscp_repo,
-                baseline,
+                keyword,
                 output,
                 python_method,
                 profile_options,
@@ -2225,7 +2225,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 generate_ddm,
                 dry_run,
                 output_mode,
-                false, // batch_mode = false for single baseline
+                false, // batch_mode = false for single keyword
                 script_mode.into(),
                 exclude,
                 fragment,
@@ -2240,7 +2240,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
         Commands::GenerateAll {
             config: config_path,
             mscp_repo,
-            baselines,
+            keywords,
             output,
             use_uv,
             use_python3,
@@ -2268,8 +2268,8 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 let mscp_repo = mscp_repo.ok_or_else(|| {
                     anyhow::anyhow!("--mscp-repo required when not using --config")
                 })?;
-                let baselines = baselines.ok_or_else(|| {
-                    anyhow::anyhow!("--baselines required when not using --config")
+                let keywords = keywords.ok_or_else(|| {
+                    anyhow::anyhow!("--keywords required when not using --config")
                 })?;
                 let output = output
                     .ok_or_else(|| anyhow::anyhow!("--output required when not using --config"))?;
@@ -2335,7 +2335,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 let parallel = !no_parallel;
                 mscp::cli::generate_all_baselines(
                     mscp_repo,
-                    baselines,
+                    keywords,
                     output,
                     python_method,
                     profile_options,
@@ -2357,10 +2357,10 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 
         Commands::Diff {
             output,
-            baseline,
+            keyword,
             format,
         } => {
-            mscp::cli::diff_versions(output, baseline, format.into(), output_mode)?;
+            mscp::cli::diff_versions(output, keyword, format.into(), output_mode)?;
         }
 
         Commands::Validate {
@@ -2373,14 +2373,14 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 
         Commands::Deduplicate {
             output,
-            baselines,
+            keywords,
             platform,
             jamf_mode,
             dry_run,
         } => {
             mscp::cli::deduplicate_profiles(
                 output,
-                baselines,
+                keywords,
                 platform,
                 jamf_mode,
                 dry_run,
@@ -2400,18 +2400,18 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             mscp::cli::SchemaAction::Baselines => {
                 mscp::cli::handle_schema_baselines(output_mode)?;
             }
-            mscp::cli::SchemaAction::Rules { baseline, platform } => {
-                mscp::cli::handle_schema_rules(&baseline, &platform, output_mode)?;
+            mscp::cli::SchemaAction::Rules { keyword, platform } => {
+                mscp::cli::handle_schema_rules(&keyword, &platform, output_mode)?;
             }
             mscp::cli::SchemaAction::Stats => {
                 mscp::cli::handle_schema_stats(output_mode)?;
             }
             mscp::cli::SchemaAction::Compare {
                 mscp_repo,
-                baseline,
+                keyword,
                 platform,
             } => {
-                mscp::cli::handle_schema_compare(&mscp_repo, &baseline, &platform, output_mode)?;
+                mscp::cli::handle_schema_compare(&mscp_repo, &keyword, &platform, output_mode)?;
             }
             mscp::cli::SchemaAction::Search { query, platform } => {
                 mscp::cli::handle_schema_search(&query, platform.as_deref(), output_mode)?;
@@ -2423,7 +2423,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 
         Commands::ExtractScripts {
             mscp_repo,
-            baseline,
+            keyword,
             output,
             flat,
             dry_run,
@@ -2432,7 +2432,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
         } => {
             mscp::cli::extract_scripts(
                 mscp_repo,
-                baseline,
+                keyword,
                 output,
                 flat,
                 dry_run,
@@ -2443,11 +2443,11 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
         }
 
         Commands::Clean {
-            baseline,
+            keyword,
             output,
             force,
         } => {
-            mscp::cli::clean_baseline(baseline, output, force)?;
+            mscp::cli::clean_baseline(keyword, output, force)?;
         }
 
         Commands::Migrate {
@@ -2469,9 +2469,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 r#type,
                 constraints,
                 mscp_repo,
-                baseline,
+                keyword,
             } => {
-                mscp::cli::constraints_add(r#type, constraints, mscp_repo, baseline, output_mode)?;
+                mscp::cli::constraints_add(r#type, constraints, mscp_repo, keyword, output_mode)?;
             }
             ConstraintsAction::Remove {
                 r#type,
@@ -2491,13 +2491,13 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 r#type,
                 constraints,
                 mscp_repo,
-                baseline,
+                keyword,
             } => {
                 mscp::cli::constraints_add_script(
                     r#type,
                     constraints,
                     mscp_repo,
-                    baseline,
+                    keyword,
                     output_mode,
                 )?;
             }
@@ -2519,14 +2519,14 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 r#type,
                 constraints,
                 mscp_repo,
-                baseline,
+                keyword,
                 exclude,
             } => {
                 mscp::cli::constraints_add_categories(
                     r#type,
                     constraints,
                     mscp_repo,
-                    baseline,
+                    keyword,
                     exclude,
                     output_mode,
                 )?;
@@ -2536,17 +2536,17 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
         Commands::Odv { action } => match action {
             OdvAction::Init {
                 mscp_repo,
-                baseline,
+                keyword,
                 output,
             } => {
-                mscp::cli::odv_init(mscp_repo, baseline, output, output_mode)?;
+                mscp::cli::odv_init(mscp_repo, keyword, output, output_mode)?;
             }
             OdvAction::List {
                 mscp_repo,
-                baseline,
+                keyword,
                 overrides,
             } => {
-                mscp::cli::odv_list(mscp_repo, baseline, overrides, output_mode)?;
+                mscp::cli::odv_list(mscp_repo, keyword, overrides, output_mode)?;
             }
             OdvAction::Edit { overrides } => {
                 mscp::cli::odv_edit(overrides, output_mode)?;
@@ -2576,7 +2576,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 
         Commands::Recipe {
             mscp_repo,
-            baseline,
+            keyword,
             output,
             org,
             odv_mode,
@@ -2586,7 +2586,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
         } => {
             dispatch_mscp_recipe(
                 &mscp_repo,
-                &baseline,
+                &keyword,
                 output.as_deref(),
                 org.as_deref(),
                 odv_mode,
@@ -2600,7 +2600,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
     Ok(())
 }
 
-/// Aggregate a baseline's mobileconfig rules into one recipe TOML.
+/// Aggregate a keyword's mobileconfig rules into one recipe TOML.
 /// Reads rule YAML directly from the mSCP repo — no Python build.
 #[expect(
     clippy::too_many_arguments,
@@ -2608,7 +2608,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 )]
 fn dispatch_mscp_recipe(
     mscp_repo: &std::path::Path,
-    baseline: &str,
+    keyword: &str,
     output: Option<&std::path::Path>,
     org: Option<&str>,
     mode: mscp::baseline_to_recipe::OdvMode,
@@ -2625,8 +2625,8 @@ fn dispatch_mscp_recipe(
         .with_layout(layout)
         .with_os(os, os_version);
     let rules = extractor
-        .extract_rules_for_baseline(baseline)
-        .with_context(|| format!("loading baseline '{baseline}' from {}", mscp_repo.display()))?;
+        .extract_rules_for_baseline(keyword)
+        .with_context(|| format!("loading keyword '{keyword}' from {}", mscp_repo.display()))?;
 
     let resolved_org = match org {
         Some(s) => Some(s.to_string()),
@@ -2634,7 +2634,7 @@ fn dispatch_mscp_recipe(
     };
 
     let (body, warnings, stats) = mscp::baseline_to_recipe::baseline_to_recipe(
-        baseline,
+        keyword,
         resolved_org.as_deref(),
         &rules,
         mode,
@@ -2646,7 +2646,7 @@ fn dispatch_mscp_recipe(
 
     let output_path = output
         .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from(format!("{baseline}.toml")));
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{keyword}.toml")));
     if let Some(parent) = output_path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -2848,7 +2848,7 @@ fn write_llm_domain_reference(writer: &mut impl Write, has: &dyn Fn(&str) -> boo
     // ── mSCP ──
     if has("mscp") {
         writeln!(buf, "## mscp — macOS Security Compliance Project\n")?;
-        writeln!(buf, "Builds and deploys mSCP security baselines.\n")?;
+        writeln!(buf, "Builds and deploys mSCP security keywords.\n")?;
 
         if let Ok(registry) = mscp::registry::MscpRegistry::embedded() {
             // Platform coverage
@@ -2863,7 +2863,7 @@ fn write_llm_domain_reference(writer: &mut impl Write, has: &dyn Fn(&str) -> boo
                             && e.os_version.as_deref() == Some(os.as_str())
                     })
                     .count();
-                writeln!(buf, "- {platform} {os} ({edge_count} rule-baseline edges)")?;
+                writeln!(buf, "- {platform} {os} ({edge_count} rule-keyword edges)")?;
             }
             writeln!(buf)?;
 
@@ -2888,7 +2888,7 @@ fn write_llm_domain_reference(writer: &mut impl Write, has: &dyn Fn(&str) -> boo
                         per_platform.push(format!("{platform} {os}: {count}"));
                     }
                 }
-                // Show which platforms this baseline belongs to
+                // Show which platforms this keyword belongs to
                 let platform_names: Vec<&str> = b
                     .platforms
                     .iter()
@@ -2965,7 +2965,7 @@ fn write_llm_domain_reference(writer: &mut impl Write, has: &dyn Fn(&str) -> boo
         }
         writeln!(
             buf,
-            "Each baseline produces: mobileconfig profiles, DDM declarations, compliance scripts\n"
+            "Each keyword produces: mobileconfig profiles, DDM declarations, compliance scripts\n"
         )?;
     }
 

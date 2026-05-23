@@ -65,7 +65,11 @@ pub struct RecipeSummary {
 /// because the bare-name path is a fallback.
 pub fn load_recipe_smart(selector: &str, recipe_path: Option<&str>) -> Result<(String, Recipe)> {
     let p = Path::new(selector);
-    let looks_path = selector.contains('/') || selector.ends_with(".toml") || p.is_file();
+    let looks_path = selector.contains('/')
+        || Path::new(selector)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
+        || p.is_file();
     if looks_path {
         if !p.is_file() {
             anyhow::bail!(
@@ -207,6 +211,48 @@ fn parse_recipe_toml(content: &str, source: &str) -> Result<Recipe> {
     toml::from_str(content).with_context(|| format!("Failed to parse recipe from {source}"))
 }
 
+fn collect_external_recipes(
+    dir: &Path,
+    recipes: &mut Vec<RecipeSummary>,
+    embedded_names: &std::collections::HashSet<&str>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+        .collect();
+    paths.sort();
+
+    for path in paths {
+        let Ok(r) = load_recipe_file(&path) else {
+            continue;
+        };
+        // Higher-priority external entry already claimed this name.
+        if recipes.iter().any(|x| x.name == r.recipe.name) {
+            continue;
+        }
+        let mut source = path.display().to_string();
+        if embedded_names.contains(r.recipe.name.as_str()) {
+            source.push_str("  (overrides embedded)");
+        }
+        let placeholders = recipe_placeholders(&r);
+        let secrets = r.recipe.secrets.clone().unwrap_or_default();
+        recipes.push(RecipeSummary {
+            name: r.recipe.name,
+            description: r.recipe.description,
+            vendor: r.recipe.vendor,
+            profile_count: r.profiles.len(),
+            source,
+            placeholders,
+            secrets,
+        });
+    }
+}
+
 /// Walk a directory of `.toml` recipes, appending each to `recipes`.
 ///
 /// Skips names already present in `recipes` (so the explicit
@@ -284,47 +330,5 @@ ExtensionIdentifier = "com.okta.mobile.auth-service-extension"
         std::fs::write(tmp.path().join("okta.toml"), override_okta_body()).unwrap();
         let r = load_recipe("okta", Some(tmp.path().to_str().unwrap())).unwrap();
         assert_eq!(r.recipe.description, "user-overridden okta recipe");
-    }
-}
-
-fn collect_external_recipes(
-    dir: &Path,
-    recipes: &mut Vec<RecipeSummary>,
-    embedded_names: &std::collections::HashSet<&str>,
-) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
-        .collect();
-    paths.sort();
-
-    for path in paths {
-        let Ok(r) = load_recipe_file(&path) else {
-            continue;
-        };
-        // Higher-priority external entry already claimed this name.
-        if recipes.iter().any(|x| x.name == r.recipe.name) {
-            continue;
-        }
-        let mut source = path.display().to_string();
-        if embedded_names.contains(r.recipe.name.as_str()) {
-            source.push_str("  (overrides embedded)");
-        }
-        let placeholders = recipe_placeholders(&r);
-        let secrets = r.recipe.secrets.clone().unwrap_or_default();
-        recipes.push(RecipeSummary {
-            name: r.recipe.name,
-            description: r.recipe.description,
-            vendor: r.recipe.vendor,
-            profile_count: r.profiles.len(),
-            source,
-            placeholders,
-            secrets,
-        });
     }
 }

@@ -309,6 +309,65 @@ fn trap_18_mscp_schema_rules_expose_has_odv_field() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Trap 18b: `--keyword` is the new primary flag (mSCP 2.0 alignment) and
+// `--baseline` / `-b` remain accepted as clap aliases. The wiring must
+// route both forms to the same code path so existing scripts and recipes
+// using `--baseline` keep working forever.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_18b_baseline_alias_for_keyword_round_trips() {
+    // `schema rules` is the cheapest baseline-consuming subcommand: no
+    // mSCP repo required, embedded parquet only. We compare two invocations
+    // that should produce byte-identical JSON output.
+    let via_keyword = Command::cargo_bin("mscp")
+        .unwrap()
+        .args(["schema", "rules", "--keyword", "cis_lvl1", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        via_keyword.status.success(),
+        "schema rules --keyword cis_lvl1 must succeed (new primary flag); stderr: {}",
+        String::from_utf8_lossy(&via_keyword.stderr)
+    );
+
+    let via_alias = Command::cargo_bin("mscp")
+        .unwrap()
+        .args(["schema", "rules", "--baseline", "cis_lvl1", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        via_alias.status.success(),
+        "schema rules --baseline cis_lvl1 must still succeed (back-compat alias)"
+    );
+
+    let via_short = Command::cargo_bin("mscp")
+        .unwrap()
+        .args(["schema", "rules", "-k", "cis_lvl1", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        via_short.status.success(),
+        "`-k cis_lvl1` short form must succeed"
+    );
+
+    let via_short_alias = Command::cargo_bin("mscp")
+        .unwrap()
+        .args(["schema", "rules", "-b", "cis_lvl1", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        via_short_alias.status.success(),
+        "`-b cis_lvl1` short alias must still succeed (back-compat)"
+    );
+
+    // All four forms must produce identical output — otherwise clap is
+    // routing them to different code paths.
+    assert_eq!(via_keyword.stdout, via_alias.stdout);
+    assert_eq!(via_keyword.stdout, via_short.stdout);
+    assert_eq!(via_keyword.stdout, via_short_alias.stdout);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Trap 19: `mscp recipe --baseline X --mscp-repo Y` aggregates every rule's
 // mobileconfig payload by Apple payload type into one recipe TOML. Catches:
 //   - aggregator skipping rules with `mobileconfig: false`

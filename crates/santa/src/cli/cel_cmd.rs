@@ -599,13 +599,13 @@ mod tests {
             false,
             OutputMode::Human,
         );
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
     fn test_handle_cel_check_invalid() {
         let result = handle_cel_check("this is not valid CEL !!!", false, OutputMode::Human);
-        assert!(result.is_ok()); // Returns Ok even for invalid - just prints error
+        result.unwrap(); // Returns Ok even for invalid - just prints error
     }
 
     #[test]
@@ -615,7 +615,7 @@ mod tests {
             &["team_id=EQHXZ8M8AV".to_string()],
             OutputMode::Human,
         );
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -625,13 +625,13 @@ mod tests {
             &["team_id=OTHER12345".to_string()],
             OutputMode::Human,
         );
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
     fn test_handle_cel_evaluate_invalid_field() {
         let result = handle_cel_evaluate(
-            r#"has(app.team_id)"#,
+            r"has(app.team_id)",
             &["unknown_field=value".to_string()],
             OutputMode::Human,
         );
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn test_handle_cel_evaluate_invalid_format() {
         let result = handle_cel_evaluate(
-            r#"has(app.team_id)"#,
+            r"has(app.team_id)",
             &["no_equals_sign".to_string()],
             OutputMode::Human,
         );
@@ -651,13 +651,13 @@ mod tests {
     #[test]
     fn test_handle_cel_fields() {
         let result = handle_cel_fields(OutputMode::Human);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
     fn test_handle_cel_fields_json() {
         let result = handle_cel_fields(OutputMode::Json);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn test_parse_condition_string_invalid() {
         let result = parse_condition_string("no operator here");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -699,7 +699,7 @@ mod tests {
             "allowlist",
             OutputMode::Human,
         );
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -714,7 +714,7 @@ mod tests {
             "allowlist",
             OutputMode::Json,
         );
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]

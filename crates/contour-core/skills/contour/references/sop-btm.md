@@ -31,7 +31,7 @@ Failure-path JSON envelope (since contour ≥0.2.1):
 
 ---
 
-## PROCEDURE generate_btm_profile(btm_toml, output_dir, target, fragment)
+## PROCEDURE generate_btm_profile(btm_toml, output_dir, target, fragment, per_app)
 
 ```
 SCHEMA_SOURCE: contour's embedded BTM rule registry (mirrors Apple's
@@ -46,6 +46,11 @@ INPUT:
                  "ddm"          — declaration JSON for macOS 15+ (preferred)
   fragment     : bool — when true, emit a GitOps fragment (Fleet `fragment.toml` schema)
                         directory instead of plain output
+  per_app      : bool — split mobileconfig output into one `.mobileconfig`
+                        per app (default is one merged file with every app's
+                        rules inside). Mobileconfig-only knob: under `--ddm`
+                        it is a silent no-op since DDM declarations are
+                        inherently per-app.
 
 PRECONDITIONS:
   ASSERT btm_toml exists AND is readable
@@ -81,11 +86,17 @@ STEP 1 — Validate the policy file:
 STEP 2 — Generate the output:
   flags = ["-o", output_dir, "--json"]
   if target == "ddm":
-    # CLI quirk: --ddm only emits .json declarations when paired with
-    # --per-app. Combined mode (the default) silently produces a single
-    # .mobileconfig regardless of --ddm. Pin --per-app whenever target
-    # is ddm so the output matches the SOP's promise.
-    flags += ["--ddm", "--per-app"]
+    # `--ddm` emits one `.json` DDM declaration per app in combined
+    # (default) and `--per-app` mode alike — DDM is per-declaration by
+    # nature, so `--per-app` is effectively a no-op under `--ddm`.
+    flags += ["--ddm"]
+  elif per_app:
+    # Mobileconfig path only: combined (default) merges every app into
+    # ONE `.mobileconfig` with all rules inside; `--per-app` splits the
+    # output into ONE `.mobileconfig` per app — useful when scoping
+    # per-app via labels/groups in the MDM, or when removing a single
+    # app's profile without touching the others.
+    flags += ["--per-app"]
   if fragment:
     flags += ["--fragment"]
   result = contour btm generate {btm_toml} {flags...}

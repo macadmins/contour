@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn test_parse_declaration_invalid_json() {
         let result = parse_declaration("not valid json");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -114,7 +114,7 @@ mod tests {
             "Payload": {}
         }"#;
         let result = parse_declaration(json);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -124,7 +124,7 @@ mod tests {
             "Payload": {}
         }"#;
         let result = parse_declaration(json);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
             "Identifier": "test"
         }"#;
         let result = parse_declaration(json);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     // ========== Write Declaration Tests ==========
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_parse_declaration_file_not_found() {
         let result = parse_declaration_file(Path::new("/nonexistent/path/file.json"));
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn test_parse_declarations_invalid() {
         let result = parse_declarations("not an array");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     // ========== DDM File Detection Tests ==========

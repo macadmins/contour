@@ -1,7 +1,7 @@
-//! mSCP CLI - Transform mSCP baselines into MDM-ready configurations.
+//! mSCP CLI - Transform mSCP keywords into MDM-ready configurations.
 //!
 //! mscp is a command-line tool that processes macOS Security Compliance Project (mSCP)
-//! baseline outputs and transforms them into configurations ready for deployment
+//! keyword outputs and transforms them into configurations ready for deployment
 //! via Fleet, Jamf Pro, or Munki.
 
 // Microsoft Rust Guidelines: M-MIMALLOC-APPS - Use mimalloc as global allocator
@@ -70,17 +70,17 @@ fn main() -> Result<()> {
             munki,
             sync,
             branch,
-            baselines,
+            keywords,
         } => {
             cli::init_project(
-                &output, org, name, force, fleet, jamf, munki, sync, &branch, baselines, cli.json,
+                &output, org, name, force, fleet, jamf, munki, sync, &branch, keywords, cli.json,
             )?;
         }
 
         Commands::Process {
             input,
             output,
-            baseline,
+            keyword,
             mscp_repo,
             jamf_mode,
             deterministic_uuids,
@@ -139,7 +139,7 @@ fn main() -> Result<()> {
                 Some(transformers::JamfOptions {
                     no_creation_date,
                     identical_payload_uuid,
-                    baseline: Some(baseline.clone()),
+                    baseline: Some(keyword.clone()),
                     domain: org,
                     org_name,
                     description_format,
@@ -175,7 +175,7 @@ fn main() -> Result<()> {
             cli::process_baseline(
                 input,
                 output,
-                baseline,
+                keyword,
                 mscp_repo,
                 profile_options,
                 jamf_options,
@@ -198,7 +198,7 @@ fn main() -> Result<()> {
             config: config_path,
             mscp_repo,
             branch,
-            baseline,
+            keyword,
             mscp_version,
             os,
             os_version,
@@ -253,7 +253,7 @@ fn main() -> Result<()> {
                 output::OutputMode::Human
             };
 
-            // Config-driven generation: load mscp.toml, derive options for this baseline.
+            // Config-driven generation: load mscp.toml, derive options for this keyword.
             if let Some(config_file) = config_path {
                 let mut loaded_config = config::load_config(&config_file)?;
 
@@ -274,15 +274,15 @@ fn main() -> Result<()> {
                     );
                 }
 
-                // Find the requested baseline in the config (CLI --baseline selects which one)
+                // Find the requested keyword in the config (CLI --keyword selects which one)
                 let baseline_config = loaded_config
                     .baselines
                     .iter()
-                    .find(|b| b.name == baseline)
+                    .find(|b| b.name == keyword)
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "baseline '{}' not found in {}; enabled baselines: {}",
-                            baseline,
+                            "keyword '{}' not found in {}; enabled baselines: {}",
+                            keyword,
                             config_file.display(),
                             loaded_config
                                 .baselines
@@ -298,7 +298,7 @@ fn main() -> Result<()> {
                     baseline_config,
                 );
 
-                // Switch branch if specified in config for this baseline
+                // Switch branch if specified in config for this keyword
                 if let Some(ref target_branch) = baseline_config.branch {
                     cli::generate::switch_branch(&mscp_repo, target_branch)?;
                 } else if let Some(ref target_branch) = branch {
@@ -307,7 +307,7 @@ fn main() -> Result<()> {
 
                 cli::generate_baseline(
                     mscp_repo,
-                    baseline,
+                    keyword,
                     output,
                     python_method,
                     opts.profile_options,
@@ -322,7 +322,7 @@ fn main() -> Result<()> {
                     opts.generate_ddm,
                     dry_run,
                     output_mode,
-                    false, // batch_mode = false for single baseline
+                    false, // batch_mode = false for single keyword
                     script_mode.into(),
                     exclude,
                     fragment,
@@ -377,7 +377,7 @@ fn main() -> Result<()> {
                 Some(transformers::JamfOptions {
                     no_creation_date,
                     identical_payload_uuid,
-                    baseline: Some(baseline.clone()),
+                    baseline: Some(keyword.clone()),
                     domain: org,
                     org_name,
                     description_format,
@@ -410,7 +410,7 @@ fn main() -> Result<()> {
 
             cli::generate_baseline(
                 mscp_repo,
-                baseline,
+                keyword,
                 output,
                 python_method,
                 profile_options,
@@ -425,7 +425,7 @@ fn main() -> Result<()> {
                 generate_ddm,
                 dry_run,
                 output_mode,
-                false, // batch_mode = false for single baseline
+                false, // batch_mode = false for single keyword
                 script_mode.into(),
                 exclude,
                 fragment,
@@ -440,7 +440,7 @@ fn main() -> Result<()> {
         Commands::GenerateAll {
             config: config_path,
             mscp_repo,
-            baselines,
+            keywords,
             output,
             use_uv,
             use_python3,
@@ -468,8 +468,8 @@ fn main() -> Result<()> {
                 let mscp_repo = mscp_repo.ok_or_else(|| {
                     anyhow::anyhow!("--mscp-repo required when not using --config")
                 })?;
-                let baselines = baselines.ok_or_else(|| {
-                    anyhow::anyhow!("--baselines required when not using --config")
+                let keywords = keywords.ok_or_else(|| {
+                    anyhow::anyhow!("--keywords required when not using --config")
                 })?;
                 let output = output
                     .ok_or_else(|| anyhow::anyhow!("--output required when not using --config"))?;
@@ -495,12 +495,12 @@ fn main() -> Result<()> {
                 };
 
                 // Build options structures
-                // Baseline is set per-baseline in generate_all_baselines loop
+                // Baseline is set per-keyword in generate_all_baselines loop
                 let jamf_options = if jamf_mode || no_creation_date || identical_payload_uuid {
                     Some(transformers::JamfOptions {
                         no_creation_date,
                         identical_payload_uuid,
-                        baseline: None, // Set per-baseline in generate loop
+                        baseline: None, // Set per-keyword in generate loop
                         domain: None,   // Use --config for domain settings
                         org_name: None,
                         description_format: None,
@@ -543,7 +543,7 @@ fn main() -> Result<()> {
                 let parallel = !no_parallel;
                 cli::generate_all_baselines(
                     mscp_repo,
-                    baselines,
+                    keywords,
                     output,
                     python_method,
                     profile_options,
@@ -565,7 +565,7 @@ fn main() -> Result<()> {
 
         Commands::Diff {
             output,
-            baseline,
+            keyword,
             format,
         } => {
             let output_mode = if cli.json {
@@ -573,7 +573,7 @@ fn main() -> Result<()> {
             } else {
                 output::OutputMode::Human
             };
-            cli::diff_versions(output, baseline, format.into(), output_mode)?;
+            cli::diff_versions(output, keyword, format.into(), output_mode)?;
         }
 
         Commands::Validate {
@@ -591,7 +591,7 @@ fn main() -> Result<()> {
 
         Commands::Deduplicate {
             output,
-            baselines,
+            keywords,
             platform,
             jamf_mode,
             dry_run,
@@ -601,14 +601,7 @@ fn main() -> Result<()> {
             } else {
                 output::OutputMode::Human
             };
-            cli::deduplicate_profiles(
-                output,
-                baselines,
-                platform,
-                jamf_mode,
-                dry_run,
-                output_mode,
-            )?;
+            cli::deduplicate_profiles(output, keywords, platform, jamf_mode, dry_run, output_mode)?;
         }
 
         Commands::List { output } => {
@@ -631,7 +624,7 @@ fn main() -> Result<()> {
 
         Commands::ExtractScripts {
             mscp_repo,
-            baseline,
+            keyword,
             output,
             flat,
             dry_run,
@@ -645,7 +638,7 @@ fn main() -> Result<()> {
             };
             cli::extract_scripts(
                 mscp_repo,
-                baseline,
+                keyword,
                 output,
                 flat,
                 dry_run,
@@ -656,11 +649,11 @@ fn main() -> Result<()> {
         }
 
         Commands::Clean {
-            baseline,
+            keyword,
             output,
             force,
         } => {
-            cli::clean_baseline(baseline, output, force)?;
+            cli::clean_baseline(keyword, output, force)?;
         }
 
         Commands::Migrate {
@@ -689,9 +682,9 @@ fn main() -> Result<()> {
                     r#type,
                     constraints,
                     mscp_repo,
-                    baseline,
+                    keyword,
                 } => {
-                    cli::constraints_add(r#type, constraints, mscp_repo, baseline, output_mode)?;
+                    cli::constraints_add(r#type, constraints, mscp_repo, keyword, output_mode)?;
                 }
                 ConstraintsAction::Remove {
                     r#type,
@@ -711,13 +704,13 @@ fn main() -> Result<()> {
                     r#type,
                     constraints,
                     mscp_repo,
-                    baseline,
+                    keyword,
                 } => {
                     cli::constraints_add_script(
                         r#type,
                         constraints,
                         mscp_repo,
-                        baseline,
+                        keyword,
                         output_mode,
                     )?;
                 }
@@ -739,14 +732,14 @@ fn main() -> Result<()> {
                     r#type,
                     constraints,
                     mscp_repo,
-                    baseline,
+                    keyword,
                     exclude,
                 } => {
                     cli::constraints_add_categories(
                         r#type,
                         constraints,
                         mscp_repo,
-                        baseline,
+                        keyword,
                         exclude,
                         output_mode,
                     )?;
@@ -764,17 +757,17 @@ fn main() -> Result<()> {
             match action {
                 OdvAction::Init {
                     mscp_repo,
-                    baseline,
+                    keyword,
                     output,
                 } => {
-                    cli::odv_init(mscp_repo, baseline, output, output_mode)?;
+                    cli::odv_init(mscp_repo, keyword, output, output_mode)?;
                 }
                 OdvAction::List {
                     mscp_repo,
-                    baseline,
+                    keyword,
                     overrides,
                 } => {
-                    cli::odv_list(mscp_repo, baseline, overrides, output_mode)?;
+                    cli::odv_list(mscp_repo, keyword, overrides, output_mode)?;
                 }
                 OdvAction::Edit { overrides } => {
                     cli::odv_edit(overrides, output_mode)?;
@@ -793,18 +786,18 @@ fn main() -> Result<()> {
                 SchemaAction::Baselines => {
                     cli::handle_schema_baselines(output_mode)?;
                 }
-                SchemaAction::Rules { baseline, platform } => {
-                    cli::handle_schema_rules(&baseline, &platform, output_mode)?;
+                SchemaAction::Rules { keyword, platform } => {
+                    cli::handle_schema_rules(&keyword, &platform, output_mode)?;
                 }
                 SchemaAction::Stats => {
                     cli::handle_schema_stats(output_mode)?;
                 }
                 SchemaAction::Compare {
                     mscp_repo,
-                    baseline,
+                    keyword,
                     platform,
                 } => {
-                    cli::handle_schema_compare(&mscp_repo, &baseline, &platform, output_mode)?;
+                    cli::handle_schema_compare(&mscp_repo, &keyword, &platform, output_mode)?;
                 }
                 SchemaAction::Search { query, platform } => {
                     cli::handle_schema_search(&query, platform.as_deref(), output_mode)?;
@@ -842,7 +835,7 @@ fn main() -> Result<()> {
 
         Commands::Recipe {
             mscp_repo,
-            baseline,
+            keyword,
             output,
             org,
             odv_mode,
@@ -852,7 +845,7 @@ fn main() -> Result<()> {
         } => {
             run_recipe_command(
                 &mscp_repo,
-                &baseline,
+                &keyword,
                 output.as_deref(),
                 org.as_deref(),
                 odv_mode,
@@ -866,10 +859,10 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Aggregate a baseline's mobileconfig rules into one recipe TOML.
+/// Aggregate a keyword's mobileconfig rules into one recipe TOML.
 ///
 /// Reads YAML rules directly from `<mscp_repo>/rules/**/*.yaml`,
-/// filters by baseline tag, groups by Apple payload type, and writes
+/// filters by keyword tag, groups by Apple payload type, and writes
 /// the rendered recipe to disk.
 #[expect(
     clippy::too_many_arguments,
@@ -877,7 +870,7 @@ fn main() -> Result<()> {
 )]
 fn run_recipe_command(
     mscp_repo: &std::path::Path,
-    baseline: &str,
+    keyword: &str,
     output: Option<&std::path::Path>,
     org: Option<&str>,
     mode: baseline_to_recipe::OdvMode,
@@ -893,8 +886,8 @@ fn run_recipe_command(
         .with_layout(layout)
         .with_os(os, os_version);
     let rules = extractor
-        .extract_rules_for_baseline(baseline)
-        .with_context(|| format!("loading baseline '{baseline}' from {}", mscp_repo.display()))?;
+        .extract_rules_for_baseline(keyword)
+        .with_context(|| format!("loading keyword '{keyword}' from {}", mscp_repo.display()))?;
 
     let resolved_org = match org {
         Some(s) => Some(s.to_string()),
@@ -902,7 +895,7 @@ fn run_recipe_command(
     };
 
     let (body, warnings, stats) =
-        baseline_to_recipe::baseline_to_recipe(baseline, resolved_org.as_deref(), &rules, mode)?;
+        baseline_to_recipe::baseline_to_recipe(keyword, resolved_org.as_deref(), &rules, mode)?;
 
     for w in &warnings {
         eprintln!("warning: {w}");
@@ -910,7 +903,7 @@ fn run_recipe_command(
 
     let output_path = output
         .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from(format!("{baseline}.toml")));
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{keyword}.toml")));
     if let Some(parent) = output_path.parent()
         && !parent.as_os_str().is_empty()
     {

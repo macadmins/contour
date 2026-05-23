@@ -876,7 +876,7 @@ mod tests {
     fn test_parse_plist_value_integer() {
         assert_eq!(
             parse_plist_value("123456"),
-            plist::Value::Integer(123456.into())
+            plist::Value::Integer(123_456.into())
         );
         assert_eq!(parse_plist_value("0"), plist::Value::Integer(0.into()));
     }

@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Options for project initialization
 #[derive(Debug)]
@@ -153,6 +153,16 @@ pub fn init_project<P: AsRef<Path>>(
         load_existing_config(output)
     };
 
+    // Capture fleet names the operator has hand-set on baselines in the
+    // existing mscp.toml. The static template currently drops these on
+    // regenerate (a separate pre-existing init limitation), but we still
+    // scaffold matching fleet stubs so the operator's customisation
+    // survives across re-inits.
+    let preserved_fleet_refs: Vec<String> = existing_config
+        .as_ref()
+        .map(|c| crate::config::referenced_fleet_names(c))
+        .unwrap_or_default();
+
     // Fall back to .contour/config.toml for domain/name defaults
     let contour_cfg = contour_core::config::ContourConfig::load_nearest();
     let domain = domain.or_else(|| contour_cfg.as_ref().map(|c| c.organization.domain.clone()));
@@ -287,13 +297,24 @@ pub fn init_project<P: AsRef<Path>>(
     if sync {
         let mscp_path = output.join("macos_security");
         sync_mscp_repo(&mscp_path, branch)?;
+
+        // Clarify which mSCP layout the synced repo carries — `dev_2.0`
+        // is 2.0, `tahoe` and other macOS-version branches are 1.x.
+        match crate::layout::MscpLayout::detect(&mscp_path) {
+            Ok(layout) => {
+                println!("  ✓ Detected mSCP layout: {}", layout.display_name());
+            }
+            Err(e) => {
+                println!("  ⚠ Could not detect mSCP layout: {e}");
+            }
+        }
     }
 
     // Detect mSCP repo (synced or pre-existing) and pick baselines
     let mscp_path = output.join("macos_security");
     let selected_baselines = if mscp_path.join("baselines").exists() && !json_mode {
         if let Some(cli_baselines) = baselines {
-            // Non-interactive: baselines provided via --baselines arg
+            // Non-interactive: baselines provided via --keywords arg
             Some(cli_baselines)
         } else if is_interactive {
             // Interactive mode: present a picker
@@ -327,7 +348,28 @@ pub fn init_project<P: AsRef<Path>>(
         munki: final_munki,
         baselines: selected_baselines.clone(),
     };
-    crate::config::generate_template_with_options(output.join("mscp.toml"), &options)?;
+    let written_config =
+        crate::config::generate_template_with_options(output.join("mscp.toml"), &options)?;
+
+    // Scaffold a stub fleet file for each baseline that references one,
+    // so the first `mscp generate` doesn't trip over a missing
+    // `output/fleets/<name>.yml`. Only fires when Fleet output is the
+    // user's target — same gate as `fleet-constraints.yml` above.
+    //
+    // Union the freshly-written config's refs with anything the operator
+    // had set on the previous mscp.toml. The static template doesn't
+    // currently round-trip per-baseline `fleet =` fields on re-init, so
+    // without the union a hand-added `fleet = "workstations"` would lose
+    // its stub on the next `mscp init`.
+    let scaffolded_fleet_stubs = if final_fleet {
+        let mut fleet_names = crate::config::referenced_fleet_names(&written_config);
+        fleet_names.extend(preserved_fleet_refs.iter().cloned());
+        fleet_names.sort();
+        fleet_names.dedup();
+        scaffold_fleet_stubs(output, &fleet_names)?
+    } else {
+        Vec::new()
+    };
 
     if json_mode {
         let result = serde_json::json!({
@@ -343,6 +385,10 @@ pub fn init_project<P: AsRef<Path>>(
                 "fleet": use_constraints && final_fleet,
                 "jamf": use_constraints && final_jamf,
             },
+            "scaffolded_fleets": scaffolded_fleet_stubs
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>(),
         });
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
@@ -397,6 +443,16 @@ pub fn init_project<P: AsRef<Path>>(
         if sync {
             println!("  - macos_security/ (mSCP repository, branch: {branch})");
         }
+        for stub in &scaffolded_fleet_stubs {
+            // Show the relative path (`output/fleets/<name>.yml`) so the
+            // line stays useful when `output` is an absolute path under
+            // /private/tmp or similar.
+            let display = stub
+                .strip_prefix(output)
+                .unwrap_or(stub.as_path())
+                .display();
+            println!("  - {display} (fleet stub — fill in agent_options, secrets, labels)");
+        }
         println!();
         println!("{}:", "Next steps".cyan());
         if sync {
@@ -407,14 +463,20 @@ pub fn init_project<P: AsRef<Path>>(
                 .unwrap_or("cis_lvl1");
             println!("  1. Review and edit mscp.toml");
             println!(
-                "  2. Run: {} generate --config ./mscp.toml --mscp-repo ./macos_security --baseline {} --output ./output",
+                "  2. Run: {} generate --config ./mscp.toml --mscp-repo ./macos_security --keyword {} --output ./output",
                 "contour mscp".cyan(),
                 example_baseline
             );
             println!("     (--config picks up [settings.munki]/[settings.jamf]/[settings.fleet])");
         } else {
-            println!("  1. Clone mSCP: git clone https://github.com/usnistgov/macos_security.git");
-            println!("  2. Or re-run with: contour mscp init --sync --branch {branch}");
+            println!(
+                "  1. Clone mSCP 2.0: git clone -b dev_2.0 https://github.com/usnistgov/macos_security.git"
+            );
+            if branch == "dev_2.0" {
+                println!("  2. Or re-run with: contour mscp init --sync");
+            } else {
+                println!("  2. Or re-run with: contour mscp init --sync --branch {branch}");
+            }
             println!("  3. Configure baselines in mscp.toml");
         }
     }
@@ -544,4 +606,110 @@ fn sync_mscp_repo(path: &Path, branch: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Scaffold a minimal `output/fleets/<name>.yml` stub for every fleet
+/// name in `fleet_names`. Idempotent: existing stubs are left
+/// byte-for-byte alone so re-running `mscp init` never clobbers an
+/// operator's edits.
+///
+/// Stubs live at `<output>/output/fleets/<name>.yml` — i.e. relative to
+/// mSCP's default `settings.output_dir = "./output"`. Callers that
+/// support a customised `output_dir` should pass the resolved directory
+/// to a future helper instead.
+///
+/// Returns the absolute paths of stubs that were actually written so the
+/// caller can list them in the "Created files" report.
+fn scaffold_fleet_stubs(output: &Path, fleet_names: &[String]) -> Result<Vec<PathBuf>> {
+    if fleet_names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let fleets_dir = output.join("output").join("fleets");
+    std::fs::create_dir_all(&fleets_dir).with_context(|| {
+        format!(
+            "Failed to create fleet stub directory: {}",
+            fleets_dir.display()
+        )
+    })?;
+
+    let mut created: Vec<PathBuf> = Vec::new();
+    for fleet_name in fleet_names {
+        let stub_path = fleets_dir.join(format!("{fleet_name}.yml"));
+        if stub_path.exists() {
+            // Operator may have already filled this in — never overwrite.
+            tracing::info!(
+                "Fleet stub already exists, leaving untouched: {}",
+                stub_path.display()
+            );
+            continue;
+        }
+        let body = crate::updaters::fleet_stub_yaml(fleet_name);
+        std::fs::write(&stub_path, body)
+            .with_context(|| format!("Failed to write fleet stub: {}", stub_path.display()))?;
+        tracing::info!("Scaffolded fleet stub: {}", stub_path.display());
+        created.push(stub_path);
+    }
+    Ok(created)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scaffold_writes_one_stub_per_fleet_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fleet_names = vec!["workstations".to_string(), "servers".to_string()];
+
+        let created = scaffold_fleet_stubs(tmp.path(), &fleet_names).unwrap();
+
+        assert_eq!(created.len(), 2);
+        let names: Vec<String> = created
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"workstations.yml".to_string()));
+        assert!(names.contains(&"servers.yml".to_string()));
+
+        // Files actually exist with valid YAML.
+        for path in &created {
+            let body = std::fs::read_to_string(path).unwrap();
+            yaml_serde::from_str::<yaml_serde::Value>(&body)
+                .unwrap_or_else(|e| panic!("stub at {} is invalid YAML: {e}", path.display()));
+        }
+    }
+
+    #[test]
+    fn scaffold_is_idempotent_and_never_overwrites_existing_stubs() {
+        // Re-running `mscp init` on a project where the operator has
+        // already filled in a fleet file must not clobber it.
+        let tmp = tempfile::tempdir().unwrap();
+        let fleet_names = vec!["workstations".to_string()];
+
+        // Seed an existing stub with operator-edited content.
+        let fleets_dir = tmp.path().join("output").join("fleets");
+        std::fs::create_dir_all(&fleets_dir).unwrap();
+        let stub = fleets_dir.join("workstations.yml");
+        let operator_content = "name: workstations\n# operator-customised\n";
+        std::fs::write(&stub, operator_content).unwrap();
+
+        let created = scaffold_fleet_stubs(tmp.path(), &fleet_names).unwrap();
+
+        // Nothing newly created — the existing file already covers it.
+        assert!(created.is_empty(), "must not report a file we didn't write");
+        // And the operator's content is byte-for-byte intact.
+        assert_eq!(std::fs::read_to_string(&stub).unwrap(), operator_content);
+    }
+
+    #[test]
+    fn scaffold_returns_empty_when_no_fleet_names_provided() {
+        // Default static template post-D references zero fleets, so the
+        // OOB init flow scaffolds nothing.
+        let tmp = tempfile::tempdir().unwrap();
+        let created = scaffold_fleet_stubs(tmp.path(), &[]).unwrap();
+        assert!(created.is_empty());
+        // The fleets dir is also not created when there's nothing to write.
+        assert!(!tmp.path().join("output").join("fleets").exists());
+    }
 }

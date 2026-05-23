@@ -189,9 +189,9 @@ pub fn run(
             //      added directly so extract_app_info routes it to the
             //      bare-binary path.
             //   3. Any other directory — recursed into to discover bundles.
-            if contour_core::app_discovery::is_bundle_dir(path) {
-                apps.push(path.clone());
-            } else if path.is_file() {
+            if contour_core::app_discovery::is_bundle_dir(path) || path.is_file() {
+                // Bundle dir OR bare file — added directly; extract_app_info
+                // routes bare files to the bare-binary path.
                 apps.push(path.clone());
             } else {
                 find_apps_recursive(path, &mut apps)?;

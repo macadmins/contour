@@ -896,8 +896,8 @@ pub fn handle_generate_recipe(
         if let Some(custom) = &secrets_cfg.dotenv {
             dotenv_files.push(PathBuf::from(custom));
         }
-        load_dotenv(&dotenv_files);
-    }
+        load_dotenv(&dotenv_files)
+    };
 
     // Vars precedence: anchor config < CWD config < CLI `--vars`.
     let mut var_map: HashMap<String, String> =
@@ -960,7 +960,7 @@ pub fn handle_generate_recipe(
     } else if let Some(c) = config {
         c.organization.domain.clone()
     } else {
-        contour_core::config::resolve_org_with_anchor(None, anchor_ref).map_err(|_| {
+        contour_core::config::resolve_org_with_anchor(None, anchor_ref).map_err(|_e| {
             anyhow::anyhow!(
                 "--org is required (e.g., --org com.yourorg)\n\
                  Alternatively, set organization.domain in profile.toml or .contour/config.toml"
@@ -2170,7 +2170,7 @@ mod tests {
     #[test]
     fn test_resolve_value_file_missing() {
         let result = resolve_value("file:/nonexistent/path/cert.cer");
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]

@@ -502,9 +502,9 @@ pub fn check_deprecated_keys(value: &Value, schema: &SchemaRegistry) -> Vec<Lint
 /// with the other registry-backed checks). Currently warning severity:
 /// schemas occasionally mislabel multi-instance configs as `"single"`,
 /// so the agent should see the signal without being blocked.
-pub fn check_single_instance_payload_repeated(
+pub fn check_single_instance_payload_repeated<S: ::std::hash::BuildHasher>(
     value: &Value,
-    apply_modes: &std::collections::HashMap<String, String>,
+    apply_modes: &std::collections::HashMap<String, String, S>,
 ) -> Vec<LintFinding> {
     use std::collections::HashMap;
     let mut findings = Vec::new();
@@ -977,7 +977,7 @@ mod tests {
             s("B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E"),
         );
         p.insert("PayloadVersion".into(), Value::Integer(1.into()));
-        p.insert(key.into(), Value::Boolean(true));
+        p.insert(key, Value::Boolean(true));
         let mut top = Dictionary::new();
         top.insert("PayloadType".into(), s("Configuration"));
         top.insert(
