@@ -170,7 +170,7 @@ mod tests {
     fn test_generate_default_config() {
         let config = SantaConfig::default();
         let result = generate_config(&config);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]

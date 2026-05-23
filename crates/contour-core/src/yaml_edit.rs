@@ -1770,7 +1770,7 @@ controls:
     #[test]
     fn test_append_apple_cp_shape_a_existing_items() {
         let content = "name: \"\u{1f4bb} Workstations\"\ncontrols:\n  enable_disk_encryption: true\n  apple_settings:\n    configuration_profiles:\n      - path: ../lib/macos/configuration-profiles/date-time.mobileconfig\n      - path: ../lib/macos/configuration-profiles/firewall.mobileconfig\n        labels_exclude_any:\n          - macOS screen lock exclusions\n  scripts:\n    - path: ../lib/macos/scripts/uninstall-fleetd-macos.sh\n";
-        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
 
         // Glob appended after the last existing profile, at item indent 6.
         assert!(result.contains(
@@ -1794,7 +1794,7 @@ controls:
     #[test]
     fn test_append_apple_cp_shape_b_empty_list() {
         let content = "name: servers\ncontrols:\n  apple_settings:\n    configuration_profiles:\n  scripts:\n";
-        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
 
         assert!(result.contains(
             "      - paths: ../lib/macos/configuration-profiles/mscp_800-53/*.mobileconfig"
@@ -1809,7 +1809,7 @@ controls:
     #[test]
     fn test_append_apple_cp_shape_c_no_cp_child() {
         let content = "name: Unassigned\npolicies:\ncontrols:\n  apple_settings:\n";
-        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
 
         assert!(result.contains("    configuration_profiles:"));
         assert!(result.contains(
@@ -1822,7 +1822,7 @@ controls:
     #[test]
     fn test_append_apple_cp_shape_d_no_apple_settings() {
         let content = "name: \"\u{1f9ea} Testing & QA\"\ncontrols:\n  enable_disk_encryption: true\n  scripts:\n    - path: ../lib/macos/scripts/uninstall-fleetd-macos.sh\npolicies:\n";
-        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
 
         assert!(result.contains("  apple_settings:"));
         assert!(result.contains("    configuration_profiles:"));
@@ -1841,7 +1841,7 @@ controls:
     #[test]
     fn test_append_apple_cp_shape_e_no_controls() {
         let content = "name: minimal\n";
-        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
 
         assert!(result.contains("name: minimal"));
         assert!(result.contains("controls:"));
@@ -1855,7 +1855,7 @@ controls:
     #[test]
     fn test_append_apple_cp_preserves_comments() {
         let content = "# Fleet team file\nname: ws\ncontrols:\n  apple_settings:\n    configuration_profiles:\n      # security baseline profiles\n      - path: ../lib/macos/configuration-profiles/firewall.mobileconfig\n";
-        let result = append_apple_configuration_profiles(&content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
         assert!(result.contains("# Fleet team file"));
         assert!(result.contains("      # security baseline profiles"));
         assert!(result.contains("mscp_800-53"));
@@ -1865,6 +1865,6 @@ controls:
     #[test]
     fn test_append_apple_cp_empty_entries_noop() {
         let content = "name: ws\ncontrols:\n  apple_settings:\n    configuration_profiles:\n";
-        assert_eq!(append_apple_configuration_profiles(&content, &[]), content);
+        assert_eq!(append_apple_configuration_profiles(content, &[]), content);
     }
 }

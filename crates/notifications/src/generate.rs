@@ -97,7 +97,6 @@ pub use contour_core::{resolve_output_dir, sanitize_filename};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::NotificationAppEntry;
 
     #[test]
     fn test_single_notification_profile() {

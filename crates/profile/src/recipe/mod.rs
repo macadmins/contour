@@ -228,6 +228,28 @@ fn substitute_odv_in_json_value(
     }
 }
 
+fn toml_to_json_value(v: &toml::Value) -> serde_json::Value {
+    match v {
+        toml::Value::String(s) => serde_json::Value::String(s.clone()),
+        toml::Value::Integer(i) => serde_json::Value::Number((*i).into()),
+        toml::Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
+        toml::Value::Datetime(d) => serde_json::Value::String(d.to_string()),
+        toml::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(toml_to_json_value).collect())
+        }
+        toml::Value::Table(t) => {
+            let mut out = serde_json::Map::with_capacity(t.len());
+            for (k, val) in t {
+                out.insert(k.clone(), toml_to_json_value(val));
+            }
+            serde_json::Value::Object(out)
+        }
+    }
+}
+
 #[cfg(test)]
 mod odv_tests {
     use super::*;
@@ -374,27 +396,5 @@ timeServer = "$ODV"
         let stats = r.resolve_odv();
         assert_eq!(stats.resolved, 0);
         assert_eq!(stats.unresolved, 1);
-    }
-}
-
-fn toml_to_json_value(v: &toml::Value) -> serde_json::Value {
-    match v {
-        toml::Value::String(s) => serde_json::Value::String(s.clone()),
-        toml::Value::Integer(i) => serde_json::Value::Number((*i).into()),
-        toml::Value::Float(f) => serde_json::Number::from_f64(*f)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
-        toml::Value::Datetime(d) => serde_json::Value::String(d.to_string()),
-        toml::Value::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(toml_to_json_value).collect())
-        }
-        toml::Value::Table(t) => {
-            let mut out = serde_json::Map::with_capacity(t.len());
-            for (k, val) in t {
-                out.insert(k.clone(), toml_to_json_value(val));
-            }
-            serde_json::Value::Object(out)
-        }
     }
 }
