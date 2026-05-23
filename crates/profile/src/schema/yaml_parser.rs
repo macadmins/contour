@@ -907,7 +907,7 @@ payload:
     fn test_parse_yaml_invalid() {
         let yaml = "not: valid: yaml: : :";
         let result = parse_yaml_manifest(yaml);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     // ========== Platform Parsing Tests ==========

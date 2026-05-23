@@ -612,7 +612,7 @@ mod tests {
         plist::to_writer_xml(&mut buffer, &plist::Value::Dictionary(dict)).unwrap();
 
         let result = parse_plist_manifest(&buffer);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[test]

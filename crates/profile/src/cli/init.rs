@@ -228,7 +228,7 @@ mod tests {
             OutputMode::Json,
         );
 
-        assert!(result.is_ok());
+        result.unwrap();
         assert!(config_path.exists());
 
         let content = std::fs::read_to_string(&config_path).unwrap();
@@ -270,7 +270,7 @@ mod tests {
             OutputMode::Json,
         );
 
-        assert!(result.is_ok());
+        result.unwrap();
         let content = std::fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("com.new"));
     }

@@ -194,6 +194,10 @@ fn add_comments(toml_str: &str) -> String {
 #   domain: Reverse-domain identifier for PayloadIdentifier (e.g., "me.macadmin")
 #   name: Organization display name for PayloadOrganization (e.g., "Macadmin")
 #
+# settings.mscp_repo: Path to a local macos_security checkout.
+#   `contour mscp init --sync` clones the mSCP 2.0 layout (the dev_2.0
+#   branch) here; `mscp generate` auto-detects 1.x vs 2.0 from the repo.
+#
 # settings.python_method: "auto" | "uv" | "python3"
 #   - auto: Automatically detect (prefers uv if available)
 #   - uv: Force use of uv run

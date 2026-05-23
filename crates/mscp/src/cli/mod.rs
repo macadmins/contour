@@ -101,8 +101,10 @@ pub enum Commands {
         #[arg(long)]
         sync: bool,
 
-        /// mSCP branch to clone (default: tahoe)
-        #[arg(long, default_value = "tahoe")]
+        /// mSCP branch to clone — `dev_2.0` is the mSCP 2.0 layout
+        /// (default); `tahoe` and other macOS-version branches are
+        /// legacy 1.x.
+        #[arg(long, default_value = "dev_2.0")]
         branch: String,
 
         /// Baselines to enable (comma-separated, used with --sync)
@@ -862,8 +864,9 @@ pub enum ContainerAction {
         #[arg(short, long, default_value = "./macos_security")]
         mscp_repo: PathBuf,
 
-        /// Git branch to use (e.g., sequoia, sonoma, tahoe)
-        #[arg(long, default_value = "tahoe")]
+        /// Git branch to use — `dev_2.0` is the mSCP 2.0 layout
+        /// (default); `tahoe` / `sequoia` / `sonoma` are legacy 1.x.
+        #[arg(long, default_value = "dev_2.0")]
         branch: String,
 
         /// Custom image name/tag

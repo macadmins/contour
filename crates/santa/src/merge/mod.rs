@@ -125,6 +125,6 @@ mod tests {
         set2.add(Rule::new(RuleType::TeamId, "A", Policy::Blocklist));
 
         let result = merge(&[set1, set2], Strategy::Strict);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 }

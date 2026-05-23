@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn test_compile_expression() {
         let expr = CompiledExpression::compile(r#"has(app.team_id) && app.team_id == "ABC""#);
-        assert!(expr.is_ok());
+        expr.unwrap();
     }
 
     #[test]

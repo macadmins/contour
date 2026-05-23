@@ -40,6 +40,17 @@ pub const DEFAULT_MSCP_CONTAINER_IMAGE: &str = "ghcr.io/brodjieski/mscp_2.0:late
 /// `/macos_security`), so the host `build/` directory mounts here.
 const MSCP_CONTAINER_BUILD_DIR: &str = "/mscp/build";
 
+/// Python version pinned for the `uv run` path.
+///
+/// mSCP's `requirements.txt` pins packages (e.g. `pillow`, `numpy`) whose
+/// wheels lag the newest CPython releases. If `uv` is left to pick the
+/// newest interpreter on the host, it lands on a Python with no matching
+/// wheel and falls back to compiling from source — which fails without
+/// system build deps (`libjpeg` etc.). Pinning to a Python with full
+/// wheel coverage keeps the install prebuilt-only. Override by exporting
+/// `UV_PYTHON` before running contour.
+const MSCP_PYTHON_VERSION: &str = "3.13";
+
 /// Generate command - wrapper mode (calls mSCP then processes)
 #[expect(
     clippy::too_many_arguments,
@@ -577,6 +588,12 @@ fn run_mscp_generation(
         }
         PythonMethod::Uv => {
             let requirements_relative = "requirements.txt";
+
+            // Pin the interpreter so uv installs prebuilt wheels rather
+            // than compiling mSCP's deps from source. Skip the pin when
+            // the caller set `UV_PYTHON` — that is the explicit override.
+            let pin_python = std::env::var_os("UV_PYTHON").is_none();
+
             let mut cmd_args = vec!["-p", "-s"];
             if generate_ddm {
                 tracing::info!("Adding -D flag to generate DDM artifacts");
@@ -584,7 +601,12 @@ fn run_mscp_generation(
             }
 
             tracing::info!(
-                "Executing: uv run --with-requirements {} python {} {} {} (in {})",
+                "Executing: uv run {}--with-requirements {} python {} {} {} (in {})",
+                if pin_python {
+                    format!("--python {MSCP_PYTHON_VERSION} ")
+                } else {
+                    String::new()
+                },
                 requirements_relative,
                 script_relative,
                 cmd_args.join(" "),
@@ -593,8 +615,11 @@ fn run_mscp_generation(
             );
 
             let mut cmd = Command::new("uv");
-            cmd.arg("run")
-                .arg("--with-requirements")
+            cmd.arg("run");
+            if pin_python {
+                cmd.arg("--python").arg(MSCP_PYTHON_VERSION);
+            }
+            cmd.arg("--with-requirements")
                 .arg(requirements_relative)
                 .arg("python")
                 .arg(script_relative)
@@ -1768,7 +1793,6 @@ pub fn list_baselines(output: PathBuf, output_mode: OutputMode) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn test_highest_baseline_version_picks_newest() {

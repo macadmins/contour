@@ -605,7 +605,7 @@ mod tests {
     fn test_handle_info_no_config() {
         // Should not panic with no config
         let result = handle_info(None, OutputMode::Json);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -625,6 +625,6 @@ mod tests {
         };
 
         let result = handle_info(Some(&config), OutputMode::Json);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 }

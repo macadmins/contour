@@ -581,14 +581,14 @@ general:
 
     #[test]
     fn test_extract_skips_non_profile_yaml() {
-        let yaml = r#"
+        let yaml = r"
 _meta:
     schema_version: 1
     cli_version: 1.4.0
     resource_type: scripts
 general:
     name: Some Script
-"#;
+";
 
         // Should fail to parse because `payloads` is missing — but our struct makes it optional
         let parsed: Result<JamfProfileYaml, _> = yaml_serde::from_str(yaml);
