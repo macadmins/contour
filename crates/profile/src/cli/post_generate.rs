@@ -16,11 +16,34 @@ use std::path::Path;
 /// `policy` controls whether errors or warnings cause the function to
 /// return an `Err`. Reporting still happens in Human mode regardless,
 /// so the operator sees the same diagnostic output before the failure.
+///
+/// `lenient` defers to the recipe over unreliable schema constraints, and is
+/// set only on the recipe path — where the output faithfully reproduces mSCP
+/// (and the Apple rules behind it). It downgrades two error classes to
+/// warnings:
+///
+///   * **Missing required fields** (any payload). A recipe authoritatively
+///     declares a *subset* of a payload's fields — a screensaver-lock rule
+///     that never sets the required `moduleName`, an Exchange restriction
+///     that doesn't provision the Mail account it rides on. mSCP itself never
+///     enforces required fields.
+///   * **Type mismatches on Apple payloads.** The embedded schema's base
+///     layer is ProfileManifests/ProfileCreator (`profilecreator.parquet`),
+///     whose data quality for `com.apple.*` payloads is unreliable wherever
+///     Apple's authoritative `capabilities.parquet` doesn't override it — e.g.
+///     legacy MCX payloads like `com.apple.MCX.FileVault2`, which types
+///     `Enable` as String though Boolean is the standard MDM-deployed shape
+///     mSCP emits. For Apple payloads we trust the rule over ProfileManifests.
+///
+/// Type mismatches on third-party payloads, and every other error, stay fatal.
 pub fn validate_generated_profile(
     path: &Path,
     mode: OutputMode,
     policy: &ValidationConfig,
+    lenient: bool,
 ) -> Result<()> {
+    use crate::validation::schema_validator::{Severity, ValidationIssue};
+
     let registry = crate::schema::SchemaRegistry::embedded()?;
     let raw = std::fs::read(path)?;
 
@@ -32,15 +55,30 @@ pub fn validate_generated_profile(
     let validator = crate::validation::schema_validator::SchemaValidator::new(&registry);
     let result = validator.validate(&profile);
 
+    // Apple payloads: `com.apple.*` or the dot-prefixed pseudo-domains
+    // (`.GlobalPreferences`). Their ProfileManifests-sourced type constraints
+    // are the ones we treat as advisory.
+    let is_apple = |pt: &str| pt.starts_with("com.apple.") || pt.starts_with('.');
+
+    // On the recipe path, demote ProfileManifests-driven errors to warnings
+    // (see the doc comment); everywhere else they stay errors.
+    let demoted = |i: &&ValidationIssue| {
+        lenient
+            && i.severity == Severity::Error
+            && (i.code == "MISSING_REQUIRED"
+                || i.code == "MISSING_NESTED_REQUIRED"
+                || (i.code == "TYPE_MISMATCH" && is_apple(&i.payload_type)))
+    };
+
     let errors: Vec<_> = result
         .issues
         .iter()
-        .filter(|i| i.severity == crate::validation::schema_validator::Severity::Error)
+        .filter(|i| i.severity == Severity::Error && !demoted(i))
         .collect();
     let warnings: Vec<_> = result
         .issues
         .iter()
-        .filter(|i| i.severity == crate::validation::schema_validator::Severity::Warning)
+        .filter(|i| i.severity == Severity::Warning || demoted(i))
         .collect();
 
     if mode == OutputMode::Human {

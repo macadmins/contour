@@ -709,9 +709,11 @@ pub fn handle_generate(
         );
     }
 
-    // Build payload content from schema fields
+    // Build payload content from schema fields. Bare generate scaffolds
+    // required fields (backfill=true) so the operator gets a usable starting
+    // point.
     let payload_content =
-        build_payload_from_schema(manifest, &std::collections::BTreeMap::new(), full);
+        build_payload_from_schema(manifest, &std::collections::BTreeMap::new(), full, true);
 
     let is_plist = format == "plist";
 
@@ -776,10 +778,12 @@ pub fn handle_generate(
     // Auto-validate generated output (mobileconfig only, not raw plist)
     if !is_plist {
         let policy = contour_core::config::resolve_validation_with_anchor(None);
+        // Bare generate scaffolds required fields, so enforce them strictly.
         super::post_generate::validate_generated_profile(
             Path::new(&output_path),
             output_mode,
             &policy,
+            false,
         )?;
     }
 
@@ -985,7 +989,10 @@ pub fn handle_generate_recipe(
 
         // Build payload content (using resolved values for secret references)
         let mut payload_content = if let Some(m) = manifest {
-            let mut content = build_payload_from_schema(m, &spec.fields, full);
+            // Recipe path: backfill=false so the rendered profile carries only
+            // the fields the recipe declares, matching mSCP (no injected
+            // schema defaults the author never listed).
+            let mut content = build_payload_from_schema(m, &spec.fields, full, false);
             // Apply extra fields with dot-notation nesting
             for (key, val) in &spec.extra_fields {
                 apply_nested_field(&mut content, key, toml_to_plist_resolved(val));
@@ -1001,9 +1008,11 @@ pub fn handle_generate_recipe(
                 );
             }
             let mut content = Dictionary::new();
+            // `fields` keys are literal payload keys — insert verbatim.
             for (key, val) in &spec.fields {
-                apply_nested_field(&mut content, key, toml_to_plist_resolved(val));
+                content.insert(key.clone(), toml_to_plist_resolved(val));
             }
+            // `extra_fields` use dot-notation to nest.
             for (key, val) in &spec.extra_fields {
                 apply_nested_field(&mut content, key, toml_to_plist_resolved(val));
             }
@@ -1069,12 +1078,15 @@ pub fn handle_generate_recipe(
         let final_bytes = substitute_placeholders(&profile_bytes, &var_map);
         std::fs::write(&output_path, &final_bytes)?;
 
-        // Auto-validate generated output
+        // Auto-validate generated output. Recipe renders mirror mSCP, which
+        // sets only the fields its rules declare — so missing required fields
+        // are warnings here, not fatal (see validate_generated_profile).
         if !is_plist {
             super::post_generate::validate_generated_profile(
                 Path::new(&output_path),
                 output_mode,
                 &validation_policy,
+                true,
             )?;
         }
 
@@ -1118,10 +1130,12 @@ pub fn handle_generate_recipe(
 
         let final_bytes = substitute_placeholders(&bytes, &var_map);
         std::fs::write(&output_path, &final_bytes)?;
+        // Combined recipe output — same mSCP-faithful leniency as above.
         super::post_generate::validate_generated_profile(
             Path::new(&output_path),
             output_mode,
             &validation_policy,
+            true,
         )?;
 
         let xml = String::from_utf8_lossy(&final_bytes);
@@ -1767,10 +1781,28 @@ fn is_profilemanifests_metadata_key(name: &str) -> bool {
     name.starts_with("PFC_") || name.starts_with("pfm_")
 }
 
+/// Build a payload dict from a schema manifest and the recipe's
+/// `[profile.fields]` (`overrides`).
+///
+/// `overrides` are **literal** payload keys — a key like
+/// `com.apple.login.mcx.DisableAutoLoginClient` is one key, not a
+/// dot-path to nest (nesting lives in `[profile.extra_fields]`, applied
+/// by the caller). So overrides are inserted verbatim.
+///
+/// Build a payload dict from the embedded schema plus operator `overrides`.
+///
+/// `full` includes every optional field (the `--full` scaffold). `backfill`
+/// controls whether *unlisted* required fields are scaffolded with their
+/// schema defaults: bare `profile generate <type>` passes `true` so the
+/// operator gets a complete starting point, while the recipe path passes
+/// `false` so a rendered profile carries only the fields the recipe (and the
+/// mSCP rules behind it) actually declare — matching mSCP byte-for-byte
+/// instead of injecting schema defaults the author never asked for.
 fn build_payload_from_schema(
     manifest: &crate::schema::PayloadManifest,
     overrides: &std::collections::BTreeMap<String, toml::Value>,
     full: bool,
+    backfill: bool,
 ) -> Dictionary {
     let mut dict = Dictionary::new();
 
@@ -1797,6 +1829,7 @@ fn build_payload_from_schema(
         idx: usize,
         overrides: &std::collections::BTreeMap<String, toml::Value>,
         full: bool,
+        backfill: bool,
         children_of: &dyn Fn(usize, u8) -> Vec<usize>,
     ) -> Value {
         let field_name = &manifest.field_order[idx];
@@ -1821,11 +1854,13 @@ fn build_payload_from_schema(
                         continue;
                     }
 
-                    if !child_field.flags.required && !full {
+                    let keep_child = full || (child_field.flags.required && backfill);
+                    if !keep_child {
                         continue;
                     }
 
-                    let child_val = build_field_value(manifest, ci, overrides, full, children_of);
+                    let child_val =
+                        build_field_value(manifest, ci, overrides, full, backfill, children_of);
                     inner.insert(child_name.clone(), child_val);
                 }
                 return Value::Dictionary(inner);
@@ -1882,25 +1917,30 @@ fn build_payload_from_schema(
             continue;
         }
 
-        // Check override
+        // Recipe field overrides are literal payload keys — insert
+        // verbatim (no dot-splitting; that's `extra_fields`' job).
         if let Some(override_val) = overrides.get(field_name) {
-            apply_nested_field(&mut dict, field_name, toml_to_plist_resolved(override_val));
+            dict.insert(field_name.clone(), toml_to_plist_resolved(override_val));
             continue;
         }
 
-        // Skip optional unless --full
-        if !field.flags.required && !full {
+        // Emit a non-override top-level field only when `--full` is set
+        // (everything) or it's required and backfill is enabled. The recipe
+        // path passes backfill=false, so it emits only its listed fields.
+        let keep = full || (field.flags.required && backfill);
+        if !keep {
             continue;
         }
 
-        let value = build_field_value(manifest, idx, overrides, full, &children_of);
+        let value = build_field_value(manifest, idx, overrides, full, backfill, &children_of);
         dict.insert(field_name.clone(), value);
     }
 
-    // Apply any overrides for fields not in schema (e.g., dot-notation keys)
+    // Recipe fields not present in the schema are still literal keys
+    // (e.g. MCX domain keys like `com.apple.login.mcx.…`). Insert verbatim.
     for (key, val) in overrides {
         if !manifest.fields.contains_key(key) {
-            apply_nested_field(&mut dict, key, toml_to_plist_resolved(val));
+            dict.insert(key.clone(), toml_to_plist_resolved(val));
         }
     }
 
@@ -1977,7 +2017,10 @@ mod tests {
             segments: vec![],
         };
 
-        let dict = build_payload_from_schema(&manifest, &std::collections::BTreeMap::new(), false);
+        // backfill=true: bare-generate scaffolding, where required fields
+        // are emitted from the schema.
+        let dict =
+            build_payload_from_schema(&manifest, &std::collections::BTreeMap::new(), false, true);
         assert!(
             dict.contains_key("allowAirDrop"),
             "real key must be emitted"
@@ -1985,6 +2028,48 @@ mod tests {
         assert!(
             !dict.contains_key("PFC_SegmentedControl_0"),
             "ProfileCreator metadata key must not leak into generated profiles"
+        );
+    }
+
+    #[test]
+    fn test_fields_dotted_key_is_literal_not_nested() {
+        use crate::schema::PayloadManifest;
+        use crate::schema::types::Platforms;
+
+        // A recipe field whose name contains dots (e.g. an MCX/WebKit key)
+        // must be inserted as ONE literal key, not exploded into nested
+        // dicts. Nesting is `extra_fields`' job, applied by the caller.
+        let manifest = PayloadManifest {
+            payload_type: "com.apple.loginwindow".to_string(),
+            title: "Login Window".to_string(),
+            description: String::new(),
+            platforms: Platforms::parse("m"),
+            min_versions: std::collections::HashMap::new(),
+            os_support: std::collections::HashMap::new(),
+            apply_mode: None,
+            category: "apple".to_string(),
+            fields: std::collections::HashMap::new(),
+            field_order: vec![],
+            segments: vec![],
+        };
+
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert(
+            "com.apple.login.mcx.DisableAutoLoginClient".to_string(),
+            toml::Value::Boolean(true),
+        );
+
+        // Recipe semantics: backfill=false (overrides are inserted regardless).
+        let dict = build_payload_from_schema(&manifest, &overrides, false, false);
+
+        assert!(
+            dict.contains_key("com.apple.login.mcx.DisableAutoLoginClient"),
+            "dotted field key must stay literal; got keys: {:?}",
+            dict.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !dict.contains_key("com"),
+            "dotted field key must NOT be split into nested `com` dict"
         );
     }
 

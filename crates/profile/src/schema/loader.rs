@@ -423,7 +423,14 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             },
             title: key.key_title.clone().unwrap_or_default(),
             description: key.key_description.clone().unwrap_or_default(),
-            default: key.default_value.as_ref().map(|v| v.to_string()),
+            // Unwrap a JSON string default to its raw text — `Value::to_string()`
+            // JSON-encodes it (`"Flurry"` -> `"\"Flurry\""`), baking embedded
+            // quotes into the rendered plist. Non-string scalars keep their
+            // faithful text form.
+            default: key.default_value.as_ref().map(|v| match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            }),
             allowed_values: key.range_list.clone().unwrap_or_default(),
             depth: key.depth as u8,
             parent_key: key.parent_key.clone(),

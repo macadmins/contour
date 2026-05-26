@@ -99,6 +99,11 @@ pub struct ProfileSpec {
     pub mcx_domain: Option<String>,
     /// Field overrides matching schema field names.
     ///
+    /// Keys are **literal** payload keys, inserted verbatim — a dotted
+    /// key like `com.apple.login.mcx.DisableAutoLoginClient` is one key,
+    /// not a nesting path. To build nested dicts, use `extra_fields`
+    /// (dot-notation) or native TOML sub-tables (`[profile.fields.a.b]`).
+    ///
     /// `BTreeMap` (not `HashMap`) so iteration is sorted and serialized
     /// output is byte-stable across runs — without this, every CI
     /// regeneration produces a spurious diff from re-ordered keys

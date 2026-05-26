@@ -61,7 +61,9 @@ payload_type = "com.okta.mobile"
 display_name = "Okta Verify Configuration"
 description = "Managed preferences for Okta Verify"
 
-[profile.fields]
+# Dotted keys nest into an `OktaVerify` dict — that's `extra_fields`'
+# dot-notation job. (`[profile.fields]` keys are literal payload keys.)
+[profile.extra_fields]
 "OktaVerify.OrgUrl" = "https://{{OKTA_DOMAIN}}"
 "OktaVerify.EnrollmentOptions" = "SilentEnrollmentDisabled"
 "OktaVerify.ReportDiagnostics" = false
