@@ -67,7 +67,7 @@ contour init --domain com.acme --name "Acme" --mdm fleet --yes
 Interactive, step-by-step training mode for a chosen toolkit.
 
 ```bash
-contour trainer santa     # also: pppc | mscp | profile
+contour trainer santa     # also: pppc | mscp | profile | btm | config
 ```
 
 ### `contour help-agents` (alias `help-ai`)

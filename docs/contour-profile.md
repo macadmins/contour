@@ -259,7 +259,7 @@ contour profile info [PAYLOAD_TYPE] [flags]
 |------|-------------|---------|
 | `[PAYLOAD_TYPE]` | Payload type for schema lookup. Omit to show CLI metadata. | — |
 | `--full` | Include all fields, not just required + top-level | `false` |
-| `--os <NAME>` | Restrict output to one OS (`macOS`, `iOS`, `tvOS`, `watchOS`, `visionOS`); fails fast if the payload is unsupported there | all platforms |
+| `--os <NAME>` | Restrict output to one OS; fails fast if the payload is unsupported there. Accepts (case-insensitive): `macOS`/`mac`, `iOS`/`ipad`/`ipados`, `tvOS`/`tv`, `watchOS`/`watch`, `visionOS`/`vision` | all platforms |
 | `--schema-path <DIR>` | External schema directory (overrides embedded) | embedded schemas |
 | `--json` | Emit JSON instead of human-readable output | `false` |
 
@@ -1199,6 +1199,29 @@ contour profile command generate DeviceLock --set PIN=123456 --uuid --base64
 
 # Interactive (search + select)
 contour profile command generate --interactive
+```
+
+#### `profile command decode`
+
+Decode an MDM `InstallProfile` command back into its inner `.mobileconfig` —
+the inverse of wrapping a profile for delivery. Unwraps the CMS/PKCS#7
+`<data>` payload and emits the profile inside.
+
+```
+contour profile command decode <INPUT> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<INPUT>` | MDM command plist file, or `-` to read from stdin | **required** |
+| `-o, --output <PATH>` | Write the inner profile to this file | stdout |
+
+```bash
+# Decode an InstallProfile command to its inner profile
+contour profile command decode install-profile.plist -o inner.mobileconfig
+
+# From stdin
+pbpaste | contour profile command decode - -o inner.mobileconfig
 ```
 
 ---

@@ -96,7 +96,7 @@ contour profile enrollment generate --platform macOS --interactive -o enrollment
 
 # Query mSCP compliance rules
 contour mscp schema baselines --json
-contour mscp schema rules --baseline cis_lvl1 --json
+contour mscp schema rules --keyword cis_lvl1 --json
 
 # PPPC profile
 contour pppc scan -p /Applications -o pppc.toml --org com.acme
@@ -121,7 +121,9 @@ The binary is signed + notarized by Apple, stapled for offline verification.
 
 ## Documentation
 
+- [Getting Started](docs/contour-getting-started.md) — install, orientation, and three starter workflows
 - [Profile Toolkit](docs/contour-profile.md) — normalize, validate, sign, diff, DDM declarations, payload extraction
+- [Recipes & Presets](docs/contour-recipes.md) — reusable profile/DDM bundles, the library workflow, mSCP aggregation
 - [PPPC Toolkit](docs/contour-pppc.md) — TCC services, interactive and batch configuration, CSV input
 - [Santa Toolkit](docs/contour-santa.md) — rule management, multiple fetch sources, `prep` for full Santa deployment
 - [mSCP Toolkit](docs/contour-mscp.md) — Fleet/Jamf/Munki output, ODV overrides, cross-baseline deduplication

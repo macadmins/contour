@@ -572,6 +572,116 @@ contour santa pipeline -i fleet.csv -b bundles.toml --org com.acme -o profiles/
 contour santa pipeline -i fleet.csv -b bundles.toml --org com.acme --layer-stage --stages 3
 ```
 
+### Deployment Rings & Fleet GitOps
+
+#### `santa rings`
+
+Generate profiles organized by **deployment rings** for staged rollouts. Each
+ring can carry multiple categories — software rules (`<prefix>1a`), CEL rules
+(`<prefix>1b`), and FAA rules (`<prefix>1c`) for ring 1, then `2a`/`2b`/`2c`
+for ring 2, and so on. Two nested subcommands:
+
+```
+contour santa rings generate <INPUTS>... [flags]
+contour santa rings init [flags]
+```
+
+`santa rings generate` — build the per-ring profiles from rule files:
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<INPUTS>...` | Input rule files (YAML, JSON, CSV) | **required** |
+| `-o, --output-dir <DIR>` | Output directory for ring profiles | — |
+| `--org <DOMAIN>` | Organization identifier prefix | `com.example` |
+| `--prefix <PREFIX>` | Profile name prefix (`santa` → `santa1a`, `santa1b`, …) | `santa` |
+| `--num-rings <N>` | Number of rings (5 or 7 for standard configs, or custom) | `5` |
+| `--max-rules <N>` | Max rules per profile (splits into `santa1a-001`, `-002`, …) | unlimited |
+| `--dry-run` | Preview without writing | `false` |
+
+`santa rings init` — scaffold a ring configuration file:
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-o, --output <PATH>` | Output file path | `rings.yaml` |
+| `--num-rings <N>` | Number of rings | `5` |
+
+```bash
+contour santa rings init --num-rings 5 -o rings.yaml
+contour santa rings generate rules.yaml --org com.acme --prefix santa --num-rings 5 -o ./rings/
+```
+
+#### `santa fleet`
+
+Generate **Fleet GitOps-compatible** output — a directory of profiles plus
+manifests, with labels used to target rings.
+
+```
+contour santa fleet <INPUTS>... [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<INPUTS>...` | Input rule files (YAML, JSON, CSV) | **required** |
+| `-o, --output-dir <DIR>` | Output directory for the Fleet GitOps structure | — |
+| `--org <DOMAIN>` | Organization identifier prefix | `com.example` |
+| `--prefix <PREFIX>` | Profile name prefix | `santa` |
+| `--team <TEAM>` | Fleet team name | `Workstations` |
+| `--num-rings <N>` | Number of rings | `5` |
+| `--fragment` | Emit a Fleet GitOps fragment directory instead of the full structure | `false` |
+| `--dry-run` | Preview without writing | `false` |
+
+```bash
+contour santa fleet rules.yaml --org com.acme --team Workstations --num-rings 5 -o ./gitops/
+```
+
+### Advanced Rule Tooling
+
+#### `santa cel`
+
+CEL (Common Expression Language) expression tools for dynamic, attribute-based
+rules. CEL rules evaluate at runtime against an app record rather than matching
+a fixed hash or Team ID.
+
+```
+contour santa cel <COMMAND>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `fields` | List available CEL context fields and operators |
+| `check` | Check that a CEL expression compiles and validate field references |
+| `eval` | Evaluate a CEL expression against an app record |
+| `classify` | Classify apps from CSV against bundle definitions |
+| `compile` | Compile structured conditions into a CEL expression |
+| `dry-run` | Run CEL expressions against test cases (simulation) |
+
+```bash
+contour santa cel fields
+contour santa cel check 'app.team_id == "EQHXZ8M8AV"'
+contour santa cel eval 'app.cd_hash != ""' --json
+```
+
+#### `santa faa`
+
+File Access Authorization (FAA) policy tools. FAA policies control which
+processes can access specific file paths.
+
+```
+contour santa faa <COMMAND>
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `generate` | Generate an FAA plist from a YAML policy |
+| `validate` | Validate an FAA policy YAML |
+| `schema` | Show the FAA schema (rule types, options, process fields, placeholders) |
+
+```bash
+contour santa faa schema --json
+contour santa faa validate policy.yaml
+contour santa faa generate policy.yaml -o policy.plist
+```
+
 ---
 
 ## Common Workflows

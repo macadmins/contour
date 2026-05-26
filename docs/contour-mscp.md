@@ -329,11 +329,14 @@ cannot decide (e.g. an empty or non-standard checkout). With a 2.0 repo,
 need to know the exact filename.
 
 > **mSCP 2.0 toolchain note:** the 2.0 Python build pulls a heavier
-> dependency set (pandas, lxml, Pillow). Pillow has no Python 3.14 wheel
-> yet, so a fresh 2.0 build under the newest Python can fail to compile
-> it. If you hit this, build with Python 3.13 — e.g. pre-create the
-> environment with `uv venv --python 3.13` in the mSCP repo, or install
-> the `libjpeg` headers.
+> dependency set (pandas, lxml, Pillow). When the repo ships
+> `pyproject.toml` + `uv.lock` (mSCP 2.0), `--use-uv` installs from the
+> **lockfile** and pins **Python 3.14** — the locked deps (e.g.
+> `pillow 11.3.0`) all have cp314 wheels, so the install stays
+> prebuilt-only. For legacy repos without a lockfile (mSCP 1.x),
+> `--use-uv` falls back to `requirements.txt` and pins **3.13** (that
+> export's `pillow==11.2.1` has no cp314 wheel). Override the interpreter
+> for a single run by exporting `UV_PYTHON`.
 
 ---
 
@@ -498,7 +501,7 @@ the operator's existing entries.
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--odv <PATH>` | ODV override file | auto-detected as `odv_<baseline>.yaml` |
+| `--odv <PATH>` | ODV override file — operator `custom_value`s are applied to the build (profiles, scripts, DDM) via mSCP's custom-rule mechanism. Auto-detected as `odv_<keyword>.yaml` in the working directory when omitted | auto-detected |
 | `--exclude <CATEGORIES>` | Exclude rule categories (comma-separated) | none |
 
 ```bash
@@ -548,6 +551,13 @@ Post-process already-generated mSCP output. Use this when you've already run the
 
 Most users should use `generate` instead.
 
+> **ODVs are a generate-time concern.** `process` has no `--odv` flag:
+> the mSCP build it consumes has already resolved every `$ODV` to a
+> concrete value, so there's nothing left to substitute. Apply operator
+> ODV overrides at build time with `generate --odv` (or an auto-detected
+> `odv_<keyword>.yaml`), or seed a recipe's `[odv]` table with
+> `recipe --odv`.
+
 ```
 contour mscp process [flags]
 ```
@@ -595,6 +605,7 @@ contour mscp recipe -r <MSCP_REPO> -k <KEYWORD> [flags]
 | `-k, --keyword <NAME>` | Baseline name (e.g., `cis_lvl1`, `800-53r5_high`) | **required** |
 | `-o, --output <PATH>` | Output recipe TOML path | `<baseline>.toml` |
 | `--org <VENDOR>` | Organization vendor string written to the recipe header | none |
+| `--odv <PATH>` | ODV override file — operator `custom_value`s seed the `[odv]` table (or inline values) over the rule defaults, keyed by `rule_id`. Auto-detected as `odv_<keyword>.yaml` in the working directory when omitted | auto-detected |
 | `--odv-mode <MODE>` | How to render `$ODV` placeholders: `variable` or `inline` | `variable` |
 | `--mscp-version <VER>` | Repository layout: `auto`, `1.x`, or `2.0` | `auto` |
 | `--os <OS>` | OS target for 2.0 layouts: `macos`, `ios`, `visionos` (ignored for 1.x) | `macos` |
@@ -1202,8 +1213,8 @@ form; substitute `--baseline` if you prefer the alias.
 contour mscp init --org com.acme --name "Acme Corp" --fleet --sync
 
 # Build cis_lvl1 with profiles, scripts, AND declarative-management
-# artifacts. --use-uv runs the 2.0 Python toolchain under a pinned
-# Python 3.13 (avoids the Pillow-on-3.14 source-build failure).
+# artifacts. --use-uv installs from the repo's uv.lock and pins Python
+# 3.14 (locked deps ship cp314 wheels; legacy repos fall back to 3.13).
 contour mscp generate \
   --mscp-repo ./macos_security \
   --keyword cis_lvl1 \
