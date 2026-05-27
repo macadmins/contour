@@ -797,9 +797,9 @@ const SOP_ROUTING_TEMPLATE: &str = include_str!("../skills/contour/references/so
 /// Creates:
 /// - `.claude/skills/contour.md` — skill file (for local Claude Code sessions)
 /// - Appends full contour instructions to `CLAUDE.md` (for CI/GitHub Actions)
-/// - Appends full contour instructions to `AGENT.md` (for Kilo Code and others)
+/// - Appends full contour instructions to `AGENTS.md` (for Kilo Code and others)
 ///
-/// The full content goes into CLAUDE.md/AGENT.md because CI agents read those
+/// The full content goes into CLAUDE.md/AGENTS.md because CI agents read those
 /// but NOT `.claude/skills/`. A pointer isn't enough — the full instructions
 /// must be in the file the agent reads at session start.
 pub fn install_skill(version: &str) -> Result<()> {
@@ -816,8 +816,8 @@ pub fn install_skill(version: &str) -> Result<()> {
     fs::write(refs_dir.join("sop-routing.md"), SOP_ROUTING_TEMPLATE)?;
     eprintln!("\u{2713} Installed .claude/skills/contour/SKILL.md");
 
-    // 2. Write full content into CLAUDE.md and AGENT.md (for CI)
-    for agent_file in &["CLAUDE.md", "AGENT.md"] {
+    // 2. Write full content into CLAUDE.md and AGENTS.md (for CI)
+    for agent_file in &["CLAUDE.md", "AGENTS.md"] {
         let path = Path::new(agent_file);
         if path.exists() {
             let existing = fs::read_to_string(path)?;

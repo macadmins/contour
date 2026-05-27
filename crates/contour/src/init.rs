@@ -437,7 +437,7 @@ fn print_summary(root: &Path, config: &ContourConfig, wrote_agent_md: bool, json
     if json {
         let result = serde_json::json!({
             "path": ContourConfig::config_path(root),
-            "agent_md": if wrote_agent_md { Some(root.join("AGENT.md")) } else { None },
+            "agents_md": if wrote_agent_md { Some(root.join("AGENTS.md")) } else { None },
             "organization": {
                 "name": config.organization.name,
                 "domain": config.organization.domain,
@@ -463,7 +463,7 @@ fn print_summary(root: &Path, config: &ContourConfig, wrote_agent_md: bool, json
         ContourConfig::config_path(root).display()
     );
     if wrote_agent_md {
-        println!("  {} Wrote AGENT.md", "✓".green());
+        println!("  {} Wrote AGENTS.md", "✓".green());
     }
     println!();
     println!(
@@ -493,10 +493,10 @@ fn print_summary(root: &Path, config: &ContourConfig, wrote_agent_md: bool, json
     println!();
 }
 
-/// Write `AGENT.md` in the project root if it doesn't already exist.
+/// Write `AGENTS.md` in the project root if it doesn't already exist.
 /// Returns `true` if the file was written, `false` if it was skipped.
 fn write_agent_md(root: &Path) -> Result<bool> {
-    let path = root.join("AGENT.md");
+    let path = root.join("AGENTS.md");
     if path.exists() {
         return Ok(false);
     }
