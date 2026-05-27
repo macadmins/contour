@@ -231,6 +231,18 @@ impl OdvOverrides {
         &self.overrides.overrides
     }
 
+    /// Map of `rule_id` → operator `custom_value`, for entries that
+    /// actually carry one. Used to seed recipe `[odv]` tables and mSCP
+    /// custom-rule files — only explicit operator overrides, not the
+    /// baked-in defaults (those mSCP resolves on its own).
+    pub fn custom_value_map(&self) -> std::collections::HashMap<String, yaml_serde::Value> {
+        self.overrides
+            .overrides
+            .iter()
+            .filter_map(|o| o.custom_value.clone().map(|v| (o.rule_id.clone(), v)))
+            .collect()
+    }
+
     /// Check if this manager has any ODVs
     pub fn is_empty(&self) -> bool {
         self.overrides.overrides.is_empty()

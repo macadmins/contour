@@ -40,16 +40,22 @@ pub const DEFAULT_MSCP_CONTAINER_IMAGE: &str = "ghcr.io/brodjieski/mscp_2.0:late
 /// `/macos_security`), so the host `build/` directory mounts here.
 const MSCP_CONTAINER_BUILD_DIR: &str = "/mscp/build";
 
-/// Python version pinned for the `uv run` path.
+/// Python version pinned for the `uv run` **project/lockfile** path.
 ///
-/// mSCP's `requirements.txt` pins packages (e.g. `pillow`, `numpy`) whose
-/// wheels lag the newest CPython releases. If `uv` is left to pick the
-/// newest interpreter on the host, it lands on a Python with no matching
-/// wheel and falls back to compiling from source — which fails without
-/// system build deps (`libjpeg` etc.). Pinning to a Python with full
-/// wheel coverage keeps the install prebuilt-only. Override by exporting
-/// `UV_PYTHON` before running contour.
-const MSCP_PYTHON_VERSION: &str = "3.13";
+/// When the mSCP repo ships `pyproject.toml` + `uv.lock` (mSCP 2.0), the
+/// `--use-uv` path installs from the lock, which resolves `pillow 11.3.0`
+/// and friends — all with cp314 wheels. So 3.14 installs prebuilt-only.
+/// Override per-run by exporting `UV_PYTHON`.
+const MSCP_PYTHON_VERSION: &str = "3.14";
+
+/// Python version for the legacy `--with-requirements requirements.txt`
+/// fallback (mSCP 1.x repos with no `pyproject.toml`/`uv.lock`).
+///
+/// mSCP's `requirements.txt` exact-pins `pillow==11.2.1`, which has **no
+/// cp314 wheel** — under 3.14 that forces a libjpeg source build that
+/// fails. 3.13 has full wheel coverage for those pins, so the legacy path
+/// stays prebuilt-only on 3.13.
+const MSCP_PYTHON_VERSION_LEGACY: &str = "3.13";
 
 /// mSCP flag that asks `generate_guidance.py` to emit declarative
 /// management (DDM) artifacts alongside profiles.
@@ -66,6 +72,102 @@ const MSCP_PYTHON_VERSION: &str = "3.13";
 ///
 /// Using the unambiguous long form keeps the call site layout-agnostic.
 const MSCP_DDM_FLAG: &str = "--ddm";
+
+/// Custom-rules files written into the mSCP repo to apply operator ODV
+/// overrides for a single build, removed on drop.
+///
+/// mSCP resolves each rule's ODV with precedence `custom` > baseline
+/// `parent_values` > `recommended`, reading `custom` from override files
+/// under `<cwd>/custom/rules/` (`collect_overrides`). contour runs the
+/// build with the repo as CWD, so seeding `custom/rules/.contour-odv/`
+/// before the build makes the Python toolchain bake the operator's values
+/// into profiles, scripts, and DDM — the same mechanism mSCP's own
+/// `--tailor` uses. The `Drop` impl removes the files on every exit path
+/// (success, error, early return) so the operator's repo stays pristine.
+struct OdvCustomRulesGuard {
+    dir: PathBuf,
+}
+
+impl Drop for OdvCustomRulesGuard {
+    fn drop(&mut self) {
+        if self.dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&self.dir) {
+                tracing::warn!(
+                    "Failed to clean up ODV custom-rules dir {}: {e}",
+                    self.dir.display()
+                );
+            }
+        }
+    }
+}
+
+/// One mSCP custom-rule override file: `{ id, odv: { custom } }`.
+#[derive(serde::Serialize)]
+struct CustomOdvRule<'a> {
+    id: &'a str,
+    odv: CustomOdvValue<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct CustomOdvValue<'a> {
+    custom: &'a yaml_serde::Value,
+}
+
+/// Seed mSCP `custom` ODV overrides from an operator override file so the
+/// Python build resolves operator values instead of baseline defaults.
+///
+/// `odv_path` is the explicit `--odv` path, or `None` to auto-detect
+/// `odv_<baseline>.yaml` in the current directory (the documented
+/// behavior). Returns a cleanup guard, or `None` when there is nothing to
+/// apply (no file, or no entries carry a `custom_value`).
+fn apply_odv_overrides(
+    mscp_repo_path: &Path,
+    baseline_name: &str,
+    odv_path: Option<PathBuf>,
+) -> Result<Option<OdvCustomRulesGuard>> {
+    let Some(manager) = crate::managers::OdvOverrides::try_load(baseline_name, odv_path) else {
+        return Ok(None);
+    };
+
+    // Only entries with an explicit custom value need seeding; bare
+    // defaults already match what mSCP resolves from the baseline.
+    let customs: Vec<(&str, &yaml_serde::Value)> = manager
+        .get_overrides()
+        .iter()
+        .filter_map(|o| o.custom_value.as_ref().map(|v| (o.rule_id.as_str(), v)))
+        .collect();
+    if customs.is_empty() {
+        return Ok(None);
+    }
+
+    // Dedicated subdir keeps us clear of operator-authored custom rules;
+    // `collect_overrides` walks the tree recursively so nesting is fine.
+    let dir = mscp_repo_path
+        .join("custom")
+        .join("rules")
+        .join(".contour-odv");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create ODV custom-rules dir: {}", dir.display()))?;
+    let guard = OdvCustomRulesGuard { dir: dir.clone() };
+
+    for (rule_id, value) in &customs {
+        let body = yaml_serde::to_string(&CustomOdvRule {
+            id: rule_id,
+            odv: CustomOdvValue { custom: value },
+        })
+        .with_context(|| format!("Failed to serialize ODV override for rule {rule_id}"))?;
+        let file = dir.join(format!("{rule_id}.yaml"));
+        std::fs::write(&file, body)
+            .with_context(|| format!("Failed to write ODV override: {}", file.display()))?;
+    }
+
+    tracing::info!(
+        "Applying {} ODV override(s) to baseline '{}' (custom > baseline > recommended)",
+        customs.len(),
+        baseline_name
+    );
+    Ok(Some(guard))
+}
 
 /// Generate command - wrapper mode (calls mSCP then processes)
 #[expect(
@@ -98,6 +200,7 @@ pub fn generate_baseline(
     mscp_version: String,
     os: String,
     os_version: Option<String>,
+    odv_path: Option<PathBuf>,
 ) -> Result<()> {
     tracing::info!(
         "Starting generate workflow for baseline '{}'",
@@ -126,6 +229,12 @@ pub fn generate_baseline(
         detect_python_method(&mscp_repo_path)
     };
     tracing::info!("Using Python method: {:?}", method);
+
+    // Seed operator ODV overrides (explicit --odv, or auto-detected
+    // `odv_<baseline>.yaml`) into the mSCP custom-rules dir so the build
+    // resolves them. The guard cleans the files up when this function
+    // returns, so it must stay in scope across the build below.
+    let _odv_guard = apply_odv_overrides(&mscp_repo_path, &baseline_name, odv_path)?;
 
     // Step 1: Run mSCP generation (even in dry-run to see what would be generated)
     // Note: mSCP writes to its build directory, but that's acceptable for dry-run
@@ -603,51 +712,72 @@ fn run_mscp_generation(
                 .context("Failed to execute python3")?
         }
         PythonMethod::Uv => {
-            let requirements_relative = "requirements.txt";
+            // Prefer the project lockfile when the repo ships it (mSCP 2.0):
+            // `uv run` auto-discovers `pyproject.toml` + `uv.lock` from the
+            // CWD (set to the repo below) and syncs the locked environment,
+            // which resolves cp314-wheel deps so Python 3.14 stays
+            // prebuilt-only. Fall back to the legacy
+            // `--with-requirements requirements.txt` path (pinned 3.13) for
+            // repos without the lockfile (mSCP 1.x) so that workflow keeps
+            // working.
+            let has_lockfile = mscp_repo_path.join("pyproject.toml").exists()
+                && mscp_repo_path.join("uv.lock").exists();
 
-            // Pin the interpreter so uv installs prebuilt wheels rather
-            // than compiling mSCP's deps from source. Skip the pin when
-            // the caller set `UV_PYTHON` — that is the explicit override.
+            // Pin the interpreter so uv installs prebuilt wheels rather than
+            // compiling from source. Skip the pin when the caller set
+            // `UV_PYTHON` — that is the explicit override.
             let pin_python = std::env::var_os("UV_PYTHON").is_none();
-
-            let mut cmd_args = vec!["-p", "-s"];
-            if generate_ddm {
-                tracing::info!("Adding {MSCP_DDM_FLAG} flag to generate DDM artifacts");
-                cmd_args.push(MSCP_DDM_FLAG);
-            }
-
-            tracing::info!(
-                "Executing: uv run {}--with-requirements {} python {} {} {} (in {})",
-                if pin_python {
-                    format!("--python {MSCP_PYTHON_VERSION} ")
-                } else {
-                    String::new()
-                },
-                requirements_relative,
-                script_relative,
-                cmd_args.join(" "),
-                baseline_yaml_relative,
-                mscp_repo_path.display()
-            );
+            let python_version = if has_lockfile {
+                MSCP_PYTHON_VERSION
+            } else {
+                MSCP_PYTHON_VERSION_LEGACY
+            };
 
             let mut cmd = Command::new("uv");
             cmd.arg("run");
             if pin_python {
-                cmd.arg("--python").arg(MSCP_PYTHON_VERSION);
+                cmd.arg("--python").arg(python_version);
             }
-            cmd.arg("--with-requirements")
-                .arg(requirements_relative)
-                .arg("python")
-                .arg(script_relative)
-                .arg("-p")
-                .arg("-s");
-
+            // Legacy repos have no project metadata; point uv at the
+            // requirements export. Lockfile repos use project mode (no
+            // `--with-requirements`), so uv reads pyproject + uv.lock.
+            if !has_lockfile {
+                cmd.arg("--with-requirements").arg("requirements.txt");
+            }
+            cmd.arg("python").arg(script_relative).arg("-p").arg("-s");
             if generate_ddm {
                 cmd.arg(MSCP_DDM_FLAG);
             }
+            cmd.arg(&baseline_yaml_relative);
 
-            cmd.arg(&baseline_yaml_relative)
-                .current_dir(mscp_repo_path)
+            tracing::info!(
+                "Executing: uv run {}{}python {} -p -s {}{} (in {}, {})",
+                if pin_python {
+                    format!("--python {python_version} ")
+                } else {
+                    String::new()
+                },
+                if has_lockfile {
+                    String::new()
+                } else {
+                    "--with-requirements requirements.txt ".to_string()
+                },
+                script_relative,
+                if generate_ddm {
+                    format!("{MSCP_DDM_FLAG} ")
+                } else {
+                    String::new()
+                },
+                baseline_yaml_relative,
+                mscp_repo_path.display(),
+                if has_lockfile {
+                    "project lockfile"
+                } else {
+                    "requirements.txt fallback"
+                }
+            );
+
+            cmd.current_dir(mscp_repo_path)
                 .output()
                 .context("Failed to execute uv run")?
         }
@@ -1289,6 +1419,7 @@ pub fn generate_all_baselines(
                     "auto".to_string(), // mscp_version — auto-detect layout
                     "macos".to_string(), // os
                     None, // os_version
+                    None, // odv_path — generate-all auto-detects odv_<baseline>.yaml per baseline
                 );
 
                 (i, baseline_name.clone(), result)
@@ -1346,6 +1477,7 @@ pub fn generate_all_baselines(
                 "auto".to_string(), // mscp_version — auto-detect layout
                 "macos".to_string(), // os
                 None,               // os_version
+                None,               // odv_path — auto-detects odv_<baseline>.yaml per baseline
             ) {
                 Ok(()) => {
                     all_result.processed += 1;
@@ -1986,5 +2118,82 @@ mod tests {
         let repo = fake_repo(tmp.path(), crate::layout::MscpLayout::V1x);
         assert_compatible_layout(repo, "ghcr.io/brodjieski/mscp:latest")
             .expect("1.x repo + non-2.0 image must pass");
+    }
+
+    #[test]
+    fn apply_odv_writes_custom_rules_for_custom_values_and_cleans_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let odv_file = repo.join("odv_cis_lvl1.yaml");
+        // Two entries: one with a custom value, one default-only.
+        std::fs::write(
+            &odv_file,
+            "baseline: cis_lvl1\n\
+             overrides:\n\
+             \x20 - rule_id: os_screensaver_delay\n\
+             \x20   default_value: 5\n\
+             \x20   custom_value: 3\n\
+             \x20 - rule_id: pw_min_length\n\
+             \x20   default_value: 14\n",
+        )
+        .unwrap();
+
+        let guard = apply_odv_overrides(repo, "cis_lvl1", Some(odv_file))
+            .unwrap()
+            .expect("a custom value should produce a guard");
+
+        let custom = repo
+            .join("custom")
+            .join("rules")
+            .join(".contour-odv")
+            .join("os_screensaver_delay.yaml");
+        let body = std::fs::read_to_string(&custom).expect("custom rule file written");
+        assert!(body.contains("id: os_screensaver_delay"), "body: {body}");
+        assert!(body.contains("custom: 3"), "body: {body}");
+        // Default-only entry must NOT produce a file (mSCP resolves it anyway).
+        assert!(
+            !repo
+                .join("custom/rules/.contour-odv/pw_min_length.yaml")
+                .exists()
+        );
+
+        drop(guard);
+        assert!(
+            !repo.join("custom/rules/.contour-odv").exists(),
+            "guard must remove the custom-rules dir on drop"
+        );
+    }
+
+    #[test]
+    fn apply_odv_is_noop_when_file_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let guard =
+            apply_odv_overrides(tmp.path(), "cis_lvl1", Some(tmp.path().join("absent.yaml")))
+                .unwrap();
+        assert!(guard.is_none(), "missing file → nothing to apply");
+        assert!(
+            !tmp.path().join("custom").exists(),
+            "no custom dir created when nothing is applied"
+        );
+    }
+
+    #[test]
+    fn apply_odv_is_noop_when_all_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let odv_file = tmp.path().join("odv_cis_lvl1.yaml");
+        std::fs::write(
+            &odv_file,
+            "baseline: cis_lvl1\n\
+             overrides:\n\
+             \x20 - rule_id: pw_min_length\n\
+             \x20   default_value: 14\n",
+        )
+        .unwrap();
+        let guard = apply_odv_overrides(tmp.path(), "cis_lvl1", Some(odv_file)).unwrap();
+        assert!(
+            guard.is_none(),
+            "no custom_value entries → nothing to apply"
+        );
+        assert!(!tmp.path().join("custom").exists());
     }
 }

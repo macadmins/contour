@@ -28,7 +28,7 @@
 use anyhow::{Context, Result};
 use contour_profiles::{RecipeProfile, write_recipe_toml};
 use plist::{Dictionary, Value as PlistValue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
 use crate::models::MscpRule;
@@ -78,6 +78,10 @@ pub struct AggregateStats {
     /// operator must edit them before generating, or `profile
     /// generate --recipe` will emit a literal `"$ODV"` payload value.
     pub odv_unresolved: usize,
+    /// Of `odv_resolved`, how many took their value from an operator
+    /// override file (`--odv` / auto-detected `odv_<baseline>.yaml`)
+    /// rather than the rule's per-baseline default.
+    pub odv_from_overrides: usize,
 }
 
 /// One key collision encountered while aggregating rules.
@@ -129,11 +133,19 @@ impl std::fmt::Display for ConflictWarning {
 ///
 /// Returns the rendered TOML, the list of key collisions detected
 /// during merging, and the per-pass counts.
+// `#[allow]` not `#[expect]`: this module is compiled into both the mscp
+// lib and bin, and `implicit_hasher` only fires in the lib context — an
+// `#[expect]` would be unfulfilled (and error) in the bin build.
+#[allow(
+    clippy::implicit_hasher,
+    reason = "override map is always built with the default hasher; a generic S would ripple through five private helpers for no caller benefit"
+)]
 pub fn baseline_to_recipe(
     baseline_name: &str,
     org: Option<&str>,
     rules: &[MscpRule],
     mode: OdvMode,
+    odv_overrides: &HashMap<String, yaml_serde::Value>,
 ) -> Result<(String, Vec<ConflictWarning>, AggregateStats)> {
     let mut warnings: Vec<ConflictWarning> = Vec::new();
     let mut stats = AggregateStats::default();
@@ -147,6 +159,7 @@ pub fn baseline_to_recipe(
         &mut warnings,
         &mut stats,
         &mut odv_defaults,
+        odv_overrides,
     )?;
     let ddm_bundles = aggregate_ddm(
         baseline_name,
@@ -155,6 +168,7 @@ pub fn baseline_to_recipe(
         &mut warnings,
         &mut stats,
         &mut odv_defaults,
+        odv_overrides,
     )?;
 
     stats.profile_count = profiles.len();
@@ -183,7 +197,7 @@ pub fn baseline_to_recipe(
         );
         let _ = writeln!(s, "[odv]");
         for (k, v) in &odv_defaults {
-            let _ = writeln!(s, "{k} = {}", render_toml_scalar(v)?);
+            let _ = writeln!(s, "{} = {}", toml_key(k), render_toml_scalar(v)?);
         }
         let _ = writeln!(s);
         s
@@ -245,6 +259,7 @@ fn aggregate_profiles(
     warnings: &mut Vec<ConflictWarning>,
     stats: &mut AggregateStats,
     odv_defaults: &mut BTreeMap<String, PlistValue>,
+    odv_overrides: &HashMap<String, yaml_serde::Value>,
 ) -> Result<Vec<RecipeProfile>> {
     // Stable order: iterate in payload-type alphabetical order so the
     // resulting TOML is deterministic across invocations.
@@ -277,6 +292,65 @@ fn aggregate_profiles(
                 .entry(payload_type.to_string())
                 .or_insert_with(|| Group::new(payload_type));
 
+            // MCX payloads are special: each top-level key under
+            // `com.apple.ManagedClient.preferences` is a *preference domain*,
+            // and mSCP emits it wrapped in the canonical
+            // `PayloadContent.<domain>.Forced[0].mcx_preference_settings`
+            // envelope. Build that envelope here (multi-domain safe) and
+            // nest every domain under one literal `PayloadContent` field —
+            // the literal-insert renderer reproduces it byte-for-byte.
+            if payload_type == "com.apple.ManagedClient.preferences" {
+                for (domain_key, prefs_val) in field_map {
+                    let Some(domain) = domain_key.as_str() else {
+                        continue;
+                    };
+                    let Some(prefs_map) = prefs_val.as_mapping() else {
+                        continue;
+                    };
+                    let mut prefs = Dictionary::new();
+                    for (pk, pv) in prefs_map {
+                        let Some(pk_str) = pk.as_str() else {
+                            continue;
+                        };
+                        let resolved = substitute_odv(
+                            pk_str,
+                            pv,
+                            rule,
+                            baseline_name,
+                            mode,
+                            stats,
+                            odv_defaults,
+                            odv_overrides,
+                        );
+                        let plist_val = yaml_to_plist(&resolved).with_context(|| {
+                            format!("converting MCX key '{pk_str}' from rule '{}'", rule.id)
+                        })?;
+                        prefs.insert(pk_str.to_string(), plist_val);
+                    }
+
+                    // Merge this domain into the group's shared
+                    // `PayloadContent` dict (multiple rules contribute
+                    // different domains to the same payload).
+                    if !group.fields.contains_key("PayloadContent") {
+                        group.fields.insert(
+                            "PayloadContent".to_string(),
+                            PlistValue::Dictionary(Dictionary::new()),
+                        );
+                    }
+                    if let Some(PlistValue::Dictionary(pc)) = group.fields.get_mut("PayloadContent")
+                    {
+                        pc.insert(
+                            domain.to_string(),
+                            PlistValue::Dictionary(mcx_envelope(prefs)),
+                        );
+                    }
+                    group
+                        .field_origin
+                        .insert(format!("PayloadContent.{domain}"), rule.id.clone());
+                }
+                continue;
+            }
+
             for (field_key, field_val) in field_map {
                 let Some(key_str) = field_key.as_str() else {
                     continue;
@@ -289,6 +363,7 @@ fn aggregate_profiles(
                     mode,
                     stats,
                     odv_defaults,
+                    odv_overrides,
                 );
                 let plist_val = yaml_to_plist(&resolved).with_context(|| {
                     format!("converting key '{key_str}' from rule '{}'", rule.id)
@@ -332,6 +407,7 @@ fn aggregate_ddm(
     warnings: &mut Vec<ConflictWarning>,
     stats: &mut AggregateStats,
     odv_defaults: &mut BTreeMap<String, PlistValue>,
+    odv_overrides: &HashMap<String, yaml_serde::Value>,
 ) -> Result<Vec<DdmBundle>> {
     let mut grouped: BTreeMap<String, DdmGroup> = BTreeMap::new();
 
@@ -387,6 +463,7 @@ fn aggregate_ddm(
             mode,
             stats,
             odv_defaults,
+            odv_overrides,
         );
         let ddm_value = yaml_to_plist(&resolved)
             .with_context(|| format!("converting ddm_value of rule '{}'", rule.id))?;
@@ -620,6 +697,24 @@ fn plist_to_toml(v: &PlistValue) -> Result<toml::Value> {
     })
 }
 
+/// Render `key` as a TOML key: bare when it's a valid bare key
+/// (`A-Za-z0-9_-`), otherwise quoted. Dotted ODV keys like
+/// `com.apple.autologout.AutoLogOutDelay` MUST be quoted — an unquoted
+/// dotted key is parsed as nested tables, which silently breaks the
+/// flat-key `$ODV` lookup in `Recipe::resolve_odv` (the placeholder is
+/// then left literal in the rendered profile).
+fn toml_key(key: &str) -> String {
+    let is_bare = !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if is_bare {
+        key.to_string()
+    } else {
+        quote_toml_str(key)
+    }
+}
+
 fn quote_toml_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -648,8 +743,10 @@ fn quote_toml_str(s: &str) -> String {
 ///     the resolved default into `odv_defaults`, keyed by
 ///     `parent_key`. The downstream `[odv]` table emits these.
 ///
-/// Substitution policy mirrors the script + Fleet-policy paths:
-///   1. `rule.odv.<baseline_name>` (per-baseline override)
+/// Substitution policy:
+///   0. operator override (`odv_overrides[rule.id]`, from `--odv` /
+///      auto-detected `odv_<baseline>.yaml`) — highest precedence
+///   1. `rule.odv.<baseline_name>` (per-baseline default)
 ///   2. `rule.odv.recommended` (upstream-recommended fallback)
 ///   3. literal `$ODV` (counted as unresolved, surfaced to the operator)
 ///
@@ -664,12 +761,16 @@ fn substitute_odv(
     mode: OdvMode,
     stats: &mut AggregateStats,
     odv_defaults: &mut BTreeMap<String, PlistValue>,
+    odv_overrides: &HashMap<String, yaml_serde::Value>,
 ) -> yaml_serde::Value {
     match value {
         yaml_serde::Value::String(s) if s == "$ODV" => {
-            match resolve_odv_for_rule(rule, baseline_name) {
+            match resolve_odv_for_rule(rule, baseline_name, odv_overrides) {
                 Some(resolved) => {
                     stats.odv_resolved += 1;
+                    if odv_overrides.contains_key(&rule.id) {
+                        stats.odv_from_overrides += 1;
+                    }
                     match mode {
                         OdvMode::Inline => resolved,
                         OdvMode::Variable => {
@@ -694,7 +795,16 @@ fn substitute_odv(
                 let next_key = k.as_str().unwrap_or(parent_key).to_string();
                 out.insert(
                     k.clone(),
-                    substitute_odv(&next_key, v, rule, baseline_name, mode, stats, odv_defaults),
+                    substitute_odv(
+                        &next_key,
+                        v,
+                        rule,
+                        baseline_name,
+                        mode,
+                        stats,
+                        odv_defaults,
+                        odv_overrides,
+                    ),
                 );
             }
             yaml_serde::Value::Mapping(out)
@@ -710,6 +820,7 @@ fn substitute_odv(
                         mode,
                         stats,
                         odv_defaults,
+                        odv_overrides,
                     )
                 })
                 .collect(),
@@ -723,6 +834,7 @@ fn substitute_odv(
                 mode,
                 stats,
                 odv_defaults,
+                odv_overrides,
             );
             yaml_serde::Value::Tagged(Box::new(yaml_serde::value::TaggedValue {
                 tag: tagged.tag.clone(),
@@ -736,13 +848,40 @@ fn substitute_odv(
 /// Look up the per-baseline default in `rule.odv`, falling back to
 /// `recommended`. Returns `None` if the rule has no `odv:` block or
 /// neither key is present.
-fn resolve_odv_for_rule(rule: &MscpRule, baseline_name: &str) -> Option<yaml_serde::Value> {
+fn resolve_odv_for_rule(
+    rule: &MscpRule,
+    baseline_name: &str,
+    odv_overrides: &HashMap<String, yaml_serde::Value>,
+) -> Option<yaml_serde::Value> {
+    // Operator override wins over the rule's baked-in defaults, and
+    // applies even when the rule has no `odv:` block of its own.
+    if let Some(custom) = odv_overrides.get(&rule.id) {
+        return Some(custom.clone());
+    }
     let odv = rule.odv.as_ref()?.as_mapping()?;
     let key_baseline = yaml_serde::Value::String(baseline_name.to_string());
     let key_recommended = yaml_serde::Value::String("recommended".to_string());
     odv.get(&key_baseline)
         .cloned()
         .or_else(|| odv.get(&key_recommended).cloned())
+}
+
+/// Wrap a flat MCX preference dict in the canonical envelope mSCP emits at
+/// build time: `{ Forced: [ { mcx_preference_settings: <prefs> } ] }`. This is
+/// the same shape `wrap_mcx_payload` produces in the profile renderer, kept in
+/// sync so import↔aggregate↔render round-trips agree.
+fn mcx_envelope(prefs: Dictionary) -> Dictionary {
+    let mut forced_entry = Dictionary::new();
+    forced_entry.insert(
+        "mcx_preference_settings".to_string(),
+        PlistValue::Dictionary(prefs),
+    );
+    let mut domain = Dictionary::new();
+    domain.insert(
+        "Forced".to_string(),
+        PlistValue::Array(vec![PlistValue::Dictionary(forced_entry)]),
+    );
+    domain
 }
 
 fn yaml_to_plist(value: &yaml_serde::Value) -> Result<PlistValue> {
@@ -866,8 +1005,14 @@ mod tests {
                 .unwrap();
         let rules = vec![rule("fw_on", info_a), rule("fw_log", info_b)];
 
-        let (toml, warnings, stats) =
-            baseline_to_recipe("test", Some("com.acme"), &rules, OdvMode::Inline).unwrap();
+        let (toml, warnings, stats) = baseline_to_recipe(
+            "test",
+            Some("com.acme"),
+            &rules,
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert!(warnings.is_empty());
         assert_eq!(toml.matches("[[profile]]").count(), 1);
         assert_eq!(stats.profile_count, 1);
@@ -884,8 +1029,14 @@ mod tests {
             yaml_serde::from_str("com.apple.screensaver:\n  idleTime: 300\n").unwrap();
         let rules = vec![rule("fw", info_a), rule("ss", info_b)];
 
-        let (toml, warnings, stats) =
-            baseline_to_recipe("two", None, &rules, OdvMode::Inline).unwrap();
+        let (toml, warnings, stats) = baseline_to_recipe(
+            "two",
+            None,
+            &rules,
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert!(warnings.is_empty());
         assert_eq!(toml.matches("[[profile]]").count(), 2);
         assert_eq!(stats.profile_count, 2);
@@ -900,8 +1051,14 @@ mod tests {
             yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: true\n").unwrap();
         let rules = vec![rule("fw_off", info_a), rule("fw_on", info_b)];
 
-        let (toml, warnings, _stats) =
-            baseline_to_recipe("c", None, &rules, OdvMode::Inline).unwrap();
+        let (toml, warnings, _stats) = baseline_to_recipe(
+            "c",
+            None,
+            &rules,
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(warnings.len(), 1);
         let w = &warnings[0];
         assert_eq!(w.key, "EnableFirewall");
@@ -911,12 +1068,77 @@ mod tests {
     }
 
     #[test]
+    fn mcx_payload_gets_forced_envelope_per_domain() {
+        // Two rules each contribute a different preference domain to the
+        // single `com.apple.ManagedClient.preferences` payload. Both must
+        // land under one `PayloadContent` field, each wrapped in the
+        // canonical `Forced[0].mcx_preference_settings` envelope.
+        let info_a: yaml_serde::Value = yaml_serde::from_str(
+            "com.apple.ManagedClient.preferences:\n  com.apple.timed:\n    TMAutomaticTimeOnlyEnabled: true\n",
+        )
+        .unwrap();
+        let info_b: yaml_serde::Value = yaml_serde::from_str(
+            "com.apple.ManagedClient.preferences:\n  com.apple.MCXBluetooth:\n    DisableBluetooth: true\n",
+        )
+        .unwrap();
+        let rules = vec![rule("timed", info_a), rule("bt", info_b)];
+
+        let profiles = {
+            let mut warnings = Vec::new();
+            let mut stats = AggregateStats::default();
+            let mut odv_defaults = BTreeMap::new();
+            aggregate_profiles(
+                "mcx",
+                &rules,
+                OdvMode::Inline,
+                &mut warnings,
+                &mut stats,
+                &mut odv_defaults,
+                &std::collections::HashMap::new(),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(profiles.len(), 1);
+        let p = &profiles[0];
+        assert_eq!(p.payload_type, "com.apple.ManagedClient.preferences");
+
+        // One `PayloadContent` field holding both domains.
+        let PlistValue::Dictionary(pc) = p.fields.get("PayloadContent").unwrap() else {
+            panic!("PayloadContent is not a dict");
+        };
+        for domain in ["com.apple.timed", "com.apple.MCXBluetooth"] {
+            let PlistValue::Dictionary(d) = pc.get(domain).unwrap() else {
+                panic!("{domain} is not a dict");
+            };
+            let PlistValue::Array(forced) = d.get("Forced").unwrap() else {
+                panic!("{domain}.Forced is not an array");
+            };
+            let PlistValue::Dictionary(entry) = &forced[0] else {
+                panic!("{domain}.Forced[0] is not a dict");
+            };
+            let PlistValue::Dictionary(prefs) = entry.get("mcx_preference_settings").unwrap()
+            else {
+                panic!("{domain} missing mcx_preference_settings");
+            };
+            assert_eq!(prefs.len(), 1, "{domain} should carry exactly one pref");
+        }
+    }
+
+    #[test]
     fn skips_non_mobileconfig_rules() {
         let info: yaml_serde::Value =
             yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: true\n").unwrap();
         let mut r = rule("fw", info);
         r.mobileconfig = false;
-        let (toml, _, stats) = baseline_to_recipe("none", None, &[r], OdvMode::Inline).unwrap();
+        let (toml, _, stats) = baseline_to_recipe(
+            "none",
+            None,
+            &[r],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(toml.matches("[[profile]]").count(), 0);
         assert_eq!(stats.profile_count, 0);
     }
@@ -947,8 +1169,14 @@ mod tests {
              ddm_key: AutomaticActions\n\
              ddm_value:\n  Download: AlwaysOn\n",
         );
-        let (toml, warnings, stats) =
-            baseline_to_recipe("ddm", Some("com.acme"), &[r], OdvMode::Inline).unwrap();
+        let (toml, warnings, stats) = baseline_to_recipe(
+            "ddm",
+            Some("com.acme"),
+            &[r],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert!(warnings.is_empty(), "no collisions for a single rule");
         assert_eq!(stats.profile_count, 0);
         assert_eq!(stats.ddm_count, 1);
@@ -978,8 +1206,14 @@ mod tests {
              ddm_key: Notifications\n\
              ddm_value: true\n",
         );
-        let (toml, warnings, stats) =
-            baseline_to_recipe("ddm", None, &[a, b], OdvMode::Inline).unwrap();
+        let (toml, warnings, stats) = baseline_to_recipe(
+            "ddm",
+            None,
+            &[a, b],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert!(warnings.is_empty());
         assert_eq!(stats.ddm_count, 1);
         assert_eq!(toml.matches("[[ddm]]").count(), 1);
@@ -1001,8 +1235,14 @@ mod tests {
              ddm_key: Notifications\n\
              ddm_value: true\n",
         );
-        let (toml, warnings, _stats) =
-            baseline_to_recipe("ddm", None, &[a, b], OdvMode::Inline).unwrap();
+        let (toml, warnings, _stats) = baseline_to_recipe(
+            "ddm",
+            None,
+            &[a, b],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].previous_rule, "su_off");
         assert_eq!(warnings[0].winning_rule, "su_on");
@@ -1020,6 +1260,40 @@ mod tests {
     }
 
     #[test]
+    fn dotted_odv_key_is_quoted_and_parses_flat() {
+        // A dotted field name (e.g. the GlobalPreferences key
+        // `com.apple.autologout.AutoLogOutDelay`) must render its `[odv]`
+        // entry QUOTED. An unquoted dotted key is parsed by TOML as nested
+        // tables, which breaks the flat-key `$ODV` lookup in the recipe
+        // loader and leaves the literal `"$ODV"` string in the profile.
+        let info: yaml_serde::Value = yaml_serde::from_str(
+            ".GlobalPreferences:\n  com.apple.autologout.AutoLogOutDelay: $ODV\n",
+        )
+        .unwrap();
+        let r = rule_with_odv("autologout", info, "recommended: 86400\n");
+        let (toml_str, _w, _s) = baseline_to_recipe(
+            "test",
+            None,
+            &[r],
+            OdvMode::Variable,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(
+            toml_str.contains(r#""com.apple.autologout.AutoLogOutDelay" = 86400"#),
+            "odv key must be quoted; got:\n{toml_str}"
+        );
+        // And it must re-parse as ONE flat key, not nested `com.apple…` tables.
+        let parsed: toml::Value = toml::from_str(&toml_str).unwrap();
+        let odv = parsed.get("odv").and_then(|v| v.as_table()).unwrap();
+        assert!(
+            odv.contains_key("com.apple.autologout.AutoLogOutDelay"),
+            "dotted odv key must stay flat; odv table was: {odv:?}"
+        );
+    }
+
+    #[test]
     fn odv_resolves_baseline_default_in_profile_field() {
         // mobileconfig_info has $ODV; rule.odv has cis_lvl1 default.
         let info: yaml_serde::Value =
@@ -1029,8 +1303,14 @@ mod tests {
             info,
             "recommended: time.nist.gov\ncis_lvl1: time.apple.com\n",
         );
-        let (toml, warnings, stats) =
-            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Inline).unwrap();
+        let (toml, warnings, stats) = baseline_to_recipe(
+            "cis_lvl1",
+            None,
+            &[r],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert!(warnings.is_empty());
         assert_eq!(stats.odv_resolved, 1);
         assert_eq!(stats.odv_unresolved, 0);
@@ -1048,8 +1328,14 @@ mod tests {
             info,
             "recommended: time.nist.gov\nstig: time.usno.navy.mil\n",
         );
-        let (toml, _warnings, stats) =
-            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Inline).unwrap();
+        let (toml, _warnings, stats) = baseline_to_recipe(
+            "cis_lvl1",
+            None,
+            &[r],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(stats.odv_resolved, 1);
         assert_eq!(stats.odv_unresolved, 0);
         assert!(toml.contains(r#"timeServer = "time.nist.gov""#));
@@ -1060,8 +1346,14 @@ mod tests {
         let info: yaml_serde::Value =
             yaml_serde::from_str("com.apple.MCX:\n  timeServer: $ODV\n").unwrap();
         let r = rule("ts", info); // no odv block
-        let (toml, _warnings, stats) =
-            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Inline).unwrap();
+        let (toml, _warnings, stats) = baseline_to_recipe(
+            "cis_lvl1",
+            None,
+            &[r],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(stats.odv_resolved, 0);
         assert_eq!(stats.odv_unresolved, 1);
         // $ODV passes through verbatim — the operator must edit before generate.
@@ -1075,8 +1367,14 @@ mod tests {
             yaml_serde::from_str("com.apple.MCX:\n  passcode:\n    MaximumFailedAttempts: $ODV\n")
                 .unwrap();
         let r = rule_with_odv("p", info, "recommended: 5\ncis_lvl1: 4\n");
-        let (toml, _warnings, stats) =
-            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Inline).unwrap();
+        let (toml, _warnings, stats) = baseline_to_recipe(
+            "cis_lvl1",
+            None,
+            &[r],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(stats.odv_resolved, 1);
         assert!(toml.contains("MaximumFailedAttempts = 4"));
     }
@@ -1106,8 +1404,14 @@ mod tests {
             ),
             odv: Some(yaml_serde::from_str("recommended: 8\ncis_lvl2: 12\n").unwrap()),
         };
-        let (toml, _warnings, stats) =
-            baseline_to_recipe("cis_lvl2", None, &[r], OdvMode::Inline).unwrap();
+        let (toml, _warnings, stats) = baseline_to_recipe(
+            "cis_lvl2",
+            None,
+            &[r],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(stats.odv_resolved, 1);
         assert!(toml.contains("MinimumLength = 12"));
     }
@@ -1123,8 +1427,14 @@ mod tests {
              ddm_key: AutomaticActions\n\
              ddm_value:\n  Download: AlwaysOn\n",
         );
-        let (toml, warnings, stats) =
-            baseline_to_recipe("mix", None, &[mc, dd], OdvMode::Inline).unwrap();
+        let (toml, warnings, stats) = baseline_to_recipe(
+            "mix",
+            None,
+            &[mc, dd],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert!(warnings.is_empty());
         assert_eq!(stats.profile_count, 1);
         assert_eq!(stats.ddm_count, 1);
@@ -1168,8 +1478,14 @@ mod tests {
             odv: Some(yaml_serde::from_str("recommended: 8\ncis_lvl1: 15\n").unwrap()),
         };
 
-        let (toml, warnings, stats) =
-            baseline_to_recipe("cis_lvl1", None, &[mc, dd], OdvMode::Variable).unwrap();
+        let (toml, warnings, stats) = baseline_to_recipe(
+            "cis_lvl1",
+            None,
+            &[mc, dd],
+            OdvMode::Variable,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert!(warnings.is_empty());
         assert_eq!(stats.odv_resolved, 2);
         assert_eq!(stats.odv_unresolved, 0);
@@ -1183,13 +1499,47 @@ mod tests {
     }
 
     #[test]
+    fn odv_override_seeds_recipe_table_over_rule_default() {
+        // Rule's per-baseline default is 5; an operator override (--odv /
+        // odv_<baseline>.yaml) sets rule "ssd" to 3. The emitted [odv]
+        // table must carry the override, not the rule default.
+        let info: yaml_serde::Value =
+            yaml_serde::from_str("com.apple.screensaver:\n  askForPasswordDelay: $ODV\n").unwrap();
+        let rule = rule_with_odv("ssd", info, "recommended: 5\ncis_lvl1: 5\n");
+
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("ssd".to_string(), yaml_serde::Value::Number(3.into()));
+
+        let (toml, warnings, stats) =
+            baseline_to_recipe("cis_lvl1", None, &[rule], OdvMode::Variable, &overrides).unwrap();
+
+        assert!(warnings.is_empty());
+        assert!(
+            toml.contains("askForPasswordDelay = 3"),
+            "override value must win; toml:\n{toml}"
+        );
+        assert!(
+            !toml.contains("askForPasswordDelay = 5"),
+            "rule default must NOT appear"
+        );
+        assert_eq!(stats.odv_resolved, 1);
+        assert_eq!(stats.odv_from_overrides, 1);
+    }
+
+    #[test]
     fn variable_mode_omits_odv_table_when_no_placeholders() {
         // No $ODV in the field — [odv] should NOT appear at all.
         let info: yaml_serde::Value =
             yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: true\n").unwrap();
         let r = rule("fw", info);
-        let (toml, _w, stats) =
-            baseline_to_recipe("cis_lvl1", None, &[r], OdvMode::Variable).unwrap();
+        let (toml, _w, stats) = baseline_to_recipe(
+            "cis_lvl1",
+            None,
+            &[r],
+            OdvMode::Variable,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(stats.odv_resolved, 0);
         assert!(!toml.contains("[odv]"));
     }

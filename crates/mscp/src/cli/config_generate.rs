@@ -193,6 +193,7 @@ pub fn generate_from_config(config: Config) -> Result<()> {
             "auto".to_string(),  // mscp_version — config path auto-detects layout
             "macos".to_string(), // os
             None,                // os_version
+            None,                // odv_path — auto-detects odv_<baseline>.yaml per baseline
         )?;
     }
 

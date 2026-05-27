@@ -2046,7 +2046,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             munki_script_catalog,
             munki_script_category,
             munki_script_separate_postinstall,
-            odv: _odv,
+            odv,
             exclude,
             dry_run,
             script_mode,
@@ -2132,6 +2132,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                     "auto".to_string(), // mscp_version — config path auto-detects layout
                     "macos".to_string(), // os
                     None,               // os_version
+                    odv.clone(),        // --odv override (else auto-detect odv_<keyword>.yaml)
                 )?;
                 return Ok(());
             }
@@ -2234,6 +2235,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 mscp_version,
                 os.as_str().to_string(),
                 os_version,
+                odv, // --odv override (else auto-detect odv_<keyword>.yaml)
             )?;
         }
 
@@ -2579,6 +2581,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             keyword,
             output,
             org,
+            odv,
             odv_mode,
             mscp_version,
             os,
@@ -2593,6 +2596,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 &mscp_version,
                 os.into(),
                 os_version,
+                odv,
             )?;
         }
     }
@@ -2615,6 +2619,7 @@ fn dispatch_mscp_recipe(
     mscp_version: &str,
     os: mscp::models::mscp::Platform,
     os_version: Option<String>,
+    odv_path: Option<std::path::PathBuf>,
 ) -> Result<()> {
     use anyhow::Context;
     use colored::Colorize;
@@ -2633,11 +2638,24 @@ fn dispatch_mscp_recipe(
         None => contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain),
     };
 
+    // Operator ODV overrides (explicit --odv, or auto-detected
+    // odv_<keyword>.yaml) seed the [odv] table over rule defaults.
+    let odv_overrides = mscp::managers::OdvOverrides::try_load(keyword, odv_path)
+        .map(|m| m.custom_value_map())
+        .unwrap_or_default();
+    if !odv_overrides.is_empty() {
+        tracing::info!(
+            "Seeding recipe ODVs from {} operator override(s)",
+            odv_overrides.len()
+        );
+    }
+
     let (body, warnings, stats) = mscp::baseline_to_recipe::baseline_to_recipe(
         keyword,
         resolved_org.as_deref(),
         &rules,
         mode,
+        &odv_overrides,
     )?;
 
     for w in &warnings {
@@ -2665,9 +2683,14 @@ fn dispatch_mscp_recipe(
         output_path.display()
     );
     if stats.odv_resolved > 0 || stats.odv_unresolved > 0 {
+        let from_overrides = if stats.odv_from_overrides > 0 {
+            format!(" ({} from your override file)", stats.odv_from_overrides)
+        } else {
+            String::new()
+        };
         println!(
-            "  ODVs: {} resolved from rule defaults, {} left as $ODV (edit the recipe to override)",
-            stats.odv_resolved, stats.odv_unresolved,
+            "  ODVs: {} resolved{}, {} left as $ODV (edit the recipe to override)",
+            stats.odv_resolved, from_overrides, stats.odv_unresolved,
         );
     }
     if !warnings.is_empty() {

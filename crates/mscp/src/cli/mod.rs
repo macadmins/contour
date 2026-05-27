@@ -787,6 +787,13 @@ pub enum Commands {
         #[arg(long)]
         org: Option<String>,
 
+        /// ODV override file. Operator `custom_value`s seed the recipe's
+        /// `[odv]` table (or inline values) in place of the rule
+        /// defaults. Auto-detected as `odv_<keyword>.yaml` in the
+        /// working directory when omitted.
+        #[arg(long)]
+        odv: Option<PathBuf>,
+
         /// How to render mSCP `$ODV` placeholders.
         ///
         /// `variable` (default): keep the literal `"$ODV"` placeholder

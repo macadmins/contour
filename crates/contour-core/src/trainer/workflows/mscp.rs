@@ -157,7 +157,7 @@ impl TrainerWorkflow for MscpWorkflow {
                 )
                 .with_commands(vec![CommandPreview::new(
                     format!(
-                        "contour mscp recipe -r {} -b {} -o ./recipes/{}.toml --org com.acme",
+                        "contour mscp recipe -r {} -k {} -o ./recipes/{}.toml --org com.acme",
                         mscp_repo.display(),
                         baseline,
                         baseline
