@@ -49,9 +49,9 @@ impl MscpOutputExtractor {
             anyhow::bail!(
                 "The --input path appears to be the mSCP repository root, not a build output directory.\n\n\
                  You probably want one of:\n\
-                 1. contour mscp generate --mscp-repo {} --baseline {} --output <DIR>\n\
+                 1. contour mscp generate --mscp-repo {} --keyword {} --output <DIR>\n\
                     (runs mSCP generation + processing in one step)\n\
-                 2. contour mscp process --input {}/build/{} --baseline {}\n\
+                 2. contour mscp process --input {}/build/{} --keyword {}\n\
                     (if you already ran generate_guidance.py manually)",
                 self.build_path.display(),
                 self.baseline_name,

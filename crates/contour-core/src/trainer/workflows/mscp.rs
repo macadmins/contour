@@ -91,7 +91,7 @@ impl TrainerWorkflow for MscpWorkflow {
                      - --fleet: Enable Fleet GitOps mode\n\
                      - --jamf: Enable Jamf Pro mode\n\
                      - --sync: Clone the mSCP repository\n\
-                     - --baselines: Pre-select baselines to enable\n\n\
+                     - --keywords: Pre-select baselines to enable\n\n\
                      This creates mscp.toml with your organization settings.",
                 )
                 .with_commands(vec![
@@ -192,7 +192,7 @@ impl TrainerWorkflow for MscpWorkflow {
                 .with_commands(vec![
                     CommandPreview::new(
                         format!(
-                            "contour mscp constraints add-categories --mscp-repo {} --baseline {}",
+                            "contour mscp constraints add-categories --mscp-repo {} --keyword {}",
                             mscp_repo.display(),
                             baseline
                         ),
@@ -215,7 +215,7 @@ impl TrainerWorkflow for MscpWorkflow {
                 .with_commands(vec![
                     CommandPreview::new(
                         format!(
-                            "contour mscp odv init --mscp-repo {} --baseline {} --output {}/odv-{}.yaml",
+                            "contour mscp odv init --mscp-repo {} --keyword {} --output {}/odv-{}.yaml",
                             mscp_repo.display(),
                             baseline,
                             output_dir.display(),
@@ -225,7 +225,7 @@ impl TrainerWorkflow for MscpWorkflow {
                     ),
                     CommandPreview::new(
                         format!(
-                            "contour mscp odv list --mscp-repo {} --baseline {}",
+                            "contour mscp odv list --mscp-repo {} --keyword {}",
                             mscp_repo.display(),
                             baseline
                         ),
@@ -253,7 +253,7 @@ impl TrainerWorkflow for MscpWorkflow {
                 .with_commands(vec![
                     CommandPreview::new(
                         format!(
-                            "contour mscp generate --mscp-repo {} --baseline {} --output {} --org {} --fleet-mode --deterministic-uuids",
+                            "contour mscp generate --mscp-repo {} --keyword {} --output {} --org {} --fleet-mode --deterministic-uuids",
                             mscp_repo.display(),
                             baseline,
                             output_dir.display(),
@@ -263,7 +263,7 @@ impl TrainerWorkflow for MscpWorkflow {
                     ),
                     CommandPreview::new(
                         format!(
-                            "contour mscp generate --mscp-repo {} --baseline {} --output {} --org {} --odv odv-{}.yaml --fleet-mode",
+                            "contour mscp generate --mscp-repo {} --keyword {} --output {} --org {} --odv odv-{}.yaml --fleet-mode",
                             mscp_repo.display(),
                             baseline,
                             output_dir.display(),
@@ -279,7 +279,7 @@ impl TrainerWorkflow for MscpWorkflow {
                         "generate".to_string(),
                         "--mscp-repo".to_string(),
                         mscp_repo.display().to_string(),
-                        "--baseline".to_string(),
+                        "--keyword".to_string(),
                         baseline.clone(),
                         "--output".to_string(),
                         output_dir.display().to_string(),
@@ -325,7 +325,7 @@ impl TrainerWorkflow for MscpWorkflow {
                 )
                 .with_commands(vec![CommandPreview::new(
                     format!(
-                        "contour mscp diff --output {} --baseline {}",
+                        "contour mscp diff --output {} --keyword {}",
                         output_dir.display(),
                         baseline
                     ),
