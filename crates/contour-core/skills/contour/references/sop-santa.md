@@ -73,16 +73,35 @@ contour santa allow -i fleet-export.csv --org com.yourco --rule-type team-id
 Default `--conflict-policy` is `most-specific` — when the same identifier
 appears across multiple rule types, the narrowest rule wins.
 
-## Recipe 3: Ring-based deployment
+## Recipe 3: Ring-based deployment (editions)
 
-Rings let you stage rollouts so a bad rule blast-radius caps at the
-canary group:
+Each ring profile is a self-contained **edition** — core rules merged with
+that ring's specialized rules into one complete allowlist. Hosts receive
+exactly one edition, scoped by Fleet labels. Santa does not layer overlapping
+mobileconfigs cleanly on a single host, so editions ship whole and are never
+stacked. The primary workflow: scaffold a ring config, customize it, then
+generate editions.
 
 ```bash
+# 1. Scaffold the ring shape (names, priorities, fleet labels)
 contour santa rings init --num-rings 5 -o rings.yaml
+
+# 2. (Optional) edit rings.yaml to customize descriptions / labels
+$EDITOR rings.yaml
+
+# 3. Generate the editions from your rules + the ring config
 contour santa rings generate <rules> \
-    --num-rings 5 --org com.yourco --prefix santa -o rings/
+    --org com.yourco --prefix santa --rings-config rings.yaml -o rings/
 ```
+
+If you don't need to customize, the shorthand skips `rings.yaml`:
+
+```bash
+contour santa rings generate <rules> \
+    --org com.yourco --prefix santa --num-rings 5 -o rings/
+```
+
+`--num-rings` accepts `1..=16` (5 and 7 use built-in templates).
 
 Output filenames follow `{prefix}{ring}{category}`:
 
@@ -98,28 +117,50 @@ Categories are auto-detected from rule type:
 - **`b`** — CEL rules (Common Expression Language, Santa 2024.x+)
 - **`c`** — FAA rules (File Access Authorization)
 
-Profiles split at >1000 rules per category: `santa1a-001`, `santa1a-002`, …
+Pass `--max-rules N` to split large editions: `santa1a-001`, `santa1a-002`, …
+Without it, editions are not split.
 
-Assign rules to rings via the `ring` field on each rule entry, OR via
-`rings.yaml` mapping labels/criteria to rings:
+**Assigning content to editions.** Each rule's `rings:` field declares which
+editions include it. An empty (or omitted) `rings:` means the rule is **core**
+— it ships in every edition.
 
 ```yaml
-- rule_type: TeamId
+- rule_type: TEAMID
   identifier: EQHXZ8M8AV
-  policy: Allowlist
-  ring: ring0          # → goes to Ring 1 profiles
+  policy: ALLOWLIST
+  # core (no `rings:` field)
+
+- rule_type: TEAMID
+  identifier: ABC1234567
+  policy: ALLOWLIST
+  rings: [ring0]          # canary only
+
+- rule_type: SIGNINGID
+  identifier: team:com.example.tool
+  policy: ALLOWLIST
+  rings: [ring0, ring1]   # canary + pilot
+```
+
+A rule that references a ring name not in the active config triggers a
+warning so typos don't silently vanish from every edition. Add `--strict` to
+turn that warning into a hard error in CI:
+
+```bash
+contour santa rings generate <rules> --rings-config rings.yaml --strict -o rings/
 ```
 
 ## Recipe 4: Fleet GitOps fragment
 
-The full pipeline: rules → ring profiles → labels → fleet YAML, all
-laid out as a Fleet v4.83 directory tree:
+The full pipeline: rules → ring editions → labels → fleet YAML, all
+laid out as a Fleet v4.83 directory tree. `santa fleet` accepts the same
+ring-config flags as `rings generate` (`--rings-config`, `--max-rules`,
+`--strict`) — same edition model, same rule-side `rings:` annotations.
 
 ```bash
 contour santa fleet <rules> \
     --org com.yourco \
-    --fleet Workstations \
-    --num-rings 5 \
+    --team Workstations \
+    --rings-config rings.yaml \
     --prefix santa \
     -o fleet-output/
 ```

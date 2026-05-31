@@ -1,5 +1,7 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use super::rule::RuleSet;
 
@@ -171,6 +173,45 @@ impl RingConfig {
         config
     }
 
+    /// Create a custom N-ring configuration with sensible defaults.
+    ///
+    /// Each ring gets a `ring{i}` name, an incrementing priority, a clean
+    /// description, and a default `ring:{i}` Fleet label. Used as the fallback
+    /// when N is not 5 or 7, and as the template emitted by `rings init`.
+    pub fn custom_rings(num_rings: u8) -> Self {
+        let mut config = Self::new();
+        for i in 0..num_rings {
+            config.add_ring(
+                Ring::new(format!("ring{i}"), i)
+                    .with_description(format!("Ring {}", i + 1))
+                    .with_fleet_labels(vec![format!("ring:{i}")]),
+            );
+        }
+        config
+    }
+
+    /// Build a `RingConfig` from a `--num-rings` value. Returns the canonical
+    /// 5- or 7-ring configs for those values, otherwise a custom config.
+    pub fn from_num_rings(num_rings: u8) -> Self {
+        match num_rings {
+            5 => Self::standard_five_rings(),
+            7 => Self::standard_seven_rings(),
+            n => Self::custom_rings(n),
+        }
+    }
+
+    /// Load a `RingConfig` from a YAML file (as produced by `rings init`).
+    pub fn from_yaml_file(path: &Path) -> Result<Self> {
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read rings config from {}", path.display()))?;
+        let config: Self = yaml_serde::from_str(&contents)
+            .with_context(|| format!("failed to parse rings config at {}", path.display()))?;
+        if config.rings.is_empty() {
+            anyhow::bail!("rings config at {} defines no rings", path.display());
+        }
+        Ok(config)
+    }
+
     /// Create a standard 7-ring configuration
     pub fn standard_seven_rings() -> Self {
         let mut config = Self::new();
@@ -274,6 +315,21 @@ impl RingAssignments {
     }
 }
 
+/// Resolve a [`RingConfig`] from CLI inputs.
+///
+/// `--rings-config <path>` wins when supplied (loaded from YAML).
+/// Otherwise `--num-rings N` selects a standard/custom config.
+/// With neither, falls back to the canonical 5-ring config.
+pub fn resolve_ring_config(
+    num_rings: Option<u8>,
+    rings_config_path: Option<&Path>,
+) -> Result<RingConfig> {
+    if let Some(path) = rings_config_path {
+        return RingConfig::from_yaml_file(path);
+    }
+    Ok(RingConfig::from_num_rings(num_rings.unwrap_or(5)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +357,58 @@ mod tests {
         let sorted = config.rings_by_priority();
         assert_eq!(sorted[0].name, "ring0");
         assert_eq!(sorted[4].name, "ring4");
+    }
+
+    #[test]
+    fn test_custom_rings_populates_fleet_labels() {
+        let config = RingConfig::custom_rings(3);
+        assert_eq!(config.rings.len(), 3);
+        for (i, ring) in config.rings.iter().enumerate() {
+            assert_eq!(ring.name, format!("ring{i}"));
+            assert_eq!(ring.priority, u8::try_from(i).unwrap());
+            assert_eq!(ring.fleet_labels, vec![format!("ring:{i}")]);
+        }
+    }
+
+    #[test]
+    fn test_from_num_rings_dispatches() {
+        assert_eq!(RingConfig::from_num_rings(5).rings.len(), 5);
+        assert_eq!(RingConfig::from_num_rings(7).rings.len(), 7);
+        assert_eq!(RingConfig::from_num_rings(3).rings.len(), 3);
+    }
+
+    #[test]
+    fn test_resolve_ring_config_defaults_to_five() {
+        let config = resolve_ring_config(None, None).unwrap();
+        assert_eq!(config.rings.len(), 5);
+    }
+
+    #[test]
+    fn test_resolve_ring_config_uses_num_rings() {
+        let config = resolve_ring_config(Some(7), None).unwrap();
+        assert_eq!(config.rings.len(), 7);
+    }
+
+    #[test]
+    fn test_resolve_ring_config_loads_from_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let template = RingConfig::custom_rings(4);
+        let yaml = yaml_serde::to_string(&template).unwrap();
+        std::fs::write(tmp.path(), yaml).unwrap();
+
+        let loaded = resolve_ring_config(None, Some(tmp.path())).unwrap();
+        assert_eq!(loaded.rings.len(), 4);
+        assert_eq!(loaded.rings[0].fleet_labels, vec!["ring:0".to_string()]);
+    }
+
+    #[test]
+    fn test_from_yaml_file_rejects_empty() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let empty = RingConfig::new();
+        std::fs::write(tmp.path(), yaml_serde::to_string(&empty).unwrap()).unwrap();
+
+        let err = RingConfig::from_yaml_file(tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("defines no rings"));
     }
 
     #[test]

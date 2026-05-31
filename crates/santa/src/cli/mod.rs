@@ -17,6 +17,7 @@ pub mod pipeline_cmd;
 pub mod prep;
 pub mod remove;
 pub mod rings;
+pub mod rings_output;
 pub mod scan;
 pub mod select;
 pub mod snip;
@@ -285,10 +286,12 @@ pub enum Commands {
         dry_run: bool,
     },
 
-    /// Generate Fleet GitOps compatible output
+    /// Generate per-ring editions for Fleet GitOps
     ///
-    /// Creates a directory structure with profiles and manifests compatible
-    /// with Fleet's GitOps workflow. Labels are used to target rings.
+    /// Each ring profile is a complete, self-contained edition: core rules
+    /// (rules with empty `rings:`) merged with that ring's specialized rules.
+    /// Hosts receive exactly one edition, scoped by Fleet labels. Santa does
+    /// not layer overlapping mobileconfigs on a single host.
     Fleet {
         /// Input rule files (YAML, JSON, CSV)
         #[arg(required = true)]
@@ -310,9 +313,21 @@ pub enum Commands {
         #[arg(long, default_value = "Workstations")]
         team: String,
 
-        /// Number of rings
-        #[arg(long, default_value = "5")]
-        num_rings: u8,
+        /// Number of rings (5 or 7 for built-in configs; otherwise custom)
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=16), conflicts_with = "rings_config")]
+        num_rings: Option<u8>,
+
+        /// Ring configuration file (as produced by `rings init`)
+        #[arg(long, value_name = "PATH")]
+        rings_config: Option<PathBuf>,
+
+        /// Maximum rules per edition (splits into santa1a-001, santa1a-002, ...)
+        #[arg(long)]
+        max_rules: Option<usize>,
+
+        /// Treat unknown ring names in rules as a hard error
+        #[arg(long)]
+        strict: bool,
 
         /// Preview without writing
         #[arg(long)]
@@ -820,13 +835,16 @@ pub enum FaaAction {
 
 #[derive(Debug, Subcommand)]
 pub enum RingsCommands {
-    /// Generate profiles for all rings
+    /// Generate per-ring editions (one mobileconfig per ring × category)
+    ///
+    /// Each ring profile is a complete, self-contained edition: core rules
+    /// (rules with empty `rings:`) merged with that ring's specialized rules.
     Generate {
         /// Input rule files (YAML, JSON, CSV)
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
 
-        /// Output directory for ring profiles
+        /// Output directory for ring editions
         #[arg(short, long)]
         output_dir: Option<PathBuf>,
 
@@ -838,13 +856,21 @@ pub enum RingsCommands {
         #[arg(long, default_value = "santa")]
         prefix: String,
 
-        /// Number of rings (5 or 7 for standard configs, or custom)
-        #[arg(long, default_value = "5")]
-        num_rings: u8,
+        /// Number of rings (5 or 7 for built-in configs; otherwise custom)
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=16), conflicts_with = "rings_config")]
+        num_rings: Option<u8>,
 
-        /// Maximum rules per profile (splits into santa1a-001, santa1a-002, etc.)
+        /// Ring configuration file (as produced by `rings init`)
+        #[arg(long, value_name = "PATH")]
+        rings_config: Option<PathBuf>,
+
+        /// Maximum rules per edition (splits into santa1a-001, santa1a-002, etc.)
         #[arg(long)]
         max_rules: Option<usize>,
+
+        /// Treat unknown ring names in rules as a hard error
+        #[arg(long)]
+        strict: bool,
 
         /// Preview without writing
         #[arg(long)]
@@ -858,7 +884,7 @@ pub enum RingsCommands {
         output: PathBuf,
 
         /// Number of rings
-        #[arg(long, default_value = "5")]
+        #[arg(long, default_value = "5", value_parser = clap::value_parser!(u8).range(1..=16))]
         num_rings: u8,
     },
 }

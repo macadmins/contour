@@ -37,6 +37,7 @@ pub fn run(
     let mode_str = match mode {
         ClientMode::Monitor => "monitor",
         ClientMode::Lockdown => "lockdown",
+        ClientMode::Standalone => "standalone",
     };
 
     if output_mode == OutputMode::Human {

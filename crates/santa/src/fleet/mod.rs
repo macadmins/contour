@@ -40,12 +40,22 @@ pub struct FleetManifest {
     pub fleets: Vec<FleetConfig>,
 }
 
+/// One emitted edition (per ring × category × split-part) from the Fleet generator.
+#[derive(Debug, Clone)]
+pub struct FleetEdition {
+    pub ring: String,
+    pub category: String,
+    pub filename: String,
+    pub rules_count: usize,
+    pub part: Option<usize>,
+    pub fleet_labels: Vec<String>,
+}
+
 /// Result of Fleet generation
 #[derive(Debug)]
 pub struct FleetGenerationResult {
-    pub profiles_written: usize,
     pub manifest_path: String,
-    pub profile_paths: Vec<String>,
+    pub editions: Vec<FleetEdition>,
 }
 
 /// Configuration for Fleet output generation
@@ -63,6 +73,8 @@ pub struct FleetOutputConfig {
     pub profiles_base_path: String,
     /// Use deterministic UUIDs
     pub deterministic_uuids: bool,
+    /// Maximum rules per edition (splits into santa1a-001, santa1a-002, ...)
+    pub max_rules: Option<usize>,
 }
 
 impl Default for FleetOutputConfig {
@@ -75,6 +87,7 @@ impl Default for FleetOutputConfig {
             ring_config: RingConfig::standard_five_rings(),
             profiles_base_path: format!("{}/profiles", layout.platforms_dir),
             deterministic_uuids: true,
+            max_rules: None,
         }
     }
 }
@@ -94,7 +107,7 @@ pub fn generate_fleet_output(
         )
     })?;
 
-    let mut profile_paths = Vec::new();
+    let mut editions = Vec::new();
     let mut fleet_profiles = Vec::new();
 
     for ring in config.ring_config.rings_by_priority() {
@@ -103,7 +116,6 @@ pub fn generate_fleet_output(
             continue;
         }
 
-        // Generate profiles for each category
         for profile_cat in ProfileCategory::all() {
             let rule_cat = match profile_cat {
                 ProfileCategory::Software => RuleCategory::Software,
@@ -116,33 +128,67 @@ pub fn generate_fleet_output(
                 continue;
             }
 
-            let profile_name = naming.generate(ring.priority, *profile_cat);
-            let identifier = naming.generate_identifier(&config.org, ring.priority, *profile_cat);
-            let filename = format!("{}.mobileconfig", profile_name);
-            let filepath = profiles_dir.join(&filename);
+            let chunks = category_rules.split_into_chunks(config.max_rules);
+            let needs_split = chunks.len() > 1;
 
-            // Generate mobileconfig
-            let options = GeneratorOptions::new(&config.org)
-                .with_identifier(&identifier)
-                .with_display_name(&format!(
-                    "{} - Ring {}",
-                    profile_cat.display_name(),
-                    ring.priority + 1
-                ))
-                .with_deterministic_uuids(config.deterministic_uuids);
+            for (idx, chunk_rules) in chunks.iter().enumerate() {
+                let part = idx + 1;
+                let (profile_name, identifier, display_name) = if needs_split {
+                    (
+                        naming.generate_split(ring.priority, *profile_cat, part),
+                        naming.generate_identifier_split(
+                            &config.org,
+                            ring.priority,
+                            *profile_cat,
+                            part,
+                        ),
+                        format!(
+                            "{} - Ring {} (Part {})",
+                            profile_cat.display_name(),
+                            ring.priority + 1,
+                            part
+                        ),
+                    )
+                } else {
+                    (
+                        naming.generate(ring.priority, *profile_cat),
+                        naming.generate_identifier(&config.org, ring.priority, *profile_cat),
+                        format!(
+                            "{} - Ring {}",
+                            profile_cat.display_name(),
+                            ring.priority + 1
+                        ),
+                    )
+                };
 
-            let content = generate(&category_rules, &options)?;
-            std::fs::write(&filepath, content)
-                .with_context(|| format!("Failed to write profile: {}", filepath.display()))?;
+                let filename = format!("{profile_name}.mobileconfig");
+                let filepath = profiles_dir.join(&filename);
 
-            let relative_path = format!("{}/{}", config.profiles_base_path, filename);
-            profile_paths.push(relative_path.clone());
+                let options = GeneratorOptions::new(&config.org)
+                    .with_identifier(&identifier)
+                    .with_display_name(&display_name)
+                    .with_deterministic_uuids(config.deterministic_uuids);
 
-            // Add to Fleet profiles with ring labels
-            fleet_profiles.push(FleetProfile {
-                path: relative_path,
-                labels: ring.fleet_labels.clone(),
-            });
+                let content = generate(chunk_rules, &options)?;
+                std::fs::write(&filepath, content)
+                    .with_context(|| format!("Failed to write profile: {}", filepath.display()))?;
+
+                let relative_path = format!("{}/{}", config.profiles_base_path, filename);
+
+                fleet_profiles.push(FleetProfile {
+                    path: relative_path,
+                    labels: ring.fleet_labels.clone(),
+                });
+
+                editions.push(FleetEdition {
+                    ring: ring.name.clone(),
+                    category: profile_cat.display_name().to_string(),
+                    filename,
+                    rules_count: chunk_rules.len(),
+                    part: if needs_split { Some(part) } else { None },
+                    fleet_labels: ring.fleet_labels.clone(),
+                });
+            }
         }
     }
 
@@ -160,9 +206,8 @@ pub fn generate_fleet_output(
         .with_context(|| format!("Failed to write manifest: {}", manifest_path.display()))?;
 
     Ok(FleetGenerationResult {
-        profiles_written: profile_paths.len(),
         manifest_path: manifest_path.display().to_string(),
-        profile_paths,
+        editions,
     })
 }
 
@@ -203,9 +248,34 @@ mod tests {
         let config = FleetOutputConfig::default();
         let result = generate_fleet_output(&rules, &config, tmp_dir.path()).unwrap();
 
-        assert!(result.profiles_written > 0);
+        assert!(!result.editions.is_empty());
         assert!(tmp_dir.path().join("default.yml").exists());
         assert!(tmp_dir.path().join("platforms/profiles").exists());
+    }
+
+    #[test]
+    fn test_generate_fleet_output_splits_on_max_rules() {
+        let tmp_dir = TempDir::new().unwrap();
+        let mut rules = RuleSet::new();
+        for i in 0..5u32 {
+            // 10-char team IDs so the generator stays happy
+            let id = format!("TEAM{i:0>6}");
+            let mut rule = Rule::new(RuleType::TeamId, id, Policy::Allowlist);
+            rule.rings = vec!["ring0".to_string()];
+            rules.add(rule);
+        }
+        let config = FleetOutputConfig {
+            max_rules: Some(2),
+            ..FleetOutputConfig::default()
+        };
+        let result = generate_fleet_output(&rules, &config, tmp_dir.path()).unwrap();
+
+        let parts: Vec<_> = result
+            .editions
+            .iter()
+            .filter(|e| e.part.is_some())
+            .collect();
+        assert_eq!(parts.len(), 3, "5 rules / max 2 → 3 parts");
     }
 
     #[test]

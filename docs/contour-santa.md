@@ -2,7 +2,7 @@
 
 > **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-`contour santa` manages [Google Santa](https://santa.dev) rules and generates `.mobileconfig` profiles for MDM deployment. It handles rule ingestion from multiple sources (Fleet CSV exports, `santactl`, osquery, Installomator, existing mobileconfigs), rule management (add, remove, filter, merge, snip), profile generation in multiple formats (mobileconfig, plist, WS1), and prerequisite profile generation.
+`contour santa` manages [Santa](https://northpole.dev/) rules and generates `.mobileconfig` profiles for MDM deployment. It handles rule ingestion from multiple sources (Fleet CSV exports, `santactl`, osquery, Installomator, existing mobileconfigs), rule management (add, remove, filter, merge, snip), profile generation in multiple formats (mobileconfig, plist, WS1), and prerequisite profile generation.
 
 Aimed at Mac admins deploying Santa for binary authorization — building allowlists, managing rules across environments, and generating MDM-ready profiles.
 
@@ -574,46 +574,87 @@ contour santa pipeline -i fleet.csv -b bundles.toml --org com.acme --layer-stage
 
 ### Deployment Rings & Fleet GitOps
 
+#### The edition model
+
+Each ring profile is a self-contained **edition** — core rules (rules with
+empty `rings:`) merged with that ring's specialized rules into one complete
+allowlist. Hosts receive exactly one edition, scoped by Fleet labels. Santa
+does not layer overlapping mobileconfigs cleanly on a single host, so editions
+ship whole and are never stacked.
+
+Content per edition is determined by each rule's `rings:` field:
+
+```yaml
+- rule_type: TEAMID
+  identifier: EQHXZ8M8AV
+  policy: ALLOWLIST
+  # no `rings:` field → core (in every edition)
+
+- rule_type: TEAMID
+  identifier: ABC1234567
+  policy: ALLOWLIST
+  rings: [ring0]          # canary only
+
+- rule_type: SIGNINGID
+  identifier: team:com.example.tool
+  policy: ALLOWLIST
+  rings: [ring0, ring1]   # canary + pilot
+```
+
+A rule whose `rings:` references a name that isn't in the active ring config
+is reported as a warning so typos don't silently drop rules from every
+edition. Use `--strict` to promote those warnings to a hard error.
+
 #### `santa rings`
 
-Generate profiles organized by **deployment rings** for staged rollouts. Each
-ring can carry multiple categories — software rules (`<prefix>1a`), CEL rules
-(`<prefix>1b`), and FAA rules (`<prefix>1c`) for ring 1, then `2a`/`2b`/`2c`
-for ring 2, and so on. Two nested subcommands:
+Generate per-ring editions for staged rollouts. Each ring can carry multiple
+categories — software rules (`<prefix>1a`), CEL rules (`<prefix>1b`), and FAA
+rules (`<prefix>1c`) for ring 1, then `2a`/`2b`/`2c` for ring 2, and so on.
+Two nested subcommands:
 
 ```
 contour santa rings generate <INPUTS>... [flags]
 contour santa rings init [flags]
 ```
 
-`santa rings generate` — build the per-ring profiles from rule files:
+`santa rings generate` — build the per-ring editions from rule files:
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `<INPUTS>...` | Input rule files (YAML, JSON, CSV) | **required** |
-| `-o, --output-dir <DIR>` | Output directory for ring profiles | — |
+| `-o, --output-dir <DIR>` | Output directory for ring editions | — |
 | `--org <DOMAIN>` | Organization identifier prefix | `com.example` |
 | `--prefix <PREFIX>` | Profile name prefix (`santa` → `santa1a`, `santa1b`, …) | `santa` |
-| `--num-rings <N>` | Number of rings (5 or 7 for standard configs, or custom) | `5` |
-| `--max-rules <N>` | Max rules per profile (splits into `santa1a-001`, `-002`, …) | unlimited |
+| `--num-rings <N>` | Number of rings (5 or 7 built-in; 1-16 custom) | `5` |
+| `--rings-config <PATH>` | Ring config file (from `rings init`); conflicts with `--num-rings` | — |
+| `--max-rules <N>` | Max rules per edition (splits into `santa1a-001`, `-002`, …) | unlimited |
+| `--strict` | Treat unknown ring names in rules as a hard error | `false` |
 | `--dry-run` | Preview without writing | `false` |
 
-`santa rings init` — scaffold a ring configuration file:
+`santa rings init` — scaffold a ring configuration file (descriptions,
+priorities, Fleet labels). Edit it, then pass with `--rings-config`:
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-o, --output <PATH>` | Output file path | `rings.yaml` |
-| `--num-rings <N>` | Number of rings | `5` |
+| `--num-rings <N>` | Number of rings (1-16) | `5` |
 
 ```bash
+# Scaffold and customize the ring shape
 contour santa rings init --num-rings 5 -o rings.yaml
-contour santa rings generate rules.yaml --org com.acme --prefix santa --num-rings 5 -o ./rings/
+$EDITOR rings.yaml   # tweak descriptions, fleet_labels, priorities
+
+# Use the file as the single source of truth
+contour santa rings generate rules.yaml --org com.acme --rings-config rings.yaml -o ./rings/
+
+# Or the shorthand when you don't need to customize:
+contour santa rings generate rules.yaml --org com.acme --num-rings 5 -o ./rings/
 ```
 
 #### `santa fleet`
 
-Generate **Fleet GitOps-compatible** output — a directory of profiles plus
-manifests, with labels used to target rings.
+Generate **Fleet GitOps-compatible** output — a directory of editions plus
+manifests, with Fleet labels used to scope each edition to its target hosts.
 
 ```
 contour santa fleet <INPUTS>... [flags]
@@ -626,12 +667,15 @@ contour santa fleet <INPUTS>... [flags]
 | `--org <DOMAIN>` | Organization identifier prefix | `com.example` |
 | `--prefix <PREFIX>` | Profile name prefix | `santa` |
 | `--team <TEAM>` | Fleet team name | `Workstations` |
-| `--num-rings <N>` | Number of rings | `5` |
+| `--num-rings <N>` | Number of rings (5 or 7 built-in; 1-16 custom) | `5` |
+| `--rings-config <PATH>` | Ring config file (from `rings init`); conflicts with `--num-rings` | — |
+| `--max-rules <N>` | Max rules per edition (splits into `santa1a-001`, `-002`, …) | unlimited |
+| `--strict` | Treat unknown ring names in rules as a hard error | `false` |
 | `--fragment` | Emit a Fleet GitOps fragment directory instead of the full structure | `false` |
 | `--dry-run` | Preview without writing | `false` |
 
 ```bash
-contour santa fleet rules.yaml --org com.acme --team Workstations --num-rings 5 -o ./gitops/
+contour santa fleet rules.yaml --org com.acme --team Workstations --rings-config rings.yaml -o ./gitops/
 ```
 
 ### Advanced Rule Tooling

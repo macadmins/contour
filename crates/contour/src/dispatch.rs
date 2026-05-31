@@ -1501,7 +1501,9 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
                 org,
                 prefix,
                 num_rings,
+                rings_config,
                 max_rules,
+                strict,
                 dry_run,
             } => {
                 let org = resolve_santa_org(org);
@@ -1511,7 +1513,9 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
                     &org,
                     &prefix,
                     num_rings,
+                    rings_config.as_deref(),
                     max_rules,
+                    strict,
                     dry_run,
                     output_mode,
                 )
@@ -1552,6 +1556,9 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
             prefix,
             team,
             num_rings,
+            rings_config,
+            max_rules,
+            strict,
             dry_run,
             fragment,
         } => {
@@ -1563,6 +1570,9 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
                 &prefix,
                 &team,
                 num_rings,
+                rings_config.as_deref(),
+                max_rules,
+                strict,
                 dry_run,
                 output_mode,
                 fragment,

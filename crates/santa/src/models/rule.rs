@@ -408,6 +408,19 @@ impl RuleSet {
         )
     }
 
+    /// Split into chunks of at most `max` rules. With `None` or a max greater
+    /// than the rule count, returns a single chunk containing all rules.
+    pub fn split_into_chunks(self, max: Option<usize>) -> Vec<RuleSet> {
+        match max {
+            Some(m) if self.rules.len() > m => self
+                .rules
+                .chunks(m)
+                .map(|chunk| RuleSet::from_rules(chunk.to_vec()))
+                .collect(),
+            _ => vec![self],
+        }
+    }
+
     /// Get rules that are global (not assigned to specific rings)
     pub fn global_rules(&self) -> RuleSet {
         RuleSet::from_rules(

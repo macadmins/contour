@@ -20,6 +20,8 @@ pub enum ClientMode {
     Monitor,
     /// Lockdown mode - enforce rules
     Lockdown,
+    /// Standalone mode - users locally approve unknown binaries (Santa 2024.10+)
+    Standalone,
 }
 
 impl ClientMode {
@@ -27,6 +29,7 @@ impl ClientMode {
         match self {
             ClientMode::Monitor => 1,
             ClientMode::Lockdown => 2,
+            ClientMode::Standalone => 3,
         }
     }
 }

@@ -1,27 +1,14 @@
+use crate::cli::rings_output::{EditionInfo, RingsOutput, collect_unknown_ring_warnings};
 use crate::generator::{GeneratorOptions, write_to_file};
-use crate::models::{ProfileCategory, ProfileNaming, RingConfig, RuleCategory, RuleSet};
-use crate::output::{CommandResult, OutputMode, print_info, print_json, print_kv, print_success};
+use crate::models::{
+    ProfileCategory, ProfileNaming, RingConfig, RuleCategory, resolve_ring_config,
+};
+use crate::output::{
+    CommandResult, OutputMode, print_info, print_json, print_kv, print_success, print_warning,
+};
 use crate::parser::parse_files;
 use anyhow::Result;
-use serde::Serialize;
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Serialize)]
-struct RingsOutput {
-    rings_count: usize,
-    profiles_generated: usize,
-    profiles: Vec<ProfileInfo>,
-}
-
-#[derive(Debug, Serialize)]
-struct ProfileInfo {
-    ring: String,
-    category: String,
-    filename: String,
-    rules_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    part: Option<usize>,
-}
 
 #[expect(
     clippy::too_many_arguments,
@@ -32,41 +19,42 @@ pub fn run(
     output_dir: Option<&Path>,
     org: &str,
     prefix: &str,
-    num_rings: u8,
+    num_rings: Option<u8>,
+    rings_config_path: Option<&Path>,
     max_rules: Option<usize>,
+    strict: bool,
     dry_run: bool,
     mode: OutputMode,
 ) -> Result<()> {
-    // Parse all input files
     let all_rules = parse_files(inputs)?;
+    let ring_config = resolve_ring_config(num_rings, rings_config_path)?;
 
-    // Set up ring configuration
-    let ring_config = match num_rings {
-        5 => RingConfig::standard_five_rings(),
-        7 => RingConfig::standard_seven_rings(),
-        n => {
-            let mut config = RingConfig::new();
-            for i in 0..n {
-                config.add_ring(
-                    crate::models::Ring::new(format!("ring{i}"), i)
-                        .with_description(format!("Ring {}", i + 1)),
-                );
-            }
-            config
+    let warnings = collect_unknown_ring_warnings(&all_rules, &ring_config);
+    if strict && !warnings.is_empty() {
+        for w in &warnings {
+            print_warning(w);
         }
-    };
+        anyhow::bail!(
+            "{} rule(s) reference unknown ring names; refusing to continue under --strict",
+            warnings.len()
+        );
+    }
+    if mode == OutputMode::Human {
+        for w in &warnings {
+            print_warning(w);
+        }
+    }
 
     let naming = ProfileNaming::new(prefix);
     let output_dir = output_dir
-        .map(|p| p.to_path_buf())
+        .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("rings"));
 
-    let mut profiles_info = Vec::new();
-    let mut profiles_generated = 0;
+    let mut editions = Vec::new();
 
     if mode == OutputMode::Human {
         print_info(&format!(
-            "Generating {} ring profiles with prefix '{}'",
+            "Generating {} ring editions with prefix '{}'",
             ring_config.rings.len(),
             prefix
         ));
@@ -78,8 +66,57 @@ pub fn run(
         ));
     }
 
+    emit_ring_editions(
+        &all_rules,
+        &ring_config,
+        &naming,
+        org,
+        max_rules,
+        dry_run,
+        &output_dir,
+        mode,
+        &mut editions,
+    )?;
+
+    if mode == OutputMode::Human {
+        if dry_run {
+            print_info("Dry run - no files written");
+        } else {
+            print_success(&format!(
+                "Generated {} editions in {}",
+                editions.len(),
+                output_dir.display()
+            ));
+        }
+    } else {
+        let payload = RingsOutput {
+            rings_count: ring_config.rings.len(),
+            editions,
+            manifest_path: None,
+            fragment: false,
+            dry_run,
+        };
+        print_json(&CommandResult::success(payload).with_warnings(warnings))?;
+    }
+
+    Ok(())
+}
+
+/// Walk the resolved ring config and emit one mobileconfig per
+/// (ring × category × split-part). Shared by both the rings and fleet paths.
+#[expect(clippy::too_many_arguments, reason = "internal helper")]
+pub(crate) fn emit_ring_editions(
+    all_rules: &crate::models::RuleSet,
+    ring_config: &RingConfig,
+    naming: &ProfileNaming,
+    org: &str,
+    max_rules: Option<usize>,
+    dry_run: bool,
+    output_dir: &Path,
+    mode: OutputMode,
+    editions: &mut Vec<EditionInfo>,
+) -> Result<()> {
     for ring in ring_config.rings_by_priority() {
-        // Filter rules for this ring
         let ring_rules = all_rules.by_ring(&ring.name);
 
         if ring_rules.is_empty() {
@@ -92,39 +129,19 @@ pub fn run(
             continue;
         }
 
-        // Generate profiles for each category
         for profile_cat in ProfileCategory::all() {
-            // Map ProfileCategory to RuleCategory for filtering
             let rule_cat = match profile_cat {
                 ProfileCategory::Software => RuleCategory::Software,
                 ProfileCategory::Cel => RuleCategory::Cel,
                 ProfileCategory::Faa => RuleCategory::Faa,
             };
 
-            // Get rules for this category in this ring
             let category_rules = ring_rules.by_category(rule_cat);
-
-            // Skip if no rules for this category
             if category_rules.is_empty() {
                 continue;
             }
 
-            // Determine if we need to split this profile
-            let chunks: Vec<RuleSet> = if let Some(max) = max_rules {
-                if category_rules.len() > max {
-                    // Split into chunks
-                    category_rules
-                        .rules()
-                        .chunks(max)
-                        .map(|chunk| RuleSet::from_rules(chunk.to_vec()))
-                        .collect()
-                } else {
-                    vec![category_rules]
-                }
-            } else {
-                vec![category_rules]
-            };
-
+            let chunks = category_rules.split_into_chunks(max_rules);
             let needs_split = chunks.len() > 1;
 
             for (idx, chunk_rules) in chunks.iter().enumerate() {
@@ -133,28 +150,29 @@ pub fn run(
                     let name = naming.generate_split(ring.priority, *profile_cat, part);
                     let id =
                         naming.generate_identifier_split(org, ring.priority, *profile_cat, part);
-                    let fname = format!("{}.mobileconfig", name);
+                    let fname = format!("{name}.mobileconfig");
                     (name, id, fname)
                 } else {
                     let name = naming.generate(ring.priority, *profile_cat);
                     let id = naming.generate_identifier(org, ring.priority, *profile_cat);
-                    let fname = format!("{}.mobileconfig", name);
+                    let fname = format!("{name}.mobileconfig");
                     (name, id, fname)
                 };
 
                 let filepath = output_dir.join(&filename);
 
-                profiles_info.push(ProfileInfo {
+                editions.push(EditionInfo {
                     ring: ring.name.clone(),
                     category: profile_cat.display_name().to_string(),
                     filename: filename.clone(),
                     rules_count: chunk_rules.len(),
                     part: if needs_split { Some(part) } else { None },
+                    fleet_labels: ring.fleet_labels.clone(),
                 });
 
                 if !dry_run {
                     if !output_dir.exists() {
-                        std::fs::create_dir_all(&output_dir)?;
+                        std::fs::create_dir_all(output_dir)?;
                     }
 
                     let display_name = if needs_split {
@@ -180,8 +198,6 @@ pub fn run(
                     write_to_file(chunk_rules, &options, &filepath)?;
                 }
 
-                profiles_generated += 1;
-
                 if mode == OutputMode::Human {
                     let label = if needs_split {
                         format!(
@@ -198,45 +214,12 @@ pub fn run(
             }
         }
     }
-
-    if mode == OutputMode::Human {
-        if dry_run {
-            print_info("Dry run - no files written");
-        } else {
-            print_success(&format!(
-                "Generated {} profiles in {}",
-                profiles_generated,
-                output_dir.display()
-            ));
-        }
-    } else {
-        print_json(&CommandResult::success(RingsOutput {
-            rings_count: ring_config.rings.len(),
-            profiles_generated,
-            profiles: profiles_info,
-        }))?;
-    }
-
     Ok(())
 }
 
 /// Initialize a ring configuration template
 pub fn init_rings(output: &Path, num_rings: u8, mode: OutputMode) -> Result<()> {
-    let config = match num_rings {
-        5 => RingConfig::standard_five_rings(),
-        7 => RingConfig::standard_seven_rings(),
-        n => {
-            let mut config = RingConfig::new();
-            for i in 0..n {
-                config.add_ring(
-                    crate::models::Ring::new(format!("ring{i}"), i)
-                        .with_description(format!("Ring {} - TODO: add description", i + 1))
-                        .with_fleet_labels(vec![format!("ring:{i}")]),
-                );
-            }
-            config
-        }
-    };
+    let config = RingConfig::from_num_rings(num_rings);
 
     let yaml = yaml_serde::to_string(&config)?;
     std::fs::write(output, &yaml)?;

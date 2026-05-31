@@ -127,7 +127,9 @@ fn main() -> Result<()> {
                 org,
                 prefix,
                 num_rings,
+                rings_config,
                 max_rules,
+                strict,
                 dry_run,
             } => {
                 let org = resolve_org(org);
@@ -137,7 +139,9 @@ fn main() -> Result<()> {
                     &org,
                     &prefix,
                     num_rings,
+                    rings_config.as_deref(),
                     max_rules,
+                    strict,
                     dry_run,
                     output_mode,
                 )
@@ -178,6 +182,9 @@ fn main() -> Result<()> {
             prefix,
             team,
             num_rings,
+            rings_config,
+            max_rules,
+            strict,
             dry_run,
             fragment,
         } => {
@@ -189,6 +196,9 @@ fn main() -> Result<()> {
                 &prefix,
                 &team,
                 num_rings,
+                rings_config.as_deref(),
+                max_rules,
+                strict,
                 dry_run,
                 output_mode,
                 fragment,
