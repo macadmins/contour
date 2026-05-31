@@ -12,6 +12,8 @@ pub enum Strategy {
     Last,
     /// Error on conflicts
     Strict,
+    /// Most restrictive policy wins (Blocklist > Allowlist); ties resolve to last
+    DenyWins,
 }
 
 /// Conflict information
@@ -59,6 +61,15 @@ pub fn merge(sets: &[RuleSet], strategy: Strategy) -> anyhow::Result<MergeResult
                 }
                 Strategy::Strict => {
                     anyhow::bail!("Conflict detected for rule: {key}");
+                }
+                Strategy::DenyWins => {
+                    // Highest restrictiveness wins; ties broken by last occurrence.
+                    // `max_by_key` returns the last max on ties, matching that intent.
+                    let winner = rule_list
+                        .into_iter()
+                        .max_by_key(|r| r.policy.restrictiveness())
+                        .unwrap();
+                    rules.add(winner);
                 }
             }
         } else {
@@ -114,6 +125,44 @@ mod tests {
         assert_eq!(result.rules.len(), 1);
         // First wins: Allowlist
         assert_eq!(result.rules.rules()[0].policy, Policy::Allowlist);
+    }
+
+    #[test]
+    fn test_merge_deny_wins_blocklist_beats_allowlist() {
+        let mut set1 = RuleSet::new();
+        set1.add(Rule::new(RuleType::TeamId, "A", Policy::Allowlist));
+
+        let mut set2 = RuleSet::new();
+        set2.add(Rule::new(RuleType::TeamId, "A", Policy::Blocklist));
+
+        let result = merge(&[set1, set2], Strategy::DenyWins).unwrap();
+        assert_eq!(result.rules.len(), 1);
+        assert_eq!(result.conflicts.len(), 1);
+        assert_eq!(result.rules.rules()[0].policy, Policy::Blocklist);
+    }
+
+    #[test]
+    fn test_merge_deny_wins_blocklist_beats_allowlist_regardless_of_order() {
+        let mut set1 = RuleSet::new();
+        set1.add(Rule::new(RuleType::TeamId, "A", Policy::Blocklist));
+
+        let mut set2 = RuleSet::new();
+        set2.add(Rule::new(RuleType::TeamId, "A", Policy::Allowlist));
+
+        let result = merge(&[set1, set2], Strategy::DenyWins).unwrap();
+        assert_eq!(result.rules.rules()[0].policy, Policy::Blocklist);
+    }
+
+    #[test]
+    fn test_merge_deny_wins_remove_beats_blocklist() {
+        let mut set1 = RuleSet::new();
+        set1.add(Rule::new(RuleType::TeamId, "A", Policy::Blocklist));
+
+        let mut set2 = RuleSet::new();
+        set2.add(Rule::new(RuleType::TeamId, "A", Policy::Remove));
+
+        let result = merge(&[set1, set2], Strategy::DenyWins).unwrap();
+        assert_eq!(result.rules.rules()[0].policy, Policy::Remove);
     }
 
     #[test]

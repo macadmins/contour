@@ -7,8 +7,9 @@ pub use json_parser::parse_json;
 pub use yaml_parser::parse_yaml;
 
 use crate::bundle::BundleSet;
-use crate::models::RuleSet;
+use crate::models::{Rule, RuleSet};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Supported input formats
@@ -74,6 +75,58 @@ pub fn parse_files(paths: &[impl AsRef<Path>]) -> Result<RuleSet> {
     Ok(combined)
 }
 
+/// Schema for the curated baseline TOML file (`baseline.toml`).
+///
+/// Distinct from the `[[bundles]]` TOML schema parsed by [`parse_toml`].
+/// Baseline rules are applied to every ring edition; declaring `rings:` on
+/// them is rejected so the file's purpose stays unambiguous.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaselineFile {
+    /// Schema version. Currently always 1; reserved for forward-compat.
+    #[serde(default = "default_baseline_version")]
+    pub version: u8,
+    /// Rules to ship in every edition.
+    #[serde(default)]
+    pub rules: Vec<Rule>,
+}
+
+fn default_baseline_version() -> u8 {
+    1
+}
+
+impl BaselineFile {
+    /// Convert into a `RuleSet`, validating no rule carries a `rings:` field.
+    pub fn into_rule_set(self) -> Result<RuleSet> {
+        for rule in &self.rules {
+            if !rule.rings.is_empty() {
+                anyhow::bail!(
+                    "baseline rules cannot declare 'rings:' (they apply to every edition by definition); \
+                     move ring-specific rules to your rules input file. \
+                     Offending rule: {}:{}",
+                    rule.rule_type,
+                    rule.identifier
+                );
+            }
+        }
+        Ok(RuleSet::from_rules(self.rules))
+    }
+}
+
+/// Parse a baseline TOML document into a `RuleSet`.
+pub fn parse_baseline_toml(content: &str) -> Result<RuleSet> {
+    let file: BaselineFile = toml::from_str(content)
+        .context("Failed to parse baseline TOML (expected `[[rules]]` entries)")?;
+    file.into_rule_set()
+}
+
+/// Read and parse a baseline TOML file from disk.
+pub fn parse_baseline_file(path: &Path) -> Result<RuleSet> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read baseline file: {}", path.display()))?;
+    parse_baseline_toml(&content)
+        .with_context(|| format!("Failed to parse baseline file: {}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +170,53 @@ policy = "ALLOWLIST"
         let rules = parse_toml(toml_content).unwrap();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules.rules()[0].identifier, "EQHXZ8M8AV");
+    }
+
+    #[test]
+    fn test_parse_baseline_toml_happy_path() {
+        let toml = r#"
+version = 1
+
+[[rules]]
+rule_type = "TEAMID"
+identifier = "EQHXZ8M8AV"
+policy = "ALLOWLIST"
+description = "Google"
+
+[[rules]]
+rule_type = "TEAMID"
+identifier = "MALICIOUS00"
+policy = "BLOCKLIST"
+"#;
+        let rules = parse_baseline_toml(toml).unwrap();
+        assert_eq!(rules.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_baseline_toml_rejects_rings_field() {
+        let toml = r#"
+[[rules]]
+rule_type = "TEAMID"
+identifier = "EQHXZ8M8AV"
+policy = "ALLOWLIST"
+rings = ["ring0"]
+"#;
+        let err = parse_baseline_toml(toml).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("baseline rules cannot declare 'rings:'"));
+        assert!(msg.contains("EQHXZ8M8AV"));
+    }
+
+    #[test]
+    fn test_parse_baseline_toml_defaults_version() {
+        // Omitting `version =` is accepted; defaults to 1.
+        let toml = r#"
+[[rules]]
+rule_type = "TEAMID"
+identifier = "EQHXZ8M8AV"
+policy = "ALLOWLIST"
+"#;
+        let rules = parse_baseline_toml(toml).unwrap();
+        assert_eq!(rules.len(), 1);
     }
 }

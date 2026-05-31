@@ -1,4 +1,6 @@
-use crate::cli::rings_output::{EditionInfo, RingsOutput, collect_unknown_ring_warnings};
+use crate::cli::rings_output::{
+    EditionInfo, RingsOutput, apply_baseline_merge, collect_unknown_ring_warnings,
+};
 use crate::fleet::{FleetOutputConfig, generate_fleet_output};
 use crate::models::{ProfileNaming, resolve_ring_config};
 use crate::output::{
@@ -21,6 +23,7 @@ pub fn run(
     team_name: &str,
     num_rings: Option<u8>,
     rings_config_path: Option<&Path>,
+    baseline_path: Option<&Path>,
     max_rules: Option<usize>,
     strict: bool,
     dry_run: bool,
@@ -36,6 +39,7 @@ pub fn run(
             team_name,
             num_rings,
             rings_config_path,
+            baseline_path,
             max_rules,
             strict,
             dry_run,
@@ -43,19 +47,22 @@ pub fn run(
         );
     }
 
-    let rules = parse_files(inputs)?;
+    let input_rules = parse_files(inputs)?;
+    let (rules, baseline_warnings) = apply_baseline_merge(input_rules, baseline_path)?;
     let ring_config = resolve_ring_config(num_rings, rings_config_path)?;
 
-    let warnings = collect_unknown_ring_warnings(&rules, &ring_config);
-    if strict && !warnings.is_empty() {
-        for w in &warnings {
+    let ring_warnings = collect_unknown_ring_warnings(&rules, &ring_config);
+    if strict && !ring_warnings.is_empty() {
+        for w in &ring_warnings {
             print_warning(w);
         }
         anyhow::bail!(
             "{} rule(s) reference unknown ring names; refusing to continue under --strict",
-            warnings.len()
+            ring_warnings.len()
         );
     }
+    let mut warnings = baseline_warnings;
+    warnings.extend(ring_warnings);
     if mode == OutputMode::Human {
         for w in &warnings {
             print_warning(w);
@@ -165,6 +172,7 @@ fn run_fragment(
     team_name: &str,
     num_rings: Option<u8>,
     rings_config_path: Option<&Path>,
+    baseline_path: Option<&Path>,
     max_rules: Option<usize>,
     strict: bool,
     dry_run: bool,
@@ -174,19 +182,22 @@ fn run_fragment(
     use crate::generator::{GeneratorOptions, generate};
     use crate::models::{ProfileCategory, RuleCategory};
 
-    let rules = parse_files(inputs)?;
+    let input_rules = parse_files(inputs)?;
+    let (rules, baseline_warnings) = apply_baseline_merge(input_rules, baseline_path)?;
     let ring_config = resolve_ring_config(num_rings, rings_config_path)?;
 
-    let warnings = collect_unknown_ring_warnings(&rules, &ring_config);
-    if strict && !warnings.is_empty() {
-        for w in &warnings {
+    let ring_warnings = collect_unknown_ring_warnings(&rules, &ring_config);
+    if strict && !ring_warnings.is_empty() {
+        for w in &ring_warnings {
             print_warning(w);
         }
         anyhow::bail!(
             "{} rule(s) reference unknown ring names; refusing to continue under --strict",
-            warnings.len()
+            ring_warnings.len()
         );
     }
+    let mut warnings = baseline_warnings;
+    warnings.extend(ring_warnings);
     if mode == OutputMode::Human {
         for w in &warnings {
             print_warning(w);

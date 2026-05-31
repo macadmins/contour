@@ -26,6 +26,9 @@ What are you trying to do?
 ├─ I want staged rollouts (Ring 1 canary → Ring 5 production)
 │  → Recipe 3: Ring-based deployment
 │
+├─ I want a curated, security-owned baseline file (separate from rules.yaml)
+│  → Recipe 3.5: Curating a baseline
+│
 ├─ I want a complete Fleet GitOps directory with rings + labels
 │  → Recipe 4: Fleet GitOps fragment
 │
@@ -148,6 +151,58 @@ turn that warning into a hard error in CI:
 ```bash
 contour santa rings generate <rules> --rings-config rings.yaml --strict -o rings/
 ```
+
+## Recipe 3.5: Curating a baseline
+
+When a security/IT team wants to maintain a separate, curated "must-ship"
+rule list — independent of the day-to-day `rules.yaml` owned by ops — use
+the optional `baseline.toml`:
+
+```toml
+# baseline.toml
+version = 1
+
+[[rules]]
+rule_type = "TEAMID"
+identifier = "EQHXZ8M8AV"
+policy = "ALLOWLIST"
+description = "Google"
+
+[[rules]]
+rule_type = "TEAMID"
+identifier = "MALICIOUS00"
+policy = "BLOCKLIST"
+```
+
+Pass it to `rings generate` (or `fleet`):
+
+```bash
+contour santa rings generate rules.yaml \
+    --baseline baseline.toml \
+    --rings-config rings.yaml \
+    --org com.yourco \
+    -o rings/
+```
+
+Semantics:
+- Baseline rules are applied to **every edition** (treated as `rings: []`).
+- On any `(rule_type, identifier)` conflict between baseline and input
+  rules, the **most-restrictive policy wins**: `Remove > Blocklist/
+  SilentBlocklist > Allowlist/AllowlistCompiler`. This is the security
+  guarantee: a baseline `BLOCKLIST` cannot be silently un-blocked by an
+  `ALLOWLIST` in a regular rule file.
+- Conflicts are reported as warnings (human mode) or in the JSON envelope.
+- Declaring `rings:` on any baseline rule is rejected at parse time.
+
+To author a baseline from real machine inventory and grow it across hosts:
+
+```bash
+contour santa scan --output-format baseline -o baseline.toml          # first machine
+contour santa scan --output-format baseline -o baseline.toml          # second machine: merges
+```
+
+Re-running on the same machine doesn't duplicate rules. Running across
+machines accumulates the union, deny-wins on policy collisions.
 
 ## Recipe 4: Fleet GitOps fragment
 

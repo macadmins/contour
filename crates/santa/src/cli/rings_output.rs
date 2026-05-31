@@ -1,8 +1,11 @@
+use anyhow::Result;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::merge::{Conflict, Strategy, merge};
 use crate::models::{RingConfig, RuleSet};
+use crate::parser::parse_baseline_file;
 
 /// Unified output payload for rings-related commands (`rings generate`,
 /// `fleet`, and `fleet --fragment`). One schema parseable with a single
@@ -28,6 +31,58 @@ pub struct EditionInfo {
     pub part: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fleet_labels: Vec<String>,
+}
+
+/// Load the baseline (if provided) and merge it into the supplied rules using
+/// deny-wins conflict resolution. Returns the merged set plus one warning
+/// string per resolved conflict so callers can route them to human or JSON
+/// output channels uniformly.
+pub fn apply_baseline_merge(
+    rules: RuleSet,
+    baseline_path: Option<&Path>,
+) -> Result<(RuleSet, Vec<String>)> {
+    let Some(path) = baseline_path else {
+        return Ok((rules, Vec::new()));
+    };
+    let baseline = parse_baseline_file(path)?;
+    // Baseline first so an input-side `Strategy::Last` tiebreak (when both
+    // sides assert the same restrictiveness) keeps the input rule, matching
+    // the principle of least surprise for users editing rules.yaml.
+    let result = merge(&[baseline, rules], Strategy::DenyWins)?;
+    let warnings = result
+        .conflicts
+        .iter()
+        .filter(|c| has_policy_disagreement(c))
+        .map(format_baseline_conflict)
+        .collect();
+    Ok((result.rules, warnings))
+}
+
+/// True when a conflict contains at least two rules with different policies.
+/// Same-policy duplicates are silent — the baseline already had this rule.
+pub fn has_policy_disagreement(conflict: &Conflict) -> bool {
+    let first = conflict.rules.first().map(|r| r.policy);
+    conflict.rules.iter().any(|r| Some(r.policy) != first)
+}
+
+fn format_baseline_conflict(conflict: &Conflict) -> String {
+    let winner = conflict
+        .rules
+        .iter()
+        .max_by_key(|r| r.policy.restrictiveness())
+        .expect("conflict always has >= 2 rules");
+    let losers: Vec<String> = conflict
+        .rules
+        .iter()
+        .filter(|r| r.policy != winner.policy)
+        .map(|r| r.policy.to_string())
+        .collect();
+    format!(
+        "baseline conflict on {}: kept {} (deny-wins), overrode {}",
+        conflict.key,
+        winner.policy,
+        losers.join(", ")
+    )
 }
 
 /// Walk rules and return one warning per `rule.rings` entry that doesn't

@@ -58,6 +58,8 @@ pub enum ScanOutputFormat {
     Rules,
     /// .mobileconfig format - fully automatic, ready for MDM deployment
     Mobileconfig,
+    /// baseline.toml format - curated rules merged with existing file (deny-wins)
+    Baseline,
 }
 
 /// Rule type strategy for scan output
@@ -320,6 +322,10 @@ pub enum Commands {
         /// Ring configuration file (as produced by `rings init`)
         #[arg(long, value_name = "PATH")]
         rings_config: Option<PathBuf>,
+
+        /// Curated baseline TOML applied to every edition; conflicts resolve deny-wins
+        #[arg(long, value_name = "PATH")]
+        baseline: Option<PathBuf>,
 
         /// Maximum rules per edition (splits into santa1a-001, santa1a-002, ...)
         #[arg(long)]
@@ -601,6 +607,7 @@ pub enum Commands {
     ///   contour santa scan --output-format bundles --output bundles.toml
     ///   contour santa scan --output-format rules --output rules.yaml
     ///   contour santa scan --output-format mobileconfig --output santa.mobileconfig --org com.example
+    ///   contour santa scan --output-format baseline --output baseline.toml   # merge-with-existing
     Scan {
         /// Directories to scan for applications
         #[arg(short, long, default_value = "/Applications")]
@@ -863,6 +870,10 @@ pub enum RingsCommands {
         /// Ring configuration file (as produced by `rings init`)
         #[arg(long, value_name = "PATH")]
         rings_config: Option<PathBuf>,
+
+        /// Curated baseline TOML applied to every edition; conflicts resolve deny-wins
+        #[arg(long, value_name = "PATH")]
+        baseline: Option<PathBuf>,
 
         /// Maximum rules per edition (splits into santa1a-001, santa1a-002, etc.)
         #[arg(long)]

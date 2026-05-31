@@ -605,6 +605,51 @@ A rule whose `rings:` references a name that isn't in the active ring config
 is reported as a warning so typos don't silently drop rules from every
 edition. Use `--strict` to promote those warnings to a hard error.
 
+#### Maintaining a baseline
+
+Teams often want to separate a curated, security-owned set of "must-ship"
+rules from the day-to-day, fleet-owned `rules.yaml`. The optional
+`baseline.toml` is that separate file:
+
+```toml
+# baseline.toml — security/IT owned, version-controlled
+version = 1
+
+[[rules]]
+rule_type = "TEAMID"
+identifier = "EQHXZ8M8AV"
+policy = "ALLOWLIST"
+description = "Google"
+
+[[rules]]
+rule_type = "TEAMID"
+identifier = "MALICIOUS00"
+policy = "BLOCKLIST"
+```
+
+Pass it to `rings generate` or `fleet` with `--baseline`. Baseline rules
+ship in **every edition** (they're treated as having empty `rings:`), and
+on any `(rule_type, identifier)` collision with regular input rules the
+**most-restrictive policy wins** — `Remove > Blocklist/SilentBlocklist >
+Allowlist/AllowlistCompiler` — regardless of which file the conflicting
+rules came from. A `BLOCKLIST` in `baseline.toml` can never be silently
+un-blocked by an `ALLOWLIST` in `rules.yaml`.
+
+Conflicts are surfaced as warnings (human mode) or in the JSON envelope's
+`warnings: []` (JSON mode), so you always know which rule was overridden.
+
+A baseline file may **not** declare `rings:` on any rule — that would
+contradict its "every edition" semantic. The parser rejects such files
+with a clear error.
+
+To author or grow a baseline from real machine inventory:
+
+```bash
+contour santa scan --output-format baseline -o baseline.toml
+# Re-running merges new rules into the existing file (deny-wins).
+contour santa scan --output-format baseline -o baseline.toml
+```
+
 #### `santa rings`
 
 Generate per-ring editions for staged rollouts. Each ring can carry multiple
@@ -627,6 +672,7 @@ contour santa rings init [flags]
 | `--prefix <PREFIX>` | Profile name prefix (`santa` → `santa1a`, `santa1b`, …) | `santa` |
 | `--num-rings <N>` | Number of rings (5 or 7 built-in; 1-16 custom) | `5` |
 | `--rings-config <PATH>` | Ring config file (from `rings init`); conflicts with `--num-rings` | — |
+| `--baseline <PATH>` | Curated baseline TOML applied to every edition; conflicts resolve deny-wins | — |
 | `--max-rules <N>` | Max rules per edition (splits into `santa1a-001`, `-002`, …) | unlimited |
 | `--strict` | Treat unknown ring names in rules as a hard error | `false` |
 | `--dry-run` | Preview without writing | `false` |
@@ -669,6 +715,7 @@ contour santa fleet <INPUTS>... [flags]
 | `--team <TEAM>` | Fleet team name | `Workstations` |
 | `--num-rings <N>` | Number of rings (5 or 7 built-in; 1-16 custom) | `5` |
 | `--rings-config <PATH>` | Ring config file (from `rings init`); conflicts with `--num-rings` | — |
+| `--baseline <PATH>` | Curated baseline TOML applied to every edition; conflicts resolve deny-wins | — |
 | `--max-rules <N>` | Max rules per edition (splits into `santa1a-001`, `-002`, …) | unlimited |
 | `--strict` | Treat unknown ring names in rules as a hard error | `false` |
 | `--fragment` | Emit a Fleet GitOps fragment directory instead of the full structure | `false` |

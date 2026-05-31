@@ -61,6 +61,18 @@ impl Policy {
             Policy::Cel => "CEL",
         }
     }
+
+    /// Ordering used by deny-wins merge: higher = more restrictive, wins on conflict.
+    pub fn restrictiveness(&self) -> u8 {
+        match self {
+            Policy::Remove => 3,
+            Policy::Blocklist | Policy::SilentBlocklist => 2,
+            Policy::Allowlist | Policy::AllowlistCompiler => 1,
+            // CEL rules evaluate dynamically — they don't share dedup keys with
+            // categorical rules in practice, so this is defensive.
+            Policy::Cel => 0,
+        }
+    }
 }
 
 impl std::fmt::Display for Policy {

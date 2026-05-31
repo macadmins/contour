@@ -189,6 +189,7 @@ pub fn run(
     }
 
     // Write output in the specified format
+    let mut baseline_summary: Option<BaselineMergeSummary> = None;
     match output_format {
         ScanOutputFormat::Csv => {
             write_csv(&scanned, &output_path, &device_name)?;
@@ -201,6 +202,9 @@ pub fn run(
         }
         ScanOutputFormat::Mobileconfig => {
             write_mobileconfig(&scanned, &output_path, org, rule_type)?;
+        }
+        ScanOutputFormat::Baseline => {
+            baseline_summary = Some(write_baseline(&scanned, &output_path, rule_type)?);
         }
     }
 
@@ -227,6 +231,17 @@ pub fn run(
             scanned.len(),
             output_path.display()
         ));
+        if let Some(summary) = &baseline_summary {
+            print_kv("Baseline added", &summary.added.to_string());
+            print_kv(
+                "Baseline already present",
+                &summary.already_present.to_string(),
+            );
+            print_kv(
+                "Baseline conflicts (deny-wins)",
+                &summary.conflicts.to_string(),
+            );
+        }
         if unsigned_count > 0 {
             print_kv("Unsigned skipped", &unsigned_count.to_string());
             for name in &unsigned_apps {
@@ -253,6 +268,7 @@ fn default_output_path(format: ScanOutputFormat) -> PathBuf {
         ScanOutputFormat::Bundles => PathBuf::from("bundles.toml"),
         ScanOutputFormat::Rules => PathBuf::from("rules.yaml"),
         ScanOutputFormat::Mobileconfig => PathBuf::from("santa-rules.mobileconfig"),
+        ScanOutputFormat::Baseline => PathBuf::from("baseline.toml"),
     }
 }
 
@@ -291,6 +307,16 @@ fn print_next_steps(format: ScanOutputFormat, output: &Path) {
             print_info("Next steps:");
             println!("  1. Review the generated profile");
             println!("  2. Deploy {} via MDM", output.display());
+        }
+        ScanOutputFormat::Baseline => {
+            print_info("Next steps:");
+            println!("  1. Review {}", output.display());
+            println!(
+                "  2. contour santa rings generate <rules> --baseline {} -o rings/",
+                output.display()
+            );
+            println!("     (or `santa fleet` for Fleet GitOps)");
+            println!("  3. Re-run this command to grow the baseline across machines");
         }
     }
 }
@@ -620,6 +646,62 @@ fn derive_bundle_name(apps: &[&ScannedApp], team_id: &str) -> String {
 
     // Fall back to team_id-based name
     format!("vendor-{}", team_id.to_lowercase())
+}
+
+/// Summary of a baseline write: how the scan merged with what was already there.
+struct BaselineMergeSummary {
+    added: usize,
+    already_present: usize,
+    conflicts: usize,
+}
+
+/// Write scanned apps to baseline.toml. If the file already exists, merge
+/// with deny-wins; otherwise write fresh.
+fn write_baseline(
+    apps: &[ScannedApp],
+    output: &Path,
+    rule_type: ScanRuleType,
+) -> Result<BaselineMergeSummary> {
+    use crate::merge::{Strategy, merge};
+    use crate::parser::{BaselineFile, parse_baseline_file};
+    use std::collections::HashSet;
+
+    let scanned_rules = apps_to_rules(apps, rule_type);
+
+    let (existing_rules, existing_keys): (crate::models::RuleSet, HashSet<String>) =
+        if output.exists() {
+            let existing = parse_baseline_file(output)?;
+            let keys: HashSet<String> = existing.iter().map(crate::models::Rule::key).collect();
+            (existing, keys)
+        } else {
+            (crate::models::RuleSet::new(), HashSet::new())
+        };
+
+    let scanned_keys: HashSet<String> =
+        scanned_rules.iter().map(crate::models::Rule::key).collect();
+    let already_present = scanned_keys.intersection(&existing_keys).count();
+    let added = scanned_keys.difference(&existing_keys).count();
+
+    let merged = merge(&[existing_rules, scanned_rules], Strategy::DenyWins)?;
+    let conflicts = merged
+        .conflicts
+        .iter()
+        .filter(|c| crate::cli::rings_output::has_policy_disagreement(c))
+        .count();
+
+    let mut rules: Vec<crate::models::Rule> = merged.rules.iter().cloned().collect();
+    rules.sort_by_key(|r| r.key());
+
+    let file = BaselineFile { version: 1, rules };
+    let toml = toml::to_string_pretty(&file).context("Failed to serialize baseline TOML")?;
+    std::fs::write(output, toml)
+        .with_context(|| format!("Failed to write baseline to {}", output.display()))?;
+
+    Ok(BaselineMergeSummary {
+        added,
+        already_present,
+        conflicts,
+    })
 }
 
 /// Write scanned apps to rules.yaml format (direct Santa rules).
