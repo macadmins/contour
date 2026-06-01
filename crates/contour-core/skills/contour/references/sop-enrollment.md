@@ -51,6 +51,13 @@ NEVER_SKIP = ["FileVault", "SoftwareUpdate"]
 The `--skip-all` CLI flag DOES include both. Procedural SOP MUST filter
 them out before generating, or document an explicit override decision.
 
+As of contour ≥0.3.0-beta.5, the NEVER_SKIP guardrail is also enforced
+in code: `contour profile enrollment generate` refuses to write a profile
+whose final skip set contains `FileVault` or `SoftwareUpdate`, regardless
+of whether they came from `--skip`, `--skip-all`, or `--skip-list`.
+Defence-in-depth — the SOP catches it at planning time, the CLI catches
+it at generation time.
+
 ---
 
 ## PROCEDURE generate_enrollment_profile(platform, os_version, intent, output_file)
@@ -193,6 +200,43 @@ POSTCONDITIONS:
 ---
 
 ## Other operations (prose recipes)
+
+### Reusable skip list (skip-list.toml)
+
+Capture an org's chosen skip set in a version-controlled TOML file so it
+can be re-applied across many enrollment profile generations.
+
+```toml
+# skip-list.toml
+version = 1
+platform = "macOS"           # optional; overrides --platform default
+os_version = "26.0"          # optional
+profile_name = "Acme Onboarding"  # optional
+skip = [
+  "Appearance",
+  "Siri",
+  "Diagnostics",
+  "Privacy",
+  "TOS",
+]
+# FileVault and SoftwareUpdate are rejected by the NEVER_SKIP guardrail
+# regardless of source; do not list them here.
+```
+
+Apply with:
+
+```bash
+contour profile enrollment generate --skip-list skip-list.toml -o dep.json
+```
+
+Precedence rules:
+- `--platform`, `--os-version`, `--profile-name` CLI flags override the
+  file's values when explicitly set (their defaults are treated as "not set").
+- `--skip <csv>` is unioned with the file's `skip` list (deduplicated).
+- `--skip-list` conflicts with `--skip-all` and `--interactive` (clap-enforced).
+- The NEVER_SKIP guardrail is applied to the final, post-merge selection
+  regardless of source — a `FileVault` or `SoftwareUpdate` entry in the
+  file or in `--skip` aborts generation before any output is written.
 
 ### List skip keys for a platform
 

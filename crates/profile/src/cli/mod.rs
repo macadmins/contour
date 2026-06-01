@@ -1238,11 +1238,14 @@ pub enum EnrollmentAction {
         #[arg(long)]
         os_version: Option<String>,
         /// Skip ALL available setup items
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["skip_list", "interactive"])]
         skip_all: bool,
-        /// Skip specific items (comma-separated)
+        /// Skip specific items (comma-separated); unions with --skip-list when both are given
         #[arg(long, value_delimiter = ',')]
         skip: Vec<String>,
+        /// Reusable skip-list TOML file (platform, os_version, profile_name, skip[])
+        #[arg(long, value_name = "PATH", conflicts_with = "interactive")]
+        skip_list: Option<std::path::PathBuf>,
         /// Output file
         #[arg(short, long)]
         output: Option<String>,

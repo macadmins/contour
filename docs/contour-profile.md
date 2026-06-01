@@ -1260,18 +1260,29 @@ contour profile enrollment generate [flags]
 |------|-------------|---------|
 | `--platform <PLATFORM>` | Target platform | `macOS` |
 | `--os-version <VERSION>` | Target OS version | all |
-| `--skip-all` | Skip every available setup item | `false` |
-| `--skip <LIST>` | Comma-separated list of skip keys | none |
-| `--profile-name <NAME>` | Profile display name | `Automatic enrollment profile` |
+| `--skip <LIST>` | Comma-separated list of skip keys; unions with `--skip-list` when both are given | none |
+| `--skip-list <PATH>` | Reusable skip-list TOML file (`platform`, `os_version`, `profile_name`, `skip[]`) | none |
+| `--skip-all` | Skip every available setup item — **rejected by the NEVER_SKIP guardrail** (includes `FileVault` / `SoftwareUpdate`); use `--skip` or `--skip-list` instead | `false` |
+| `--profile-name <NAME>` | Profile display name (overridden by `--skip-list`'s value if both set) | `Automatic enrollment profile` |
 | `-o, --output <PATH>` | Output file path | stdout |
-| `--interactive` | Pick skip items interactively | `false` |
+| `--interactive` | Pick skip items interactively (conflicts with `--skip-list`, `--skip-all`) | `false` |
 
 ```bash
 contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
 contour profile enrollment generate --platform iOS --skip TOS,Siri,Privacy -o ios-enrollment.dep.json
+contour profile enrollment generate --skip-list skip-list.toml -o enrollment.dep.json
 ```
 
-> **Security note**: always keep FileVault and SoftwareUpdate enabled (do **not** skip them).
+Example `skip-list.toml`:
+
+```toml
+version = 1
+platform = "macOS"
+profile_name = "Acme Onboarding"
+skip = ["Appearance", "Siri", "Diagnostics", "Privacy", "TOS"]
+```
+
+> **Security guardrail**: `FileVault` and `SoftwareUpdate` are rejected in any source (`--skip`, `--skip-list`, `--skip-all`). Skipping the Setup Assistant panes for these undermines disk encryption and OS-update hygiene. Enforced in code as of 0.3.0-beta.5; documented in `--sop enrollment`.
 
 ---
 

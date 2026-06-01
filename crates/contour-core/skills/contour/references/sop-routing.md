@@ -77,9 +77,14 @@ Use when: creating Setup Assistant enrollment profiles for ABM/ADE.
 ```bash
 contour profile enrollment list --platform macOS --json
 contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
+contour profile enrollment generate --platform macOS --skip "Siri,TOS,Diagnostics,Privacy" -o enrollment.dep.json
+contour profile enrollment generate --skip-list skip-list.toml -o enrollment.dep.json
 ```
 
-ALWAYS keep FileVault and SoftwareUpdate enabled (do NOT skip them).
+Pick whichever mode fits — interactive for one-off, `--skip` for CI
+one-liners, `--skip-list` for the reusable, version-controlled file.
+`--skip-all` is rejected by the NEVER_SKIP guardrail (FileVault /
+SoftwareUpdate). Never skip those.
 
 ## Fleet GitOps Migration → `--sop fleet-migrate`
 

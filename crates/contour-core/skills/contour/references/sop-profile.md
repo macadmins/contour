@@ -378,9 +378,14 @@ contour profile command generate RestartDevice --uuid --json
 
 ```
 contour profile enrollment list --platform macOS --json
-contour profile enrollment generate --platform macOS --skip-all -o enrollment.dep.json
+contour profile enrollment generate --platform macOS --skip "Siri,TOS,Diagnostics,Privacy" -o enrollment.dep.json
+contour profile enrollment generate --platform macOS --skip-list skip-list.toml -o enrollment.dep.json
 contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
 ```
+
+`--skip-all` is intentionally rejected by the NEVER_SKIP guardrail
+(includes `FileVault` / `SoftwareUpdate`). Pick one of the three modes
+above. See `--sop enrollment` for the full procedural workflow.
 
 ---
 
