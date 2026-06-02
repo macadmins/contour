@@ -12,7 +12,7 @@ CLI for control, AI for intent. Ship consistent, declarative Apple configuration
 
 **Contour brings order to Apple device configuration.**
 
-Got profiles already? Drop them in. Contour normalizes, validates, signs, and diffs them in bulk and in parallel. The output is clean and deterministic: drops into any GitOps repo, works with any MDM.
+Got profiles already? Drop them in. Contour normalizes, validates, unsigns, and diffs them in bulk and in parallel. The output is clean and deterministic: drops into any GitOps repo, works with any MDM.
 
 Building new ones? Contour generates `.mobileconfig` profiles and Declarative Device Management (DDM) JSON declarations for every Apple platform: macOS, iOS, iPadOS, tvOS, watchOS, and visionOS.
 
