@@ -779,6 +779,9 @@ fn run(cli: Cli) -> Result<()> {
                     output_mode,
                 )?;
             }
+            DdmAction::Search { query, schema_path } => {
+                cli::ddm::handle_ddm_search(&query, schema_path.as_deref(), output_mode)?;
+            }
             DdmAction::List {
                 category,
                 schema_path,
@@ -796,12 +799,14 @@ fn run(cli: Cli) -> Result<()> {
                 name,
                 output,
                 full,
+                org,
                 schema_path,
             } => {
                 cli::ddm::handle_ddm_generate(
                     &name,
                     output.as_deref(),
                     full,
+                    org.as_deref(),
                     schema_path.as_deref(),
                     config.as_ref(),
                     output_mode,

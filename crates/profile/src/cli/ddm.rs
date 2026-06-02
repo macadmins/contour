@@ -420,6 +420,62 @@ pub fn handle_ddm_validate(
 }
 
 /// List available DDM declaration types from embedded schema
+/// Substring search across DDM declaration types. Mirrors `profile search`
+/// but scoped to `ddm-*` categories so callers don't have to filter
+/// `ddm list | grep` themselves.
+pub fn handle_ddm_search(
+    query: &str,
+    schema_path: Option<&str>,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let registry = load_registry(schema_path)?;
+    let mut results: Vec<_> = registry
+        .search(query)
+        .into_iter()
+        .filter(|m| m.category.starts_with("ddm-"))
+        .collect();
+    results.sort_by(|a, b| a.payload_type.cmp(&b.payload_type));
+
+    if output_mode == OutputMode::Json {
+        let list: Vec<_> = results
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "type": m.payload_type,
+                    "title": m.title,
+                    "category": m.category.strip_prefix("ddm-").unwrap_or(&m.category),
+                    "platforms": m.platforms.to_vec(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&list)?);
+        return Ok(());
+    }
+
+    if results.is_empty() {
+        println!("No DDM declaration types match '{query}'.");
+        return Ok(());
+    }
+
+    println!(
+        "{} DDM declaration type(s) match '{}':\n",
+        results.len().to_string().bold(),
+        query.bold()
+    );
+    for m in &results {
+        let cat = m.category.strip_prefix("ddm-").unwrap_or(&m.category);
+        let platforms = m.platforms.to_vec().join(", ");
+        println!(
+            "  • {} — {} [{}] ({})",
+            m.payload_type.cyan().bold(),
+            m.title,
+            cat.magenta(),
+            platforms
+        );
+    }
+    Ok(())
+}
+
 pub fn handle_ddm_list(
     category: Option<&str>,
     schema_path: Option<&str>,
@@ -708,6 +764,7 @@ pub fn handle_ddm_generate(
     name: &str,
     output: Option<&str>,
     full: bool,
+    org: Option<&str>,
     schema_path: Option<&str>,
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
@@ -756,7 +813,7 @@ pub fn handle_ddm_generate(
         .split('.')
         .next_back()
         .unwrap_or("declaration");
-    let domain = resolve_ddm_org_domain(None, config).ok_or_else(|| {
+    let domain = resolve_ddm_org_domain(org, config).ok_or_else(|| {
         anyhow::anyhow!(
             "organization domain is required for DDM generation\n\
              Set it via:\n  \

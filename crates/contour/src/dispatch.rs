@@ -908,6 +908,9 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output_mode,
                 )?;
             }
+            DdmAction::Search { query, schema_path } => {
+                profile::cli::ddm::handle_ddm_search(&query, schema_path.as_deref(), output_mode)?;
+            }
             DdmAction::List {
                 category,
                 schema_path,
@@ -925,12 +928,14 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 name,
                 output,
                 full,
+                org,
                 schema_path,
             } => {
                 profile::cli::ddm::handle_ddm_generate(
                     &name,
                     output.as_deref(),
                     full,
+                    org.as_deref(),
                     schema_path.as_deref(),
                     config.as_ref(),
                     output_mode,

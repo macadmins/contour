@@ -1006,6 +1006,21 @@ pub enum DdmAction {
         no_parallel: bool,
     },
 
+    #[command(
+        about = "Search DDM declaration types by keyword (substring match across name, title, description, field names)"
+    )]
+    Search {
+        #[arg(help = "Search query (case-insensitive substring)")]
+        query: String,
+
+        #[arg(
+            short = 'p',
+            long,
+            help = "Path to external Apple device-management repo"
+        )]
+        schema_path: Option<String>,
+    },
+
     #[command(about = "List available DDM declaration types (42 embedded)")]
     List {
         #[arg(
@@ -1046,6 +1061,12 @@ pub enum DdmAction {
 
         #[arg(long, help = "Include all fields (not just required)")]
         full: bool,
+
+        #[arg(
+            long,
+            help = "Organization reverse domain (e.g., com.acme). Overrides profile.toml / .contour/config.toml / CONTOUR_ORG"
+        )]
+        org: Option<String>,
 
         #[arg(
             short = 'p',
