@@ -2,9 +2,15 @@
 
 > **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-`contour pppc` generates TCC (Transparency, Consent, and Control) mobileconfig profiles from app bundles. It scans applications for code signing requirements, produces a human-editable `pppc.toml` policy file, and generates `.mobileconfig` profiles ready for MDM deployment via Fleet, Jamf Pro, or any MDM that supports custom configuration profiles.
+`contour pppc` pre-approves Privacy Preferences (TCC) for managed apps.
 
-Aimed at Mac admins who need to pre-approve Privacy Preferences (Full Disk Access, Screen Capture, Accessibility, etc.) for managed applications.
+Point it at an app bundle and contour reads the code-signing requirements straight from the binary. The output is a human-editable `pppc.toml` policy file you review in a PR, then a `.mobileconfig` profile ready for Fleet, Jamf Pro, Workspace ONE, or any MDM that takes custom configuration profiles.
+
+**What you get:** signed, schema-valid TCC profiles for the apps you actually run.
+
+- **Bundle-derived signing requirements.** No hand-copying CSREQs into XML. contour extracts them from the binary so the profile matches the app you're approving, not a stale copy from somewhere else.
+- **An editable intermediate file.** `pppc.toml` is the source of truth. Tune which services each app needs (Full Disk Access, Screen Capture, Accessibility, Camera, Microphone, …), then regenerate. Diffs cleanly in a PR.
+- **MDM-portable output.** One `.mobileconfig` per policy, identifiers under your org, deterministic UUIDs. Switch to `--format plist` for Workspace ONE Custom Settings.
 
 ## Quick Start
 

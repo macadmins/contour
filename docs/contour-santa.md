@@ -2,9 +2,15 @@
 
 > **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-`contour santa` manages [Santa](https://northpole.dev/) rules and generates `.mobileconfig` profiles for MDM deployment. It handles rule ingestion from multiple sources (Fleet CSV exports, `santactl`, osquery, Installomator, existing mobileconfigs), rule management (add, remove, filter, merge, snip), profile generation in multiple formats (mobileconfig, plist, WS1), and prerequisite profile generation.
+`contour santa` builds and ships Santa rules through your MDM.
 
-Aimed at Mac admins deploying Santa for binary authorization — building allowlists, managing rules across environments, and generating MDM-ready profiles.
+Pull rules from wherever they live: a Fleet CSV export, `santactl` output, osquery, Installomator labels, or an existing `.mobileconfig`. Add, remove, filter, merge, or snip them. Render the final profile in whatever flavor your MDM accepts: `.mobileconfig`, raw plist, Workspace ONE. The prerequisite profiles Santa needs to run (system extension, TCC) come from the same workflow.
+
+**What you get:** a curated, schema-valid Santa allowlist tied to your org, ready to deploy.
+
+- **Rules from many sources, one canonical format.** A Fleet exported report CSV, a `santactl` dump, an osquery export, and a vendor mobileconfig all land as the same internal rule shape. Filter, dedup, and merge them with one toolset.
+- **MDM-portable output.** Identifiers under your `--org`, deterministic UUIDs, optionally signed with your Developer ID. Emit `.mobileconfig` for Jamf/Fleet, raw plist for Workspace ONE.
+- **Ring editions and baselines.** Stage rollouts by ring (canary → pilot → production), merge a curated `baseline.toml` on top, and let deny-wins resolution catch policy conflicts at build time so a `BLOCKLIST` cannot be silently un-blocked.
 
 ## Quick Start
 
@@ -261,7 +267,7 @@ contour santa allow [flags]
 |------|-------------|---------|
 | `-i, --input <FILE>` | Input CSV file | **required** |
 | `-o, --output <FILE>` | Output file path | auto-generated |
-| `--rule-type <TYPE>` | Rule type: `team-id` or `signing-id` | `signing-id` |
+| `--rule-type <TYPE>` | Rule type: `team-id`, `signing-id`, `cdhash`, or `auto` (per-row best fit) | `team-id` |
 | `--org <ORG>` | Organization identifier prefix | `com.example` |
 | `--name <NAME>` | Profile display name | auto-generated |
 | `--no-deterministic-uuids` | Disable deterministic UUIDs | `false` (deterministic by default) |
@@ -270,7 +276,30 @@ contour santa allow [flags]
 ```bash
 contour santa allow --input apps.csv --org com.acme
 contour santa allow --input fleet-export.csv --rule-type team-id -o vendor-allowlist.mobileconfig
+
+# Most specific: one rule per CDHash (requires a `cdhash` column in the CSV)
+contour santa allow --input fleet-export.csv --rule-type cdhash -o binary-pin.mobileconfig
+
+# Per-row best fit: signing-id when derivable (column present, or team+bundle composable), team-id fallback
+contour santa allow --input fleet-export.csv --rule-type auto -o santa.mobileconfig
 ```
+
+**Building the CSV from osquery.** The canonical pattern joins `apps` ⋈
+`signature` to expose `team_identifier`, a precomputed `signing_id`
+(`TEAMID:bundle_id`), and `cdhash` columns in one query. See the worked example
+in [contour-osquery.md](contour-osquery.md#worked-example-building-a-santa-allowlist-from-osquery-output).
+
+| CSV column          | Read into       | Drives          |
+|---------------------|-----------------|-----------------|
+| `team_identifier`   | `app.team_id`   | `--rule-type team-id`, `auto` fallback |
+| `signing_id`        | `app.signing_id`| `--rule-type signing-id`, `auto` |
+| `cdhash`            | `app.cdhash`    | `--rule-type cdhash` |
+| `bundle_identifier` | `app.bundle_id` | `auto` synthesis when `signing_id` is missing |
+
+> **Mind the spelling.** contour's parser looks for `signing_id` /
+> `signingid` / `signing_identifier`. The common osquery-side typo
+> `signning_id` (double-n) is **not** recognized; with it, `--rule-type
+> signing-id` produces zero rules silently.
 
 #### `santa config`
 

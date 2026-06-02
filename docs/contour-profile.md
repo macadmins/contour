@@ -325,6 +325,20 @@ needing a `Configuration` wrapper is repaired on the fly with a warning,
 rather than being dropped. `--strict` turns those repairs back into hard
 rejections. The same tolerant parse path backs `profile library import`.
 
+##### Jamf Pro backup workflow (`--jamf`)
+
+`--jamf` makes `profile import` read the YAML tree produced by
+[`jamf-cli`](https://github.com/Jamf-Concepts/jamf-cli), Jamf Concepts'
+open-source companion CLI for Jamf Pro. contour walks the backup,
+unwraps each embedded `.mobileconfig`, runs the same tolerant parse as a
+regular import, normalizes to your org identity, and writes one
+`.mobileconfig` per profile under `-o`. `--strict`, `--dry-run`,
+`--no-validate`, and `--no-uuid` work the same way they do for a
+directory import.
+
+End-to-end recipe (backup → import → validate → sign):
+[Common Workflows → Onboarding from a Jamf Pro tenant](#onboarding-from-a-jamf-pro-tenant).
+
 #### `profile normalize`
 
 Standardize identifiers, display names, filenames, and optionally UUIDs across one or more profiles. The core command for ensuring consistency.
@@ -1073,6 +1087,26 @@ contour profile generate com.apple.mobiledevice.passwordpolicy --interactive --o
 contour profile generate com.apple.wifi.managed --format plist --full -o wifi-payload.plist
 ```
 
+##### Workspace ONE Custom Settings (`--format plist`)
+
+Workspace ONE's **Custom Settings** payload accepts the raw payload `<dict>` directly — without the surrounding `PayloadType: Configuration` / `PayloadContent` wrapper that a full `.mobileconfig` carries. `--format plist` emits exactly that shape: a valid `<plist><dict>…</dict></plist>` containing the payload's keys, suitable for pasting into the WS1 Custom XML field.
+
+```bash
+# Generate a raw payload dict for WS1 Custom Settings
+contour profile generate com.apple.wifi.managed --format plist --full --org com.acme -o wifi.plist
+
+# Works with recipes too — emits one .plist per [[profile]] in the recipe
+contour profile generate --recipe restrictions --format plist --org com.acme -o ws1-out/
+```
+
+What you get:
+
+- **A bare `<dict>` of payload keys.** No `PayloadType`, no `PayloadContent` array, no UUIDs to hand-edit — only the keys WS1 expects. Verify with `plutil -lint <file>.plist`.
+- **The same schema validation as `.mobileconfig` output.** contour refuses to write a `--format plist` file that doesn't match the embedded Apple schema, so an agent or a copy-paste cannot smuggle invented keys past WS1.
+- **A recipe-driven path.** Combine `--format plist` with `--recipe <name>` to render a vendor preset (Okta, CrowdStrike, etc.) into WS1-ready dicts. Recipes resolve secrets at generate time the same way they do for `.mobileconfig` output.
+
+Paste the resulting `.plist` content into a WS1 "Custom Settings" profile; WS1 wraps it server-side into a proper installable profile when it pushes to devices.
+
 ---
 
 ### Library & Recipes
@@ -1328,6 +1362,40 @@ contour profile validate ./profiles -r --strict
 contour profile sign ./profiles -r -i "Developer ID Application: Acme Corp"
 ```
 
+### Onboarding from a Jamf Pro tenant
+
+Pull every configuration profile out of a Jamf Pro instance using
+[`jamf-cli`](https://github.com/Jamf-Concepts/jamf-cli), then convert and
+normalize so everything lands as schema-valid `.mobileconfig` under
+your org identifier — ready for a GitOps repo or re-deployment via any MDM.
+
+```bash
+# 1. Back up the tenant. jamf-cli credentials are configured once
+#    (see its README); the output directory holds the full YAML tree.
+./jamf-cli pro backup --output ./jamf-backup
+
+# 2. Import every profile through contour with --jamf.
+#    Identifiers are rewritten under --org, PayloadOrganization is set
+#    from --name, UUIDs are regenerated, and each profile is validated
+#    against Apple's embedded schema.
+contour profile import ./jamf-backup --jamf -o ./profiles \
+    --org com.acme --name "Acme Corp" --all
+
+# 3. Validate against Apple's schema before committing. --strict promotes
+#    warnings to errors, so anything questionable surfaces in CI.
+contour profile validate ./profiles -r --strict
+
+# 4. (Optional) sign with your Developer ID for offline-verifiable distribution.
+contour profile sign ./profiles -r -i "Developer ID Application: Acme Corp"
+```
+
+`--strict` on the import step (step 2) refuses to silently repair
+defects in the Jamf export; pair it with `--dry-run` first if you want
+to preview the conversion before touching disk. To produce
+byte-stable diffs for a GitOps repo, add `contour profile uuid ./profiles
+-r -p --org com.acme` between step 3 and step 4 — predictable v5 UUIDs
+derived from `(org, identifier)` mean re-imports don't churn the diff.
+
 ### GitOps-ready profiles
 
 Initialize a project, normalize with predictable UUIDs for reproducible diffs, then commit:
@@ -1357,6 +1425,25 @@ contour profile payload extract all-in-one.mobileconfig --type com.apple.wifi.ma
 contour profile payload extract all-in-one.mobileconfig --type com.apple.security.pkcs12 -o cert.mobileconfig
 contour profile link wifi.mobileconfig cert.mobileconfig --merge -o corp-wifi-bundle.mobileconfig
 ```
+
+### Generate for Workspace ONE Custom Settings
+
+Render the raw payload `<dict>` WS1 expects, validated against the embedded Apple schema:
+
+```bash
+# Single payload, all fields populated
+contour profile generate com.apple.mobiledevice.passwordpolicy \
+    --format plist --full --org com.acme -o passcode.plist
+
+# Recipe → one .plist per [[profile]] entry, with secrets resolved
+contour profile generate --recipe restrictions \
+    --format plist --org com.acme -o ws1-restrictions/
+
+# Confirm the output is a valid plist before pasting
+plutil -lint passcode.plist
+```
+
+Paste the resulting `.plist` content into a WS1 Custom Settings payload field. The schema-validation pass and (optional) secret resolution work identically to `.mobileconfig` generation, so the same recipes serve Jamf, Fleet, and WS1 with no per-MDM divergence.
 
 ### Unsign, edit, re-sign
 

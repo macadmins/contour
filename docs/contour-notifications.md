@@ -2,9 +2,15 @@
 
 > **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-`contour notifications` generates notification settings mobileconfig profiles for macOS MDM deployment. It scans installed applications, produces a human-editable `notifications.toml` policy file, and generates `.mobileconfig` profiles that control per-app notification behavior (alerts, badges, sounds, lock screen, critical alerts).
+`contour notifications` controls per-app notification behavior fleet-wide.
 
-Aimed at Mac admins who need to manage notification settings across managed applications — suppressing noisy alerts, enabling critical notifications, or standardizing notification behavior fleet-wide.
+Scan installed applications, edit a `notifications.toml` to decide what each app may do (alerts, badges, sounds, lock screen, critical alerts), then render a `.mobileconfig` you can deploy through any MDM.
+
+**What you get:** sane notification defaults across the fleet, set once and applied consistently.
+
+- **Per-app, fleet-wide.** Suppress the noisy apps, allow critical ones, standardize everyone else.
+- **Editable intermediate.** `notifications.toml` is your audit trail. Review what changed in a PR before shipping.
+- **Schema-valid profile.** Identifiers under your org, deterministic UUIDs, ready for Fleet, Jamf, or any MDM that takes custom profiles.
 
 ## Quick Start
 

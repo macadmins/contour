@@ -2,9 +2,15 @@
 
 > **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-`contour mscp` transforms [macOS Security Compliance Project (mSCP)](https://github.com/usnistgov/macos_security) baselines into MDM-ready configurations for Fleet, Jamf Pro, and Munki. It handles generation, post-processing, deduplication, constraints, ODV customization, versioning, and GitOps repository management.
+`contour mscp` turns [macOS Security Compliance Project (mSCP)](https://github.com/usnistgov/macos_security) baselines into deployable configurations.
 
-Aimed at Mac admins deploying security compliance baselines across Apple platforms (macOS, iOS, visionOS).
+Generate from a baseline keyword. Apply your ODV customizations. Deduplicate across baselines. Track versions. Manage the GitOps repo. The transformer handles the chain end-to-end so you don't hand-edit YAML.
+
+**What you get:** a security baseline tied to your org, in the format your MDM expects.
+
+- **One source, for many MDMs.** The same baseline emits files for Fleet GitOps YAML, Jamf Pro configuration profiles, or Munki based from the same `mscp generate` run. All is MDM agnostic, for those admins who do prefer filebased and GitOps based modern automation.
+- **ODV-aware.** Your organizationally defined values land where mSCP expects them. The embedded schema query API allows to validate every rule, baseline, and constraint.
+- **GitOps-ready.** Deduplicated rules, stable identifiers, and clean diffs across baseline updates. Cross-baseline aggregation collapses redundant configurations so the repo stays scannable.
 
 ## Quick Start
 

@@ -2,9 +2,15 @@
 
 > **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-`contour btm` generates Service Management mobileconfig profiles and DDM declarations from macOS launch items. It scans LaunchDaemons, LaunchAgents, and app bundles for background tasks, produces a human-editable `btm.toml` policy file, and generates `.mobileconfig` or DDM JSON declarations ready for MDM deployment.
+`contour btm` pre-approves managed login items and background services for macOS 13+.
 
-Aimed at Mac admins who need to pre-approve managed login items and background tasks (macOS 13+ Service Management framework) for managed applications.
+Point it at `/Applications`, a single app bundle, or a directory of launch items. contour scans LaunchDaemons, LaunchAgents, and app bundles, writes a human-editable `btm.toml`, and renders the final `.mobileconfig` profile or DDM JSON declaration.
+
+**What you get:** Service Management policies that stop end-user prompts cold.
+
+- **One scan, every signal.** LaunchDaemons, LaunchAgents, and app-level helpers all enumerated together so nothing slips by.
+- **Profile or DDM.** Pick the delivery shape your MDM supports; the policy file is the same.
+- **Editable, reviewable.** `btm.toml` diffs cleanly in a PR before you ship.
 
 ## Quick Start
 

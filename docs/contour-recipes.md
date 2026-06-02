@@ -2,16 +2,17 @@
 
 > **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-A **recipe** turns a tested set of payload settings into a single, shareable
-TOML file that anyone can render into `.mobileconfig` profiles (and DDM
-declarations) with one command — no hand-editing XML, no copy-pasting UUIDs.
-A **preset** is the DDM-only sibling: a declarative-management intent bundle
-composed the same way. A **library** is a versioned directory of recipes and
-presets your team owns.
+A **recipe** is a small TOML file that captures one tested set of payload settings. Render it with a single command and you get a `.mobileconfig` profile (or a DDM declaration). No hand-editing XML, no copy-pasting UUIDs.
 
-Aimed at Mac admins who want to capture vendor onboarding (Okta, CrowdStrike,
-Entra, Santa…) or compliance baselines once and reproduce them reliably across
-orgs, fleets, and MDMs.
+A **preset** is the DDM-only sibling: a declarative-management intent bundle composed the same way.
+
+A **library** is a versioned directory of recipes and presets your team owns.
+
+**What you get:** vendor onboarding captured once, replayed forever.
+
+- **One TOML, many environments.** The same recipe renders for staging, production, every fleet, every MDM you support.
+- **Reproducible by design.** Re-run the recipe and the artifact is byte-identical. Secrets resolve from your vault at generate time and never enter the repo.
+- **Composable.** Mix vendor presets (Okta, CrowdStrike, Entra, Santa) with your in-house ones, layer ODV overrides, ship a library to teammates.
 
 ## Quick Start
 

@@ -2,16 +2,15 @@
 
 > **Status: Preview** — feature-complete for core workflows, APIs and flags may still change before 1.0.
 
-`contour support` generates configuration profiles for the Root3 Support
-App (`nl.root3.support`) — the customizable macOS menu-bar support app.
-It scans per-brand asset folders (logos, menu-bar icons), produces a
-human-editable `support.toml`, and generates `.mobileconfig` profiles
-that brand and configure the Support App for each of your organizations
-or sub-brands.
+`contour support` generates branded configuration profiles for the [Root3 Support App](https://github.com/root3nl/SupportApp) (`nl.root3.support`), the customizable macOS menu-bar support app.
 
-Aimed at Mac admins — especially MSPs and multi-brand organizations —
-who deploy the Root3 Support App and need consistent, per-brand
-configuration profiles.
+Drop your assets in per-brand folders (logos, menu-bar icons), edit a small `support.toml`, and contour writes one `.mobileconfig` per brand. Each one configures the Support App for that organization or sub-brand.
+
+**What you get:** consistent, per-brand Support App profiles for every tenant you manage.
+
+- **Asset-driven.** One folder per brand. contour finds the logos and icons automatically; no hand-coding paths.
+- **Reviewable intermediate.** `support.toml` shows exactly what each brand will look like before you ship.
+- **MSP-friendly.** Built for multi-brand organizations and MSPs that deploy the same app under many identities.
 
 ## Quick Start
 
