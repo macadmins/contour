@@ -98,6 +98,43 @@ contour mscp verify --output ./output
 Python toolchain `uv` [by astral](https://docs.astral.sh/uv/) as interpreter. Full pipeline in
 [contour-mscp.md](contour-mscp.md).
 
+## Why validation matters — schema, not vibes
+
+Apple's MDM/DDM schema is full of details that human-language intent
+doesn't survive. A few classes of surprise the schema captures and a
+plain text prompt does not:
+
+- **Legacy names freeze in place.** The key controlling biometric unlock
+  is still `allowFingerprintForUnlock` (and `allowFingerprintModification`),
+  even though it covers Touch ID, Face ID, and Optic ID. The 2013 naming
+  is preserved for API stability. An agent told to "require Touch ID"
+  could emit `TouchID = true` — a key that doesn't exist; Apple silently
+  ignores it on the device.
+- **Different concerns live in different payloads.** "Require 12+ char
+  passcode and biometric unlock" spans two payloads:
+  `com.apple.mobiledevice.passwordpolicy` for the complexity rules and
+  `com.apple.applicationaccess` (Restrictions) for the biometric controls.
+  There is no single "passcode" payload that does both.
+- **Version-gated keys.** Some keys only exist on certain OS versions —
+  introduced in 14.0, removed in 16.0, deprecated since 15.0. The schema
+  carries that metadata; contour filters availability when you pass
+  `--os-version`.
+- **Supervision and scope constraints.** Many restrictions only take
+  effect on supervised devices, or only in a `System`-scoped profile,
+  or only when the device is in a specific MDM enrolment state.
+
+Contour validates every field against the embedded Apple schema **before
+writing**. An unknown key like `TouchID = true` is rejected at generate
+time with a `SCHEMA_VIOLATION` error — not silently written into a
+profile that ships and produces no effect on devices.
+
+This matters most when an AI agent is driving. Without a schema check,
+the agent produces plausible-looking config that fails silently in
+production. With contour in the loop, the agent either uses a real key
+or gets a fast, typed error it can recover from on the next attempt —
+the failure surfaces at authoring time, not at MDM-push time, and not
+at the user's device.
+
 ## Learn interactively — `contour trainer`
 
 Prefer to be walked through it? `contour trainer` runs guided, step-by-step

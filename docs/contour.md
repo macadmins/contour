@@ -8,6 +8,45 @@ PPPC/TCC, mSCP baselines, Background Task Management, notifications, and
 more. Each toolkit is a subcommand with its own documentation; this page
 covers the umbrella binary and the standalone, non-toolkit commands.
 
+## Why contour
+
+Device config deserves the same rigor as the code you ship to production.
+Profiles, DDM declarations, Santa rules, osquery policies — some of this
+already runs in your device management solution, but the tooling around
+it has lived in GUIs and copy-paste for years. Drift happens over time.
+Typos slip through. And AI agents now generate config without validation.
+Contour adds a validation step you can apply when useful.
+
+- **How.** The Apple schema for MDM/profiles, declarative management, and
+  osquery is embedded in the binary. Processors and generators validate
+  against it before writing normalized config out. Identifiers and UUIDs
+  are handled deterministically for clean diffs.
+- **What.** One signed binary. Output is normalized to diff cleanly, work
+  consistently, and fail loud when something's wrong — whether you or an
+  agent wrote it.
+
+## AI agent integration
+
+Because validation is baked into every generator, contour is safe to hand
+to an AI agent. Install it as a skill for Claude Code (or have the agent
+call the CLI directly):
+
+```bash
+# Install as a Claude Code skill — agent receives Apple schema and SOP routing
+contour setup-agent
+
+# Or let the agent call the CLI directly — discoverable command index + usage
+contour help-ai
+contour help-ai --sop profile        # profile generation SOP
+contour help-ai --sop osquery        # osquery schema lookup + query patterns
+contour help-ai --sop fleet-migrate  # GitOps repo migration SOP
+```
+
+contour is a CLI, not an MCP tool — the agent invokes contour with a
+selector and receives exactly the schema fragment embedded in the binary.
+No large context window to collapse, no MCP orchestration, no web
+fetches — just the precise schema slice the agent requested.
+
 ## Toolkits
 
 Each toolkit has a dedicated guide:
