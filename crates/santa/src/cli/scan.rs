@@ -781,6 +781,66 @@ fn apps_to_rules(apps: &[ScannedApp], rule_type: ScanRuleType) -> RuleSet {
                 rules.add(rule);
             }
         }
+        ScanRuleType::Cdhash => {
+            // One rule per unique, valid CDHash (40 hex chars).
+            let mut seen_cdhashes: HashMap<String, &ScannedApp> = HashMap::new();
+            for app in apps {
+                if let Some(cdhash) = &app.cdhash {
+                    if crate::cel::is_valid_cdhash(cdhash) {
+                        seen_cdhashes.entry(cdhash.clone()).or_insert(app);
+                    }
+                }
+            }
+            let mut cdhashes: Vec<_> = seen_cdhashes.keys().cloned().collect();
+            cdhashes.sort();
+            for cdhash in cdhashes {
+                let app = seen_cdhashes[&cdhash];
+                let rule = Rule::new(RuleType::Cdhash, &cdhash, Policy::Allowlist)
+                    .with_description(&app.name);
+                rules.add(rule);
+            }
+        }
+        ScanRuleType::Auto => {
+            // Per-row: prefer SigningID when present, else synthesize from
+            // team_id + bundle_id, else fall back to TeamID-only.
+            let mut seen_signing: HashMap<String, &ScannedApp> = HashMap::new();
+            let mut seen_team: HashMap<String, &ScannedApp> = HashMap::new();
+            for app in apps {
+                let signing_id = app.signing_id.clone().or_else(|| {
+                    let team = app.team_id.as_deref()?;
+                    let bundle = app.bundle_id.as_deref()?;
+                    let candidate = format!("{team}:{bundle}");
+                    crate::cel::is_valid_signing_id(&candidate).then_some(candidate)
+                });
+                if let Some(sid) = signing_id {
+                    seen_signing.entry(sid).or_insert(app);
+                    continue;
+                }
+                if let Some(team_id) = &app.team_id {
+                    if crate::cel::is_valid_team_id(team_id) {
+                        seen_team.entry(team_id.clone()).or_insert(app);
+                    }
+                }
+            }
+
+            let mut signing_ids: Vec<_> = seen_signing.keys().cloned().collect();
+            signing_ids.sort();
+            for sid in signing_ids {
+                let app = seen_signing[&sid];
+                let rule = Rule::new(RuleType::SigningId, &sid, Policy::Allowlist)
+                    .with_description(&app.name);
+                rules.add(rule);
+            }
+
+            let mut team_ids: Vec<_> = seen_team.keys().cloned().collect();
+            team_ids.sort();
+            for tid in team_ids {
+                let app = seen_team[&tid];
+                let rule = Rule::new(RuleType::TeamId, &tid, Policy::Allowlist)
+                    .with_description(&app.name);
+                rules.add(rule);
+            }
+        }
     }
 
     rules

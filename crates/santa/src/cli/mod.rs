@@ -68,8 +68,18 @@ pub enum ScanRuleType {
     /// Generate TeamID rules (vendor-level, fewer rules)
     #[default]
     TeamId,
-    /// Generate SigningID rules (app-level, more specific)
+    /// Generate SigningID rules (app-level, more specific). Requires a
+    /// `signing_id` column in the input; rows without one produce no rule.
     SigningId,
+    /// Generate CDHash rules (binary-level, most specific). Requires a
+    /// `cdhash` column (40 hex characters); rows without a valid hash
+    /// produce no rule. One rule per exact binary version.
+    Cdhash,
+    /// Pick the best rule per row: SigningID when the column is present, or
+    /// when `team_identifier` + `bundle_identifier` can be composed into one
+    /// (`TEAMID:bundle_id`); otherwise fall back to a TeamID rule. Recommended
+    /// for Fleet CSVs built from osquery's `apps` ⋈ `signature` join.
+    Auto,
 }
 
 #[derive(Parser)]

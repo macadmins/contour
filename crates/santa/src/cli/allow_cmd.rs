@@ -45,6 +45,8 @@ pub fn run(
             match rule_type {
                 ScanRuleType::TeamId => "team-id (vendor-level)",
                 ScanRuleType::SigningId => "signing-id (app-level)",
+                ScanRuleType::Cdhash => "cdhash (binary-level, most specific)",
+                ScanRuleType::Auto => "auto (signing-id when derivable, team-id fallback)",
             },
         );
         print_kv(
@@ -165,6 +167,77 @@ fn records_to_rules(apps: &crate::cel::AppRecordSet, rule_type: ScanRuleType) ->
                 let desc = &seen[&signing_id];
                 let rule = Rule::new(RuleType::SigningId, &signing_id, Policy::Allowlist)
                     .with_description(desc);
+                rules.add(rule);
+            }
+        }
+        ScanRuleType::Cdhash => {
+            // One rule per unique, valid 40-char CDHash. Most specific
+            // identifier — tied to exactly one binary version.
+            let mut seen: HashMap<String, String> = HashMap::new();
+            for app in apps.apps() {
+                if let Some(cdhash) = &app.cdhash {
+                    if crate::cel::is_valid_cdhash(cdhash) {
+                        seen.entry(cdhash.clone()).or_insert_with(|| {
+                            app.app_name.clone().unwrap_or_else(|| cdhash.clone())
+                        });
+                    }
+                }
+            }
+
+            let mut cdhashes: Vec<_> = seen.keys().cloned().collect();
+            cdhashes.sort();
+
+            for cdhash in cdhashes {
+                let desc = &seen[&cdhash];
+                let rule =
+                    Rule::new(RuleType::Cdhash, &cdhash, Policy::Allowlist).with_description(desc);
+                rules.add(rule);
+            }
+        }
+        ScanRuleType::Auto => {
+            // Per-row decision. Prefer SigningID when the column is present,
+            // or when team_identifier + bundle_identifier compose into a valid
+            // one. Fall back to TeamID-only when there's no bundle context.
+            // Each (rule_type, identifier) dedupes naturally via the map keys.
+            let mut seen_signing: HashMap<String, String> = HashMap::new();
+            let mut seen_team: HashMap<String, String> = HashMap::new();
+            for app in apps.apps() {
+                let signing_id = app.signing_id.clone().or_else(|| {
+                    let team = app.team_id.as_deref()?;
+                    let bundle = app.bundle_id.as_deref()?;
+                    let candidate = format!("{team}:{bundle}");
+                    crate::cel::is_valid_signing_id(&candidate).then_some(candidate)
+                });
+                if let Some(sid) = signing_id {
+                    seen_signing
+                        .entry(sid)
+                        .or_insert_with(|| app.app_name.clone().unwrap_or_default());
+                    continue;
+                }
+                if let Some(team_id) = &app.team_id {
+                    if crate::cel::is_valid_team_id(team_id) {
+                        seen_team.entry(team_id.clone()).or_insert_with(|| {
+                            app.app_name.clone().unwrap_or_else(|| team_id.clone())
+                        });
+                    }
+                }
+            }
+
+            let mut signing_ids: Vec<_> = seen_signing.keys().cloned().collect();
+            signing_ids.sort();
+            for sid in signing_ids {
+                let desc = &seen_signing[&sid];
+                let rule =
+                    Rule::new(RuleType::SigningId, &sid, Policy::Allowlist).with_description(desc);
+                rules.add(rule);
+            }
+
+            let mut team_ids: Vec<_> = seen_team.keys().cloned().collect();
+            team_ids.sort();
+            for tid in team_ids {
+                let desc = &seen_team[&tid];
+                let rule =
+                    Rule::new(RuleType::TeamId, &tid, Policy::Allowlist).with_description(desc);
                 rules.add(rule);
             }
         }

@@ -28,6 +28,11 @@ pub struct AppRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
 
+    /// Code Directory Hash (40 hex chars). Most specific Santa identifier;
+    /// tied to one exact binary version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cdhash: Option<String>,
+
     /// Application version string
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -84,6 +89,13 @@ impl AppRecord {
     #[must_use]
     pub fn with_sha256(mut self, hash: impl Into<String>) -> Self {
         self.sha256 = Some(hash.into());
+        self
+    }
+
+    /// Builder: set Code Directory Hash.
+    #[must_use]
+    pub fn with_cdhash(mut self, hash: impl Into<String>) -> Self {
+        self.cdhash = Some(hash.into());
         self
     }
 
@@ -230,6 +242,7 @@ impl AppRecord {
             signing_id: get(&["signing_id", "signingid"]),
             team_id: get(&["team_id", "team_identifier", "teamid", "developer_id"]),
             sha256: get(&["sha256", "hash"]),
+            cdhash: get(&["cdhash", "code_directory_hash"]),
             version: get(&["version", "software_version"]),
             bundle_id: get(&["bundle_identifier", "bundle_id", "bundleid"]),
             vendor: get(&["vendor", "publisher", "developer", "authority"]),
@@ -262,6 +275,11 @@ pub fn is_valid_signing_id(s: &str) -> bool {
 /// Check if a string is a valid SHA-256 hash (64 hex characters).
 pub fn is_valid_sha256(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Check if a string is a valid Code Directory Hash (40 hex characters).
+pub fn is_valid_cdhash(s: &str) -> bool {
+    s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// A collection of app records with deduplication support.

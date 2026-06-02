@@ -958,6 +958,14 @@ pub enum PayloadAction {
 
         #[arg(short, long, help = "Output file path")]
         output: Option<String>,
+
+        #[arg(
+            long,
+            value_parser = ["mobileconfig", "plist"],
+            default_value = "mobileconfig",
+            help = "Output format: mobileconfig (default, full profile) or plist (raw payload dict for WS1 Custom Settings — requires exactly one --type)"
+        )]
+        format: String,
     },
 }
 

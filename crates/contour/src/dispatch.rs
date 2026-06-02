@@ -736,11 +736,13 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 file,
                 r#type,
                 output,
+                format,
             } => {
                 profile::cli::payload::handle_payload_extract(
                     &file,
                     &r#type,
                     output.as_deref(),
+                    &format,
                     output_mode,
                 )?;
             }

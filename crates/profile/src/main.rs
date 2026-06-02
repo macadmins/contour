@@ -619,11 +619,13 @@ fn run(cli: Cli) -> Result<()> {
                 file,
                 r#type,
                 output,
+                format,
             } => {
                 cli::payload::handle_payload_extract(
                     &file,
                     &r#type,
                     output.as_deref(),
+                    &format,
                     output_mode,
                 )?;
             }

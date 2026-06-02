@@ -8,7 +8,9 @@ mod context;
 pub mod dryrun;
 pub mod validate;
 
-pub use context::{AppRecord, AppRecordSet, is_valid_signing_id, is_valid_team_id};
+pub use context::{
+    AppRecord, AppRecordSet, is_valid_cdhash, is_valid_signing_id, is_valid_team_id,
+};
 
 use crate::bundle::Bundle;
 use anyhow::{Context, Result};

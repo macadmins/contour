@@ -166,6 +166,7 @@ pub fn handle_payload_extract(
     file: &str,
     types: &[String],
     output: Option<&str>,
+    format: &str,
     output_mode: OutputMode,
 ) -> Result<()> {
     let profile = parse_profile_auto_unsign(file)?;
@@ -190,6 +191,63 @@ pub fn handle_payload_extract(
             "No payloads found matching types: {}",
             resolved_types.join(", ")
         );
+    }
+
+    // --format plist: emit just the inner payload dictionary (no profile envelope).
+    // Targets Workspace ONE "Custom Settings", which accepts the raw payload dict
+    // and wraps it server-side. Requires exactly one matching payload so the
+    // single emitted dict has unambiguous semantics.
+    if format == "plist" {
+        if extracted.len() > 1 {
+            anyhow::bail!(
+                "--format plist requires exactly one matching payload (found {}). \
+                 Narrow with a single --type, or extract per type separately.",
+                extracted.len()
+            );
+        }
+        let payload = &extracted[0];
+        // WS1 Custom Settings wants the bare payload-specific keys only.
+        // Strip any `Payload*` administrative keys (PayloadDisplayName,
+        // PayloadEnabled, etc.) that WS1 supplies via its own profile wrapper.
+        let dict: plist::Dictionary = payload
+            .content
+            .iter()
+            .filter(|(k, _)| !k.starts_with("Payload"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let output_path = output
+            .map(std::string::ToString::to_string)
+            .unwrap_or_else(|| {
+                let path = Path::new(file);
+                let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+                format!("{stem}_extract.plist")
+            });
+
+        let mut buf = Vec::new();
+        plist::to_writer_xml(&mut buf, &plist::Value::Dictionary(dict))?;
+        std::fs::write(&output_path, &buf)
+            .with_context(|| format!("Failed to write to {output_path}"))?;
+
+        if output_mode == OutputMode::Json {
+            let result = serde_json::json!({
+                "success": true,
+                "extracted_count": 1,
+                "types": [payload.payload_type.clone()],
+                "format": "plist",
+                "output": output_path,
+            });
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        } else {
+            println!(
+                "{} Extracted {} as raw plist to {}",
+                "✓".green(),
+                payload.payload_type.green(),
+                output_path
+            );
+            println!("\nRaw plist for WS1 Custom Settings — paste into Custom XML payload.");
+        }
+        return Ok(());
     }
 
     // Build additional fields
