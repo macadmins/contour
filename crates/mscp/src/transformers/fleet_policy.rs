@@ -25,7 +25,6 @@ pub struct FleetPolicy {
 /// Generator that converts mSCP mobileconfig rules into Fleet policy YAML
 #[derive(Debug)]
 pub struct FleetPolicyGenerator {
-    #[expect(dead_code, reason = "Reserved for future use in diagnostic output")]
     baseline_name: String,
 }
 
@@ -34,6 +33,17 @@ impl FleetPolicyGenerator {
         Self {
             baseline_name: baseline_name.to_string(),
         }
+    }
+
+    /// The `managed_policies` osquery SQL for a single rule, if it is a scalar
+    /// `mobileconfig` rule (otherwise `None`).
+    ///
+    /// Thin wrapper over [`Self::generate_policy_for_rule`] used by the mSCP →
+    /// osquery bridge so it reuses this generator instead of duplicating the SQL
+    /// builder. The generated SQL does not depend on the baseline name.
+    pub fn managed_policies_query(&self, rule: &MscpRule) -> Option<String> {
+        self.generate_policy_for_rule(rule, &self.baseline_name, None)
+            .map(|p| p.query)
     }
 
     /// Generate Fleet policies for all eligible rules in a baseline.

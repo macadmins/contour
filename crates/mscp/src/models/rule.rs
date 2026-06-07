@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Represents an mSCP rule YAML file
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MscpRule {
     /// Rule identifier (e.g., "`audit_acls_files_configure`")
     pub id: String,

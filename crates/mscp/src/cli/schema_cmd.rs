@@ -526,6 +526,19 @@ pub fn handle_schema_rule(rule_id: &str, mode: OutputMode) -> Result<()> {
         }
         OutputMode::Json => {
             let r = &detail.rule;
+            // Classify osquery coverage with the *same* bridge classifier that
+            // emits packs/policies: reconstruct the rule from its embedded payload
+            // (check + mobileconfig_info) and run the full `classify()`, rather
+            // than the coarse schema-only heuristic or the stored columns (which
+            // carry posture's own taxonomy, not contour's routing).
+            let rule_for_classify = crate::extractors::embedded::rule_for_classification(
+                &r.rule_id,
+                r.mobileconfig,
+                detail.payload.as_ref(),
+            );
+            let classification = crate::osquery::classify::classify(&rule_for_classify);
+            let (osquery_checkable, osquery_table) =
+                classification.osquery_coverage(rule_for_classify.check.is_some());
             let mut rule_json = serde_json::json!({
                 "rule_id": r.rule_id,
                 "title": r.title,
@@ -541,18 +554,24 @@ pub fn handle_schema_rule(rule_id: &str, mode: OutputMode) -> Result<()> {
                 "content_hash": r.content_hash,
                 "has_result": r.has_result,
                 "check_mechanism": r.check_mechanism,
-                "osquery_checkable": r.osquery_checkable,
-                "osquery_table": r.osquery_table,
+                "osquery_checkable": osquery_checkable,
+                "osquery_table": osquery_table,
+                "osquery_reason": classification.reason,
                 "baseline_count": r.baseline_count,
                 "control_count": r.control_count,
                 "weight": r.weight,
                 "odv_default": r.odv_default,
+                "introduced": r.introduced,
                 "distro": r.distro,
             });
 
             let payload_json = if let Some(ref p) = detail.payload {
                 serde_json::json!({
                     "rule_id": p.rule_id,
+                    "platform": p.platform,
+                    "os_version": p.os_version,
+                    "check_source": p.check_source,
+                    "default_check_script": p.default_check_script,
                     "check_script": p.check_script,
                     "fix_script": p.fix_script,
                     "expected_result": p.expected_result,

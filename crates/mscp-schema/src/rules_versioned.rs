@@ -41,6 +41,7 @@ pub fn schema() -> Schema {
         Field::new("control_count", DataType::Int32, false),
         Field::new("weight", DataType::Float64, false),
         Field::new("odv_default", DataType::Utf8, true),
+        Field::new("introduced", DataType::Utf8, true),
         Field::new("distro", DataType::Utf8, true),
     ])
 }
@@ -77,6 +78,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<RuleVersioned>> {
             col(&batch, "control_count")?.as_primitive::<arrow::datatypes::Int32Type>();
         let weights = col(&batch, "weight")?.as_primitive::<arrow::datatypes::Float64Type>();
         let odv_defaults = col(&batch, "odv_default")?.as_string::<i32>();
+        let introduceds = col(&batch, "introduced")?.as_string::<i32>();
         let distros = col(&batch, "distro")?.as_string::<i32>();
 
         for row in 0..batch.num_rows() {
@@ -131,6 +133,11 @@ pub fn read(bytes: &[u8]) -> Result<Vec<RuleVersioned>> {
                     None
                 } else {
                     Some(odv_defaults.value(row).to_string())
+                },
+                introduced: if introduceds.is_null(row) {
+                    None
+                } else {
+                    Some(introduceds.value(row).to_string())
                 },
                 distro: if distros.is_null(row) {
                     None

@@ -129,20 +129,55 @@ impl RuleExtractor {
         }
     }
 
-    /// Extract rules for a specific baseline (filtered by `tags` membership
-    /// after normalization).
+    /// Extract rules for a specific baseline.
+    ///
+    /// Membership comes from the baseline file's own explicit `profile[].rules[]`
+    /// id list — the authoritative source that every 1.x baseline declares. This
+    /// is robust where the filename differs from the rule tag (e.g. `DISA-STIG`
+    /// selects rules tagged `stig`). When no baseline file lists rules (a 2.0
+    /// derived baseline), it falls back to `tags` membership.
     pub fn extract_rules_for_baseline(&self, baseline_name: &str) -> Result<Vec<MscpRule>> {
         let all_rules = self.extract_all_rules()?;
-        let filtered: Vec<MscpRule> = all_rules
-            .into_iter()
-            .filter(|r| r.is_in_baseline(baseline_name))
-            .collect();
+        let filtered: Vec<MscpRule> = match self.baseline_rule_ids(baseline_name) {
+            Some(ids) => {
+                let id_set: std::collections::HashSet<&str> =
+                    ids.iter().map(String::as_str).collect();
+                all_rules
+                    .into_iter()
+                    .filter(|r| id_set.contains(r.id.as_str()))
+                    .collect()
+            }
+            None => all_rules
+                .into_iter()
+                .filter(|r| r.is_in_baseline(baseline_name))
+                .collect(),
+        };
         tracing::info!(
             "Found {} rules for baseline '{}'",
             filtered.len(),
             baseline_name
         );
         Ok(filtered)
+    }
+
+    /// The explicit rule-id membership list a baseline file declares under
+    /// `profile[].rules[]`, flattened across sections in document order.
+    ///
+    /// Returns `None` when no baseline file exists or it lists no rules, so the
+    /// caller can fall back to tag-based membership.
+    fn baseline_rule_ids(&self, baseline_name: &str) -> Option<Vec<String>> {
+        let layout = self.layout().ok()?;
+        let path = layout
+            .baselines_dir(&self.mscp_repo_path)
+            .join(format!("{baseline_name}.yaml"));
+        let text = fs::read_to_string(&path).ok()?;
+        let parsed: BaselineMembership = yaml_serde::from_str(&text).ok()?;
+        let ids: Vec<String> = parsed
+            .profile
+            .into_iter()
+            .flat_map(|section| section.rules)
+            .collect();
+        (!ids.is_empty()).then_some(ids)
     }
 
     fn extract_v1x(&self) -> Result<Vec<MscpRule>> {
@@ -213,6 +248,20 @@ impl RuleExtractor {
         let rules = self.extract_rules_for_baseline(baseline_name)?;
         Ok(RuleStats::from_rules(&rules))
     }
+}
+
+/// Minimal view of a 1.x baseline file: just the rule-id membership under
+/// `profile[].rules[]`. All other baseline fields are ignored.
+#[derive(serde::Deserialize)]
+struct BaselineMembership {
+    #[serde(default)]
+    profile: Vec<BaselineSection>,
+}
+
+#[derive(serde::Deserialize)]
+struct BaselineSection {
+    #[serde(default)]
+    rules: Vec<String>,
 }
 
 fn parse_v1x_rule<P: AsRef<Path>>(path: P) -> Result<MscpRule> {
@@ -312,6 +361,32 @@ mod tests {
         let extractor = RuleExtractor::new("./macos_security");
         let rules = extractor.extract_rules_for_baseline("cis_lvl1").unwrap();
         assert!(!rules.is_empty());
+    }
+
+    /// A baseline file's explicit `profile[].rules[]` list is the authoritative
+    /// membership source — flatten every section's rules in document order.
+    #[test]
+    fn baseline_rule_ids_reads_explicit_profile_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bdir = tmp.path().join("baselines");
+        std::fs::create_dir_all(&bdir).unwrap();
+        std::fs::write(
+            bdir.join("Test-STIG.yaml"),
+            "parent_values: \"stig\"\nprofile:\n  - section: auditing\n    rules:\n      - audit_one\n      - audit_two\n  - section: system\n    rules:\n      - sys_three\n",
+        )
+        .unwrap();
+        let ex = RuleExtractor::new(tmp.path()).with_layout(MscpLayout::V1x);
+        let ids = ex.baseline_rule_ids("Test-STIG").expect("ids");
+        assert_eq!(ids, vec!["audit_one", "audit_two", "sys_three"]);
+    }
+
+    /// No baseline file (or a 2.0 derived baseline) → `None`, so the caller
+    /// falls back to tag membership.
+    #[test]
+    fn baseline_rule_ids_none_when_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ex = RuleExtractor::new(tmp.path()).with_layout(MscpLayout::V1x);
+        assert!(ex.baseline_rule_ids("Nope").is_none());
     }
 
     /// Live: extract from dev_2.0 tree and confirm V2x path runs.

@@ -18,6 +18,10 @@ fn col<'a>(
 pub fn schema() -> Schema {
     Schema::new(vec![
         Field::new("rule_id", DataType::Utf8, false),
+        Field::new("platform", DataType::Utf8, false),
+        Field::new("os_version", DataType::Utf8, false),
+        Field::new("check_source", DataType::Utf8, true),
+        Field::new("default_check_script", DataType::Utf8, true),
         Field::new("check_script", DataType::Utf8, true),
         Field::new("fix_script", DataType::Utf8, true),
         Field::new("expected_result", DataType::Utf8, true),
@@ -44,6 +48,10 @@ pub fn read(bytes: &[u8]) -> Result<Vec<RulePayload>> {
     for batch in reader {
         let batch = batch.context("reading record batch")?;
         let rule_ids = col(&batch, "rule_id")?.as_string::<i32>();
+        let platforms = col(&batch, "platform")?.as_string::<i32>();
+        let os_versions = col(&batch, "os_version")?.as_string::<i32>();
+        let check_sources = col(&batch, "check_source")?.as_string::<i32>();
+        let default_check_scripts = col(&batch, "default_check_script")?.as_string::<i32>();
         let check_scripts = col(&batch, "check_script")?.as_string::<i32>();
         let fix_scripts = col(&batch, "fix_script")?.as_string::<i32>();
         let expected_results = col(&batch, "expected_result")?.as_string::<i32>();
@@ -60,6 +68,18 @@ pub fn read(bytes: &[u8]) -> Result<Vec<RulePayload>> {
         for row in 0..batch.num_rows() {
             out.push(RulePayload {
                 rule_id: rule_ids.value(row).to_string(),
+                platform: platforms.value(row).to_string(),
+                os_version: os_versions.value(row).to_string(),
+                check_source: if check_sources.is_null(row) {
+                    None
+                } else {
+                    Some(check_sources.value(row).to_string())
+                },
+                default_check_script: if default_check_scripts.is_null(row) {
+                    None
+                } else {
+                    Some(default_check_scripts.value(row).to_string())
+                },
                 check_script: if check_scripts.is_null(row) {
                     None
                 } else {

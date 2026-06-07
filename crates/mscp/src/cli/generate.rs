@@ -201,6 +201,7 @@ pub fn generate_baseline(
     os: String,
     os_version: Option<String>,
     odv_path: Option<PathBuf>,
+    osquery: Option<crate::osquery::OsqueryGenOptions>,
 ) -> Result<()> {
     tracing::info!(
         "Starting generate workflow for baseline '{}'",
@@ -352,6 +353,7 @@ pub fn generate_baseline(
             fragment,
             output_structure,
             glob_config,
+            osquery,
         )?;
 
         // Count what was generated (recursive walk — files are in nested subdirs)
@@ -1420,6 +1422,7 @@ pub fn generate_all_baselines(
                     "macos".to_string(), // os
                     None, // os_version
                     None, // odv_path — generate-all auto-detects odv_<baseline>.yaml per baseline
+                    None, // osquery — not yet plumbed for generate-all
                 );
 
                 (i, baseline_name.clone(), result)
@@ -1478,6 +1481,7 @@ pub fn generate_all_baselines(
                 "macos".to_string(), // os
                 None,               // os_version
                 None,               // odv_path — auto-detects odv_<baseline>.yaml per baseline
+                None,               // osquery — not yet plumbed for generate-all
             ) {
                 Ok(()) => {
                     all_result.processed += 1;

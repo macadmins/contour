@@ -13,7 +13,6 @@
 
 use assert_cmd::Command;
 use serde_json::Value;
-use std::fs;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trap 19: `osquery search <unknown_keyword> --json` returns `[]` exit 0.
@@ -180,19 +179,20 @@ fn trap_22_osquery_table_returns_columns_under_table_object() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trap 23: `profile enrollment generate --skip-all` includes FileVault AND
-//          SoftwareUpdate in skip_setup_items. The procedural SOP's INVARIANT
-//          forbids these in production output, so any agent following the SOP
-//          MUST filter them out (or use --skip with an explicit list).
+// Trap 23: `profile enrollment generate --skip-all` is REFUSED by the NEVER_SKIP
+//          guardrail. --skip-all enumerates every skippable key, which includes
+//          FileVault and SoftwareUpdate; the CLI now enforces the invariant
+//          itself (see enrollment::NEVER_SKIP) and bails before writing rather
+//          than emitting an unsafe profile.
 //
 // SOP procedure: generate_enrollment_profile / NEVER_SKIP invariant
 //
-// Catches: regressions that quietly drop --skip-all's coverage of these
-// keys would change the trap shape silently. Also pins the FACT that the
-// CLI does not enforce the rule itself — agents must.
+// Catches: regressions that weaken the guardrail (letting FileVault/
+// SoftwareUpdate into skip_setup_items) or that stop surfacing why generation
+// was refused.
 // ─────────────────────────────────────────────────────────────────────────────
 #[test]
-fn trap_23_enrollment_skip_all_includes_filevault_and_softwareupdate() {
+fn trap_23_enrollment_skip_all_rejected_by_never_skip_guardrail() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("test.dep.json");
 
@@ -211,27 +211,31 @@ fn trap_23_enrollment_skip_all_includes_filevault_and_softwareupdate() {
         ])
         .output()
         .unwrap();
+
+    // --skip-all enumerates every skippable key, which includes the NEVER_SKIP
+    // keys (FileVault, SoftwareUpdate). The CLI enforces the guardrail itself, so
+    // generation MUST be refused rather than emitting an unsafe profile.
     assert!(
-        result.status.success(),
-        "enrollment generate --skip-all must succeed; stderr: {}",
-        String::from_utf8_lossy(&result.stderr)
+        !result.status.success(),
+        "enrollment generate --skip-all must be refused by the NEVER_SKIP guardrail; stdout: {} stderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
     );
 
-    let body = fs::read_to_string(&out).unwrap();
-    let parsed: Value = serde_json::from_str(&body).expect("dep profile is valid JSON");
-    let skip = parsed
-        .get("skip_setup_items")
-        .and_then(|v| v.as_array())
-        .expect("dep profile must have skip_setup_items array");
-
-    let names: Vec<&str> = skip.iter().filter_map(|v| v.as_str()).collect();
-    assert!(
-        names.contains(&"FileVault"),
-        "--skip-all MUST include FileVault (the SOP exists to filter this out)"
+    let msg = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
     );
     assert!(
-        names.contains(&"SoftwareUpdate"),
-        "--skip-all MUST include SoftwareUpdate (the SOP exists to filter this out)"
+        msg.contains("FileVault") && msg.contains("SoftwareUpdate") && msg.contains("NEVER_SKIP"),
+        "guardrail rejection must name FileVault, SoftwareUpdate and NEVER_SKIP; got: {msg}"
+    );
+
+    // The guardrail bails before writing, so no profile file is produced.
+    assert!(
+        !out.exists(),
+        "no enrollment profile should be written when the guardrail rejects --skip-all"
     );
 }
 

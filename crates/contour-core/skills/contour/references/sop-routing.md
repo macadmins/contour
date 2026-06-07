@@ -70,6 +70,24 @@ contour mscp schema rule os_airdrop_disable --json  # detail + ODV options
 
 Rules with `has_odv: true` require organization-defined values — show the user `odv_options` and ask.
 
+## mSCP → osquery / Fleet policies → `--sop mscp-osquery`
+
+Use when: turning mSCP baseline rules into osquery **detection** (Fleet
+policies or a vendor-neutral osquery query pack) rather than enforcement.
+Native osquery-table queries (Tier-1) where a table fits, an audit-script →
+results-plist fallback (Tier-2) for the residual.
+
+```bash
+contour mscp generate -m ./macos_security -k disa_stig -o out \
+  --fleet-mode --osquery --org <ORG_DOMAIN>            # Fleet policies.yml (default)
+contour mscp generate -m ./macos_security -k cis_lvl1 -o out \
+  --fleet-mode --osquery --osquery-format pack --org <ORG_DOMAIN>   # vendor-neutral pack
+contour help-ai --sop mscp-osquery                     # full Tier-1/Tier-2 model + plist contract
+```
+
+`--osquery` requires a resolvable org (`--org` / `CONTOUR_ORG` / config). Read
+the emitted `<baseline>.osquery-coverage.md` to see the Tier-1/Tier-2 split.
+
 ## DEP Enrollment → `--sop enrollment`
 
 Use when: creating Setup Assistant enrollment profiles for ABM/ADE.

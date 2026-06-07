@@ -258,16 +258,18 @@ pub fn write_executable(path: &Path, content: &str) -> Result<()> {
 
 // ── Rule filtering ──────────────────────────────────────────────────
 
-/// Filter rules that have script-based remediation for a given baseline.
-pub fn script_rules_for_baseline<'a>(
-    rules: &'a [MscpRule],
-    baseline_name: &str,
-) -> Vec<&'a MscpRule> {
+/// Filter rules that have executable script-based remediation.
+///
+/// Callers pass rules already scoped to a baseline (via
+/// [`extract_rules_for_baseline`](crate::extractors::rules::RuleExtractor::extract_rules_for_baseline)
+/// or `rules_from_embedded`), so this does NOT re-check baseline membership — an
+/// earlier `is_in_baseline(name)` gate here tag-matched the baseline *filename*
+/// and silently dropped every rule of a baseline whose tag differs (e.g.
+/// `DISA-STIG` rules are tagged `stig`), emptying its scripts folder.
+pub fn script_capable_rules(rules: &[MscpRule]) -> Vec<&MscpRule> {
     rules
         .iter()
-        .filter(|r| {
-            r.has_script_remediation() && r.has_executable_fix() && r.is_in_baseline(baseline_name)
-        })
+        .filter(|r| r.has_script_remediation() && r.has_executable_fix())
         .collect()
 }
 
@@ -300,5 +302,35 @@ pub fn create_test_rule() -> MscpRule {
         mobileconfig_info: None,
         ddm_info: None,
         odv: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rules reaching this filter are already baseline-scoped by the extractor, so
+    /// it must NOT re-check baseline tag membership: DISA-STIG rules carry the tag
+    /// `stig`, not `DISA-STIG`, and the old `is_in_baseline` gate silently dropped
+    /// every one of them — leaving the baseline's scripts folder empty.
+    #[test]
+    fn keeps_script_rule_whose_tag_differs_from_baseline_filename() {
+        let mut rule = create_test_rule();
+        rule.tags = vec!["stig".to_string()];
+        let rules = vec![rule];
+        assert_eq!(
+            script_capable_rules(&rules).len(),
+            1,
+            "a script-capable rule must be kept regardless of its baseline tag"
+        );
+    }
+
+    /// A profile-enforced (mobileconfig) rule has no script remediation → excluded.
+    #[test]
+    fn drops_mobileconfig_only_rule() {
+        let mut rule = create_test_rule();
+        rule.mobileconfig = true;
+        let rules = vec![rule];
+        assert!(script_capable_rules(&rules).is_empty());
     }
 }

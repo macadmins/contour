@@ -255,6 +255,26 @@ pub enum Commands {
         /// [FLEET] Generate a Fleet fragment directory instead of full GitOps structure
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         fragment: bool,
+
+        /// [FLEET/OSQUERY] Emit osquery detection (native-table queries + slim/full audit script)
+        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        osquery: bool,
+
+        /// [OSQUERY] Output adapter: `fleet` (default) or `pack`
+        #[arg(
+            long,
+            default_value = "fleet",
+            help_heading = "Experimental - not stable (Fleet Options)"
+        )]
+        osquery_format: String,
+
+        /// [OSQUERY] Audit-script scope: `slim` (default, residual only) or `full`
+        #[arg(
+            long,
+            default_value = "slim",
+            help_heading = "Experimental - not stable (Fleet Options)"
+        )]
+        osquery_audit: String,
     },
 
     /// Generate baseline using mSCP and process output (recommended)
@@ -465,6 +485,26 @@ pub enum Commands {
         /// same YAML.
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         interactive: bool,
+
+        /// [FLEET/OSQUERY] Emit osquery detection (native-table queries + slim/full audit script)
+        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        osquery: bool,
+
+        /// [OSQUERY] Output adapter: `fleet` (default) or `pack`
+        #[arg(
+            long,
+            default_value = "fleet",
+            help_heading = "Experimental - not stable (Fleet Options)"
+        )]
+        osquery_format: String,
+
+        /// [OSQUERY] Audit-script scope: `slim` (default, residual only) or `full`
+        #[arg(
+            long,
+            default_value = "slim",
+            help_heading = "Experimental - not stable (Fleet Options)"
+        )]
+        osquery_audit: String,
     },
 
     /// Generate multiple baselines

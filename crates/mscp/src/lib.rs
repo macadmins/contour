@@ -16,6 +16,7 @@ pub mod generators;
 pub mod layout;
 pub mod managers;
 pub mod models;
+pub mod osquery;
 pub mod output;
 pub mod registry;
 pub mod transformers;

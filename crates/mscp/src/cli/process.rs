@@ -47,6 +47,7 @@ pub fn process_baseline(
     fragment: bool,
     output_structure: OutputStructure,
     glob_config: Option<GitopsGlobConfig>,
+    osquery: Option<crate::osquery::OsqueryGenOptions>,
 ) -> Result<()> {
     tracing::info!(
         "Processing baseline '{}' from: {}",
@@ -551,7 +552,9 @@ pub fn process_baseline(
 
             tracing::info!(
                 "Generated {} individual script pairs in {:?} mode",
-                script_paths.len() - usize::from(baseline.compliance_script.is_some()),
+                script_paths
+                    .len()
+                    .saturating_sub(usize::from(baseline.compliance_script.is_some())),
                 script_mode
             );
         }
@@ -589,6 +592,70 @@ pub fn process_baseline(
                 p_path.display()
             );
             policy_path = Some(p_path);
+        }
+    }
+
+    // --osquery: classify rules + emit native-table queries (Tier 1) and a
+    // slim/full audit-script → results-plist pattern (Tier 2) for the residual.
+    // Reuses the rule set and the FleetPolicyGenerator for managed_policies SQL.
+    if let Some(oq) = osquery.as_ref() {
+        if is_fleet_output && !is_jamf_mode && !dry_run && baseline.platform == Platform::MacOS {
+            let rules = if let Some(ref repo_path) = mscp_repo_path {
+                RuleExtractor::new(repo_path).extract_rules_for_baseline(&baseline.name)?
+            } else {
+                crate::extractors::rules_from_embedded(&baseline.name, "macOS")?
+            };
+
+            let scope = crate::osquery::AuditScope::parse(&oq.audit)?;
+            let fmt = crate::osquery::OsqueryFormat::parse(&oq.format)?;
+            // Reverse-domain for the audit results-plist path + launchd label.
+            // Required — never fall back to a placeholder org.
+            let org_domain = oq.org.as_deref().filter(|o| !o.is_empty()).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--osquery requires an organization domain (pass --org, set CONTOUR_ORG, or .contour/config.toml)"
+                )
+            })?;
+
+            // managed_policies SQL via the existing generator (no duplication).
+            let mp_gen = FleetPolicyGenerator::new(&baseline.name);
+            let art = crate::osquery::build(&rules, org_domain, &baseline.name, scope, |r| {
+                mp_gen.managed_policies_query(r)
+            });
+
+            let oq_dir = output_path.join("osquery").join(&baseline.name);
+            std::fs::create_dir_all(&oq_dir)?;
+            std::fs::write(
+                oq_dir.join(format!("{}-audit.sh", baseline.name)),
+                &art.audit.sh,
+            )?;
+            std::fs::write(
+                oq_dir.join(format!(
+                    "{org_domain}.{}.audit.launchd.plist",
+                    baseline.name
+                )),
+                &art.audit.launchd_plist,
+            )?;
+            std::fs::write(
+                oq_dir.join(format!("{}.osquery-coverage.md", baseline.name)),
+                &art.coverage_md,
+            )?;
+            match fmt {
+                crate::osquery::OsqueryFormat::Pack => {
+                    let json = crate::osquery::adapters::pack::to_pack_json(&art);
+                    std::fs::write(oq_dir.join(format!("{}.pack.json", baseline.name)), json)?;
+                }
+                crate::osquery::OsqueryFormat::Fleet => {
+                    let policies = crate::osquery::adapters::fleet::to_fleet_policies(&art);
+                    let yaml = yaml_serde::to_string(&policies)?;
+                    std::fs::write(oq_dir.join(format!("{}.policies.yml", baseline.name)), yaml)?;
+                }
+            }
+            tracing::info!(
+                "osquery bridge: {} queries, audit covers {} rules → {}",
+                art.queries.len(),
+                art.audit.covered.len(),
+                oq_dir.display()
+            );
         }
     }
 

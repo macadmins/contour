@@ -230,7 +230,7 @@ impl RuleScriptGenerator {
     ) -> Result<Vec<(String, PathBuf, PathBuf)>> {
         let mut generated = Vec::new();
 
-        let script_rules = script_helpers::script_rules_for_baseline(rules, baseline_name);
+        let script_rules = script_helpers::script_capable_rules(rules);
 
         match self.options.mode {
             ScriptMode::Combined => {

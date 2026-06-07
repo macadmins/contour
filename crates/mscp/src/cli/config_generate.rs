@@ -194,6 +194,7 @@ pub fn generate_from_config(config: Config) -> Result<()> {
             "macos".to_string(), // os
             None,                // os_version
             None,                // odv_path — auto-detects odv_<baseline>.yaml per baseline
+            None,                // osquery — not exposed in config-driven generation
         )?;
     }
 

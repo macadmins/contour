@@ -7,6 +7,8 @@
     reason = "public API surface — consumed by CLI and external callers"
 )]
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
 use anyhow::Result;
 use mdm_schema::SkipKey;
 use mscp_schema::{BaselineEdge, BaselineMeta, EnvelopePattern, RulePayload, RuleVersioned};
@@ -43,26 +45,135 @@ pub fn list_baseline_rules(baseline: &str, platform: &str) -> Result<Vec<RuleVer
     let edges: Vec<BaselineEdge> =
         mscp_schema::baseline_edges::read(mscp_schema::embedded_baseline_edges())?;
 
-    let matching_rule_ids: Vec<&str> = edges
+    // mSCP 2.0 baseline files target a specific (platform, OS version), and each
+    // edge carries them. Match the rule to its edge on (rule_id, os_version) so a
+    // baseline returns one row per rule — its targeted OS version — not every OS
+    // version the rule happens to exist for. (Edge platform is null-tolerant for
+    // any legacy V1 data; the authoritative platform gate is on the rule below.)
+    let matching: std::collections::HashSet<(&str, &str)> = edges
         .iter()
-        .filter(|e| e.baseline == baseline && e.platform.as_deref().is_some_and(|p| p == platform))
-        .map(|e| e.rule_id.as_str())
+        .filter(|e| e.baseline == baseline && e.platform.as_deref().is_none_or(|p| p == platform))
+        .filter_map(|e| e.os_version.as_deref().map(|ov| (e.rule_id.as_str(), ov)))
         .collect();
 
     let all_rules = mscp_schema::rules_versioned::read(mscp_schema::embedded_rules_versioned())?;
 
     let filtered = all_rules
         .into_iter()
-        .filter(|r| r.platform == platform && matching_rule_ids.contains(&r.rule_id.as_str()))
+        .filter(|r| {
+            r.platform == platform
+                && matching.contains(&(r.rule_id.as_str(), r.os_version.as_str()))
+        })
         .collect();
 
     Ok(filtered)
 }
 
-/// Look up a single rule payload by rule ID.
-pub fn get_rule_payload(rule_id: &str) -> Result<Option<RulePayload>> {
+/// A (platform, OS version) pair and how many versioned rule rows it covers.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PlatformCoverage {
+    pub platform: String,
+    pub os_version: String,
+    pub rules: usize,
+}
+
+/// Per-baseline coverage: the unique-rule total plus a per-platform breakdown.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BaselineCoverage {
+    pub baseline: String,
+    pub total: usize,
+    pub per_platform: Vec<PlatformCoverage>,
+}
+
+/// Distinct (platform, OS) coverage across all versioned rules, sorted.
+///
+/// In mSCP 2.0 each rule self-describes its platforms, so coverage is derived
+/// from `rules_versioned` — the baseline edges carry a null platform.
+pub fn platform_coverage() -> Result<Vec<PlatformCoverage>> {
+    let rules = mscp_schema::rules_versioned::read(mscp_schema::embedded_rules_versioned())?;
+    let mut counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for r in &rules {
+        *counts
+            .entry((r.platform.clone(), r.os_version.clone()))
+            .or_default() += 1;
+    }
+    Ok(counts
+        .into_iter()
+        .map(|((platform, os_version), rules)| PlatformCoverage {
+            platform,
+            os_version,
+            rules,
+        })
+        .collect())
+}
+
+/// Per-baseline coverage: total unique rules and a per-(platform, OS) breakdown.
+///
+/// Joins `baseline_edges` (baseline → rule_id membership) with `rules_versioned`
+/// (rule_id → platform/OS), reading each dataset once. Because mSCP 2.0 stamps
+/// platform on the rule, a rule that targets several platforms contributes to
+/// each platform's count.
+pub fn baseline_coverage() -> Result<Vec<BaselineCoverage>> {
+    let edges = mscp_schema::baseline_edges::read(mscp_schema::embedded_baseline_edges())?;
+    let rules = mscp_schema::rules_versioned::read(mscp_schema::embedded_rules_versioned())?;
+
+    // rule_id -> [(platform, os_version)]
+    let mut platforms_of: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    for r in &rules {
+        platforms_of
+            .entry(r.rule_id.as_str())
+            .or_default()
+            .push((r.platform.as_str(), r.os_version.as_str()));
+    }
+
+    // baseline -> unique rule_ids
+    let mut by_baseline: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for e in &edges {
+        by_baseline
+            .entry(e.baseline.as_str())
+            .or_default()
+            .insert(e.rule_id.as_str());
+    }
+
+    Ok(by_baseline
+        .into_iter()
+        .map(|(baseline, ids)| {
+            let mut per: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+            for id in &ids {
+                for pv in platforms_of.get(id).into_iter().flatten() {
+                    *per.entry(*pv).or_default() += 1;
+                }
+            }
+            BaselineCoverage {
+                baseline: baseline.to_string(),
+                total: ids.len(),
+                per_platform: per
+                    .into_iter()
+                    .map(|((platform, os_version), rules)| PlatformCoverage {
+                        platform: platform.to_string(),
+                        os_version: os_version.to_string(),
+                        rules,
+                    })
+                    .collect(),
+            }
+        })
+        .collect())
+}
+
+/// Look up a single rule payload by rule ID, platform, and OS version.
+///
+/// Payloads are keyed by (rule_id, platform, os_version) — in mSCP 2.0 the check
+/// is platform-level and may be overridden per OS version, so the same rule has a
+/// distinct payload per platform/version.
+pub fn get_rule_payload(
+    rule_id: &str,
+    platform: &str,
+    os_version: &str,
+) -> Result<Option<RulePayload>> {
     let payloads = mscp_schema::rule_payloads::read(mscp_schema::embedded_rule_payloads())?;
-    Ok(payloads.into_iter().find(|p| p.rule_id == rule_id))
+    Ok(payloads
+        .into_iter()
+        .find(|p| p.rule_id == rule_id && p.platform == platform && p.os_version == os_version))
 }
 
 /// List all envelope patterns.
@@ -160,13 +271,23 @@ pub fn search_rules(query: &str, platform: Option<&str>) -> Result<Vec<RuleVersi
 /// Get full detail for a single rule.
 pub fn get_rule_detail(rule_id: &str) -> Result<Option<RuleDetail>> {
     let rules = mscp_schema::rules_versioned::read(mscp_schema::embedded_rules_versioned())?;
-    let rule = rules.into_iter().find(|r| r.rule_id == rule_id);
+    // Prefer the latest macOS variant — in mSCP 2.0 the shell check is macOS-only,
+    // so it's the richest row to surface; fall back to any platform otherwise.
+    let rule = rules
+        .iter()
+        .filter(|r| r.rule_id == rule_id && r.platform == "macOS")
+        .max_by(|a, b| a.os_version.cmp(&b.os_version))
+        .or_else(|| rules.iter().find(|r| r.rule_id == rule_id))
+        .cloned();
     let Some(rule) = rule else {
         return Ok(None);
     };
 
     let payloads = mscp_schema::rule_payloads::read(mscp_schema::embedded_rule_payloads())?;
-    let payload = payloads.into_iter().find(|p| p.rule_id == rule_id);
+    // Payloads are keyed by (rule_id, platform, os_version); match the chosen rule.
+    let payload = payloads.into_iter().find(|p| {
+        p.rule_id == rule_id && p.platform == rule.platform && p.os_version == rule.os_version
+    });
 
     let edges = mscp_schema::baseline_edges::read(mscp_schema::embedded_baseline_edges())?;
     let baselines: Vec<String> = edges
@@ -210,22 +331,58 @@ mod tests {
     #[test]
     fn test_get_rule_payload() {
         let rules = list_baseline_rules("cis_lvl1", "macOS").expect("list_baseline_rules failed");
-        let first_rule_id = &rules
+        let first = rules
             .first()
-            .expect("cis_lvl1 macOS should have at least one rule")
-            .rule_id;
-        let payload = get_rule_payload(first_rule_id).expect("get_rule_payload failed");
+            .expect("cis_lvl1 macOS should have at least one rule");
+        let payload = get_rule_payload(&first.rule_id, "macOS", &first.os_version)
+            .expect("get_rule_payload failed");
         assert!(
             payload.is_some(),
-            "Expected payload for rule {first_rule_id}"
+            "Expected macOS payload for rule {} {}",
+            first.rule_id,
+            first.os_version
         );
     }
 
     #[test]
     fn test_get_rule_payload_unknown() {
-        let payload = get_rule_payload("nonexistent_rule_that_does_not_exist_12345")
-            .expect("get_rule_payload failed");
+        let payload = get_rule_payload(
+            "nonexistent_rule_that_does_not_exist_12345",
+            "macOS",
+            "26.0",
+        )
+        .expect("get_rule_payload failed");
         assert!(payload.is_none(), "Expected None for nonexistent rule");
+    }
+
+    #[test]
+    fn test_platform_coverage_includes_macos() {
+        let coverage = platform_coverage().expect("platform_coverage failed");
+        assert!(!coverage.is_empty(), "Expected non-empty platform coverage");
+        let macos = coverage.iter().find(|c| c.platform == "macOS");
+        assert!(
+            macos.is_some_and(|c| c.rules > 0),
+            "Expected macOS coverage with rules, got {coverage:?}"
+        );
+    }
+
+    #[test]
+    fn test_baseline_coverage_cis_lvl1_has_macos() {
+        let coverage = baseline_coverage().expect("baseline_coverage failed");
+        let cis = coverage
+            .iter()
+            .find(|c| c.baseline == "cis_lvl1")
+            .expect("cis_lvl1 should be present in baseline coverage");
+        assert!(cis.total > 0, "Expected cis_lvl1 to have rules");
+        assert!(
+            cis.per_platform.iter().any(|p| p.platform == "macOS"),
+            "Expected cis_lvl1 to cover macOS, got {:?}",
+            cis.per_platform
+        );
+        // Per-platform counts must not exceed the unique-rule total.
+        for p in &cis.per_platform {
+            assert!(p.rules <= cis.total, "per-platform count exceeds total");
+        }
     }
 
     #[test]

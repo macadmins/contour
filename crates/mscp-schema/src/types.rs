@@ -75,6 +75,8 @@ pub struct RuleVersioned {
     pub control_count: i32,
     pub weight: f64,
     pub odv_default: Option<String>,
+    /// OS version this rule was introduced on the platform.
+    pub introduced: Option<String>,
     pub distro: Option<String>,
 }
 
@@ -82,6 +84,17 @@ pub struct RuleVersioned {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RulePayload {
     pub rule_id: String,
+    /// Platform + OS version this payload applies to. In mSCP 2.0 the check is
+    /// platform-level and may be overridden per OS version, so payloads are keyed
+    /// by (rule_id, platform, os_version).
+    pub platform: String,
+    pub os_version: String,
+    /// `version` if this check is a per-OS-version override, `platform` if the
+    /// platform-level default, `None` when there is no check.
+    pub check_source: Option<String>,
+    /// The platform-level default check, preserved even when this OS version
+    /// overrides it (so the default is never lost).
+    pub default_check_script: Option<String>,
     pub check_script: Option<String>,
     pub fix_script: Option<String>,
     pub expected_result: Option<String>,

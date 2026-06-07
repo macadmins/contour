@@ -50,6 +50,31 @@ fn parse_json_field(s: &str) -> Option<yaml_serde::Value> {
         .map(|v| json_to_yaml_value(&v))
 }
 
+/// Build a minimal [`MscpRule`] carrying only the fields the osquery
+/// [`classify`](crate::osquery::classify::classify) reads — `id`, `check`,
+/// `mobileconfig`, and `mobileconfig_info`.
+///
+/// For callers (e.g. `schema rule --json`) that hold a
+/// [`RulePayload`](mscp_schema::RulePayload) plus the `mobileconfig` flag but not
+/// a fully assembled rule. Reuses [`parse_json_field`] so `mobileconfig_info` is
+/// parsed identically to the bridge's full reconstruction. All other fields are
+/// left at their [`Default`] values; the result is for classification only.
+pub(crate) fn rule_for_classification(
+    id: &str,
+    mobileconfig: bool,
+    payload: Option<&mscp_schema::RulePayload>,
+) -> MscpRule {
+    MscpRule {
+        id: id.to_string(),
+        check: payload.and_then(|p| p.check_script.clone()),
+        mobileconfig,
+        mobileconfig_info: payload
+            .and_then(|p| p.mobileconfig_info.as_deref())
+            .and_then(parse_json_field),
+        ..Default::default()
+    }
+}
+
 /// Build `MscpRule` values from embedded parquet data for a given baseline and platform.
 ///
 /// This is the embedded-data counterpart of [`super::RuleExtractor`] which reads
@@ -71,8 +96,10 @@ pub fn rules_from_embedded(baseline: &str, platform: &str) -> Result<Vec<MscpRul
     let payloads = mscp_schema::rule_payloads::read(mscp_schema::embedded_rule_payloads())?;
 
     // 2. Filter edges to the requested baseline + platform and collect unique rule IDs.
-    //    Also accumulate sections per rule for the `tags` field.
+    //    Also accumulate sections per rule for the `tags` field, and the baseline's
+    //    target OS version per rule (to select the matching per-version payload).
     let mut rule_sections: HashMap<String, Vec<String>> = HashMap::new();
+    let mut rule_os: HashMap<String, String> = HashMap::new();
     for edge in &edges {
         if edge.baseline != baseline {
             continue;
@@ -86,6 +113,9 @@ pub fn rules_from_embedded(baseline: &str, platform: &str) -> Result<Vec<MscpRul
             .entry(edge.rule_id.clone())
             .or_default()
             .push(edge.section.clone());
+        if let Some(ref ov) = edge.os_version {
+            rule_os.entry(edge.rule_id.clone()).or_insert(ov.clone());
+        }
     }
 
     if rule_sections.is_empty() {
@@ -101,11 +131,15 @@ pub fn rules_from_embedded(baseline: &str, platform: &str) -> Result<Vec<MscpRul
         .map(|m| (m.rule_id.as_str(), m))
         .collect();
 
-    // 4. Index rule_payloads by rule_id (only those we need).
-    let payload_map: HashMap<&str, &mscp_schema::RulePayload> = payloads
+    // 4. Index rule_payloads by (rule_id, os_version) for the requested platform.
+    //    Payloads are keyed by (rule_id, platform, os_version) in mSCP 2.0, so the
+    //    check is resolved for the baseline's targeted OS version (a rule's macOS
+    //    check is not seen when building for iOS, and an older OS's override is not
+    //    applied to a newer one).
+    let payload_map: HashMap<(&str, &str), &mscp_schema::RulePayload> = payloads
         .iter()
-        .filter(|p| rule_ids.contains(p.rule_id.as_str()))
-        .map(|p| (p.rule_id.as_str(), p))
+        .filter(|p| p.platform == platform && rule_ids.contains(p.rule_id.as_str()))
+        .map(|p| ((p.rule_id.as_str(), p.os_version.as_str()), p))
         .collect();
 
     // 5. Assemble MscpRule values.
@@ -117,7 +151,9 @@ pub fn rules_from_embedded(baseline: &str, platform: &str) -> Result<Vec<MscpRul
             None => continue, // edge references a rule not in rule_meta -- skip
         };
 
-        let payload = payload_map.get(rule_id);
+        let payload = rule_os
+            .get(*rule_id)
+            .and_then(|ov| payload_map.get(&(*rule_id, ov.as_str())));
 
         let sections = rule_sections.get(*rule_id).cloned().unwrap_or_default();
 

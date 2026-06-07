@@ -266,7 +266,7 @@ exit 0
     ) -> Result<Vec<PathBuf>> {
         let mut generated_paths = Vec::new();
 
-        let script_rules = script_helpers::script_rules_for_baseline(rules, baseline_name);
+        let script_rules = script_helpers::script_capable_rules(rules);
 
         tracing::info!(
             "Found {} script-based remediation rules for baseline '{}'",

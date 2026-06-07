@@ -2031,6 +2031,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             dry_run,
             script_mode,
             fragment,
+            osquery,
+            osquery_format,
+            osquery_audit,
         } => {
             // Resolve org from CLI flags, falling back to .contour/config.toml
             let org = resolve_mscp_org(org);
@@ -2061,6 +2064,12 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 || no_creation_date
                 || identical_payload_uuid
                 || description_format.is_some();
+            // osquery artifact naming reuses the resolved org reverse-domain.
+            let osquery_opts = osquery.then(|| mscp::osquery::OsqueryGenOptions {
+                format: osquery_format,
+                audit: osquery_audit,
+                org: org.clone(),
+            });
             let jamf_options = if has_jamf_flags {
                 Some(mscp::transformers::JamfOptions {
                     no_creation_date,
@@ -2111,6 +2120,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 fragment,
                 mscp::config::OutputStructure::default(),
                 None,
+                osquery_opts,
             )?;
         }
 
@@ -2155,6 +2165,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             script_mode,
             fragment,
             interactive,
+            osquery,
+            osquery_format,
+            osquery_audit,
         } => {
             let python_method = if use_container {
                 Some(mscp::cli::generate::PythonMethod::Container)
@@ -2236,6 +2249,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                     "macos".to_string(), // os
                     None,               // os_version
                     odv.clone(),        // --odv override (else auto-detect odv_<keyword>.yaml)
+                    None,               // osquery — not exposed in config-driven generation
                 )?;
                 return Ok(());
             }
@@ -2277,6 +2291,12 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 || no_creation_date
                 || identical_payload_uuid
                 || description_format.is_some();
+            // osquery artifact naming reuses the resolved org reverse-domain.
+            let osquery_opts = osquery.then(|| mscp::osquery::OsqueryGenOptions {
+                format: osquery_format,
+                audit: osquery_audit,
+                org: org.clone(),
+            });
             let jamf_options = if has_jamf_flags {
                 Some(mscp::transformers::JamfOptions {
                     no_creation_date,
@@ -2339,6 +2359,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 os.as_str().to_string(),
                 os_version,
                 odv, // --odv override (else auto-detect odv_<keyword>.yaml)
+                osquery_opts,
             )?;
         }
 
@@ -2977,21 +2998,21 @@ fn write_llm_domain_reference(writer: &mut impl Write, has: &dyn Fn(&str) -> boo
         writeln!(buf, "Builds and deploys mSCP security keywords.\n")?;
 
         if let Ok(registry) = mscp::registry::MscpRegistry::embedded() {
-            // Platform coverage
-            let versions = registry.platform_versions();
+            // Platform coverage. mSCP 2.0 (dev_2.0) stamps platform/OS on the rule,
+            // not the baseline edge, so coverage comes from the versioned rules.
             writeln!(buf, "### Platform coverage\n")?;
-            for (platform, os) in &versions {
-                let edge_count = registry
-                    .edges
-                    .iter()
-                    .filter(|e| {
-                        e.platform.as_deref() == Some(platform)
-                            && e.os_version.as_deref() == Some(os.as_str())
-                    })
-                    .count();
-                writeln!(buf, "- {platform} {os} ({edge_count} rule-keyword edges)")?;
+            for c in mscp::api::platform_coverage().unwrap_or_default() {
+                writeln!(buf, "- {} {} ({} rules)", c.platform, c.os_version, c.rules)?;
             }
             writeln!(buf)?;
+
+            // Per-baseline rule counts, joined from the versioned rules' platforms.
+            let baseline_cov = mscp::api::baseline_coverage().unwrap_or_default();
+            let cov_by_name: std::collections::HashMap<&str, &mscp::api::BaselineCoverage> =
+                baseline_cov
+                    .iter()
+                    .map(|c| (c.baseline.as_str(), c))
+                    .collect();
 
             // Baselines with per-platform rule counts
             writeln!(
@@ -3000,20 +3021,16 @@ fn write_llm_domain_reference(writer: &mut impl Write, has: &dyn Fn(&str) -> boo
                 registry.baselines.len()
             )?;
             for b in &registry.baselines {
-                let total = registry.unique_rule_count_for_baseline(&b.baseline);
-                let mut per_platform = Vec::new();
-                for (platform, os) in &versions {
-                    let filter = mscp::registry::PlatformFilter {
-                        platform,
-                        os_version: Some(os),
-                    };
-                    let count = registry
-                        .rule_ids_for_baseline(&b.baseline, Some(&filter))
-                        .len();
-                    if count > 0 {
-                        per_platform.push(format!("{platform} {os}: {count}"));
-                    }
-                }
+                let cov = cov_by_name.get(b.baseline.as_str());
+                let total = cov.map_or(0, |c| c.total);
+                let per_platform: Vec<String> = cov
+                    .map(|c| {
+                        c.per_platform
+                            .iter()
+                            .map(|p| format!("{} {}: {}", p.platform, p.os_version, p.rules))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 // Show which platforms this keyword belongs to
                 let platform_names: Vec<&str> = b
                     .platforms

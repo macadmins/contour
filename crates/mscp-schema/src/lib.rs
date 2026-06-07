@@ -178,10 +178,12 @@ mod tests {
     }
 
     #[test]
-    fn test_edges_have_platform_distinction() {
-        let edges = baseline_edges::read(embedded_baseline_edges())
-            .expect("Failed to read embedded baseline_edges");
-        let platforms: HashSet<&str> = edges.iter().filter_map(|e| e.platform.as_deref()).collect();
+    fn test_rules_have_platform_distinction() {
+        // mSCP 2.0 stamps platform on the rule (`rules_versioned`), not the
+        // baseline edge — V2 edges carry a null platform.
+        let rules = rules_versioned::read(embedded_rules_versioned())
+            .expect("Failed to read embedded rules_versioned");
+        let platforms: HashSet<&str> = rules.iter().map(|r| r.platform.as_str()).collect();
         assert!(
             platforms.contains("macOS")
                 && platforms.contains("iOS")

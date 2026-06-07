@@ -21,6 +21,7 @@ mod generators;
 mod layout;
 mod managers;
 mod models;
+mod osquery;
 mod output;
 mod transformers;
 mod updaters;
@@ -105,6 +106,9 @@ fn main() -> Result<()> {
             dry_run,
             script_mode,
             fragment,
+            osquery,
+            osquery_format,
+            osquery_audit,
         } => {
             // Resolve org from CLI flags, falling back to .contour/config.toml
             let org = resolve_org(org);
@@ -135,6 +139,12 @@ fn main() -> Result<()> {
                 || no_creation_date
                 || identical_payload_uuid
                 || description_format.is_some();
+            // osquery artifact naming reuses the resolved org reverse-domain.
+            let osquery_opts = osquery.then(|| crate::osquery::OsqueryGenOptions {
+                format: osquery_format,
+                audit: osquery_audit,
+                org: org.clone(),
+            });
             let jamf_options = if has_jamf_flags {
                 Some(transformers::JamfOptions {
                     no_creation_date,
@@ -191,6 +201,7 @@ fn main() -> Result<()> {
                 fragment,
                 crate::config::OutputStructure::default(),
                 None, // glob_config - process has no mscp.toml in scope; use `generate --config` for glob support
+                osquery_opts,
             )?;
         }
 
@@ -235,6 +246,9 @@ fn main() -> Result<()> {
             script_mode,
             fragment,
             interactive,
+            osquery,
+            osquery_format,
+            osquery_audit,
         } => {
             let python_method = if use_container {
                 Some(cli::generate::PythonMethod::Container)
@@ -332,6 +346,7 @@ fn main() -> Result<()> {
                     "macos".to_string(), // os
                     None,               // os_version
                     odv.clone(),        // --odv override (else auto-detect odv_<keyword>.yaml)
+                    None,               // osquery — not exposed in config-driven generation
                 )?;
                 return Ok(());
             }
@@ -374,6 +389,12 @@ fn main() -> Result<()> {
                 || no_creation_date
                 || identical_payload_uuid
                 || description_format.is_some();
+            // osquery artifact naming reuses the resolved org reverse-domain.
+            let osquery_opts = osquery.then(|| crate::osquery::OsqueryGenOptions {
+                format: osquery_format,
+                audit: osquery_audit,
+                org: org.clone(),
+            });
             let jamf_options = if has_jamf_flags {
                 Some(transformers::JamfOptions {
                     no_creation_date,
@@ -436,6 +457,7 @@ fn main() -> Result<()> {
                 os.as_str().to_string(),
                 os_version,
                 odv, // --odv override (else auto-detect odv_<keyword>.yaml)
+                osquery_opts,
             )?;
         }
 
