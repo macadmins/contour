@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadDisplayName</key>
+	<string>Audit Sample</string>
+	<key>PayloadIdentifier</key>
+	<string>com.acme.audit.sample</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>00000000-0000-0000-0000-0000000000AA</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadOrganization</key>
+	<string>Acme</string>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadIdentifier</key>
+			<string>com.acme.audit.root</string>
+			<key>PayloadUUID</key>
+			<string>00000000-0000-0000-0000-0000000000B1</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadDisplayName</key>
+			<string>Acme Root CA</string>
+			<key>PayloadContent</key>
+			<data>MIICxDCCAaygAwIBAgIJAIb6f2y4Rwy1MA0GCSqGSIb3DQEBCwUAMBcxFTATBgNVBAMMDEFjbWUgUm9vdCBDQTAeFw0yNjA2MDMxMjM1NDdaFw0zNjA1MzExMjM1NDdaMBcxFTATBgNVBAMMDEFjbWUgUm9vdCBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAPRM9l6iwgqlfr/xq0x5Vi9klJxej1n7MiM0gBqw3Sa725ugZ979cWYAae3r/0DT7R/4aCZbm5jh4Cr2MI4zvcZUDWhuFBPOxcYtdiHYFYsFzP66zp2e0eNRYuPyzWvUxSZ3LrX1yCoFBCufVSCgEU8RaXb/E8FeleHGkev/XLvkgVqLh//5mIr4FFfW3QvN4OGpuYuygKn2slpHTq2XGEulsnOZGyFKezxm9ip25CACfOro/tA0YaD7vJow0jSqdGqSRyHAh+1991yVpWDBZ4jcvgthlzn9JOs7t4jx/B6eTpug69TegCzeO5DgS6DAVTQM4EYPruQBhoKzzMykOgMCAwEAAaMTMBEwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEABlpdkln0amGjltI88oUESUHcneuo3+i8c/sWy8MLSATGJUfLFRaGgMJQqbjPwsPfoBunj/FBgIRarP6q6JZ7UbCrLcXgymh17Yflq3Mer0fjyuVOFReAWPi2Kt+0k+vPX0cZwT+FGoZn1fEmUzHOeArJ7ajbGsTIY468PNM0mfQTEI6XjvFGs7b0rVB3WZ3ak0iXAXKvSoBptmqmfws9cv1LK1oyN0MvzZ5Mbt3Slxtyfcjc1uaZeG3iDxQUDWCMWa5OWrpxej5VVOrein0MhqS1FaYZGZKYjUvWfajY03NucIAlPIuSdzirMoV61633aiEy+ulSd3UUK6R6EMQstA==</data>
+		</dict>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.wifi.managed</string>
+			<key>PayloadIdentifier</key>
+			<string>com.acme.audit.wifi</string>
+			<key>PayloadUUID</key>
+			<string>00000000-0000-0000-0000-0000000000B2</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>SSID_STR</key>
+			<string>Acme-Corp</string>
+			<key>Password</key>
+			<string>$FLEET_VAR_NDES_SCEP_CHALLENGE</string>
+		</dict>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.font</string>
+			<key>PayloadIdentifier</key>
+			<string>com.acme.audit.font</string>
+			<key>PayloadUUID</key>
+			<string>00000000-0000-0000-0000-0000000000B3</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>Font</key>
+			<data>AAECAwQFBgcICQoLDA0ODw==</data>
+		</dict>
+	</array>
+</dict>
+</plist>

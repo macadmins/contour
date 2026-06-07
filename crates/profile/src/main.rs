@@ -3,6 +3,8 @@
 //! Profile provides commands for importing, validating, and normalizing
 //! Apple configuration profiles (.mobileconfig) for MDM deployments.
 
+mod audit;
+mod classify;
 mod cli;
 mod config;
 mod ddm;
@@ -15,6 +17,7 @@ mod output;
 mod plan;
 mod profile;
 mod recipe;
+mod reidentify;
 mod rollback;
 mod schema;
 mod signing;
@@ -293,6 +296,86 @@ fn run(cli: Cli) -> Result<()> {
                 md_report.as_deref(),
                 fail_on_deprecations,
                 config.as_ref(),
+                output_mode,
+            )?;
+        }
+        Commands::Reidentify {
+            paths,
+            org,
+            scheme,
+            recursive,
+            max_depth,
+            no_parallel,
+            write,
+        } => {
+            let org = contour_core::resolve_org(org)?;
+            let scheme = cli::reidentify::parse_scheme(&scheme)?;
+            cli::reidentify::handle_reidentify(
+                &paths,
+                &org,
+                scheme,
+                recursive,
+                max_depth,
+                !no_parallel,
+                write,
+                output_mode,
+            )?;
+        }
+        Commands::Classify {
+            paths,
+            recursive,
+            max_depth,
+            no_parallel,
+            map,
+            write,
+            sync_identity,
+            org,
+            identity_scheme,
+        } => {
+            let scheme = cli::reidentify::parse_scheme(&identity_scheme)?;
+            let org = if sync_identity {
+                Some(contour_core::resolve_org(org)?)
+            } else {
+                None
+            };
+            cli::classify::handle_classify(
+                &paths,
+                recursive,
+                max_depth,
+                !no_parallel,
+                map.as_deref(),
+                write,
+                sync_identity,
+                scheme,
+                org.as_deref(),
+                output_mode,
+            )?;
+        }
+        Commands::Audit {
+            paths,
+            recursive,
+            max_depth,
+            no_parallel,
+            certs_only,
+            secrets_only,
+            with_deprecations,
+            fail_on_secrets,
+            route_into,
+            dry_run,
+            md_report,
+        } => {
+            cli::audit::handle_audit(
+                &paths,
+                recursive,
+                max_depth,
+                !no_parallel,
+                certs_only,
+                secrets_only,
+                with_deprecations,
+                fail_on_secrets,
+                route_into.as_deref(),
+                dry_run,
+                md_report.as_deref(),
                 output_mode,
             )?;
         }

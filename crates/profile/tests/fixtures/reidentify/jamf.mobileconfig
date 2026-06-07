@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadDisplayName</key>
+	<string>System - Network (Corp)</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadIdentifier</key>
+	<string>com.acme.1B0BD287-ED66-48B2-9366-36F1BE8FC6A4</string>
+	<key>PayloadUUID</key>
+	<string>6B7D8FE7-9D7D-4ECE-9B2E-A78C36181507</string>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.security.pkcs12</string>
+			<key>PayloadIdentifier</key>
+			<string>com.acme.cert.0F1E2D3C</string>
+			<key>PayloadUUID</key>
+			<string>C0000000-0000-0000-0000-0000000000CC</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.wifi.managed</string>
+			<key>PayloadIdentifier</key>
+			<string>com.acme.wifi.9A8B7C6D</string>
+			<key>PayloadUUID</key>
+			<string>W0000000-0000-0000-0000-0000000000FF</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadCertificateUUID</key>
+			<string>C0000000-0000-0000-0000-0000000000CC</string>
+		</dict>
+	</array>
+</dict>
+</plist>

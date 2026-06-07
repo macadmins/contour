@@ -414,6 +414,63 @@ contour profile uuid ./profiles -r -p --org com.acme
 
 ---
 
+#### `profile reidentify`
+
+Make `PayloadIdentifier`s consistent with their `PayloadUUID`s. Jamf-exported
+profiles often carry an identifier that embeds a stray internal UUID disjoint
+from the real `PayloadUUID` (e.g. `com.org.1B0BD287-…` while `PayloadUUID` is
+`6B7D8FE7-…`). `reidentify` fixes that, in one of two schemes.
+
+```
+contour profile reidentify <PATHS>... --org <DOMAIN> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<PATHS>...` | Profile file(s) or directory to process | **required** |
+| `--org <DOMAIN>` | Organization reverse domain (identifier prefix) | from `.contour/config.toml` |
+| `--scheme <SCHEME>` | `uuid` (sync identifier to `PayloadUUID`) or `name` (derive from display name) | `uuid` |
+| `-r, --recursive` | Process directories recursively | `false` |
+| `--max-depth <N>` | Maximum directory depth (requires `--recursive`) | unlimited |
+| `--no-parallel` | Disable parallel processing | `false` |
+| `--write` | Apply changes (default is a dry-run preview) | `false` |
+| `-o, --output <PATH>` | Output file or directory | in-place |
+
+**Schemes**
+
+- **`uuid` (default)** — identifier becomes `{org}.{PayloadUUID}`; UUIDs are left
+  unchanged, so no cross-references can break. The minimal, safe fix.
+  ```
+  com.org.1B0BD287-…   →   com.org.6B7D8FE7-…     (PayloadUUID 6B7D8FE7-… unchanged)
+  ```
+- **`name`** — identifier is derived from the display name
+  (`{org}.profile.{slug}` for the envelope, `{org}.{slug}.{type}` per payload),
+  UUIDs are regenerated deterministically (v5), and every UUID cross-reference
+  (`PayloadCertificateUUID`, …) is remapped so nothing breaks. References that
+  point outside the profile are reported as orphans (run `profile link`).
+  ```
+  "System - Certificate (Company Root)"  →  com.org.profile.system-certificate-company-root
+  ```
+
+Both schemes are **idempotent** — a second `--write` changes nothing. Signed
+profiles are skipped (reidentifying changes content and would break the
+signature).
+
+```bash
+# Default: sync the identifier to the real PayloadUUID (preview, then apply)
+contour profile reidentify ./profiles -r --org com.acme
+contour profile reidentify ./profiles -r --org com.acme --write
+
+# Derive name-based identifiers and remap references
+contour profile reidentify ./profiles -r --org com.acme --scheme name --write
+```
+
+Pairs with `profile classify`: after renaming display names, run reidentify (or
+use `classify --sync-identity` to do both in one pass — defaults to the `name`
+scheme).
+
+---
+
 ### Inspect & Validate
 
 #### `profile scan`
@@ -1395,6 +1452,12 @@ to preview the conversion before touching disk. To produce
 byte-stable diffs for a GitOps repo, add `contour profile uuid ./profiles
 -r -p --org com.acme` between step 3 and step 4 — predictable v5 UUIDs
 derived from `(org, identifier)` mean re-imports don't churn the diff.
+
+Jamf identifiers also embed a stray internal UUID disjoint from the real
+`PayloadUUID`. Run `contour profile reidentify ./profiles -r --org com.acme
+--write` to make the identifier consistent with the UUID (default `uuid`
+scheme), or `--scheme name` to rebuild identifiers from the display names and
+remap cross-references. See [`profile reidentify`](#profile-reidentify).
 
 ### GitOps-ready profiles
 

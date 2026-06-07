@@ -4,6 +4,8 @@
 //! subcommands, arguments, and their handlers for profile operations.
 
 // Core modules
+pub mod audit;
+pub mod classify;
 pub mod command;
 pub mod ddm;
 pub mod diff;
@@ -25,6 +27,7 @@ pub mod normalize;
 pub mod payload;
 pub mod plan;
 pub mod post_generate;
+pub mod reidentify;
 pub mod rollback;
 pub mod scan;
 pub mod search;
@@ -340,6 +343,157 @@ pub enum Commands {
             help = "Exit non-zero if any deprecation is found (overrides [validation].fail_on_deprecations)"
         )]
         fail_on_deprecations: bool,
+    },
+
+    #[command(about = "Make PayloadIdentifiers consistent with UUIDs")]
+    Reidentify {
+        #[arg(help = "Profile file(s) or directory", required = true, num_args = 1..)]
+        paths: Vec<String>,
+
+        #[arg(long, help = "Organization reverse domain (e.g., com.yourorg)")]
+        org: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "SCHEME",
+            default_value = "uuid",
+            help = "Identifier scheme: uuid (sync to PayloadUUID) or name (slug from display name)"
+        )]
+        scheme: String,
+
+        #[arg(short, long, help = "Process directories recursively")]
+        recursive: bool,
+
+        #[arg(long, help = "Maximum directory depth (requires --recursive)")]
+        max_depth: Option<usize>,
+
+        #[arg(long, help = "Disable parallel processing")]
+        no_parallel: bool,
+
+        #[arg(long, help = "Apply changes (default is a dry-run preview)")]
+        write: bool,
+    },
+
+    #[command(about = "Classify a profile and rewrite its display name (Kind: Subject)")]
+    Classify {
+        #[arg(help = "Profile file(s) or directory", required = true, num_args = 1..)]
+        paths: Vec<String>,
+
+        #[arg(short, long, help = "Process directories recursively")]
+        recursive: bool,
+
+        #[arg(long, help = "Maximum directory depth (requires --recursive)")]
+        max_depth: Option<usize>,
+
+        #[arg(long, help = "Disable parallel processing")]
+        no_parallel: bool,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Reference map to use (overrides the default)"
+        )]
+        map: Option<String>,
+
+        #[arg(
+            long,
+            help = "Apply the new display names (default is a dry-run preview)"
+        )]
+        write: bool,
+
+        #[arg(
+            long,
+            help = "Also rebuild PayloadIdentifier/UUIDs to match (requires --org)"
+        )]
+        sync_identity: bool,
+
+        #[arg(
+            long,
+            help = "Organization reverse domain (required with --sync-identity)"
+        )]
+        org: Option<String>,
+
+        #[arg(
+            long = "scheme",
+            value_name = "SCHEME",
+            default_value = "name",
+            help = "Identity scheme for --sync-identity: name (default) or uuid"
+        )]
+        identity_scheme: String,
+    },
+
+    #[command(
+        about = "Audit profile(s) for binary content, certificates, and secrets",
+        long_about = "Classify each payload's content and security posture:\n\
+                      \n\
+                      - binary: which payloads embed <data> blobs (fonts, certs)\n\
+                      - cert: which are certificates, and of what kind\n  \
+                        (root / intermediate / leaf / identity) via DER parsing\n\
+                      - secrets: schema-sensitive fields, known credential field\n  \
+                        names, PKCS#12 private keys, MDM deploy-time variables,\n  \
+                        and high-entropy literals\n\
+                      \n\
+                      With --route-into, matching profiles are moved into\n\
+                      category subfolders (certs/ secrets/ binary/ clean/);\n\
+                      a profile lands in every bucket it matches. Use --dry-run\n\
+                      to preview the routing plan without moving anything.\n\
+                      \n\
+                      Examples:\n  \
+                      contour profile audit ./profiles -r --json\n  \
+                      contour profile audit ./profiles -r --certs-only\n  \
+                      contour profile audit ./profiles -r --route-into ./triage --dry-run"
+    )]
+    Audit {
+        #[arg(help = "Profile file(s) or directory to audit", required = true, num_args = 1..)]
+        paths: Vec<String>,
+
+        #[arg(short, long, help = "Process directories recursively")]
+        recursive: bool,
+
+        #[arg(
+            long,
+            help = "Maximum directory depth for recursive search (requires --recursive)"
+        )]
+        max_depth: Option<usize>,
+
+        #[arg(long, help = "Disable parallel processing")]
+        no_parallel: bool,
+
+        #[arg(
+            long,
+            conflicts_with = "secrets_only",
+            help = "Only report/route cert payloads"
+        )]
+        certs_only: bool,
+
+        #[arg(long, help = "Only report/route secret-bearing payloads")]
+        secrets_only: bool,
+
+        #[arg(long, help = "Also scan for deprecated payload types and keys")]
+        with_deprecations: bool,
+
+        #[arg(long, help = "Exit non-zero if any secret is found")]
+        fail_on_secrets: bool,
+
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Move matching profiles into category subfolders under DIR"
+        )]
+        route_into: Option<String>,
+
+        #[arg(
+            long,
+            help = "With --route-into: print the routing plan without moving anything"
+        )]
+        dry_run: bool,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Write a Markdown audit report to this path"
+        )]
+        md_report: Option<String>,
     },
 
     #[command(

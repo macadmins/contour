@@ -7,6 +7,8 @@
 //! - Profile normalization and UUID management
 //! - Code signing and verification
 
+pub mod audit;
+pub mod classify;
 pub mod cli;
 pub mod config;
 pub mod ddm;
@@ -19,6 +21,7 @@ pub mod output;
 pub mod plan;
 pub mod profile;
 pub mod recipe;
+pub mod reidentify;
 pub mod rollback;
 pub mod schema;
 pub mod signing;

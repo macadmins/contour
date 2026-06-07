@@ -75,7 +75,7 @@ cel-interpreter = "0.10"
 arrow = "58"
 parquet = { version = "58", features = ["arrow"] }
 bytes = "1"
-indexmap = "2"
+indexmap = { version = "2", features = ["serde"] }
 
 # Diff
 similar = "3"

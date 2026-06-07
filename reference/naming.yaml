@@ -1,0 +1,107 @@
+# Friendly display-name schema for `contour profile classify`.
+#
+# Two scope-aware templates:
+#   system: "System - Certificate (Company Root)"   (Scope - Kind (detail))
+#   app:    "OneDrive (Settings)"                (AppName (aspect))
+# A profile is app-scope when all its payloads are app-config types AND an app
+# name is derivable; otherwise system-scope. The "(...)" is dropped when empty.
+
+system_format: "{scope} - {kind} ({subject})"
+app_format: "{subject} ({kind})"
+multi_kind_join: " + "
+
+scope:
+  system_label: System
+  app_payload_types:
+    - com.apple.ManagedClient.preferences
+    - com.apple.notificationsettings
+    - com.apple.TCC.configuration-profile-policy
+    - com.apple.system-extension-policy
+
+# payload type -> friendly Kind label. For app-config payloads this is the
+# parenthetical "aspect" (Settings / Notification / Privacy Control).
+kinds:
+  com.apple.wifi.managed: Wi-Fi
+  com.apple.ethernet.managed: Wired Network
+  com.apple.security.root: Certificate
+  com.apple.security.pem: Certificate
+  com.apple.security.pkcs1: Certificate
+  com.apple.security.pkcs12: Identity
+  com.apple.loginwindow: Login Window
+  com.apple.applicationaccess: Restriction
+  com.apple.MCX: Restriction
+  com.apple.extensiblesso: Single Sign-On
+  com.apple.notificationsettings: Notification
+  com.apple.TCC.configuration-profile-policy: Privacy Control
+  com.apple.system-extension-policy: System Extension
+  com.apple.ManagedClient.preferences: Settings
+  com.apple.font: Fonts
+
+# how to derive {subject} per payload type
+subjects:
+  com.apple.wifi.managed:
+    field: SSID_STR
+  com.apple.security.root:
+    cert_subject_cn: true
+  com.apple.security.pem:
+    cert_subject_cn: true
+  com.apple.security.pkcs1:
+    cert_subject_cn: true
+  com.apple.ManagedClient.preferences:
+    app_name: true
+  # Payloads below have no reliable payload-level identity, so they fall back to
+  # detail recovered from the existing name (app_name first when present).
+  com.apple.notificationsettings:
+    app_name: true
+    from_existing: {}
+  com.apple.TCC.configuration-profile-policy:
+    app_name: true
+    from_existing:
+      strip_leading: [PPPC]
+  com.apple.system-extension-policy:
+    app_name: true
+    from_existing: {}
+  com.apple.MCX:
+    from_existing: {}
+  com.apple.applicationaccess:
+    from_existing: {}
+  com.apple.loginwindow:
+    from_existing: {}
+  # Fonts: distinguishing text lives only in the (replaced) name; reuse it.
+  com.apple.font:
+    from_existing: {}
+
+# bundle id / preference domain -> friendly app name
+apps:
+  com.microsoft.Edge: Microsoft Edge
+  com.microsoft.OneDrive: OneDrive
+  us.zoom.xos: Zoom
+
+# Leading tokens every `from_existing` rule strips before keeping the detail.
+# Generic scope/category words live here. Add YOUR org's cluster / tenant /
+# lifecycle prefixes so they don't leak into the recovered detail — this is the
+# per-org knob. Keep org-specific tokens in a local, uncommitted
+# `.contour/naming.yaml` rather than here.
+strip_leading_default:
+  - System
+  - App
+  - Settings
+  - Restrictions
+  - Notifications
+  - Privacy
+  - Login
+  - Window
+  # --- add your org's cluster / tenant / lifecycle prefixes (local override) ---
+  # - <YOUR_TENANT_CODE>
+  # - Retired
+  # - Legacy
+
+# Tokens removed from recovered detail wherever they appear (trailing/mid-name),
+# with separator cleanup — for cluster/tenant tags that aren't leading prefixes.
+strip_tokens_default: []
+  # - <YOUR_TENANT_CODE>
+
+# Codes preserved and re-appended as a trailing " - {code}" suffix (e.g. site
+# codes), instead of stripped.
+keep_trailing: []
+  # - <YOUR_SITE_CODE>

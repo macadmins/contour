@@ -451,6 +451,86 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 output_mode,
             )?;
         }
+        Commands::Reidentify {
+            paths,
+            org,
+            scheme,
+            recursive,
+            max_depth,
+            no_parallel,
+            write,
+        } => {
+            let org = contour_core::resolve_org(org)?;
+            let scheme = profile::cli::reidentify::parse_scheme(&scheme)?;
+            profile::cli::reidentify::handle_reidentify(
+                &paths,
+                &org,
+                scheme,
+                recursive,
+                max_depth,
+                !no_parallel,
+                write,
+                output_mode,
+            )?;
+        }
+        Commands::Classify {
+            paths,
+            recursive,
+            max_depth,
+            no_parallel,
+            map,
+            write,
+            sync_identity,
+            org,
+            identity_scheme,
+        } => {
+            let scheme = profile::cli::reidentify::parse_scheme(&identity_scheme)?;
+            let org = if sync_identity {
+                Some(contour_core::resolve_org(org)?)
+            } else {
+                None
+            };
+            profile::cli::classify::handle_classify(
+                &paths,
+                recursive,
+                max_depth,
+                !no_parallel,
+                map.as_deref(),
+                write,
+                sync_identity,
+                scheme,
+                org.as_deref(),
+                output_mode,
+            )?;
+        }
+        Commands::Audit {
+            paths,
+            recursive,
+            max_depth,
+            no_parallel,
+            certs_only,
+            secrets_only,
+            with_deprecations,
+            fail_on_secrets,
+            route_into,
+            dry_run,
+            md_report,
+        } => {
+            profile::cli::audit::handle_audit(
+                &paths,
+                recursive,
+                max_depth,
+                !no_parallel,
+                certs_only,
+                secrets_only,
+                with_deprecations,
+                fail_on_secrets,
+                route_into.as_deref(),
+                dry_run,
+                md_report.as_deref(),
+                output_mode,
+            )?;
+        }
         Commands::Search {
             query,
             field,

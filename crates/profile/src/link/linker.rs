@@ -85,6 +85,28 @@ fn generate_uuid_mapping(
     Ok(mapping)
 }
 
+/// Apply a UUID mapping to one profile in place: rewrite the envelope and payload
+/// UUIDs and every reference field (`REFERENCE_FIELDS`).
+#[allow(
+    dead_code,
+    reason = "called from reidentify module; CLI wired in Task 5"
+)]
+pub(crate) fn remap_uuids_in_profile(
+    profile: &mut crate::profile::ConfigurationProfile,
+    mapping: &UuidMapping,
+) -> anyhow::Result<()> {
+    if let Some(new_uuid) = mapping.get(&profile.payload_uuid) {
+        profile.payload_uuid = new_uuid.clone();
+    }
+    for payload in &mut profile.payload_content {
+        if let Some(new_uuid) = mapping.get(&payload.payload_uuid) {
+            payload.payload_uuid = new_uuid.clone();
+        }
+        update_payload_references(payload, mapping)?;
+    }
+    Ok(())
+}
+
 /// Apply UUID mapping to all profiles.
 fn apply_uuid_mapping(
     mut profiles: Vec<(PathBuf, ConfigurationProfile)>,
