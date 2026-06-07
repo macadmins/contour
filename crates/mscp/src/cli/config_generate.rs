@@ -40,6 +40,7 @@ pub fn build_options_from_config(
             } else {
                 Some(config.settings.organization.name.clone())
             },
+            org_domain: None,
             remove_consent_text: config.settings.jamf.remove_consent_text,
             consent_text: config.settings.jamf.consent_text.clone(),
             deterministic_uuids: config.settings.jamf.deterministic_uuids,
@@ -179,6 +180,7 @@ pub fn generate_from_config(config: Config) -> Result<()> {
             opts.no_labels,
             opts.fleet_names,
             false, // fleet_glob — --glob is a CLI-flag-mode option
+            None,  // fleet_label
             opts.fleet_mode,
             opts.jamf_exclude_conflicts,
             opts.generate_ddm,

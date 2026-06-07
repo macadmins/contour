@@ -16,9 +16,11 @@ pub struct FleetGlobalConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reports: Option<Vec<yaml_serde::Value>>,
 
-    /// Agent options - path reference to shared config
+    /// Agent options — retained for reading existing repos; contour no longer
+    /// emits it (the `fleetctl new` scaffold ships none). Always serialized as
+    /// absent via `skip_serializing_if`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_options: Option<AgentOptionsRef>,
+    pub agent_options: Option<yaml_serde::Value>,
 
     /// Controls - only set here OR in no-team.yml, not both
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,12 +48,6 @@ pub struct LabelPathRef {
 
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub paths: Option<String>,
-}
-
-/// Agent options path reference
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentOptionsRef {
-    pub path: String,
 }
 
 /// Organization settings for default.yml
@@ -98,58 +94,9 @@ pub struct Features {
     pub enable_software_inventory: Option<bool>,
 }
 
-/// Agent options configuration (Fleet v4.83+: platforms/all/agent-options.yml)
+/// Fleet settings for fleet files
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentOptions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub command_line_flags: Option<yaml_serde::Value>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<AgentConfig>,
-}
-
-/// Agent config section
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub decorators: Option<Decorators>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<AgentConfigOptions>,
-}
-
-/// Decorators for osquery
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Decorators {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub load: Option<Vec<String>>,
-}
-
-/// Agent config options
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfigOptions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub disable_distributed: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distributed_interval: Option<u32>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distributed_plugin: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distributed_tls_max_attempts: Option<u32>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logger_tls_endpoint: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pack_delimiter: Option<String>,
-}
-
-/// Team settings for team files
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TeamSettings {
+pub struct FleetSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<EnrollSecret>>,
 
@@ -162,7 +109,7 @@ pub struct TeamSettings {
 /// Based on Fleet `GitOps` spec: `pkg/spec/gitops.go`
 /// Top-level keys: `name`, `settings`, `org_settings`, `agent_options`, `controls`, `policies`, `reports`, `software`, `labels`
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FleetTeamConfig {
+pub struct FleetConfig {
     /// Fleet name (top-level, NOT nested under `team:`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -192,7 +139,7 @@ pub struct FleetTeamConfig {
     pub software: Option<Software>,
 }
 
-/// Software configuration for team files
+/// Software configuration for fleet files
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Software {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -351,8 +298,8 @@ pub struct FleetGitOpsOutput {
     /// Base output directory
     pub output_dir: std::path::PathBuf,
 
-    /// Team configurations to be written
-    pub teams: Vec<(String, FleetTeamConfig)>, // (filename, config)
+    /// Fleet configurations to be written
+    pub fleets: Vec<(String, FleetConfig)>, // (filename, config)
 
     /// Files to be copied (source, destination)
     pub files_to_copy: Vec<(std::path::PathBuf, std::path::PathBuf)>,

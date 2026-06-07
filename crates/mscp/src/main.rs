@@ -123,6 +123,7 @@ fn main() -> Result<()> {
             {
                 Some(transformers::ProfileOptions {
                     org_name: org_name.clone(),
+                    org_domain: None,
                     remove_consent_text,
                     consent_text: consent_text.clone(),
                     deterministic_uuids,
@@ -231,6 +232,11 @@ fn main() -> Result<()> {
             no_labels,
             fleets,
             glob,
+            fleet_label,
+            all_fleets,
+            exclude_fleets,
+            remove,
+            canonical_fleets,
             fleet_mode,
             jamf_exclude_conflicts,
             munki_compliance_flags,
@@ -331,6 +337,7 @@ fn main() -> Result<()> {
                     opts.no_labels,
                     opts.fleet_names,
                     false, // fleet_glob — --glob is a CLI-flag-mode option
+                    None,  // fleet_label
                     opts.fleet_mode,
                     opts.jamf_exclude_conflicts,
                     opts.generate_ddm,
@@ -373,6 +380,7 @@ fn main() -> Result<()> {
             {
                 Some(transformers::ProfileOptions {
                     org_name: org_name.clone(),
+                    org_domain: None,
                     remove_consent_text,
                     consent_text: consent_text.clone(),
                     deterministic_uuids,
@@ -430,6 +438,42 @@ fn main() -> Result<()> {
                 cli::generate::switch_branch(&mscp_repo, &target_branch)?;
             }
 
+            // --all-fleets: discover every fleet under fleets/ and attach to each,
+            // minus any --exclude-fleets.
+            let fleets = if all_fleets {
+                let mut names =
+                    crate::updaters::FleetUpdater::new(&output, keyword.clone()).fleet_names()?;
+                if let Some(ref excluded) = exclude_fleets {
+                    names.retain(|n| !excluded.contains(n));
+                }
+                Some(names)
+            } else {
+                fleets
+            };
+
+            // --canonical-fleets: greenfield scaffold of workstations +
+            // personal-mobile-devices (if absent), then attach to workstations.
+            let fleets = if canonical_fleets {
+                let created = crate::updaters::FleetUpdater::new(&output, keyword.clone())
+                    .ensure_canonical_fleets()?;
+                for name in &created {
+                    println!("  ✓ Scaffolded canonical fleet: fleets/{name}.yml");
+                }
+                Some(vec![crate::updaters::fleet::CANONICAL_PRIMARY.to_string()])
+            } else {
+                fleets
+            };
+
+            // --remove: withdraw the baseline from the target fleets and stop.
+            if remove {
+                let Some(ref target_fleets) = fleets else {
+                    anyhow::bail!("--remove requires --fleets or --all-fleets");
+                };
+                crate::updaters::FleetUpdater::new(&output, keyword.clone())
+                    .remove_from_fleets(target_fleets)?;
+                return Ok(());
+            }
+
             cli::generate_baseline(
                 mscp_repo,
                 keyword,
@@ -442,6 +486,7 @@ fn main() -> Result<()> {
                 no_labels,
                 fleets,
                 glob,
+                fleet_label,
                 fleet_mode,
                 jamf_exclude_conflicts,
                 generate_ddm,

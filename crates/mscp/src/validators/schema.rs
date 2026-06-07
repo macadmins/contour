@@ -20,7 +20,7 @@ impl SchemaValidator {
     }
 
     /// Validate a YAML file against a JSON schema
-    pub fn validate_team_yaml<P: AsRef<Path>>(&self, yaml_path: P) -> Result<ValidationResult> {
+    pub fn validate_fleet_yaml<P: AsRef<Path>>(&self, yaml_path: P) -> Result<ValidationResult> {
         let yaml_path = yaml_path.as_ref();
 
         // Read the YAML file

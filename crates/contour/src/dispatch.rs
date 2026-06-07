@@ -483,6 +483,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             sync_identity,
             org,
             identity_scheme,
+            emit_map,
         } => {
             let scheme = profile::cli::reidentify::parse_scheme(&identity_scheme)?;
             let org = if sync_identity {
@@ -500,6 +501,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 sync_identity,
                 scheme,
                 org.as_deref(),
+                emit_map.as_deref(),
                 output_mode,
             )?;
         }
@@ -2041,13 +2043,16 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             let deterministic_uuids = resolve_mscp_deterministic_uuids(deterministic_uuids);
 
             // Build ProfileOptions when any general profile option is set
-            let profile_options = if org_name.is_some()
+            // (including --org, which re-domains the profile identifiers).
+            let profile_options = if org.is_some()
+                || org_name.is_some()
                 || remove_consent_text
                 || consent_text.is_some()
                 || deterministic_uuids
             {
                 Some(mscp::transformers::ProfileOptions {
                     org_name: org_name.clone(),
+                    org_domain: org.clone(),
                     remove_consent_text,
                     consent_text: consent_text.clone(),
                     deterministic_uuids,
@@ -2150,6 +2155,11 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             no_labels,
             fleets,
             glob,
+            fleet_label,
+            all_fleets,
+            exclude_fleets,
+            remove,
+            canonical_fleets,
             fleet_mode,
             jamf_exclude_conflicts,
             munki_compliance_flags,
@@ -2234,6 +2244,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                     opts.no_labels,
                     opts.fleet_names,
                     false, // fleet_glob — --glob is a CLI-flag-mode option
+                    None,  // fleet_label
                     opts.fleet_mode,
                     opts.jamf_exclude_conflicts,
                     opts.generate_ddm,
@@ -2268,13 +2279,16 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             let deterministic_uuids = resolve_mscp_deterministic_uuids(deterministic_uuids);
 
             // Build ProfileOptions when any general profile option is set
-            let profile_options = if org_name.is_some()
+            // (including --org, which re-domains the profile identifiers).
+            let profile_options = if org.is_some()
+                || org_name.is_some()
                 || remove_consent_text
                 || consent_text.is_some()
                 || deterministic_uuids
             {
                 Some(mscp::transformers::ProfileOptions {
                     org_name: org_name.clone(),
+                    org_domain: org.clone(),
                     remove_consent_text,
                     consent_text: consent_text.clone(),
                     deterministic_uuids,
@@ -2332,6 +2346,43 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 mscp::cli::generate::switch_branch(&mscp_repo, &target_branch)?;
             }
 
+            // --all-fleets: discover every fleet under fleets/ and attach to each
+            // (overrides an explicit --fleets list), minus any --exclude-fleets.
+            let fleets = if all_fleets {
+                let mut names =
+                    mscp::updaters::FleetUpdater::new(&output, keyword.clone()).fleet_names()?;
+                if let Some(ref excluded) = exclude_fleets {
+                    names.retain(|n| !excluded.contains(n));
+                }
+                Some(names)
+            } else {
+                fleets
+            };
+
+            // --canonical-fleets: greenfield scaffold of workstations +
+            // personal-mobile-devices (if absent), then attach to workstations.
+            let fleets = if canonical_fleets {
+                let created = mscp::updaters::FleetUpdater::new(&output, keyword.clone())
+                    .ensure_canonical_fleets()?;
+                for name in &created {
+                    println!("  ✓ Scaffolded canonical fleet: fleets/{name}.yml");
+                }
+                Some(vec![mscp::updaters::fleet::CANONICAL_PRIMARY.to_string()])
+            } else {
+                fleets
+            };
+
+            // --remove: withdraw the baseline from the target fleets and stop
+            // (no generation).
+            if remove {
+                let Some(ref target_fleets) = fleets else {
+                    anyhow::bail!("--remove requires --fleets or --all-fleets");
+                };
+                mscp::updaters::FleetUpdater::new(&output, keyword.clone())
+                    .remove_from_fleets(target_fleets)?;
+                return Ok(());
+            }
+
             mscp::cli::generate_baseline(
                 mscp_repo,
                 keyword,
@@ -2344,6 +2395,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 no_labels,
                 fleets,
                 glob,
+                fleet_label,
                 fleet_mode,
                 jamf_exclude_conflicts,
                 generate_ddm,

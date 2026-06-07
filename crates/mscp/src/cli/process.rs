@@ -6,10 +6,10 @@ use crate::managers::{ConstraintType, Constraints, build_exclusion_plan, discove
 use crate::models::Platform;
 use crate::output::{CommandResult, OutputMode, print_bar_chart};
 use crate::transformers::{
-    DdmTransformer, FleetPolicyGenerator, JamfOptions, JamfPostprocessor, LabelGenerator,
-    MunkiComplianceGenerator, MunkiComplianceOptions, MunkiScriptGenerator, MunkiScriptOptions,
-    ProfileOptions, ProfilePostprocessor, ProfileTransformer, RuleScriptGenerator,
-    RuleScriptOptions, ScriptMode, ScriptTransformer, TeamYamlGenerator,
+    DdmTransformer, FleetPolicyGenerator, FleetYamlGenerator, JamfOptions, JamfPostprocessor,
+    LabelGenerator, MunkiComplianceGenerator, MunkiComplianceOptions, MunkiScriptGenerator,
+    MunkiScriptOptions, ProfileOptions, ProfilePostprocessor, ProfileTransformer,
+    RuleScriptGenerator, RuleScriptOptions, ScriptMode, ScriptTransformer,
 };
 use crate::validators::ConflictDetector;
 use crate::versioning::{GitInfoExtractor, ManifestStore, ProfileInfo};
@@ -679,13 +679,13 @@ pub fn process_baseline(
             tracing::info!("Fragment mode: generating Fleet fragment...");
 
             // Generate baseline component (mscp/{baseline}/baseline.toml)
-            let team_generator = TeamYamlGenerator::new(&output_path);
-            let baseline_config = team_generator.generate_baseline_component(
+            let fleet_generator = FleetYamlGenerator::new(&output_path);
+            let baseline_config = fleet_generator.generate_baseline_component(
                 &baseline,
                 &profile_dest_paths,
                 &script_paths,
             )?;
-            let baseline_toml_path = team_generator.write_baseline_component(
+            let baseline_toml_path = fleet_generator.write_baseline_component(
                 &baseline_config,
                 &baseline.name,
                 baseline.platform,
@@ -696,14 +696,14 @@ pub fn process_baseline(
             );
 
             // Generate team YAML with profile/script content (+ policy reference)
-            let team_yml_path = gitops_generator.generate_team_yml_with_glob_plan(
+            let fleet_yml_path = gitops_generator.generate_fleet_yml_with_glob_plan(
                 &baseline.name,
                 &profile_dest_paths,
                 &script_paths,
                 policy_path.as_deref(),
                 &glob_plan,
             )?;
-            tracing::info!("Team YAML written to: {}", team_yml_path.display());
+            tracing::info!("Team YAML written to: {}", fleet_yml_path.display());
 
             // Generate labels (needed for fragment default.yml)
             let layout = contour_core::fleet_layout::FleetLayout::default();
@@ -799,20 +799,18 @@ pub fn process_baseline(
             } else {
                 tracing::info!("Generating Fleet GitOps global structure...");
                 gitops_generator.generate_structure()?;
-                tracing::info!(
-                    "Generated default.yml, platforms/all/agent-options.yml, fleets/unassigned.yml"
-                );
+                tracing::info!("Generated default.yml, fleets/unassigned.yml");
             }
 
             // Generate baseline component (mscp/{baseline}/baseline.toml)
             tracing::info!("Generating baseline component...");
-            let team_generator = TeamYamlGenerator::new(&output_path);
-            let baseline_config = team_generator.generate_baseline_component(
+            let fleet_generator = FleetYamlGenerator::new(&output_path);
+            let baseline_config = fleet_generator.generate_baseline_component(
                 &baseline,
                 &profile_dest_paths,
                 &script_paths,
             )?;
-            let baseline_toml_path = team_generator.write_baseline_component(
+            let baseline_toml_path = fleet_generator.write_baseline_component(
                 &baseline_config,
                 &baseline.name,
                 baseline.platform,
@@ -824,14 +822,14 @@ pub fn process_baseline(
             );
 
             // Generate team YAML with actual profile/script content (+ policy reference)
-            let team_yml_path = gitops_generator.generate_team_yml_with_glob_plan(
+            let fleet_yml_path = gitops_generator.generate_fleet_yml_with_glob_plan(
                 &baseline.name,
                 &profile_dest_paths,
                 &script_paths,
                 policy_path.as_deref(),
                 &glob_plan,
             )?;
-            tracing::info!("Team YAML written to: {}", team_yml_path.display());
+            tracing::info!("Team YAML written to: {}", fleet_yml_path.display());
 
             // Generate label definitions (Fleet-specific)
             if !no_labels {

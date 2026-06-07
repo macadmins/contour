@@ -58,6 +58,24 @@ contour profile command list --json               # 65 commands
 contour profile command generate DeviceLock --set PIN=123456 --uuid --base64
 ```
 
+## Display-Name Naming → `--sop profile-naming`
+
+Use when: renaming profile display names to a friendly, consistent scheme,
+bootstrapping a `name.toml` naming map, or reshuffling identifiers/UUIDs to
+match the names after a manual round.
+
+```bash
+contour profile classify <DIR> -r --emit-map name.toml   # scan → name.toml scaffold (best-guess apps)
+contour profile classify <DIR> -r --map name.toml         # dry-run preview (old → new)
+contour profile classify <DIR> -r --map name.toml --write # apply renames
+contour profile reidentify <DIR> -r --scheme name --org <ORG> --write  # reshuffle ids/UUIDs to match
+contour help-ai --sop profile-naming
+```
+
+Scopes: App (`App - OneDrive (Settings)`), User (`PayloadScope == User`), System.
+Override the schema with `name.toml`/`.contour/naming.yaml`; keep org-internal
+app names local (gitignored), never in a committed map.
+
 ## mSCP Compliance → `--sop mscp`
 
 Use when: working with CIS, STIG, 800-53, CMMC baselines or mSCP security rules.

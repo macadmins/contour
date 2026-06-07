@@ -46,11 +46,12 @@ pub fn classify(rule: &MscpRule) -> Classification {
         return mk(Tier::Residual, None, "mobileconfig array value");
     }
 
-    // 3. Sharing / remote management.
-    if SHARING_HINTS.iter().any(|h| id.contains(h))
-        || check.contains("cupsctl")
-        || check.contains("QuerySecurityInfo")
-    {
+    // 3. Sharing / remote management. `mdmclient QuerySecurityInfo` also reports
+    // secure-boot / recovery-lock / authenticated-root, which are NOT sharing
+    // columns — so only a sharing-hint id (which covers remote_management) or
+    // `cupsctl` routes to sharing_preferences; a bare QuerySecurityInfo check
+    // falls through to the audit script.
+    if SHARING_HINTS.iter().any(|h| id.contains(h)) || check.contains("cupsctl") {
         return mk(
             Tier::Native,
             Some(OsqueryTable::SharingPreferences),
@@ -156,6 +157,17 @@ mod tests {
             false,
         ));
         assert_eq!(c.table, Some(OsqueryTable::SharingPreferences));
+    }
+
+    #[test]
+    fn querysecurityinfo_non_sharing_is_residual() {
+        // secure-boot via QuerySecurityInfo is not a sharing_preferences column.
+        let c = classify(&rule(
+            "os_secure_boot_verify",
+            Some("/usr/libexec/mdmclient QuerySecurityInfo | grep -c SecureBoot"),
+            false,
+        ));
+        assert_eq!(c.tier, Tier::Residual);
     }
 
     #[test]

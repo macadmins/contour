@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 use crate::managers::baseline::baseline_path_to_fleet_path;
+use crate::updaters::injection_manifest::InjectionManifest;
 use contour_core::fleet_layout::FleetLayout;
 use contour_core::yaml_edit;
 
@@ -16,6 +17,11 @@ pub struct FleetUpdater {
     /// When true, the baseline's profiles are attached as a single
     /// `*.mobileconfig` glob entry instead of one entry per file.
     glob: bool,
+    /// Optional label to scope the attached *profiles* to. `None` (default)
+    /// leaves them unscoped — the baseline's configuration profiles enforce on
+    /// every host in the fleet. Remediation *scripts* keep their own functional
+    /// trigger labels regardless.
+    profile_label: Option<String>,
 }
 
 impl FleetUpdater {
@@ -24,6 +30,7 @@ impl FleetUpdater {
             output_base: output_base.as_ref().to_path_buf(),
             baseline_name,
             glob: false,
+            profile_label: None,
         }
     }
 
@@ -33,6 +40,38 @@ impl FleetUpdater {
     pub fn with_glob(mut self, glob: bool) -> Self {
         self.glob = glob;
         self
+    }
+
+    /// Scope attached profiles to a label (opt-in). Without it, profiles are
+    /// unscoped (apply to all hosts in the fleet).
+    #[must_use]
+    pub fn with_profile_label(mut self, label: Option<String>) -> Self {
+        self.profile_label = label;
+        self
+    }
+
+    /// The labels to scope attached profile entries with: the explicit
+    /// `--fleet-label`, else none (unscoped).
+    fn profile_labels(&self) -> Vec<String> {
+        self.profile_label.clone().into_iter().collect()
+    }
+
+    /// The fleet entries this baseline contributes (the profile glob/paths plus
+    /// each script path) — recorded in the injection manifest as contour-owned.
+    fn baseline_entries(&self) -> Result<Vec<String>> {
+        let mut entries = Vec::new();
+        let profiles = self.get_baseline_profiles()?;
+        if self.glob {
+            if !profiles.is_empty() {
+                entries.push(glob_dir_from_profiles(&profiles)?);
+            }
+        } else {
+            entries.extend(profiles);
+        }
+        for (script_path, _label) in self.get_baseline_scripts()? {
+            entries.push(script_path);
+        }
+        Ok(entries)
     }
 
     /// Validate that all fleet names resolve to existing fleet files.
@@ -50,7 +89,7 @@ impl FleetUpdater {
         }
 
         if !missing.is_empty() {
-            let available = self.list_available_fleets()?;
+            let available = self.fleet_names()?;
             anyhow::bail!(
                 "Fleet files not found: {missing}\n\
                  Available fleets: {available}\n\
@@ -76,6 +115,7 @@ impl FleetUpdater {
 
     /// Add baseline to specified fleets using comment-preserving editing.
     pub fn add_to_fleets(&self, fleet_names: &[String]) -> Result<()> {
+        let mut manifest = InjectionManifest::load(&self.output_base)?;
         for fleet_name in fleet_names {
             let fleet_file = self
                 .output_base
@@ -83,7 +123,7 @@ impl FleetUpdater {
                 .join(format!("{fleet_name}.yml"));
 
             if !fleet_file.exists() {
-                let available = self.list_available_fleets()?;
+                let available = self.fleet_names()?;
                 anyhow::bail!(
                     "Fleet file not found: {}\nAvailable fleets: {}",
                     fleet_file.display(),
@@ -107,14 +147,21 @@ impl FleetUpdater {
             let mut modified = content.clone();
             let mut changes_made = false;
 
+            // Emit the `# contour:<baseline>` signpost only if this fleet doesn't
+            // already carry it — decided from the original content so the
+            // profiles- and scripts-section appends agree (scripts runs on the
+            // already-modified text, which by then holds the profile marker).
+            let marker_line = format!("# contour:{}", self.baseline_name);
+            let marker = (!content.contains(&marker_line)).then_some(self.baseline_name.as_str());
+
             // Append profiles to controls.apple_settings.configuration_profiles
-            if let Some(new_content) = self.append_profiles(&modified)? {
+            if let Some(new_content) = self.append_profiles(&modified, marker)? {
                 modified = new_content;
                 changes_made = true;
             }
 
             // Append scripts to controls.scripts
-            if let Some(new_content) = self.append_scripts(&modified)? {
+            if let Some(new_content) = self.append_scripts(&modified, marker)? {
                 modified = new_content;
                 changes_made = true;
             }
@@ -144,8 +191,62 @@ impl FleetUpdater {
                     self.baseline_name
                 );
             }
+
+            // Record this baseline as injected into the fleet — the manifest is
+            // the source of truth for idempotency and `--remove`.
+            manifest.record(fleet_name, &self.baseline_name, self.baseline_entries()?);
         }
 
+        manifest.save(&self.output_base)?;
+        Ok(())
+    }
+
+    /// Withdraw this baseline from `fleet_names`, using the injection manifest to
+    /// know exactly which entries contour added. Each entry line (and its
+    /// indented continuation, e.g. labels) is removed; everything else — the
+    /// operator's own content and comments — is left byte-stable. Fails closed on
+    /// invalid YAML, and updates the manifest.
+    pub fn remove_from_fleets(&self, fleet_names: &[String]) -> Result<()> {
+        let mut manifest = InjectionManifest::load(&self.output_base)?;
+        for fleet_name in fleet_names {
+            let Some(injection) = manifest.find(fleet_name, &self.baseline_name) else {
+                tracing::info!(
+                    "  Fleet '{}' has no '{}' injection recorded — nothing to remove",
+                    fleet_name,
+                    self.baseline_name
+                );
+                continue;
+            };
+            let fleet_file = self
+                .output_base
+                .join("fleets")
+                .join(format!("{fleet_name}.yml"));
+            if !fleet_file.exists() {
+                manifest.remove(fleet_name, &self.baseline_name);
+                continue;
+            }
+            let content = std::fs::read_to_string(&fleet_file)
+                .with_context(|| format!("Failed to read {}", fleet_file.display()))?;
+            let modified = remove_entries(&content, &injection.entries, Some(&self.baseline_name));
+            if modified != content {
+                if let Err(e) = yaml_serde::from_str::<yaml_serde::Value>(&modified) {
+                    anyhow::bail!(
+                        "refused to edit {}: removing the baseline produced invalid YAML ({e}). \
+                         The file was left untouched.",
+                        fleet_file.display()
+                    );
+                }
+                std::fs::write(&fleet_file, &modified)
+                    .with_context(|| format!("Failed to write {}", fleet_file.display()))?;
+                tracing::info!(
+                    "✓ Removed '{}' from fleet: {}",
+                    self.baseline_name,
+                    fleet_name
+                );
+            }
+            manifest.remove(fleet_name, &self.baseline_name);
+        }
+        manifest.save(&self.output_base)?;
         Ok(())
     }
 
@@ -196,7 +297,7 @@ impl FleetUpdater {
     /// In glob mode the whole baseline is attached as a single
     /// `*.mobileconfig` entry; otherwise one entry per profile is emitted.
     /// Returns `Some(modified)` if changes were made, `None` if already present.
-    fn append_profiles(&self, content: &str) -> Result<Option<String>> {
+    fn append_profiles(&self, content: &str, marker: Option<&str>) -> Result<Option<String>> {
         let baseline_profiles = self.get_baseline_profiles()?;
 
         if baseline_profiles.is_empty() {
@@ -204,7 +305,9 @@ impl FleetUpdater {
             return Ok(None);
         }
 
-        let label_name = format!("mscp-{}", self.baseline_name);
+        // Profiles are unscoped by default (enforce on all hosts in the fleet);
+        // `--fleet-label` opts into scoping them.
+        let labels = self.profile_labels();
 
         let entries: Vec<yaml_edit::ProfileListEntry> = if self.glob {
             // One glob entry covering the baseline's profile directory.
@@ -215,7 +318,7 @@ impl FleetUpdater {
             vec![yaml_edit::ProfileListEntry {
                 path: glob_path,
                 glob: true,
-                labels_include_all: vec![label_name],
+                labels_include_all: labels.clone(),
             }]
         } else {
             // One literal entry per profile, skipping any already present.
@@ -225,7 +328,7 @@ impl FleetUpdater {
                 .map(|path| yaml_edit::ProfileListEntry {
                     path: path.clone(),
                     glob: false,
-                    labels_include_all: vec![label_name.clone()],
+                    labels_include_all: labels.clone(),
                 })
                 .collect()
         };
@@ -240,13 +343,13 @@ impl FleetUpdater {
             if entries.len() == 1 { "y" } else { "ies" }
         );
         Ok(Some(yaml_edit::append_apple_configuration_profiles(
-            content, &entries,
+            content, &entries, marker,
         )))
     }
 
     /// Append baseline scripts using line-based editing.
     /// Returns `Some(modified)` if changes were made, `None` if all already present.
-    fn append_scripts(&self, content: &str) -> Result<Option<String>> {
+    fn append_scripts(&self, content: &str, marker: Option<&str>) -> Result<Option<String>> {
         let baseline_scripts = self.get_baseline_scripts()?;
 
         if baseline_scripts.is_empty() {
@@ -268,6 +371,10 @@ impl FleetUpdater {
 
         tracing::info!("  Adding {} scripts", new_entries.len());
 
+        // A seeded `scripts: []` must become bare before we splice block entries
+        // under it (otherwise the result is invalid YAML).
+        let content = yaml_edit::normalize_empty_flow_list(content, &["controls", "scripts"]);
+        let content = content.as_str();
         let lines: Vec<&str> = content.lines().collect();
 
         // Format script entries with labels_include_all
@@ -284,7 +391,13 @@ impl FleetUpdater {
             })
             .collect();
 
-        let flat: Vec<String> = formatted.into_iter().flatten().collect();
+        let mut flat: Vec<String> = formatted.into_iter().flatten().collect();
+
+        // Lead the injected block with a `# contour:<baseline>` signpost (indent 4
+        // to match the script entries). Cosmetic — the manifest drives removal.
+        if let Some(baseline) = marker {
+            flat.insert(0, format!("    # contour:{baseline}"));
+        }
 
         // Try to find existing controls.scripts section
         if let Some(insert) =
@@ -408,7 +521,9 @@ impl FleetUpdater {
     }
 
     /// List available fleet files
-    fn list_available_fleets(&self) -> Result<Vec<String>> {
+    /// The fleet names (file stems) present under `fleets/`, sorted, excluding
+    /// example stubs. Used by `--all-fleets` to attach a baseline to every fleet.
+    pub fn fleet_names(&self) -> Result<Vec<String>> {
         let fleets_dir = self.output_base.join("fleets");
 
         if !fleets_dir.exists() {
@@ -434,6 +549,77 @@ impl FleetUpdater {
         fleets.sort();
         Ok(fleets)
     }
+
+    /// Scaffold the canonical greenfield fleets ([`CANONICAL_FLEETS`]) that don't
+    /// yet exist under `fleets/`, returning the names actually created (empty if
+    /// all were already present). Idempotent — never overwrites an operator's
+    /// fleet file. Used by `--canonical-fleets` to bootstrap a repo with no
+    /// fleets before attaching a baseline to the workstations fleet.
+    ///
+    /// # Errors
+    /// Returns an error if the `fleets/` directory or a file cannot be written.
+    pub fn ensure_canonical_fleets(&self) -> Result<Vec<String>> {
+        let fleets_dir = self.output_base.join("fleets");
+        std::fs::create_dir_all(&fleets_dir)
+            .with_context(|| format!("Failed to create {}", fleets_dir.display()))?;
+
+        let mut created = Vec::new();
+        for (name, purpose) in CANONICAL_FLEETS {
+            let path = fleets_dir.join(format!("{name}.yml"));
+            if path.exists() {
+                continue;
+            }
+            std::fs::write(&path, canonical_fleet_yaml(name, purpose))
+                .with_context(|| format!("Failed to write {}", path.display()))?;
+            created.push((*name).to_string());
+        }
+        Ok(created)
+    }
+}
+
+/// Remove list entries whose `path:`/`paths:` value is in `paths`, plus each
+/// entry's indented continuation lines (e.g. `labels_include_all`). Everything
+/// else — operator content, comments, blank lines — is preserved verbatim.
+fn remove_entries(content: &str, paths: &[String], marker: Option<&str>) -> String {
+    // The cosmetic `# contour:<baseline>` signpost, dropped alongside its entries
+    // so removal leaves no orphaned marker behind.
+    let marker_line = marker.map(|b| format!("# contour:{b}"));
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim_start();
+        if marker_line.as_deref() == Some(trimmed) {
+            i += 1;
+            continue;
+        }
+        let is_target = (trimmed.starts_with("- path:") || trimmed.starts_with("- paths:"))
+            && paths.iter().any(|p| line.contains(p.as_str()));
+        if !is_target {
+            out.push(line);
+            i += 1;
+            continue;
+        }
+        // Drop the entry and any lines indented deeper than it (its continuation).
+        let indent = line.len() - trimmed.len();
+        i += 1;
+        while i < lines.len() {
+            let next = lines[i];
+            let next_trim = next.trim_start();
+            let deeper = !next_trim.is_empty() && (next.len() - next_trim.len()) > indent;
+            if deeper {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+    }
+    let mut result = out.join("\n");
+    if content.ends_with('\n') {
+        result.push('\n');
+    }
+    result
 }
 
 /// Derive a single `*.mobileconfig` glob path from a baseline's profile
@@ -486,10 +672,157 @@ pub fn fleet_stub_yaml(fleet_name: &str) -> String {
     )
 }
 
+/// The canonical fleet that macOS security baselines attach to: supervised,
+/// MDM-managed workstations (not BYOD). `--canonical-fleets` targets this fleet.
+pub const CANONICAL_PRIMARY: &str = "workstations";
+
+/// The greenfield fleets `--canonical-fleets` scaffolds, each with a purpose
+/// comment block (every line prefixed `# `, trailing newline): a supervised
+/// macOS workstation fleet and a BYOD/user-enrolled mobile fleet.
+const CANONICAL_FLEETS: &[(&str, &str)] = &[
+    (
+        CANONICAL_PRIMARY,
+        "# Supervised, MDM-managed macOS workstations — the primary target for\n\
+         # security baselines (CIS, STIG, 800-53). `--canonical-fleets` attaches a\n\
+         # baseline's configuration profiles and audit scripts to the sections below.\n",
+    ),
+    (
+        "personal-mobile-devices",
+        "# BYOD / user-enrolled iPhones and iPads with a limited management scope.\n\
+         # macOS security baselines do NOT attach here — keep this fleet for\n\
+         # mobile-appropriate configuration only.\n",
+    ),
+];
+
+/// A canonical Fleet GitOps team file for `--canonical-fleets`: all seven
+/// top-level keys present so `fleetctl gitops` parses it, `controls` already
+/// shaped as `apple_settings.configuration_profiles: []` + `scripts: []` so a
+/// baseline attach inserts cleanly. `purpose` is the per-fleet comment block.
+fn canonical_fleet_yaml(fleet_name: &str, purpose: &str) -> String {
+    format!(
+        "# Fleet GitOps — {fleet_name} fleet (scaffolded by `contour mscp generate --canonical-fleets`)\n\
+         #\n\
+         {purpose}\
+         #\n\
+         # Before `fleetctl gitops`:\n\
+         #   - Set host-label targeting / team enrollment for this fleet\n\
+         #   - Wire in any required `secrets:` (e.g. enroll secret)\n\
+         #   - Confirm `agent_options.path` matches your repo layout\n\
+         #\n\
+         # See: https://fleetdm.com/docs/configuration/yaml-files#teams\n\
+         \n\
+         name: {fleet_name}\n\
+         controls:\n  \
+           apple_settings:\n    \
+             configuration_profiles: []\n  \
+           scripts: []\n\
+         policies: []\n\
+         reports: []\n\
+         agent_options:\n  \
+           path: ../platforms/all/agent-options.yml\n\
+         settings: {{}}\n\
+         software: {{}}\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn remove_entries_drops_matched_entry_and_labels_keeps_rest() {
+        let content = "\
+controls:
+  apple_settings:
+    configuration_profiles:
+      # operator's own profile — keep
+      - paths: ../platforms/macos/configuration-profiles/tenants/sample/*.mobileconfig
+      # contour:cis_lvl1
+      - paths: ../platforms/macos/configuration-profiles/cis_lvl1/*.mobileconfig
+        labels_include_all:
+          - \"mscp-cis_lvl1\"
+  scripts:
+    # contour:cis_lvl1
+    - path: ../platforms/macos/scripts/cis_lvl1/cis_lvl1_os_audit.sh
+      labels_include_all:
+        - \"mscp-cis_lvl1\"
+";
+        let removed = remove_entries(
+            content,
+            &[
+                "../platforms/macos/configuration-profiles/cis_lvl1/*.mobileconfig".to_string(),
+                "../platforms/macos/scripts/cis_lvl1/cis_lvl1_os_audit.sh".to_string(),
+            ],
+            Some("cis_lvl1"),
+        );
+        // CIS profile + its labels, the CIS script + its labels, and both
+        // `# contour:cis_lvl1` signposts are gone…
+        assert!(!removed.contains("cis_lvl1"));
+        assert!(!removed.contains("mscp-cis_lvl1"));
+        assert!(!removed.contains("# contour:"));
+        // …operator content + comment preserved.
+        assert!(removed.contains("tenants/sample/*.mobileconfig"));
+        assert!(removed.contains("# operator's own profile — keep"));
+    }
+
+    #[test]
+    fn ensure_canonical_fleets_scaffolds_valid_files_idempotently() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let updater = FleetUpdater::new(tmp.path(), "cis_lvl1".to_string());
+
+        // First run creates both canonical fleets, in declaration order.
+        let created = updater.ensure_canonical_fleets().unwrap();
+        assert_eq!(created, vec!["workstations", "personal-mobile-devices"]);
+
+        let ws = tmp.path().join("fleets/workstations.yml");
+        let mobile = tmp.path().join("fleets/personal-mobile-devices.yml");
+        assert!(ws.exists() && mobile.exists());
+
+        // Each scaffold is valid YAML with the attach-ready controls shape.
+        let ws_text = fs::read_to_string(&ws).unwrap();
+        yaml_serde::from_str::<yaml_serde::Value>(&ws_text).expect("workstations.yml parses");
+        assert!(ws_text.contains("name: workstations"));
+        assert!(ws_text.contains("configuration_profiles: []"));
+        assert!(ws_text.contains("scripts: []"));
+
+        // Second run is a no-op: nothing created, operator content untouched.
+        fs::write(&ws, "name: workstations  # operator-owned\n").unwrap();
+        let again = updater.ensure_canonical_fleets().unwrap();
+        assert!(again.is_empty());
+        assert_eq!(
+            fs::read_to_string(&ws).unwrap(),
+            "name: workstations  # operator-owned\n"
+        );
+    }
+
+    #[test]
+    fn fleet_names_discovers_yml_stems_sorted_excluding_examples() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let fleets = tmp.path().join("fleets");
+        fs::create_dir_all(&fleets).unwrap();
+        for f in [
+            "servers.yml",
+            "workstations.yml",
+            "example-fleet.yml",
+            "notes.txt",
+        ] {
+            fs::write(fleets.join(f), "name: x\n").unwrap();
+        }
+        let updater = FleetUpdater::new(tmp.path(), "cis_lvl1".to_string());
+        // Sorted, .yml only, example stubs excluded.
+        assert_eq!(
+            updater.fleet_names().unwrap(),
+            vec!["servers", "workstations"]
+        );
+    }
+
+    #[test]
+    fn fleet_names_is_empty_when_no_fleets_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let updater = FleetUpdater::new(tmp.path(), "cis_lvl1".to_string());
+        assert!(updater.fleet_names().unwrap().is_empty());
+    }
 
     #[test]
     fn fleet_stub_yaml_is_well_formed() {
@@ -609,7 +942,7 @@ mod tests {
 
         let updater = FleetUpdater::new("/tmp/test", "cis_lvl2".to_string());
         // append_profiles reads from baseline.toml which doesn't exist — returns None
-        let result = updater.append_profiles(content).unwrap();
+        let result = updater.append_profiles(content, None).unwrap();
         assert!(result.is_none());
     }
 
@@ -618,7 +951,7 @@ mod tests {
         let content = "# Fleet: Blue\nname: fleet-air-blue\n\n# Controls section\ncontrols:\n  scripts:\n    - path: ../lib/macos/scripts/existing.sh\n";
 
         let updater = FleetUpdater::new("/tmp/test", "cis_lvl2".to_string());
-        let result = updater.append_scripts(content).unwrap();
+        let result = updater.append_scripts(content, None).unwrap();
         assert!(result.is_none());
     }
 }

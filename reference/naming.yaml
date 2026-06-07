@@ -7,11 +7,13 @@
 # name is derivable; otherwise system-scope. The "(...)" is dropped when empty.
 
 system_format: "{scope} - {kind} ({subject})"
-app_format: "{subject} ({kind})"
+app_format: "{scope} - {subject} ({kind})"
 multi_kind_join: " + "
 
 scope:
   system_label: System
+  app_label: App
+  user_label: User
   app_payload_types:
     - com.apple.ManagedClient.preferences
     - com.apple.notificationsettings
@@ -71,11 +73,40 @@ subjects:
   com.apple.font:
     from_existing: {}
 
-# bundle id / preference domain -> friendly app name
+# bundle id / preference domain -> friendly app name.
+# This is the matrix: `raw.bundle.id: Desired Name`. Add an entry to remap any
+# bundle id that otherwise falls back to its raw id. Keep org-internal app names
+# in a local `.contour/name.toml` / `.contour/naming.yaml`, not here.
 apps:
   com.microsoft.Edge: Microsoft Edge
+  com.microsoft.edgemac: Microsoft Edge
   com.microsoft.OneDrive: OneDrive
+  com.microsoft.Outlook: Microsoft Outlook
+  com.microsoft.Word: Microsoft Word
+  com.microsoft.office: Microsoft Office
+  com.microsoft.autoupdate2: Microsoft AutoUpdate
+  com.microsoft.teams: Microsoft Teams
+  com.microsoft.teams2: Microsoft Teams
+  com.microsoft.remotehelp: Microsoft Remote Help
   us.zoom.xos: Zoom
+  com.google.Chrome: Google Chrome
+  com.google.Keystone: Google Keystone
+  org.mozilla.firefox: Mozilla Firefox
+  com.adobe.Acrobat.Pro: Adobe Acrobat Pro
+  com.adobe.ARMDC: Adobe Acrobat Reader
+  com.apple.AppStore: App Store
+  com.apple.appstore: App Store
+  com.apple.SoftwareUpdate: Software Update
+  com.apple.Terminal: Terminal
+  com.spotify.client: Spotify
+  com.cisco.secureclient.gui: Cisco Secure Client
+  com.cisco.webexmeetingsapp: Webex
+  com.logmein.GoToMeeting: GoToMeeting
+  com.teamviewer.TeamViewerQS: TeamViewer QuickSupport
+  com.displaylink.DisplayLinkUserAgent: DisplayLink
+  corp.sap.privileges: Privileges
+  corp.sap.privileges.agent: Privileges Agent
+  nl.root3.support: Support
 
 # Leading tokens every `from_existing` rule strips before keeping the detail.
 # Generic scope/category words live here. Add YOUR org's cluster / tenant /
@@ -105,3 +136,8 @@ strip_tokens_default: []
 # codes), instead of stripped.
 keep_trailing: []
   # - <YOUR_SITE_CODE>
+
+# Codes preserved and re-prepended as a leading "{code} - " prefix (e.g. a
+# tenant/cluster code that should lead the name), instead of stripped.
+keep_leading: []
+  # - <YOUR_TENANT_CODE>

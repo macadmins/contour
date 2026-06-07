@@ -57,19 +57,17 @@ fn launchd_disabled(check: &str) -> Option<String> {
     ))
 }
 
-/// Find the service label in a `"<label>" => disabled` substring of the check.
+/// Find the service label in a `"<label>" => enabled|disabled` substring of the
+/// check. mSCP phrases the grep either way (compliant = the service is disabled);
+/// the label is the quoted token before the ` => ` arrow and the compliance query
+/// is identical regardless.
 fn extract_launchd_label(check: &str) -> Option<&str> {
-    let marker = " => disabled";
-    let marker_at = check.find(marker)?;
-    // The label is the quoted token immediately before the marker:  "<label>" => disabled
+    let marker_at = check.find(" => ")?;
     let before = &check[..marker_at];
     let close_quote = before.rfind('"')?;
     let open_quote = before[..close_quote].rfind('"')?;
     let label = &before[open_quote + 1..close_quote];
-    if label.is_empty() {
-        return None;
-    }
-    Some(label)
+    (!label.is_empty()).then_some(label)
 }
 
 #[cfg(test)]
@@ -121,6 +119,25 @@ mod tests {
         assert_eq!(
             q,
             "SELECT 1 FROM launchd_overrides WHERE label = 'com.apple.smbd' AND key = 'Disabled' AND value IN ('1','true')"
+        );
+    }
+
+    #[test]
+    fn launchd_label_from_enabled_marker() {
+        // mSCP checks often grep `"<label>" => enabled` (compliant = service is
+        // disabled). The label is still extractable; the compliance query is the
+        // same disabled-override check.
+        let q = build(
+            OsqueryTable::LaunchdOverrides,
+            &rule(
+                "os_tftpd_disable",
+                Some("enabled=$(/bin/launchctl print-disabled system | /usr/bin/grep '\"com.apple.tftpd\" => enabled')"),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            q,
+            "SELECT 1 FROM launchd_overrides WHERE label = 'com.apple.tftpd' AND key = 'Disabled' AND value IN ('1','true')"
         );
     }
 

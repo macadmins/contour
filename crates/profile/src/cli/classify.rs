@@ -36,6 +36,7 @@ pub fn handle_classify(
     sync_identity: bool,
     scheme: crate::reidentify::Scheme,
     org: Option<&str>,
+    emit_map: Option<&str>,
     output_mode: OutputMode,
 ) -> Result<()> {
     if sync_identity && org.is_none() {
@@ -52,6 +53,13 @@ pub fn handle_classify(
         }
         vec![p.to_path_buf()]
     };
+
+    // --emit-map: scan the profiles and write a name.toml scaffold instead of
+    // renaming. Surfaces every bundle id (best-guess names) so nothing falls
+    // back to a raw id silently.
+    if let Some(out) = emit_map {
+        return emit_map_scaffold(&files, &map, out, output_mode);
+    }
 
     // Phase 1: classify every profile (no writes), in parallel.
     let process = |path: &PathBuf| -> Result<Classified, (String, String)> {
@@ -117,6 +125,62 @@ pub fn handle_classify(
     match output_mode {
         OutputMode::Json => print_json(&results, write),
         OutputMode::Human => print_human(&results, write),
+    }
+    Ok(())
+}
+
+/// `--emit-map`: parse the profiles, scan for bundle ids/payload types, and write
+/// a `name.toml` scaffold with best-guess names for review.
+fn emit_map_scaffold(
+    files: &[PathBuf],
+    map: &NamingMap,
+    out: &str,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let mut profiles = Vec::new();
+    for path in files {
+        match parse_profile_auto_unsign(&path.to_string_lossy()) {
+            Ok(p) => profiles.push(p),
+            Err(e) => eprintln!("{} {}: {}", "Warning:".yellow(), path.display(), e),
+        }
+    }
+    let report = crate::classify::scan::scan(&profiles, map);
+    let toml = crate::classify::scan::emit_name_toml(&report, map);
+    std::fs::write(out, &toml).with_context(|| format!("write {out}"))?;
+
+    match output_mode {
+        OutputMode::Json => {
+            let summary = serde_json::json!({
+                "emitted": out,
+                "profiles_scanned": report.profiles_scanned,
+                "new_bundle_ids": report.new_bundle_ids.len(),
+                "new_payload_types": report.new_payload_types.iter().collect::<Vec<_>>(),
+            });
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        OutputMode::Human => {
+            println!(
+                "Scanned {} profile(s) → {}",
+                report.profiles_scanned,
+                out.cyan()
+            );
+            println!(
+                "  {} new bundle id(s) added with best-guess names (review `# review` lines)",
+                report.new_bundle_ids.len()
+            );
+            if !report.new_payload_types.is_empty() {
+                println!(
+                    "  {} unmapped payload type(s): {}",
+                    report.new_payload_types.len(),
+                    report
+                        .new_payload_types
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
     }
     Ok(())
 }

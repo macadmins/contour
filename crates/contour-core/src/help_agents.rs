@@ -207,8 +207,9 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "osquery" => SOP_OSQUERY,
         "precommit" | "pre-commit" | "hook" | "git-hook" | "githook" => SOP_PRECOMMIT,
         "profile-changes" | "plan" | "rollback" | "change-impact" | "review" => SOP_PROFILE_CHANGES,
+        "profile-naming" | "naming" | "classify" | "rename" | "display-name" => SOP_PROFILE_NAMING,
         _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, mscp, ddm, santa, pppc, btm, notifications, support, osquery, precommit, profile-changes"
+            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, mscp, ddm, santa, pppc, btm, notifications, support, osquery, precommit, profile-changes"
         ),
     };
     writer.write_all(sop.as_bytes())?;
@@ -275,6 +276,7 @@ const SOP_PRECOMMIT: &str = include_str!("../skills/contour/references/sop-preco
 /// the implementations target.
 const SOP_PROFILE_CHANGES: &str =
     include_str!("../skills/contour/references/sop-profile-changes.md");
+const SOP_PROFILE_NAMING: &str = include_str!("../skills/contour/references/sop-profile-naming.md");
 
 /// SOP_FLEET_MIGRATE — 12th SOP. Numbered migration playbook (NOT a
 /// callable procedure). Validated against fleetctl v4.84.2 scaffold +

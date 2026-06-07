@@ -59,6 +59,10 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap subcommand enum: the Generate variant carries many CLI flags; boxing a derive(Subcommand) variant is not worth the ergonomic cost"
+)]
 pub enum Commands {
     /// Display project information and status
     Info {
@@ -405,6 +409,34 @@ pub enum Commands {
         /// [FLEET] With --fleets, attach the baseline as a single *.mobileconfig glob entry instead of one entry per profile
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         glob: bool,
+
+        /// [FLEET] With --fleets, scope the attached profiles to this label (default: unscoped — applies to all hosts in the fleet)
+        #[arg(
+            long,
+            value_name = "LABEL",
+            help_heading = "Experimental - not stable (Fleet Options)"
+        )]
+        fleet_label: Option<String>,
+
+        /// [FLEET] Attach the baseline to EVERY fleet found under fleets/ (multi-brand: one baseline across all fleets). Overrides --fleets.
+        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        all_fleets: bool,
+
+        /// [FLEET] With --all-fleets, fleets to skip (comma-separated) — "all or nearly all"
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help_heading = "Experimental - not stable (Fleet Options)"
+        )]
+        exclude_fleets: Option<Vec<String>>,
+
+        /// [FLEET] With --fleets/--all-fleets, REMOVE this baseline's injection from the target fleets (manifest-driven) instead of adding it
+        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        remove: bool,
+
+        /// [FLEET] Greenfield: scaffold canonical workstations + personal-mobile-devices fleets (if absent) and attach the baseline to workstations
+        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        canonical_fleets: bool,
 
         /// [MUNKI] Generate Munki compliance flags nopkg item (for osquery/FleetDM scoping)
         #[arg(long, help_heading = "Experimental - not stable (Munki Options)")]

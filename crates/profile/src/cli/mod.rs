@@ -420,6 +420,13 @@ pub enum Commands {
             help = "Identity scheme for --sync-identity: name (default) or uuid"
         )]
         identity_scheme: String,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Scan the profiles and write a name.toml naming scaffold (with best-guess app names) instead of renaming"
+        )]
+        emit_map: Option<String>,
     },
 
     #[command(

@@ -27,7 +27,7 @@ pub fn validate_output(
     // Fleet v4.83+ layout: baseline components live at mscp/{baseline}/baseline.toml
     // (no longer under lib/mscp/). See sop-format-spec.md migration history.
     let mscp_dir = output_path.join("mscp");
-    let teams_dir = output_path.join("fleets");
+    let fleets_dir = output_path.join("fleets");
 
     if !mscp_dir.exists() {
         result.add_error("Missing mscp/ directory (run `contour mscp generate` to populate)");
@@ -35,7 +35,7 @@ pub fn validate_output(
         println!("  {} mscp/ directory exists", "✓".green());
     }
 
-    if !teams_dir.exists() {
+    if !fleets_dir.exists() {
         result.add_error("Missing fleets directory");
     } else if output_mode == OutputMode::Human {
         println!("  {} fleets directory exists", "✓".green());
@@ -47,7 +47,7 @@ pub fn validate_output(
     }
     let validator = SchemaValidator::new(schemas_path.as_ref());
 
-    for entry in WalkDir::new(&teams_dir)
+    for entry in WalkDir::new(&fleets_dir)
         .max_depth(1)
         .into_iter()
         .filter_map(std::result::Result::ok)
@@ -56,12 +56,12 @@ pub fn validate_output(
         if path.extension().and_then(|s| s.to_str()) == Some("yml")
             || path.extension().and_then(|s| s.to_str()) == Some("yaml")
         {
-            result.team_files_checked += 1;
+            result.fleet_files_checked += 1;
 
-            match validator.validate_team_yaml(path) {
+            match validator.validate_fleet_yaml(path) {
                 Ok(validation_result) => {
                     if validation_result.valid {
-                        result.team_files_valid += 1;
+                        result.fleet_files_valid += 1;
                         if output_mode == OutputMode::Human {
                             println!(
                                 "  {} {} - {}",
@@ -71,7 +71,7 @@ pub fn validate_output(
                             );
                         }
                     } else {
-                        result.team_files_invalid += 1;
+                        result.fleet_files_invalid += 1;
                         if output_mode == OutputMode::Human {
                             println!(
                                 "  {} {} - {}",
@@ -89,7 +89,7 @@ pub fn validate_output(
                     }
                 }
                 Err(e) => {
-                    result.team_files_invalid += 1;
+                    result.fleet_files_invalid += 1;
                     if output_mode == OutputMode::Human {
                         println!(
                             "  {} {} - {}: {}",

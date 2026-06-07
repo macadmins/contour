@@ -269,7 +269,7 @@ impl FleetLayout {
             labels_dir: "lib/all/labels",
             unassigned_filename: "no-team.yml",
             unassigned_name: "No team",
-            settings_key: "team_settings",
+            settings_key: "fleet_settings",
             agent_options_path: "lib/agent-options.yml",
 
             macos_profiles_subdir: "lib/macos/configuration-profiles",
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(layout.platforms_dir, "lib");
         assert_eq!(layout.labels_dir, "lib/all/labels");
         assert_eq!(layout.unassigned_filename, "no-team.yml");
-        assert_eq!(layout.settings_key, "team_settings");
+        assert_eq!(layout.settings_key, "fleet_settings");
     }
 
     #[test]

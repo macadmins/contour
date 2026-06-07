@@ -1,5 +1,6 @@
 pub mod ddm;
 pub mod fleet_policy;
+pub mod fleet_yaml;
 pub mod jamf;
 pub mod jamf_scoping;
 pub mod labels;
@@ -10,10 +11,10 @@ pub mod profile;
 pub mod rule_script;
 pub mod script;
 pub mod script_helpers;
-pub mod team_yaml;
 
 pub use ddm::*;
 pub use fleet_policy::*;
+pub use fleet_yaml::*;
 pub use jamf::*;
 pub use jamf_scoping::*;
 pub use labels::*;
@@ -22,4 +23,3 @@ pub use munki_script::*;
 pub use profile::*;
 pub use rule_script::*;
 pub use script::*;
-pub use team_yaml::*;

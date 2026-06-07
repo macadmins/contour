@@ -331,6 +331,7 @@ fn run(cli: Cli) -> Result<()> {
             sync_identity,
             org,
             identity_scheme,
+            emit_map,
         } => {
             let scheme = cli::reidentify::parse_scheme(&identity_scheme)?;
             let org = if sync_identity {
@@ -348,6 +349,7 @@ fn run(cli: Cli) -> Result<()> {
                 sync_identity,
                 scheme,
                 org.as_deref(),
+                emit_map.as_deref(),
                 output_mode,
             )?;
         }

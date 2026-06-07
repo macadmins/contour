@@ -186,6 +186,7 @@ pub fn generate_baseline(
     no_labels: bool,
     fleet_names: Option<Vec<String>>,
     fleet_glob: bool,
+    fleet_label: Option<String>,
     fleet_mode: bool,
     jamf_exclude_conflicts: bool,
     generate_ddm: bool,
@@ -375,19 +376,19 @@ pub fn generate_baseline(
     }
 
     // Step 3: Update fleet files if requested
-    if let Some(teams) = fleet_names {
+    if let Some(fleets) = fleet_names {
         // Validate teams upfront before doing any work
         {
             use crate::updaters::FleetUpdater;
             let updater = FleetUpdater::new(&output_path, baseline_name.clone());
-            updater.validate_fleets(&teams)?;
+            updater.validate_fleets(&fleets)?;
         };
 
         if dry_run {
             if output_mode == OutputMode::Human && !batch_mode {
                 println!("\nWould update fleet files:");
-                for team in &teams {
-                    println!("  • Add baseline to fleet: {team}");
+                for fleet in &fleets {
+                    println!("  • Add baseline to fleet: {fleet}");
                 }
                 println!("  • Update default.yml with labels");
             }
@@ -395,14 +396,15 @@ pub fn generate_baseline(
             tracing::info!("Updating fleet files...");
             use crate::updaters::FleetUpdater;
 
-            let updater =
-                FleetUpdater::new(&output_path, baseline_name.clone()).with_glob(fleet_glob);
+            let updater = FleetUpdater::new(&output_path, baseline_name.clone())
+                .with_glob(fleet_glob)
+                .with_profile_label(fleet_label.clone());
 
             // Add labels to default.yml
             updater.add_labels_to_default()?;
 
             // Add baseline to specified teams
-            updater.add_to_fleets(&teams)?;
+            updater.add_to_fleets(&fleets)?;
 
             if output_mode == OutputMode::Human && !batch_mode {
                 println!("{}", "✓ Team files updated successfully".green());
@@ -1407,6 +1409,7 @@ pub fn generate_all_baselines(
                     false, // no_labels (default to generating labels)
                     None,  // fleet_names - not used in generate-all mode
                     false, // fleet_glob - not used in generate-all mode
+                    None,  // fleet_label - not used in generate-all mode
                     fleet_mode,
                     jamf_exclude_conflicts,
                     generate_ddm,
@@ -1466,6 +1469,7 @@ pub fn generate_all_baselines(
                 false, // no_labels (default to generating labels)
                 None,  // fleet_names - not used in generate-all mode
                 false, // fleet_glob - not used in generate-all mode
+                None,  // fleet_label - not used in generate-all mode
                 fleet_mode,
                 jamf_exclude_conflicts,
                 generate_ddm,
@@ -1991,8 +1995,8 @@ pub fn list_baselines(output: PathBuf, output_mode: OutputMode) -> Result<()> {
             println!("    {} Referenced by: {}", "-".dimmed(), "(none)".dimmed());
         } else {
             println!("    {} Referenced by:", "-".dimmed());
-            for team_file in &baseline.referenced_by {
-                if let Some(filename) = team_file.file_name() {
+            for fleet_file in &baseline.referenced_by {
+                if let Some(filename) = fleet_file.file_name() {
                     println!(
                         "        {} fleets/{}",
                         "-".dimmed(),

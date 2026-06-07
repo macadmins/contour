@@ -4,6 +4,7 @@
 
 pub mod collision;
 pub mod map;
+pub mod scan;
 
 use serde::Serialize;
 
@@ -41,6 +42,8 @@ const NAME_SEPARATORS: [char; 3] = [' ', '-', ':'];
 /// Subject derivation outcome for one profile.
 struct Derived {
     subject: Option<String>,
+    /// Leading keep codes to prepend before the formatted name.
+    leading: Vec<String>,
     /// Trailing site/keep codes to append after the formatted name.
     trailing: Vec<String>,
     /// The subject came from a payload-derived app name (drives app-format).
@@ -73,19 +76,30 @@ pub fn classify_profile(profile: &ConfigurationProfile, map: &NamingMap) -> Clas
     }
 
     let kind_str = kinds.join(&map.multi_kind_join);
-    let scope_label = &map.scope.system_label;
-    let lead_prefix = format!("{scope_label} - {kind_str}");
+    // Lead prefix for idempotent stripping uses the system label; `strip_leading_default`
+    // declares the scope words (System/App/User/…) so app/user names still strip cleanly.
+    let lead_prefix = format!("{} - {kind_str}", map.scope.system_label);
     let d = derive_subject(profile, map, &lead_prefix, &kinds);
 
-    // App-format only when the profile is app-scope AND a real app name was
-    // derived; otherwise the system format applies (Scope - Kind (detail)).
+    // Scope (checked in order): App (app-config payloads + a derived app name) →
+    // User (`PayloadScope == "User"`) → System. App leads with the subject; User
+    // and System share the kind-first system format. The `{scope}` placeholder is
+    // filled with the matching label.
     let is_app_format = is_app_scope(profile, map) && d.used_app_name && d.subject.is_some();
+    let scope_label = if is_app_format {
+        &map.scope.app_label
+    } else if is_user_scope(profile) {
+        &map.scope.user_label
+    } else {
+        &map.scope.system_label
+    };
     let new_name = render(
         map,
         is_app_format,
         scope_label,
         &kind_str,
         d.subject.as_deref(),
+        &d.leading,
         &d.trailing,
     );
 
@@ -95,6 +109,15 @@ pub fn classify_profile(profile: &ConfigurationProfile, map: &NamingMap) -> Clas
         subject: d.subject,
         status: d.status,
     }
+}
+
+/// True when the profile envelope declares `PayloadScope == "User"`.
+fn is_user_scope(profile: &ConfigurationProfile) -> bool {
+    profile
+        .additional_fields
+        .get("PayloadScope")
+        .and_then(plist::Value::as_string)
+        == Some("User")
 }
 
 /// True when every payload that contributes a kind is an app-config type.
@@ -124,6 +147,7 @@ fn render(
     scope_label: &str,
     kind: &str,
     subject: Option<&str>,
+    leading: &[String],
     trailing: &[String],
 ) -> String {
     let tmpl = if is_app {
@@ -144,7 +168,13 @@ fn render(
         out.push_str(" - ");
         out.push_str(code);
     }
-    out
+    // Re-prepend any leading keep-codes as a `{code} - ` prefix, in order.
+    let mut prefix = String::new();
+    for code in leading {
+        prefix.push_str(code);
+        prefix.push_str(" - ");
+    }
+    format!("{prefix}{out}")
 }
 
 /// Derive the subject, trailing codes and status by walking payloads in map order.
@@ -171,6 +201,7 @@ fn derive_subject(
                 if !s.is_empty() {
                     return Derived {
                         subject: Some(s.to_string()),
+                        leading: Vec::new(),
                         trailing: Vec::new(),
                         used_app_name: false,
                         status: Status::Classified,
@@ -185,6 +216,7 @@ fn derive_subject(
                     if let Some(cn) = info.subject_cn {
                         return Derived {
                             subject: Some(cn),
+                            leading: Vec::new(),
                             trailing: Vec::new(),
                             used_app_name: false,
                             status: Status::Classified,
@@ -202,6 +234,7 @@ fn derive_subject(
                 };
                 return Derived {
                     subject: Some(subject),
+                    leading: Vec::new(),
                     trailing: Vec::new(),
                     used_app_name: true,
                     status,
@@ -210,18 +243,20 @@ fn derive_subject(
         }
 
         if let Some(fe) = &rule.from_existing {
-            let (subject, trailing) = extract_from_existing(
+            let (subject, leading, trailing) = extract_from_existing(
                 &profile.payload_display_name,
                 fe,
                 lead_prefix,
                 kind_labels,
                 &map.strip_leading_default,
                 &map.strip_tokens_default,
+                &map.keep_leading,
                 &map.keep_trailing,
             );
             if subject.is_some() {
                 return Derived {
                     subject,
+                    leading,
                     trailing,
                     used_app_name: false,
                     status: Status::Classified,
@@ -231,6 +266,7 @@ fn derive_subject(
     }
     Derived {
         subject: None,
+        leading: Vec::new(),
         trailing: Vec::new(),
         used_app_name: false,
         status: Status::Classified,
@@ -244,6 +280,10 @@ fn derive_subject(
 /// strips the rendered `{scope} - {kind}` lead plus leading scope/cluster
 /// tokens. Always preferring the parenthetical keeps renaming idempotent:
 /// `Scope - Kind (detail)` recovers `detail` on a second pass.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "naming-map knobs threaded explicitly"
+)]
 fn extract_from_existing(
     name: &str,
     rule: &map::FromExisting,
@@ -251,11 +291,14 @@ fn extract_from_existing(
     kind_labels: &[String],
     strip_leading_default: &[String],
     strip_tokens_default: &[String],
+    keep_leading: &[String],
     keep_trailing: &[String],
-) -> (Option<String>, Vec<String>) {
+) -> (Option<String>, Vec<String>, Vec<String>) {
     // Ignore a trailing collision suffix so re-classification is idempotent.
     let trimmed = collision::strip_suffix(name.trim());
-    let (remainder, codes) = extract_keep_codes(trimmed, keep_trailing);
+    // Pull leading keep-codes first, then trailing, from what remains.
+    let (after_leading, leading) = extract_keep_codes(trimmed, keep_leading);
+    let (remainder, codes) = extract_keep_codes(&after_leading, keep_trailing);
 
     let detail = match first_parenthetical(&remainder) {
         Some(p) => p,
@@ -275,7 +318,7 @@ fn extract_from_existing(
 
     // Remove cluster/tenant tags wherever they appear (trailing, mid-name).
     let cleaned = strip_tokens_anywhere(&detail, strip_tokens_default);
-    ((!cleaned.is_empty()).then_some(cleaned), codes)
+    ((!cleaned.is_empty()).then_some(cleaned), leading, codes)
 }
 
 /// Pull whole-word keep-codes out of `s` (anywhere), returning the remaining
@@ -396,9 +439,31 @@ fn strip_leading_tokens(name: &str, tokens: &[&str]) -> String {
 /// `PayloadContent`; other app payloads carry a `BundleIdentifier` /
 /// `ServiceProviderBundleIdentifier` field.
 fn app_bundle_id(payload: &PayloadContent) -> Option<String> {
+    // ManagedClient.preferences: the inner preference domain is the first key.
     if let Some(plist::Value::Dictionary(dict)) = payload.content.get("PayloadContent") {
         if let Some((domain, _)) = dict.iter().next() {
             return Some(domain.clone());
+        }
+    }
+    // notificationsettings: the target app is NotificationSettings[0].BundleIdentifier.
+    if let Some(plist::Value::Array(arr)) = payload.content.get("NotificationSettings") {
+        if let Some(plist::Value::Dictionary(first)) = arr.first() {
+            if let Some(id) = first
+                .get("BundleIdentifier")
+                .and_then(plist::Value::as_string)
+            {
+                return Some(id.to_string());
+            }
+        }
+    }
+    // TCC privacy: the target app is the first service entry's Identifier.
+    if let Some(plist::Value::Dictionary(services)) = payload.content.get("Services") {
+        if let Some(plist::Value::Array(arr)) = services.values().next() {
+            if let Some(plist::Value::Dictionary(first)) = arr.first() {
+                if let Some(id) = first.get("Identifier").and_then(plist::Value::as_string) {
+                    return Some(id.to_string());
+                }
+            }
         }
     }
     for key in ["BundleIdentifier", "ServiceProviderBundleIdentifier"] {
@@ -532,7 +597,10 @@ mod tests {
             )],
         );
         let c = classify_profile(&p, &map());
-        assert_eq!(c.new_name.as_deref(), Some("Microsoft Edge (Settings)"));
+        assert_eq!(
+            c.new_name.as_deref(),
+            Some("App - Microsoft Edge (Settings)")
+        );
         assert_eq!(c.status, Status::Classified);
     }
 
@@ -551,7 +619,10 @@ mod tests {
             )],
         );
         let c = classify_profile(&p, &map());
-        assert_eq!(c.new_name.as_deref(), Some("de.acme.customapp (Settings)"));
+        assert_eq!(
+            c.new_name.as_deref(),
+            Some("App - de.acme.customapp (Settings)")
+        );
         assert_eq!(c.status, Status::AppUnmapped);
     }
 

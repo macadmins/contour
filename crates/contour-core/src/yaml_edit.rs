@@ -605,13 +605,56 @@ pub fn find_nested_key(lines: &[&str], section_path: &[&str]) -> Option<(usize, 
     Some((found_idx, found_indent))
 }
 
+/// Rewrite an empty flow list (`key: []`) at `section_path` to a bare `key:`,
+/// so block-style entries can be inserted under it.
+///
+/// The line-based appenders insert `- path:` items beneath a section header;
+/// that is invalid YAML under a `key: []` whose value is already closed. Real
+/// fleet files commonly seed sections as `configuration_profiles: []` /
+/// `scripts: []`, so callers normalize the target section first. No-op when the
+/// key is absent or already block-style (bare or with items).
+pub fn normalize_empty_flow_list(content: &str, section_path: &[&str]) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let Some((idx, _)) = find_nested_key(&lines, section_path) else {
+        return content.to_string();
+    };
+    let line = lines[idx];
+    if line.trim_end().ends_with(": []") {
+        let mut out: Vec<String> = lines.iter().map(|l| (*l).to_string()).collect();
+        out[idx] = line
+            .trim_end()
+            .trim_end_matches("[]")
+            .trim_end()
+            .to_string();
+        let mut result = out.join("\n");
+        if content.ends_with('\n') {
+            result.push('\n');
+        }
+        return result;
+    }
+    content.to_string()
+}
+
 /// Format `ProfileListEntry` values into YAML lines at the given indent.
 ///
 /// A glob entry is emitted as `- paths:`, a literal one as `- path:`.
-fn format_profile_list_entries(entries: &[ProfileListEntry], indent: usize) -> Vec<String> {
+///
+/// When `marker` is `Some("cis_lvl1")`, a `# contour:cis_lvl1` signpost comment
+/// leads the block so a human reading the fleet file can see which baseline
+/// contour injected the entries below. The marker is cosmetic — the injection
+/// manifest, not this comment, is the source of truth for removal.
+fn format_profile_list_entries(
+    entries: &[ProfileListEntry],
+    indent: usize,
+    marker: Option<&str>,
+) -> Vec<String> {
     let pad = " ".repeat(indent);
     let sub_pad = " ".repeat(indent + 2);
     let mut lines = Vec::new();
+
+    if let Some(baseline) = marker {
+        lines.push(format!("{pad}# contour:{baseline}"));
+    }
 
     for e in entries {
         let key = if e.glob { "paths" } else { "path" };
@@ -644,10 +687,25 @@ fn format_profile_list_entries(entries: &[ProfileListEntry], indent: usize) -> V
 ///
 /// The result is NOT validated here; callers should parse it (fail-closed)
 /// before writing over an operator's file.
-pub fn append_apple_configuration_profiles(content: &str, entries: &[ProfileListEntry]) -> String {
+///
+/// When `marker` is `Some(baseline)`, a `# contour:<baseline>` signpost comment
+/// leads the inserted block (see [`format_profile_list_entries`]).
+pub fn append_apple_configuration_profiles(
+    content: &str,
+    entries: &[ProfileListEntry],
+    marker: Option<&str>,
+) -> String {
     if entries.is_empty() {
         return content.to_string();
     }
+
+    // A seeded `configuration_profiles: []` must become bare before we splice
+    // block entries under it (otherwise the result is invalid YAML).
+    let content = normalize_empty_flow_list(
+        content,
+        &["controls", "apple_settings", "configuration_profiles"],
+    );
+    let content = content.as_str();
 
     let lines: Vec<&str> = content.lines().collect();
 
@@ -657,7 +715,7 @@ pub fn append_apple_configuration_profiles(content: &str, entries: &[ProfileList
         &lines,
         &["controls", "apple_settings", "configuration_profiles"],
     ) {
-        let flat = format_profile_list_entries(entries, insert.indent);
+        let flat = format_profile_list_entries(entries, insert.indent, marker);
         return insert_lines_at(content, &insert, &flat);
     }
 
@@ -666,7 +724,7 @@ pub fn append_apple_configuration_profiles(content: &str, entries: &[ProfileList
         let cp_indent = as_indent + 2;
         let item_indent = cp_indent + 2;
         let mut new_lines = vec![format!("{}configuration_profiles:", " ".repeat(cp_indent))];
-        new_lines.extend(format_profile_list_entries(entries, item_indent));
+        new_lines.extend(format_profile_list_entries(entries, item_indent, marker));
         let insert = InsertPoint {
             line: as_idx + 1,
             indent: item_indent,
@@ -695,7 +753,7 @@ pub fn append_apple_configuration_profiles(content: &str, entries: &[ProfileList
             format!("{}apple_settings:", " ".repeat(c_indent + 2)),
             format!("{}configuration_profiles:", " ".repeat(c_indent + 4)),
         ];
-        new_lines.extend(format_profile_list_entries(entries, item_indent));
+        new_lines.extend(format_profile_list_entries(entries, item_indent, marker));
         let insert = InsertPoint {
             line: insert_at,
             indent: item_indent,
@@ -710,7 +768,7 @@ pub fn append_apple_configuration_profiles(content: &str, entries: &[ProfileList
         result.push('\n');
     }
     result.push_str("controls:\n  apple_settings:\n    configuration_profiles:\n");
-    for line in format_profile_list_entries(entries, 6) {
+    for line in format_profile_list_entries(entries, 6, marker) {
         result.push_str(&line);
         result.push('\n');
     }
@@ -1533,7 +1591,7 @@ controls:
     #[test]
     fn test_remove_preserves_unrelated_content() {
         let content = "\
-name: TestTeam
+name: TestFleet
 controls:
   scripts:
     - path: ../lib/macos/scripts/setup.sh
@@ -1546,7 +1604,7 @@ policies:
             remove_path_entries(content, &["../lib/all/reports/disk.yml".to_string()]);
         assert_eq!(count, 1);
         assert!(!result.contains("disk.yml"));
-        assert!(result.contains("name: TestTeam"));
+        assert!(result.contains("name: TestFleet"));
         assert!(result.contains("setup.sh"));
         assert!(result.contains("filevault.yml"));
     }
@@ -1725,7 +1783,7 @@ controls:
     #[test]
     fn test_set_nested_kvs_no_controls_section() {
         let content = "\
-name: TestTeam
+name: TestFleet
 reports:
   - path: ../lib/q.yml
 ";
@@ -1766,11 +1824,63 @@ controls:
         }
     }
 
+    /// A `Some(baseline)` marker leads the inserted block with a signpost
+    /// comment, at the same indent as the entries.
+    #[test]
+    fn marker_emits_contour_signpost_before_entries() {
+        let content = "name: ws\ncontrols:\n  apple_settings:\n    configuration_profiles:\n      - path: ../lib/macos/configuration-profiles/existing.mobileconfig\n";
+        let result =
+            append_apple_configuration_profiles(content, &[glob_entry()], Some("cis_lvl1"));
+
+        assert!(result.contains("      # contour:cis_lvl1"));
+        // The signpost sits immediately above the injected glob.
+        let marker_at = result.find("# contour:cis_lvl1").unwrap();
+        let glob_at = result.find("mscp_800-53").unwrap();
+        assert!(marker_at < glob_at);
+        // No marker is emitted when the caller passes None.
+        let plain = append_apple_configuration_profiles(content, &[glob_entry()], None);
+        assert!(!plain.contains("# contour:"));
+    }
+
+    /// A seeded `configuration_profiles: []` is normalized to bare before the
+    /// glob is spliced under it, so the result is valid block YAML — not the
+    /// `- paths:` -under- `[]` that fail-closed validation would reject.
+    #[test]
+    fn append_into_empty_flow_list_produces_valid_block() {
+        let content = "name: ws\ncontrols:\n  apple_settings:\n    configuration_profiles: []\n  scripts: []\n";
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
+
+        // The `[]` is gone; the glob sits as a block item beneath the bare key.
+        assert!(!result.contains("configuration_profiles: []"));
+        assert!(result.contains("    configuration_profiles:\n"));
+        assert!(result.contains(
+            "      - paths: ../lib/macos/configuration-profiles/mscp_800-53/*.mobileconfig"
+        ));
+        // The untouched `scripts: []` is preserved verbatim.
+        assert!(result.contains("  scripts: []"));
+    }
+
+    #[test]
+    fn normalize_empty_flow_list_is_noop_when_absent_or_block() {
+        // Absent key → unchanged.
+        let c1 = "name: ws\ncontrols:\n  scripts: []\n";
+        assert_eq!(
+            normalize_empty_flow_list(
+                c1,
+                &["controls", "apple_settings", "configuration_profiles"]
+            ),
+            c1
+        );
+        // Already block-style (has items) → unchanged.
+        let c2 = "controls:\n  scripts:\n    - path: a.sh\n";
+        assert_eq!(normalize_empty_flow_list(c2, &["controls", "scripts"]), c2);
+    }
+
     /// Shape A — the configuration_profiles list already has items.
     #[test]
     fn test_append_apple_cp_shape_a_existing_items() {
         let content = "name: \"\u{1f4bb} Workstations\"\ncontrols:\n  enable_disk_encryption: true\n  apple_settings:\n    configuration_profiles:\n      - path: ../lib/macos/configuration-profiles/date-time.mobileconfig\n      - path: ../lib/macos/configuration-profiles/firewall.mobileconfig\n        labels_exclude_any:\n          - macOS screen lock exclusions\n  scripts:\n    - path: ../lib/macos/scripts/uninstall-fleetd-macos.sh\n";
-        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
 
         // Glob appended after the last existing profile, at item indent 6.
         assert!(result.contains(
@@ -1794,7 +1904,7 @@ controls:
     #[test]
     fn test_append_apple_cp_shape_b_empty_list() {
         let content = "name: servers\ncontrols:\n  apple_settings:\n    configuration_profiles:\n  scripts:\n";
-        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
 
         assert!(result.contains(
             "      - paths: ../lib/macos/configuration-profiles/mscp_800-53/*.mobileconfig"
@@ -1809,7 +1919,7 @@ controls:
     #[test]
     fn test_append_apple_cp_shape_c_no_cp_child() {
         let content = "name: Unassigned\npolicies:\ncontrols:\n  apple_settings:\n";
-        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
 
         assert!(result.contains("    configuration_profiles:"));
         assert!(result.contains(
@@ -1822,7 +1932,7 @@ controls:
     #[test]
     fn test_append_apple_cp_shape_d_no_apple_settings() {
         let content = "name: \"\u{1f9ea} Testing & QA\"\ncontrols:\n  enable_disk_encryption: true\n  scripts:\n    - path: ../lib/macos/scripts/uninstall-fleetd-macos.sh\npolicies:\n";
-        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
 
         assert!(result.contains("  apple_settings:"));
         assert!(result.contains("    configuration_profiles:"));
@@ -1841,7 +1951,7 @@ controls:
     #[test]
     fn test_append_apple_cp_shape_e_no_controls() {
         let content = "name: minimal\n";
-        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
 
         assert!(result.contains("name: minimal"));
         assert!(result.contains("controls:"));
@@ -1855,7 +1965,7 @@ controls:
     #[test]
     fn test_append_apple_cp_preserves_comments() {
         let content = "# Fleet team file\nname: ws\ncontrols:\n  apple_settings:\n    configuration_profiles:\n      # security baseline profiles\n      - path: ../lib/macos/configuration-profiles/firewall.mobileconfig\n";
-        let result = append_apple_configuration_profiles(content, &[glob_entry()]);
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
         assert!(result.contains("# Fleet team file"));
         assert!(result.contains("      # security baseline profiles"));
         assert!(result.contains("mscp_800-53"));
@@ -1865,6 +1975,9 @@ controls:
     #[test]
     fn test_append_apple_cp_empty_entries_noop() {
         let content = "name: ws\ncontrols:\n  apple_settings:\n    configuration_profiles:\n";
-        assert_eq!(append_apple_configuration_profiles(content, &[]), content);
+        assert_eq!(
+            append_apple_configuration_profiles(content, &[], None),
+            content
+        );
     }
 }

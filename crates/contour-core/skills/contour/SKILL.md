@@ -55,6 +55,7 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 | Fleet GitOps migration | `contour help-ai --sop fleet-migrate` |
 | Santa rules, CEL, FAA | `contour help-ai --sop santa` |
 | DDM declarations | `contour help-ai --sop ddm` |
+| Rename display names, friendly naming, name.toml, reidentify | `contour help-ai --sop profile-naming` |
 
 For the full routing table with examples, read `references/sop-routing.md`.
 

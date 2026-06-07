@@ -10,6 +10,11 @@ pub struct ProfileOptions {
     /// Organization display name for `PayloadOrganization` (e.g., "Macadmin")
     pub org_name: Option<String>,
 
+    /// Organization reverse-domain (e.g. `com.acme`). When set, every
+    /// `PayloadIdentifier` (envelope + payloads) is prefixed with it so the
+    /// generated profiles carry the org domain. UUIDs are left untouched.
+    pub org_domain: Option<String>,
+
     /// Remove `ConsentText` from profiles
     pub remove_consent_text: bool,
 
@@ -75,6 +80,11 @@ impl ProfilePostprocessor {
                     Value::String(org_name.clone()),
                 );
                 tracing::debug!("Set PayloadOrganization to {org_name}");
+            }
+
+            // Prefix identifiers with the org reverse-domain (UUIDs untouched).
+            if let Some(ref org_domain) = self.options.org_domain {
+                redomain(dict, org_domain);
             }
 
             // Handle ConsentText
@@ -189,6 +199,33 @@ impl ProfilePostprocessor {
 
         Ok(())
     }
+}
+
+/// Prefix the envelope and every payload `PayloadIdentifier` with `{org}.`.
+/// UUIDs are left untouched, so cross-references (which use `PayloadUUID`) keep
+/// resolving. Idempotent — an identifier already under `{org}.` is left as-is.
+fn redomain(dict: &mut Dictionary, org: &str) {
+    prefix_identifier(dict, org);
+    if let Some(Value::Array(payloads)) = dict.get_mut("PayloadContent") {
+        for payload in payloads.iter_mut() {
+            if let Value::Dictionary(pd) = payload {
+                prefix_identifier(pd, org);
+            }
+        }
+    }
+}
+
+/// Prepend `{org}.` to this dict's `PayloadIdentifier` unless already present.
+fn prefix_identifier(dict: &mut Dictionary, org: &str) {
+    let prefix = format!("{org}.");
+    let Some(Value::String(current)) = dict.get("PayloadIdentifier") else {
+        return;
+    };
+    if current.starts_with(&prefix) {
+        return;
+    }
+    let new = format!("{prefix}{current}");
+    dict.insert("PayloadIdentifier".to_string(), Value::String(new));
 }
 
 /// Jamf postprocessor for mobileconfig files
@@ -400,6 +437,50 @@ impl JamfPostprocessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redomain_prefixes_envelope_and_payloads_idempotently() {
+        let mut payload = Dictionary::new();
+        payload.insert(
+            "PayloadIdentifier".into(),
+            Value::String("mscp.com.apple.MCX.uuid-1".into()),
+        );
+        payload.insert("PayloadUUID".into(), Value::String("uuid-1".into()));
+        let mut dict = Dictionary::new();
+        dict.insert(
+            "PayloadIdentifier".into(),
+            Value::String("com.apple.MCX.cis_lvl1".into()),
+        );
+        dict.insert(
+            "PayloadContent".into(),
+            Value::Array(vec![Value::Dictionary(payload)]),
+        );
+
+        redomain(&mut dict, "com.acme");
+        // Envelope + payload identifiers gain the org prefix…
+        assert_eq!(
+            dict.get("PayloadIdentifier").and_then(Value::as_string),
+            Some("com.acme.com.apple.MCX.cis_lvl1")
+        );
+        let p = match dict.get("PayloadContent") {
+            Some(Value::Array(a)) => a[0].as_dictionary().unwrap(),
+            _ => panic!("payload"),
+        };
+        assert_eq!(
+            p.get("PayloadIdentifier").and_then(Value::as_string),
+            Some("com.acme.mscp.com.apple.MCX.uuid-1")
+        );
+        // …while the UUID is untouched (references keep resolving).
+        assert_eq!(
+            p.get("PayloadUUID").and_then(Value::as_string),
+            Some("uuid-1")
+        );
+
+        // Idempotent: a second pass changes nothing.
+        let before = dict.clone();
+        redomain(&mut dict, "com.acme");
+        assert_eq!(dict, before);
+    }
 
     #[test]
     fn test_deterministic_uuid_generation() {

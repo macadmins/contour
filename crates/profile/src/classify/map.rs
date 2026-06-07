@@ -54,22 +54,58 @@ pub struct NamingMap {
     /// site codes), rather than stripped. Whole-word, case-insensitive.
     #[serde(default)]
     pub keep_trailing: Vec<String>,
+    /// Codes preserved and re-prepended as a leading `{code} - ` prefix (e.g.
+    /// a tenant/cluster code that should lead the name), rather than stripped.
+    /// Whole-word, case-insensitive.
+    #[serde(default)]
+    pub keep_leading: Vec<String>,
 }
 
 /// Scope detection and labelling.
-#[derive(Debug, Clone, Default, Deserialize)]
+///
+/// A profile is classified into one of three scopes (checked in this order):
+/// **App** (every kind-contributing payload is an `app_payload_types` entry and an
+/// app name is derivable), **User** (envelope `PayloadScope == "User"`), else
+/// **System**. Each scope renders with its own label substituted for `{scope}`.
+#[derive(Debug, Clone, Deserialize)]
 pub struct ScopeConfig {
     /// Label used for system-scope profiles (e.g. `System`).
     #[serde(default = "default_system_label")]
     pub system_label: String,
+    /// Label used for app-scope profiles (e.g. `App`).
+    #[serde(default = "default_app_label")]
+    pub app_label: String,
+    /// Label used for user-scope profiles — envelope `PayloadScope == "User"`
+    /// (e.g. `User`).
+    #[serde(default = "default_user_label")]
+    pub user_label: String,
     /// Payload types that mark a profile as app-scope. A profile is app-scope
     /// when every payload that contributes a kind is one of these.
     #[serde(default)]
     pub app_payload_types: Vec<String>,
 }
 
+impl Default for ScopeConfig {
+    fn default() -> Self {
+        Self {
+            system_label: default_system_label(),
+            app_label: default_app_label(),
+            user_label: default_user_label(),
+            app_payload_types: Vec::new(),
+        }
+    }
+}
+
 fn default_system_label() -> String {
     "System".to_string()
+}
+
+fn default_app_label() -> String {
+    "App".to_string()
+}
+
+fn default_user_label() -> String {
+    "User".to_string()
 }
 
 /// How to derive the `{subject}` for a payload type.
@@ -116,26 +152,52 @@ impl NamingMap {
         yaml_serde::from_str(text).context("Failed to parse naming map YAML")
     }
 
-    /// The embedded default map.
+    /// Parse a map from TOML text (the `name.toml` override format).
+    ///
+    /// # Errors
+    /// Returns an error if the TOML is malformed or missing required fields.
+    pub fn from_toml(text: &str) -> Result<Self> {
+        toml::from_str(text).context("Failed to parse naming map TOML")
+    }
+
+    /// Load a map from a file, picking the parser by extension: `.toml` → TOML,
+    /// anything else → YAML.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be read or parsed.
+    pub fn from_file(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read naming map: {}", path.display()))?;
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("toml"))
+        {
+            Self::from_toml(&text)
+        } else {
+            Self::from_yaml(&text)
+        }
+    }
+
+    /// The embedded default map — contour's built-in naming schema.
     pub fn embedded() -> Result<Self> {
         Self::from_yaml(EMBEDDED_DEFAULT)
     }
 
-    /// Resolve the map to use: explicit `path` → `.contour/naming.yaml` → embedded default.
+    /// Resolve the map to use. Contour's embedded schema is the default; callers
+    /// override it with `--map`, or a repo-local `.contour/name.toml` (TOML) or
+    /// `.contour/naming.yaml` (YAML), checked in that order.
     ///
     /// # Errors
     /// Returns an error if an explicitly requested file cannot be read or parsed.
     pub fn resolve(explicit: Option<&Path>) -> Result<Self> {
         if let Some(p) = explicit {
-            let text = std::fs::read_to_string(p)
-                .with_context(|| format!("Failed to read naming map: {}", p.display()))?;
-            return Self::from_yaml(&text);
+            return Self::from_file(p);
         }
-        let local = Path::new(".contour/naming.yaml");
-        if local.is_file() {
-            let text = std::fs::read_to_string(local)
-                .with_context(|| format!("Failed to read {}", local.display()))?;
-            return Self::from_yaml(&text);
+        for candidate in [".contour/name.toml", ".contour/naming.yaml"] {
+            let local = Path::new(candidate);
+            if local.is_file() {
+                return Self::from_file(local);
+            }
         }
         Self::embedded()
     }
@@ -149,7 +211,9 @@ mod tests {
     fn embedded_default_parses() {
         let map = NamingMap::embedded().expect("embedded map parses");
         assert_eq!(map.system_format, "{scope} - {kind} ({subject})");
-        assert_eq!(map.app_format, "{subject} ({kind})");
+        assert_eq!(map.app_format, "{scope} - {subject} ({kind})");
+        assert_eq!(map.scope.app_label, "App");
+        assert_eq!(map.scope.user_label, "User");
         assert_eq!(map.multi_kind_join, " + ");
         assert_eq!(
             map.kinds.get("com.apple.wifi.managed").map(String::as_str),
