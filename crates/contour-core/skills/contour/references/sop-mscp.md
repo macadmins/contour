@@ -327,6 +327,44 @@ contour mscp clean --baseline <name> --output ./output --force  # remove
 contour mscp deduplicate --output ./output     # find shared profiles
 ```
 
+### Attach a baseline to existing fleets (inject engine)
+
+```
+# Generate the baseline AND attach its profiles + scripts to fleet files in one run.
+# Profiles are unscoped by default (every host in the fleet); --fleet-label scopes them.
+contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG \
+  --fleets workstations,kiosks   # attach to named fleets (comma-separated)
+  # --all-fleets                   # attach to EVERY fleet under fleets/ (multi-brand)
+  # --exclude-fleets a,b           # with --all-fleets, skip these ("all or nearly all")
+  # --fleet-label "SYS - VIP"      # scope the attached profiles to a label
+  # --canonical-fleets             # greenfield: scaffold workstations + personal-mobile-devices, attach to workstations
+  # --glob                         # one *.mobileconfig glob entry instead of per-file
+#
+# Idempotent: a fleet already carrying the baseline is left unchanged.
+# A `# contour:<baseline>` marker leads each injected block (cosmetic signpost).
+# The injection manifest (.contour/fleet-injections.toml) records every attach.
+# ONE profile set is referenced by MANY fleets via glob — never duplicated or re-identified per fleet.
+
+# Withdraw a baseline (manifest-driven — removes the entries + markers it added):
+contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG \
+  --fleets kiosks --remove
+```
+
+### Generate Fleet scheduled-query reports
+
+```
+# --osquery also emits Fleet "reports" (scheduled queries for data collection — NOT pass/fail):
+#   platforms/macos/reports/<baseline>-compliance.reports.yml  — per-rule audit-plist status
+#   platforms/macos/reports/security-posture.reports.yml       — OS/FileVault/SIP/firewall/Gatekeeper/screen-lock
+contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG --osquery
+#
+# The security-posture pack is OVERRIDABLE: drop a repo-local .contour/security-posture.toml
+# (a list of [[report]] tables: name, description, query, platform=darwin, interval,
+# observer_can_run, automations_enabled) to replace or extend it WITHOUT recompiling.
+# Canonical fleets glob ../platforms/macos/reports/*.yml so reports apply automatically.
+# Verify the emitted queries with `contour osquery verify` (see --sop osquery).
+```
+
 ---
 
 ## Key JSON fields for agents

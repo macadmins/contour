@@ -259,7 +259,7 @@ pub enum Commands {
         #[arg(long, value_delimiter = ',')]
         section: Option<Vec<String>>,
 
-        /// Show standard operating procedures for a tool (profile, mscp, santa, pppc, ddm)
+        /// Show standard operating procedures for a tool (profile, profile-naming, mscp, osquery, fleet-migrate, enrollment, ddm, santa, pppc, btm, notifications, support, ci, precommit)
         #[arg(long)]
         sop: Option<String>,
 

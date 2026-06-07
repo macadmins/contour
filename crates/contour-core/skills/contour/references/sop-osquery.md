@@ -317,3 +317,33 @@ contour osquery stats --json
 #           windows_tables}
 # As of contour 0.2.x: 283 tables, 2581 columns total.
 ```
+
+### Verify generated queries against a host (osqueryi / orbit)
+
+```
+# Render every generated *.policies.yml / *.reports.yml query as a path-resolved,
+# copy-pasteable command. contour NEVER executes them — you run them on the host.
+contour osquery verify ./output                  # scan a GitOps repo (or a dir/file), print commands
+contour osquery verify ./output -o verify.md     # write a Markdown reference instead of printing
+#
+# Each query is emitted in BOTH host forms (one doc works everywhere):
+#   dev / CI:            osqueryi --json "<sql>"
+#   Fleet-managed host:  sudo orbit shell -- --json "<sql>"   (no osqueryi there; needs root)
+# Binary paths are resolved (PATH, then the standard install location).
+# Non-osquery policies (e.g. Fleet `type: patch` software/FMA policies) are skipped — they have no query.
+
+# Same thing inline, right after generating:
+contour mscp generate ... --osquery --verify-queries
+# → writes <output>/osquery/verify-commands.md
+```
+
+### Generated osquery artifacts (--osquery bridge)
+
+```
+# `contour mscp generate ... --osquery` (Fleet output) emits, per baseline:
+#   osquery/<baseline>/<baseline>.policies.yml          — pass/fail Fleet policies (native query or plist read)
+#   osquery/<baseline>/<baseline>-audit.sh              — Tier-2 audit script (writes /Library/Preferences/<org>.<baseline>.audit.plist)
+#   osquery/<baseline>/<baseline>.osquery-coverage.md   — Tier-1/Tier-2/uncovered coverage report
+#   platforms/macos/reports/<baseline>-compliance.reports.yml  — scheduled query over the audit plist
+#   platforms/macos/reports/security-posture.reports.yml       — baseline-independent posture pack (overridable; see --sop mscp)
+```

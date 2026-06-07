@@ -344,6 +344,32 @@ reverted later.
 
 ---
 
+## Attach a baseline across many fleets (inject engine)
+
+Once a repo is on the v4.83 layout, contour can attach an mSCP baseline to one,
+several, or every fleet — **comment-preserving** and idempotent. One generated
+profile set is referenced by many fleets via glob (never duplicated per fleet).
+
+```bash
+# Generate + attach in one run (see --sop mscp for the full flag set):
+contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG \
+  --fleets workstations,servers,kiosks          # named fleets (comma-separated), or:
+  # --all-fleets               # every fleet under fleets/ (multi-brand)
+  # --exclude-fleets a,b       # with --all-fleets, skip these
+  # --canonical-fleets         # greenfield: scaffold workstations + personal-mobile-devices
+
+# Each injected block is led by a `# contour:<baseline>` marker; the attach is
+# recorded in .contour/fleet-injections.toml. Withdraw it manifest-driven:
+contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG \
+  --fleets lx --remove
+```
+
+Fail-closed: if a splice would produce invalid YAML, contour refuses to write and
+leaves the fleet file byte-for-byte untouched. Operator content and comments are
+always preserved.
+
+---
+
 ## Hard rules (don't drop these)
 
 - **DDM declarations live in `platforms/<os>/declaration-profiles/`**, not
