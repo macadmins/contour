@@ -7,6 +7,8 @@ pub mod catalog;
 pub mod classify;
 pub mod query;
 pub mod report;
+pub mod reports;
+pub mod verify;
 
 use catalog::OsqueryTable;
 

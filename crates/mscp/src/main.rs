@@ -237,6 +237,7 @@ fn main() -> Result<()> {
             exclude_fleets,
             remove,
             canonical_fleets,
+            verify_queries,
             fleet_mode,
             jamf_exclude_conflicts,
             munki_compliance_flags,
@@ -474,6 +475,10 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
+            // `output` is moved into generate_baseline; keep a copy for the
+            // post-generate query verification (skipped on dry-run).
+            let verify_output = (verify_queries && !dry_run).then(|| output.clone());
+
             cli::generate_baseline(
                 mscp_repo,
                 keyword,
@@ -504,6 +509,12 @@ fn main() -> Result<()> {
                 odv, // --odv override (else auto-detect odv_<keyword>.yaml)
                 osquery_opts,
             )?;
+
+            // --verify-queries: run the emitted policy/report queries through a
+            // local osqueryi (or print how to verify via orbit on a Fleet host).
+            if let Some(out) = verify_output {
+                crate::osquery::verify::verify_generated(&out)?;
+            }
         }
 
         Commands::GenerateAll {

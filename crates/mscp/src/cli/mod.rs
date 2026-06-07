@@ -438,6 +438,10 @@ pub enum Commands {
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         canonical_fleets: bool,
 
+        /// [FLEET] After generating, run the emitted policy/report queries through local osqueryi (skipped if absent; on Fleet hosts use `contour osquery verify --orbit`)
+        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        verify_queries: bool,
+
         /// [MUNKI] Generate Munki compliance flags nopkg item (for osquery/FleetDM scoping)
         #[arg(long, help_heading = "Experimental - not stable (Munki Options)")]
         munki_compliance_flags: bool,

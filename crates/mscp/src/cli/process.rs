@@ -648,6 +648,24 @@ pub fn process_baseline(
                     let policies = crate::osquery::adapters::fleet::to_fleet_policies(&art);
                     let yaml = yaml_serde::to_string(&policies)?;
                     std::fs::write(oq_dir.join(format!("{}.policies.yml", baseline.name)), yaml)?;
+
+                    // Companion scheduled-query report: surface the audit plist the
+                    // bridge's script writes (one row per rule → live compliance
+                    // visibility). Lives under platforms/macos/reports/ so the
+                    // fleet `reports:` glob picks it up.
+                    let reports_dir = output_path.join("platforms").join("macos").join("reports");
+                    std::fs::create_dir_all(&reports_dir)?;
+                    let compliance =
+                        crate::osquery::reports::compliance_report(org_domain, &baseline.name);
+                    let yaml = yaml_serde::to_string(&[compliance])?;
+                    std::fs::write(
+                        reports_dir.join(format!("{}-compliance.reports.yml", baseline.name)),
+                        yaml,
+                    )?;
+                    tracing::info!(
+                        "osquery bridge: wrote compliance report → {}",
+                        reports_dir.display()
+                    );
                 }
             }
             tracing::info!(
@@ -657,6 +675,24 @@ pub fn process_baseline(
                 oq_dir.display()
             );
         }
+    }
+
+    // Baseline-independent macOS security-posture reports (OS version, FileVault,
+    // SIP, firewall, Gatekeeper, screen lock). Emitted on every macOS Fleet run —
+    // they read live system state, so they need no contour-deployed artifact. The
+    // file is overwritten identically each run (idempotent).
+    if is_fleet_output && !is_jamf_mode && !dry_run && baseline.platform == Platform::MacOS {
+        let reports_dir = output_path.join("platforms").join("macos").join("reports");
+        std::fs::create_dir_all(&reports_dir)?;
+        // Embedded default, overridable via <repo>/.contour/security-posture.toml.
+        let pack = crate::osquery::reports::resolve_security_posture(&output_path)?;
+        let yaml = yaml_serde::to_string(&pack)?;
+        std::fs::write(reports_dir.join("security-posture.reports.yml"), yaml)?;
+        tracing::info!(
+            "Wrote {} security-posture reports → {}",
+            pack.len(),
+            reports_dir.display()
+        );
     }
 
     // Generate Fleet-specific GitOps files (skip for plain mode, Jamf mode, and dry-run)

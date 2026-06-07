@@ -699,6 +699,14 @@ const CANONICAL_FLEETS: &[(&str, &str)] = &[
 /// shaped as `apple_settings.configuration_profiles: []` + `scripts: []` so a
 /// baseline attach inserts cleanly. `purpose` is the per-fleet comment block.
 fn canonical_fleet_yaml(fleet_name: &str, purpose: &str) -> String {
+    // The macOS workstations fleet globs in the security-posture + compliance
+    // reports contour writes under platforms/macos/reports/; the mobile fleet
+    // (iOS/iPadOS) has no use for darwin host reports, so it stays empty.
+    let reports_block = if fleet_name == CANONICAL_PRIMARY {
+        "reports:\n  - paths: ../platforms/macos/reports/*.yml\n"
+    } else {
+        "reports: []\n"
+    };
     format!(
         "# Fleet GitOps — {fleet_name} fleet (scaffolded by `contour mscp generate --canonical-fleets`)\n\
          #\n\
@@ -717,7 +725,7 @@ fn canonical_fleet_yaml(fleet_name: &str, purpose: &str) -> String {
              configuration_profiles: []\n  \
            scripts: []\n\
          policies: []\n\
-         reports: []\n\
+         {reports_block}\
          agent_options:\n  \
            path: ../platforms/all/agent-options.yml\n\
          settings: {{}}\n\
@@ -785,6 +793,10 @@ controls:
         assert!(ws_text.contains("name: workstations"));
         assert!(ws_text.contains("configuration_profiles: []"));
         assert!(ws_text.contains("scripts: []"));
+        // Workstations globs in contour's macOS reports; mobile stays empty.
+        assert!(ws_text.contains("reports:\n  - paths: ../platforms/macos/reports/*.yml"));
+        let mobile_text = fs::read_to_string(&mobile).unwrap();
+        assert!(mobile_text.contains("reports: []"));
 
         // Second run is a no-op: nothing created, operator content untouched.
         fs::write(&ws, "name: workstations  # operator-owned\n").unwrap();

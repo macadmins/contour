@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -28,6 +29,14 @@ pub enum OsqueryAction {
     },
     /// Show embedded schema statistics
     Stats,
+    /// Emit osqueryi + orbit commands for generated queries (*.policies.yml / *.reports.yml)
+    Verify {
+        /// GitOps repo, directory, or single query file to verify
+        path: PathBuf,
+        /// Write the commands to this Markdown file (default: print to stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Dispatch an `OsqueryAction`.
@@ -39,7 +48,40 @@ pub fn handle(action: OsqueryAction, json: bool) -> Result<()> {
         }
         OsqueryAction::Table { table_name } => handle_table(&table_name, json, &mut out),
         OsqueryAction::Stats => handle_stats(json, &mut out),
+        OsqueryAction::Verify { path, output } => handle_verify(&path, output.as_deref(), &mut out),
     }
+}
+
+/// Render every generated query under `path` as a Markdown reference with both
+/// the `osqueryi` (dev/CI) and `sudo orbit shell` (Fleet-managed host) command
+/// per query (never executed). With `--output`, write the doc to a `.md` file;
+/// otherwise print it.
+fn handle_verify(path: &Path, output: Option<&Path>, out: &mut impl Write) -> Result<()> {
+    use mscp::osquery::verify;
+
+    let queries = verify::collect_queries(path)?;
+    if queries.is_empty() {
+        writeln!(
+            out,
+            "No *.policies.yml / *.reports.yml queries found under {}",
+            path.display()
+        )?;
+        return Ok(());
+    }
+
+    match output {
+        Some(file) => {
+            verify::write_markdown(file, &queries)?;
+            writeln!(
+                out,
+                "Wrote {} query commands (osqueryi + orbit forms) → {}",
+                queries.len(),
+                file.display()
+            )?;
+        }
+        None => write!(out, "{}", verify::render_markdown(&queries))?,
+    }
+    Ok(())
 }
 
 /// Load all entries from the embedded Parquet data.

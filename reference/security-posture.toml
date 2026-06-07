@@ -1,0 +1,47 @@
+# contour — macOS security-posture reports (scheduled queries).
+#
+# These are baseline-independent Fleet "reports": osquery snapshot queries that
+# collect live host state for visibility (distinct from pass/fail policies).
+# contour writes them to platforms/macos/reports/security-posture.reports.yml on
+# every macOS Fleet run.
+#
+# This is the embedded default. To override or extend it for a repo, drop a
+# `.contour/security-posture.toml` at that repo's root (same shape) — contour
+# uses it instead of this built-in. Every query is verified against the embedded
+# osquery schema; test one on a host with `contour osquery verify`.
+#
+# Per-report fields (name, description, query are required; the rest default):
+#   platform           = "darwin"   # comma-separated osquery platforms
+#   interval           = 86400      # seconds between runs
+#   observer_can_run   = true       # observers may run it ad hoc
+#   automations_enabled = false     # forward results to the log destination
+
+[[report]]
+name = "macOS host: OS version"
+description = "macOS product name, version, and build for fleet-wide version tracking."
+query = "SELECT name, version, build FROM os_version;"
+
+[[report]]
+name = "macOS host: FileVault / disk encryption"
+description = "Encryption state of each volume, including the FileVault status of the boot volume."
+query = "SELECT name, encrypted, filevault_status FROM disk_encryption;"
+
+[[report]]
+name = "macOS host: System Integrity Protection"
+description = "Whether SIP is enabled on the host."
+query = "SELECT config_flag, enabled FROM sip_config;"
+
+[[report]]
+name = "macOS host: application firewall"
+description = "Application firewall global state and stealth mode (alf; limited on macOS 15+)."
+query = "SELECT global_state, stealth_enabled, logging_enabled FROM alf;"
+
+[[report]]
+name = "macOS host: Gatekeeper"
+description = "Whether Gatekeeper assessments and Developer ID checks are enabled."
+query = "SELECT assessments_enabled, dev_id_enabled FROM gatekeeper;"
+
+[[report]]
+name = "macOS host: screen lock"
+description = "Whether the screensaver password (screen lock) is enabled and its grace period."
+query = "SELECT enabled, grace_period FROM screenlock;"
