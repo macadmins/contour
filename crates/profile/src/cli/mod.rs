@@ -1250,6 +1250,12 @@ pub enum DdmAction {
             help = "JSON or TOML file whose key/values fill the declaration's Payload (e.g. {\"hello\":\"world\"} for management.properties). Merged over the schema skeleton."
         )]
         payload: Option<String>,
+
+        #[arg(
+            long,
+            help = "Use the beta seed schema (pre-release OS keys, e.g. app.settings, package UninstallBehavior)"
+        )]
+        beta: bool,
     },
 
     #[command(

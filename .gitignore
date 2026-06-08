@@ -55,6 +55,10 @@ crates/mdm-schema/data/*.parquet
 crates/mdm-schema/data/*.toml
 crates/mscp-schema/data/*.parquet
 crates/osquery-schema/data/*.parquet
+# Beta seed channel — (downloaded at build time)
+crates/mdm-schema/data/beta/*.parquet
+crates/mscp-schema/data/beta/*.parquet
+crates/osquery-schema/data/beta/*.parquet
 
 # Local mSCP source clone (used by `contour mscp generate` / `list-baselines`)
 /macos_security/

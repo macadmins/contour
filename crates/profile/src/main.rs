@@ -889,6 +889,7 @@ fn run(cli: Cli) -> Result<()> {
                 org,
                 schema_path,
                 payload,
+                beta,
             } => {
                 cli::ddm::handle_ddm_generate(
                     &name,
@@ -897,6 +898,7 @@ fn run(cli: Cli) -> Result<()> {
                     org.as_deref(),
                     schema_path.as_deref(),
                     payload.as_deref(),
+                    beta,
                     config.as_ref(),
                     output_mode,
                 )?;

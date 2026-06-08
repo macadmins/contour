@@ -2,30 +2,57 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    let data_dir = Path::new("data");
-
-    // Re-run only when the sentinel file changes (or is created/deleted).
+    // Re-run when either embedded snapshot changes (or is created/deleted).
     println!("cargo:rerun-if-changed=data/capabilities.parquet");
+    // The beta seed snapshot is embedded via `embedded_capabilities_beta`;
+    // rebuild when it is refreshed.
+    println!("cargo:rerun-if-changed=data/beta/capabilities.parquet");
 
     // Allow skipping downloads entirely for offline / CI-cached builds.
     if std::env::var("CONTOUR_SCHEMA_SKIP_DOWNLOAD").is_ok() {
         return;
     }
 
-    // If the sentinel file already exists, nothing to do.
+    // Stable channel — embedded via `embedded_capabilities`.
+    ensure_dataset(
+        Path::new("data"),
+        "mdm-schema/data",
+        "CONTOUR_MDM_SCHEMA_URL",
+        "mdm-schema.zip",
+    );
+
+    // Beta seed channel — embedded via `embedded_capabilities_beta`. Handled
+    // exactly like stable: a gitignored snapshot downloaded from Cloudflare
+    // (via CONTOUR_MDM_SCHEMA_BETA_URL) when the local copy is missing.
+    ensure_dataset(
+        Path::new("data/beta"),
+        "mdm-schema/data/beta",
+        "CONTOUR_MDM_SCHEMA_BETA_URL",
+        "mdm-schema-beta.zip",
+    );
+}
+
+/// Ensure `data_dir/capabilities.parquet` exists, downloading and extracting
+/// the schema zip named by the `url_var` environment variable when it's
+/// missing. `inner_prefix` is the zip's nested data path; `zip_name` appears
+/// only in the missing-URL error message.
+fn ensure_dataset(data_dir: &Path, inner_prefix: &str, url_var: &str, zip_name: &str) {
+    // The capabilities parquet is the sentinel file for each channel.
     if data_dir.join("capabilities.parquet").exists() {
         return;
     }
 
-    let url = std::env::var("CONTOUR_MDM_SCHEMA_URL").unwrap_or_else(|_| {
+    let url = std::env::var(url_var).unwrap_or_else(|_| {
         panic!(
-            "CONTOUR_MDM_SCHEMA_URL is not set and data/capabilities.parquet is missing.\n\
-             Set CONTOUR_MDM_SCHEMA_URL to the URL of mdm-schema.zip,\n\
-             or copy parquet files into crates/mdm-schema/data/ manually."
+            "{url_var} is not set and {}/capabilities.parquet is missing.\n\
+             Set {url_var} to the URL of {zip_name},\n\
+             or copy parquet files into crates/mdm-schema/{} manually.",
+            data_dir.display(),
+            data_dir.display(),
         )
     });
 
-    download_and_extract(&url, data_dir, "mdm-schema/data");
+    download_and_extract(&url, data_dir, inner_prefix);
 }
 
 /// Download a zip archive from `url`, extract it, and move files from the

@@ -22,6 +22,23 @@ pub enum SchemaFormat {
 
 /// Load embedded manifests from mdm-schema's Parquet data (profiles + capabilities).
 pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
+    load_embedded_from(mdm_schema::embedded_capabilities())
+}
+
+/// Load embedded manifests using the **beta seed** capabilities dataset.
+///
+/// Identical to [`load_embedded`] but sources Apple capabilities from
+/// `embedded_capabilities_beta`, so pre-release (seed) declarations and keys —
+/// e.g. `com.apple.configuration.app.settings` and `package`'s
+/// `UninstallBehavior` — appear in the registry. ProfileCreator manifests and
+/// supplemental prefs are shared with the stable path.
+pub fn load_embedded_beta() -> Result<Vec<PayloadManifest>> {
+    load_embedded_from(mdm_schema::embedded_capabilities_beta())
+}
+
+/// Shared body for [`load_embedded`] / [`load_embedded_beta`]: merges the
+/// ProfileCreator manifests with the supplied Apple capabilities Parquet bytes.
+fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>> {
     let profile_manifests = mdm_schema::profiles::read(mdm_schema::embedded_profile_manifests())
         .context("Failed to read embedded profile manifests from Parquet")?;
 
@@ -185,7 +202,7 @@ pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
     // Append Apple's native schemas from capabilities.parquet.
     // MDM profiles override ProfileCreator where both exist (Apple is authoritative).
     // DDM declarations are added alongside (no overlap with ProfileCreator).
-    let capabilities = mdm_schema::capabilities::read(mdm_schema::embedded_capabilities())
+    let capabilities = mdm_schema::capabilities::read(capabilities_bytes)
         .context("Failed to read embedded capabilities from Parquet")?;
 
     // Collect existing payload_types so we can merge, not duplicate
@@ -717,6 +734,36 @@ mod tests {
         assert!(
             passcode_ddm.is_some(),
             "Should have DDM passcode declaration"
+        );
+    }
+
+    #[test]
+    fn test_load_embedded_beta_exposes_seed_declarations() {
+        // The beta registry must surface OS-seed declarations/keys that the
+        // stable registry does not: app.settings (new in 27.0) and package's
+        // UninstallBehavior key.
+        let beta = load_embedded_beta().expect("Failed to load beta manifests");
+        assert!(
+            beta.iter()
+                .any(|m| m.payload_type == "com.apple.configuration.app.settings"),
+            "beta registry should expose app.settings"
+        );
+        let package = beta
+            .iter()
+            .find(|m| m.payload_type == "com.apple.configuration.package")
+            .expect("beta registry should expose package");
+        assert!(
+            package.fields.contains_key("UninstallBehavior"),
+            "beta package manifest should carry the 27.0 UninstallBehavior field"
+        );
+
+        // Guard: stable must NOT carry the seed-only declaration.
+        let stable = load_embedded().expect("Failed to load stable manifests");
+        assert!(
+            !stable
+                .iter()
+                .any(|m| m.payload_type == "com.apple.configuration.app.settings"),
+            "stable registry must not contain the 27.0 app.settings declaration"
         );
     }
 

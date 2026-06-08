@@ -19,8 +19,17 @@ use walkdir::WalkDir;
 
 /// Load schema registry (embedded or from external path)
 fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
+    load_registry_opts(schema_path, false)
+}
+
+/// Load the schema registry, optionally from the beta seed dataset.
+///
+/// An explicit `schema_path` always wins (external dir); `beta` only selects
+/// the embedded **seed** schema (pre-release OS keys) when no path is given.
+fn load_registry_opts(schema_path: Option<&str>, beta: bool) -> Result<SchemaRegistry> {
     match schema_path {
         Some(p) => SchemaRegistry::from_auto_detect(Path::new(p)),
+        None if beta => SchemaRegistry::embedded_beta(),
         None => SchemaRegistry::embedded(),
     }
 }
@@ -769,6 +778,7 @@ fn generate_field_value(
 }
 
 /// Generate a DDM declaration JSON from schema
+#[allow(clippy::too_many_arguments, reason = "CLI handler mirrors clap args")]
 pub fn handle_ddm_generate(
     name: &str,
     output: Option<&str>,
@@ -776,10 +786,11 @@ pub fn handle_ddm_generate(
     org: Option<&str>,
     schema_path: Option<&str>,
     payload_file: Option<&str>,
+    beta: bool,
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let registry = load_registry(schema_path)?;
+    let registry = load_registry_opts(schema_path, beta)?;
 
     let manifest = registry.get_by_name(name).ok_or_else(|| {
         anyhow::anyhow!(

@@ -17,6 +17,17 @@ pub fn embedded_capabilities() -> &'static [u8] {
     include_bytes!("../data/capabilities.parquet")
 }
 
+/// Embedded **beta** capabilities Parquet data (Apple device-management seed).
+///
+/// Built from Apple's pre-release OS seed (e.g. `seed_OS_27_0`) and published
+/// to `data/beta/` by the posture pipeline. Carries the same shape as
+/// [`embedded_capabilities`] plus seed-only declarations and keys (for example
+/// `com.apple.configuration.app.settings` and `package`'s `UninstallBehavior`).
+/// Consumers opt in explicitly so the stable channel is never affected.
+pub fn embedded_capabilities_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/capabilities.parquet")
+}
+
 /// Embedded profile manifests Parquet data (ProfileCreator).
 pub fn embedded_profile_manifests() -> &'static [u8] {
     include_bytes!("../data/profilecreator.parquet")
@@ -112,6 +123,48 @@ mod tests {
             keys.len() >= 20,
             "Expected at least 20 skip keys, got {}",
             keys.len()
+        );
+    }
+
+    #[test]
+    fn test_beta_capabilities_contain_seed_additions() {
+        let caps = capabilities::read(embedded_capabilities_beta())
+            .expect("Failed to read embedded beta capabilities");
+        assert!(!caps.is_empty());
+
+        // Seed-only declaration: app.settings (introduced 27.0).
+        assert!(
+            caps.iter()
+                .any(|c| c.payload_type == "com.apple.configuration.app.settings"),
+            "beta dataset should carry com.apple.configuration.app.settings"
+        );
+
+        // Seed-only key on an existing declaration: package gained UninstallBehavior.
+        let package = caps
+            .iter()
+            .find(|c| c.payload_type == "com.apple.configuration.package")
+            .expect("beta dataset should carry com.apple.configuration.package");
+        assert!(
+            package.keys.iter().any(|k| k.name == "UninstallBehavior"),
+            "package should expose the 27.0 UninstallBehavior key in the beta dataset"
+        );
+        assert!(
+            package.keys.iter().any(|k| k.name == "Remove"),
+            "package UninstallBehavior should include the Remove subkey"
+        );
+    }
+
+    #[test]
+    fn test_stable_capabilities_lack_seed_additions() {
+        // Guard: the stable channel must NOT carry seed-only additions, so the
+        // beta accessor is the only path to 27.0 keys.
+        let caps = capabilities::read(embedded_capabilities())
+            .expect("Failed to read embedded capabilities");
+        assert!(
+            !caps
+                .iter()
+                .any(|c| c.payload_type == "com.apple.configuration.app.settings"),
+            "stable dataset must not contain the 27.0 app.settings declaration"
         );
     }
 

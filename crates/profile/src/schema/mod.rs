@@ -61,6 +61,16 @@ impl SchemaRegistry {
         Self::from_manifests(manifests_vec, SchemaSource::Embedded)
     }
 
+    /// Load embedded schemas from the **beta seed** dataset.
+    ///
+    /// Same shape as [`embedded`](Self::embedded) but includes pre-release
+    /// (OS seed) declarations and keys — e.g. `com.apple.configuration.app.settings`
+    /// and `package`'s `UninstallBehavior`. Use for `--beta` generation.
+    pub fn embedded_beta() -> Result<Self> {
+        let manifests_vec = loader::load_embedded_beta()?;
+        Self::from_manifests(manifests_vec, SchemaSource::Embedded)
+    }
+
     /// Load from external ultra-compact directory
     pub fn from_directory(path: &Path) -> Result<Self> {
         let manifests_vec = loader::load_from_directory(path)?;
