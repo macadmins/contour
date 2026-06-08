@@ -11,7 +11,7 @@ use crate::ddm::{
 };
 use crate::output::OutputMode;
 use crate::schema::SchemaRegistry;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -258,10 +258,13 @@ fn walk_payload_path<'a>(
     Some(current)
 }
 
-/// Validate a single DDM declaration
-fn validate_single_ddm(path: &Path, registry: &SchemaRegistry) -> Result<DdmValidationResult> {
-    let decl = parse_declaration_file(path)?;
-
+/// Schema-validation errors + warnings for an in-memory declaration. Reused by
+/// the `validate` command and as the fail-closed gate before `generate`/`compose`
+/// write a declaration.
+pub fn declaration_errors(
+    decl: &Declaration,
+    registry: &SchemaRegistry,
+) -> (Vec<String>, Vec<String>) {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
@@ -304,14 +307,20 @@ fn validate_single_ddm(path: &Path, registry: &SchemaRegistry) -> Result<DdmVali
     if decl.identifier.is_empty() {
         errors.push("Identifier is empty".to_string());
     }
-
     if decl.declaration_type.is_empty() {
         errors.push("Type is empty".to_string());
     }
 
+    (errors, warnings)
+}
+
+/// Validate a single DDM declaration file.
+fn validate_single_ddm(path: &Path, registry: &SchemaRegistry) -> Result<DdmValidationResult> {
+    let decl = parse_declaration_file(path)?;
+    let (errors, warnings) = declaration_errors(&decl, registry);
     Ok(DdmValidationResult {
         file: path.to_path_buf(),
-        declaration_type: decl.declaration_type,
+        declaration_type: decl.declaration_type.clone(),
         valid: errors.is_empty(),
         errors,
         warnings,
@@ -766,6 +775,7 @@ pub fn handle_ddm_generate(
     full: bool,
     org: Option<&str>,
     schema_path: Option<&str>,
+    payload_file: Option<&str>,
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -804,6 +814,29 @@ pub fn handle_ddm_generate(
         }
     }
 
+    // Merge an explicit payload file (JSON or TOML) over the schema skeleton —
+    // e.g. {"hello":"world"} fills a `com.apple.management.properties` Payload.
+    if let Some(pf) = payload_file {
+        let text =
+            std::fs::read_to_string(pf).with_context(|| format!("reading payload file '{pf}'"))?;
+        let is_toml = Path::new(pf)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("toml"));
+        let map: serde_json::Map<String, serde_json::Value> = if is_toml {
+            let v: toml::Value =
+                toml::from_str(&text).with_context(|| format!("parsing TOML payload '{pf}'"))?;
+            serde_json::to_value(v)?
+                .as_object()
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            serde_json::from_str(&text).with_context(|| format!("parsing JSON payload '{pf}'"))?
+        };
+        for (k, v) in map {
+            payload.insert(k, v);
+        }
+    }
+
     // Build identifier.
     // Resolve domain: profile.toml → .contour/config.toml → error.
     // Refuse silent "com.example" defaulting — DDM declarations are deployable
@@ -828,8 +861,22 @@ pub fn handle_ddm_generate(
         declaration_type: manifest.payload_type.clone(),
         identifier,
         server_token: None,
+        authentication: None,
         payload,
     };
+
+    // Fail-closed: never write a schema-invalid declaration.
+    let (errors, _) = declaration_errors(&decl, &registry);
+    if !errors.is_empty() {
+        let msg = format!(
+            "generated '{name}' is schema-invalid:\n  - {}",
+            errors.join("\n  - ")
+        );
+        if output_mode == OutputMode::Json {
+            contour_core::output::print_error_json(&msg, Some("SCHEMA_VIOLATION"));
+        }
+        anyhow::bail!(msg);
+    }
 
     let json = write_declaration(&decl)?;
 
@@ -1012,7 +1059,7 @@ pub fn handle_ddm_compose(
             }
         }
     };
-    let bundle: Bundle = match toml::from_str(&bundle_text) {
+    let mut bundle: Bundle = match toml::from_str(&bundle_text) {
         Ok(b) => b,
         Err(e) => {
             let msg = format!("Failed to parse bundle TOML from {source_label}: {e}");
@@ -1022,6 +1069,21 @@ pub fn handle_ddm_compose(
             anyhow::bail!(msg);
         }
     };
+
+    // Resolve an [asset].zip into a hashed Reference, relative to the bundle
+    // file's directory (presets have no path → resolve against cwd).
+    if let Some(asset) = bundle.asset.as_mut() {
+        let base_dir = bundle_path
+            .and_then(|p| Path::new(p).parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        if let Err(e) = crate::ddm::compose::materialize_asset(asset, &base_dir) {
+            let msg = format!("failed to hash asset zip: {e}");
+            if output_mode == OutputMode::Json {
+                contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
+            }
+            anyhow::bail!(msg);
+        }
+    }
 
     // 2. Resolve org domain (shared resolution: profile.toml → CONTOUR_ORG → .contour/config.toml).
     let Some(domain) = resolve_ddm_org_domain(org_flag, config) else {
@@ -1056,6 +1118,38 @@ pub fn handle_ddm_compose(
         std::fs::create_dir_all(out)?;
     } else if !out.is_dir() {
         anyhow::bail!("--output {output_dir} is not a directory");
+    }
+
+    // Fail-closed: validate every emitted declaration against the embedded
+    // schema before writing any of them.
+    {
+        let mut decls: Vec<(&str, &Declaration)> = vec![("configuration", &composed.configuration)];
+        if let Some(a) = &composed.asset {
+            decls.push(("asset", a));
+        }
+        if let Some(a) = &composed.activation {
+            decls.push(("activation", a));
+        }
+        if let Some(s) = &composed.subscriptions {
+            decls.push(("status-subscriptions", s));
+        }
+        let mut all_errors = Vec::new();
+        for (kind, d) in &decls {
+            let (errors, _) = declaration_errors(d, &registry);
+            for e in errors {
+                all_errors.push(format!("{kind}: {e}"));
+            }
+        }
+        if !all_errors.is_empty() {
+            let msg = format!(
+                "composed declarations are schema-invalid:\n  - {}",
+                all_errors.join("\n  - ")
+            );
+            if output_mode == OutputMode::Json {
+                contour_core::output::print_error_json(&msg, Some("SCHEMA_VIOLATION"));
+            }
+            anyhow::bail!(msg);
+        }
     }
 
     let mut written: Vec<(String, PathBuf, Declaration)> = Vec::new();
@@ -1570,6 +1664,145 @@ mod tests {
             "{} DDM types produced invalid docs:\n  {}",
             failures.len(),
             failures.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn reproduces_macadmins_sshd_bundle_structure() {
+        use crate::ddm::compose::{BundleActivation, BundleAsset, BundleConfiguration};
+        use serde_json::{Map, Value, json};
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+
+        let mut reference = Map::new();
+        reference.insert("ContentType".into(), json!("application/zip"));
+        reference.insert(
+            "DataURL".into(),
+            json!("https://files.macadmins.io/sshd-0.0.1.zip"),
+        );
+        reference.insert(
+            "Hash-SHA-256".into(),
+            json!("708904b8ceb7fb26a7e10bc391e643d269ed13d91b6af3f2262f138ddf4f449c"),
+        );
+        let mut asset_payload = Map::new();
+        asset_payload.insert("Reference".into(), Value::Object(reference));
+        let mut cfg_payload = Map::new();
+        cfg_payload.insert("ServiceType".into(), json!("com.apple.sshd"));
+
+        let bundle = Bundle {
+            intent_name: "sshd".into(),
+            asset: Some(BundleAsset {
+                type_name: "com.apple.asset.data".into(),
+                payload: asset_payload,
+                ..Default::default()
+            }),
+            configuration: BundleConfiguration {
+                type_name: "com.apple.configuration.services.configuration-files".into(),
+                identifier: None,
+                asset_ref_field: None,
+                payload: cfg_payload,
+            },
+            activation: Some(BundleActivation::default()),
+            subscriptions: None,
+        };
+        let c = compose(
+            &bundle,
+            "io.macadmins",
+            &registry,
+            &ComposeOptions::default(),
+        )
+        .unwrap();
+
+        // Asset: computed identifier + Authentication {Type: None} (the gap closed).
+        let asset = c.asset.expect("asset emitted");
+        assert_eq!(asset.identifier, "io.macadmins.asset.sshd");
+        assert_eq!(
+            asset
+                .authentication
+                .unwrap()
+                .get("Type")
+                .and_then(Value::as_str),
+            Some("None")
+        );
+        // Configuration: auto-wired DataAssetReference + the ServiceType.
+        assert_eq!(
+            c.configuration
+                .payload
+                .get("DataAssetReference")
+                .and_then(Value::as_str),
+            Some("io.macadmins.asset.sshd")
+        );
+        assert_eq!(
+            c.configuration
+                .payload
+                .get("ServiceType")
+                .and_then(Value::as_str),
+            Some("com.apple.sshd")
+        );
+        // Activation: StandardConfigurations references the configuration.
+        let act = c.activation.expect("activation emitted");
+        let cfgs = act
+            .payload
+            .get("StandardConfigurations")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(cfgs[0].as_str(), Some("io.macadmins.config.sshd"));
+    }
+
+    #[test]
+    fn zip_materialization_feeds_compose() {
+        use crate::ddm::compose::{
+            BundleActivation, BundleAsset, BundleConfiguration, materialize_asset,
+        };
+        use serde_json::{Value, json};
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("z.zip"), b"hello").unwrap();
+        let mut asset = BundleAsset {
+            type_name: "com.apple.asset.data".into(),
+            zip: Some("z.zip".into()),
+            url: Some("https://cdn.example.com/z.zip".into()),
+            ..Default::default()
+        };
+        materialize_asset(&mut asset, tmp.path()).unwrap();
+
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+        let mut cfg = serde_json::Map::new();
+        cfg.insert("ServiceType".into(), json!("com.apple.sshd"));
+        let bundle = Bundle {
+            intent_name: "z".into(),
+            asset: Some(asset),
+            configuration: BundleConfiguration {
+                type_name: "com.apple.configuration.services.configuration-files".into(),
+                identifier: None,
+                asset_ref_field: None,
+                payload: cfg,
+            },
+            activation: Some(BundleActivation::default()),
+            subscriptions: None,
+        };
+        let c = compose(
+            &bundle,
+            "io.macadmins",
+            &registry,
+            &ComposeOptions::default(),
+        )
+        .unwrap();
+        let reference = c
+            .asset
+            .unwrap()
+            .payload
+            .get("Reference")
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            reference.get("Hash-SHA-256").and_then(Value::as_str),
+            Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+        assert_eq!(
+            reference.get("DataURL").and_then(Value::as_str),
+            Some("https://cdn.example.com/z.zip")
         );
     }
 }

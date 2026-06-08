@@ -1014,6 +1014,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 full,
                 org,
                 schema_path,
+                payload,
             } => {
                 profile::cli::ddm::handle_ddm_generate(
                     &name,
@@ -1021,6 +1022,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     full,
                     org.as_deref(),
                     schema_path.as_deref(),
+                    payload.as_deref(),
                     config.as_ref(),
                     output_mode,
                 )?;

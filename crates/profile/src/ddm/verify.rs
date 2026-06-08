@@ -380,6 +380,7 @@ mod tests {
             declaration_type: t.to_string(),
             identifier: id.to_string(),
             server_token: None,
+            authentication: None,
             payload: DeclarationPayload(payload.into_iter().collect()),
         }
     }

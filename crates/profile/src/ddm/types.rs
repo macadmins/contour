@@ -29,6 +29,13 @@ pub struct Declaration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_token: Option<String>,
 
+    /// Top-level `Authentication` dictionary — asset declarations
+    /// (`com.apple.asset.data`) carry the server-authentication details
+    /// (`{"Type": "None"}` or `{"Type": "MDM"}`) as a sibling of `Payload`.
+    /// Omitted (not serialized) for declarations that don't use it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentication: Option<serde_json::Map<String, serde_json::Value>>,
+
     /// The payload containing the actual configuration
     pub payload: DeclarationPayload,
 }
@@ -122,6 +129,7 @@ impl Declaration {
             declaration_type: declaration_type.to_string(),
             identifier: identifier.to_string(),
             server_token: None,
+            authentication: None,
             payload: DeclarationPayload::new(),
         }
     }

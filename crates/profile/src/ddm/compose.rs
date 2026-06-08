@@ -55,7 +55,7 @@ pub struct Bundle {
 }
 
 /// Bundle [asset] section.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct BundleAsset {
     #[serde(rename = "type")]
     pub type_name: String,
@@ -67,7 +67,35 @@ pub struct BundleAsset {
     /// Free-form payload — copied verbatim into the emitted declaration.
     #[serde(default)]
     pub payload: Map<String, Value>,
+
+    /// Path to a `.zip` (relative to the bundle file) whose SHA-256 and
+    /// `application/zip` content-type seed the data asset's `Reference`.
+    /// Resolved by [`materialize_asset`] before [`compose`].
+    #[serde(default)]
+    pub zip: Option<String>,
+
+    /// Hosting URL → `Reference.DataURL` (S3 presigned / Cloudflare / long
+    /// URL). When omitted, a placeholder is emitted for the operator to fill
+    /// after hosting the zip.
+    #[serde(default)]
+    pub url: Option<String>,
+
+    /// Server-authentication type for a data asset: `none` (a standard GET —
+    /// the URL carries any auth, e.g. presigned) or `mdm` (the device's MDM
+    /// identity cert). Apple's `asset.data` has no username/password — host
+    /// credentials are never embedded here.
+    #[serde(default)]
+    pub auth: Option<String>,
+
+    /// Explicit `Authentication` dictionary override (advanced; wins over
+    /// `auth`). Emitted verbatim as the declaration's top-level `Authentication`.
+    #[serde(default)]
+    pub authentication: Option<Map<String, Value>>,
 }
+
+/// Placeholder DataURL emitted when an asset has a `zip` (so it can be hashed)
+/// but no `url` yet — the operator hosts the zip, then replaces this.
+pub const DATAURL_PLACEHOLDER: &str = "https://REPLACE-WITH-HOSTED-URL/asset.zip";
 
 /// Bundle [configuration] section.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -191,6 +219,9 @@ pub enum ComposeError {
     OrphanAsset { identifier: String },
     /// Org domain is empty or doesn't look like a reverse-DNS string.
     InvalidOrg { domain: String },
+    /// `[asset].auth` is not one of Apple's allowed `Authentication.Type`
+    /// values (`none` / `mdm`).
+    InvalidAuthType { value: String },
 }
 
 impl ComposeError {
@@ -204,7 +235,8 @@ impl ComposeError {
             | Self::UnknownAssetRefField { .. }
             | Self::WrongCategory { .. }
             | Self::OrphanAsset { .. }
-            | Self::UnsubscribedStatusKey { .. } => "SCHEMA_VIOLATION",
+            | Self::UnsubscribedStatusKey { .. }
+            | Self::InvalidAuthType { .. } => "SCHEMA_VIOLATION",
             Self::InvalidIdentifier { .. } => "INVALID_IDENTIFIER",
             Self::InvalidOrg { .. } => "INVALID_ORG",
         }
@@ -280,6 +312,13 @@ impl std::fmt::Display for ComposeError {
                      identifiers across orgs."
                 )
             }
+            Self::InvalidAuthType { value } => write!(
+                f,
+                "[asset].auth = '{value}' is not a valid asset Authentication.Type; \
+                 Apple's com.apple.asset.data allows only `none` (standard GET — the \
+                 URL carries any auth, e.g. presigned) or `mdm` (device MDM identity \
+                 cert). Host credentials are never embedded in the declaration."
+            ),
         }
     }
 }
@@ -439,12 +478,13 @@ pub fn compose(
         None
     };
 
-    // 5. Build the asset declaration (if any).
+    // 5. Build the asset declaration (if any), wiring its Authentication block.
     let asset_decl = match (&bundle.asset, asset_id.clone()) {
         (Some(asset), Some(id)) => Some(Declaration {
             declaration_type: asset.type_name.clone(),
             identifier: id,
             server_token: None,
+            authentication: resolve_asset_authentication(asset)?,
             payload: DeclarationPayload(asset.payload.clone().into_iter().collect()),
         }),
         _ => None,
@@ -459,6 +499,7 @@ pub fn compose(
         declaration_type: bundle.configuration.type_name.clone(),
         identifier: configuration_id.clone(),
         server_token: None,
+        authentication: None,
         payload: DeclarationPayload(config_payload.into_iter().collect()),
     };
 
@@ -480,7 +521,11 @@ pub fn compose(
             Some(Declaration {
                 declaration_type: type_name,
                 identifier: id,
+                // ServerToken is assigned by the MDM server when it stores the
+                // declaration; contour omits it (the macadmins examples include
+                // an empty "" placeholder, but it is not author-controlled).
                 server_token: None,
+                authentication: None,
                 payload: DeclarationPayload(payload.into_iter().collect()),
             })
         }
@@ -514,6 +559,85 @@ pub fn compose(
         activation: activation_decl,
         subscriptions: subscriptions_decl,
         asset_ref_field_used: asset_ref_field,
+    })
+}
+
+/// Resolve an asset's top-level `Authentication` dictionary.
+///
+/// Precedence: explicit `[asset.authentication]` map > `auth = "none"|"mdm"` >
+/// the `{"Type": "None"}` default for `com.apple.asset.data`. Other asset types
+/// get no `Authentication` unless one is provided explicitly.
+fn resolve_asset_authentication(
+    asset: &BundleAsset,
+) -> Result<Option<Map<String, Value>>, ComposeError> {
+    if let Some(explicit) = &asset.authentication {
+        return Ok(Some(explicit.clone()));
+    }
+    if let Some(auth) = &asset.auth {
+        let type_value = match auth.to_ascii_lowercase().as_str() {
+            "none" => "None",
+            "mdm" => "MDM",
+            _ => {
+                return Err(ComposeError::InvalidAuthType {
+                    value: auth.clone(),
+                });
+            }
+        };
+        let mut m = Map::new();
+        m.insert("Type".to_string(), Value::String(type_value.to_string()));
+        return Ok(Some(m));
+    }
+    if asset.type_name == "com.apple.asset.data" {
+        let mut m = Map::new();
+        m.insert("Type".to_string(), Value::String("None".to_string()));
+        return Ok(Some(m));
+    }
+    Ok(None)
+}
+
+/// Compute a data asset's `Reference` from a local `.zip`: read the file, hash
+/// it (SHA-256), and set `ContentType`/`DataURL`/`Hash-SHA-256` on the asset
+/// payload. `DataURL` is the asset's `url` or a [`DATAURL_PLACEHOLDER`] for the
+/// operator to fill after hosting. Call before [`compose`].
+///
+/// # Errors
+/// Returns an error if the zip can't be read.
+pub fn materialize_asset(
+    asset: &mut BundleAsset,
+    base_dir: &std::path::Path,
+) -> std::io::Result<()> {
+    let Some(zip_rel) = asset.zip.clone() else {
+        return Ok(());
+    };
+    let zip_path = base_dir.join(&zip_rel);
+    let bytes = std::fs::read(&zip_path)?;
+    let hash = sha256_hex(&bytes);
+    let url = asset
+        .url
+        .clone()
+        .unwrap_or_else(|| DATAURL_PLACEHOLDER.to_string());
+
+    let mut reference = Map::new();
+    reference.insert(
+        "ContentType".to_string(),
+        Value::String("application/zip".to_string()),
+    );
+    reference.insert("DataURL".to_string(), Value::String(url));
+    reference.insert("Hash-SHA-256".to_string(), Value::String(hash));
+    asset
+        .payload
+        .insert("Reference".to_string(), Value::Object(reference));
+    Ok(())
+}
+
+/// Lowercase hex SHA-256 of `bytes` (matches the examples' `shasum -a 256`).
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(bytes);
+    digest.iter().fold(String::with_capacity(64), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
     })
 }
 
@@ -590,6 +714,7 @@ fn build_subscriptions_decl(
         declaration_type: "com.apple.configuration.management.status-subscriptions".to_string(),
         identifier: id,
         server_token: None,
+        authentication: None,
         payload: DeclarationPayload(payload.into_iter().collect()),
     }))
 }
@@ -777,6 +902,7 @@ mod tests {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
                 payload: Map::new(),
+                ..Default::default()
             }),
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.account.exchange".into(),
@@ -833,6 +959,7 @@ mod tests {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
                 payload: Map::new(),
+                ..Default::default()
             }),
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.account.mail".into(),
@@ -863,6 +990,7 @@ mod tests {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
                 payload: Map::new(),
+                ..Default::default()
             }),
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.passcode.settings".into(),
@@ -893,6 +1021,7 @@ mod tests {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
                 payload: Map::new(),
+                ..Default::default()
             }),
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.account.exchange".into(),
@@ -926,6 +1055,7 @@ mod tests {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
                 payload: Map::new(),
+                ..Default::default()
             }),
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.passcode.settings".into(),
@@ -1126,5 +1256,133 @@ mod tests {
         };
         let composed = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap();
         assert!(composed.subscriptions.is_none());
+    }
+
+    fn data_asset_bundle(asset: BundleAsset) -> Bundle {
+        Bundle {
+            intent_name: "sshd".into(),
+            asset: Some(asset),
+            configuration: BundleConfiguration {
+                type_name: "com.apple.configuration.services.configuration-files".into(),
+                identifier: None,
+                asset_ref_field: None,
+                payload: Map::new(),
+            },
+            activation: Some(BundleActivation::default()),
+            subscriptions: None,
+        }
+    }
+
+    fn data_asset_registry() -> SchemaRegistry {
+        registry_with(vec![
+            make_manifest("com.apple.asset.data", &["Reference"]),
+            make_manifest(
+                "com.apple.configuration.services.configuration-files",
+                &["ServiceType", "DataAssetReference"],
+            ),
+            make_manifest("com.apple.activation.simple", &[]),
+        ])
+    }
+
+    #[test]
+    fn data_asset_defaults_authentication_none() {
+        let mut payload = Map::new();
+        payload.insert("Reference".into(), Value::Object(Map::new()));
+        let bundle = data_asset_bundle(BundleAsset {
+            type_name: "com.apple.asset.data".into(),
+            payload,
+            ..Default::default()
+        });
+        let c = compose(
+            &bundle,
+            "io.macadmins",
+            &data_asset_registry(),
+            &ComposeOptions::default(),
+        )
+        .unwrap();
+        // Data asset gets {"Type":"None"} as a sibling of Payload.
+        let auth = c.asset.unwrap().authentication.unwrap();
+        assert_eq!(auth.get("Type").and_then(Value::as_str), Some("None"));
+        // ServerToken stays server-managed (omitted).
+        assert!(c.activation.unwrap().server_token.is_none());
+    }
+
+    #[test]
+    fn asset_auth_mdm_maps_to_type_mdm() {
+        let bundle = data_asset_bundle(BundleAsset {
+            type_name: "com.apple.asset.data".into(),
+            auth: Some("mdm".into()),
+            payload: {
+                let mut p = Map::new();
+                p.insert("Reference".into(), Value::Object(Map::new()));
+                p
+            },
+            ..Default::default()
+        });
+        let c = compose(
+            &bundle,
+            "io.macadmins",
+            &data_asset_registry(),
+            &ComposeOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            c.asset
+                .unwrap()
+                .authentication
+                .unwrap()
+                .get("Type")
+                .and_then(Value::as_str),
+            Some("MDM")
+        );
+    }
+
+    #[test]
+    fn asset_auth_invalid_is_rejected() {
+        let bundle = data_asset_bundle(BundleAsset {
+            type_name: "com.apple.asset.data".into(),
+            auth: Some("s3-creds".into()),
+            payload: {
+                let mut p = Map::new();
+                p.insert("Reference".into(), Value::Object(Map::new()));
+                p
+            },
+            ..Default::default()
+        });
+        let err = compose(
+            &bundle,
+            "io.macadmins",
+            &data_asset_registry(),
+            &ComposeOptions::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ComposeError::InvalidAuthType { .. }));
+    }
+
+    #[test]
+    fn materialize_asset_hashes_zip_and_placeholders_url() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("p.zip"), b"hello").unwrap();
+        let mut asset = BundleAsset {
+            type_name: "com.apple.asset.data".into(),
+            zip: Some("p.zip".into()),
+            ..Default::default()
+        };
+        materialize_asset(&mut asset, tmp.path()).unwrap();
+        let reference = asset.payload.get("Reference").unwrap().as_object().unwrap();
+        // SHA-256 of "hello".
+        assert_eq!(
+            reference.get("Hash-SHA-256").and_then(Value::as_str),
+            Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+        assert_eq!(
+            reference.get("ContentType").and_then(Value::as_str),
+            Some("application/zip")
+        );
+        // No url → placeholder.
+        assert_eq!(
+            reference.get("DataURL").and_then(Value::as_str),
+            Some(DATAURL_PLACEHOLDER)
+        );
     }
 }

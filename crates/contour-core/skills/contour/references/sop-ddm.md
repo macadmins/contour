@@ -202,6 +202,46 @@ Override hatches (rare; defaults are correct for most intents):
   schema has multiple `*AssetReference` fields.
 - `activation.references` — explicit `StandardConfigurations[]` array.
 
+### DATA_ASSET_ZIP_WORKFLOW (`com.apple.asset.data` — hosting a file)
+
+A data asset references a file (zip) the device downloads. Instead of pasting a
+SHA-256 by hand, point `[asset]` at the local `.zip`; contour hashes it and fills
+the `Reference`:
+
+```toml
+[asset]
+type = "com.apple.asset.data"
+zip  = "payload.zip"                  # relative to the bundle file; hashed (SHA-256)
+url  = "https://files.example.com/payload-1.0.zip"   # → Reference.DataURL
+auth = "none"                         # Authentication.Type — see below
+[configuration]
+type = "com.apple.configuration.services.configuration-files"
+[configuration.payload]
+ServiceType = "com.apple.sshd"        # DataAssetReference is auto-wired
+[activation]
+```
+
+Emits a complete asset:
+```json
+{ "Type": "com.apple.asset.data", "Identifier": "{org}.asset.{intent}",
+  "Payload": { "Reference": { "ContentType": "application/zip",
+    "DataURL": "...", "Hash-SHA-256": "<computed>" } },
+  "Authentication": { "Type": "None" } }
+```
+
+- **`url` omitted** → a `https://REPLACE-WITH-HOSTED-URL/...` placeholder is
+  emitted. Host the zip (S3 / Cloudflare R2 / any HTTPS), then replace the URL.
+- **`auth`** is Apple's `Authentication.Type` and has only two values — there is
+  **no username/password field**; host credentials are NEVER embedded:
+  - `none` — a standard GET. Use for public URLs OR **presigned / tokened long
+    URLs** (S3 presigned, Cloudflare signed URL) where the URL itself carries auth.
+  - `mdm` — the device authenticates with its MDM identity certificate. Use when
+    the file is hosted behind an endpoint that validates the device cert (e.g.
+    served by the MDM/an auth-gated proxy).
+  - For anything else (rotating secrets, basic-auth servers), front the file with
+    a presigned URL and use `none`, or proxy it behind MDM-cert auth and use `mdm`.
+- `[asset.authentication]` is an advanced override for the full dictionary.
+
 ### Predicate ↔ status-subscription invariant
 
 Apple's DDM spec defines two distinct predicate failure modes:
@@ -251,12 +291,26 @@ contour profile ddm info com.apple.configuration.passcode.settings --json
 ```
 # Requires organization.domain in profile.toml or .contour/config.toml.
 contour profile ddm generate <type> -o <file>.json --full --json
+
+# --payload fills the Payload from a JSON/TOML file (merged over the schema
+# skeleton). The standalone path for management declarations:
+echo '{"hello":"world"}' > props.json
+contour profile ddm generate com.apple.management.properties \
+  --org io.macadmins --payload props.json -o props.json
+# → {"Type":"com.apple.management.properties","Identifier":"io.macadmins.properties",
+#    "Payload":{"hello":"world"}}
 ```
 
 Note: this emits ONE declaration in isolation. For multi-component setups
 (asset + configuration + activation with cross-references), use
 `compose` (above) — it enforces the cross-file invariants the per-file
 generate cannot.
+
+Both `generate` and `compose` are **fail-closed**: a declaration that is
+schema-invalid (missing a required field, etc.) is NOT written — the command
+errors with `SCHEMA_VIOLATION` listing what's wrong. So any file contour emits is
+schema-valid by construction; `ddm validate`/`verify` (below) remain the gate for
+hand-edited or externally-sourced declarations.
 
 ### Compose a bundle (asset + configuration + activation in one shot)
 

@@ -1243,6 +1243,13 @@ pub enum DdmAction {
             help = "Path to external Apple device-management repo"
         )]
         schema_path: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "JSON or TOML file whose key/values fill the declaration's Payload (e.g. {\"hello\":\"world\"} for management.properties). Merged over the schema skeleton."
+        )]
+        payload: Option<String>,
     },
 
     #[command(
