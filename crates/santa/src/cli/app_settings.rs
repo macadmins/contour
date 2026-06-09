@@ -107,14 +107,22 @@ pub fn run(
         }
     };
 
-    if strict && !skipped.is_empty() {
-        for s in &skipped {
-            print_warning(s);
+    if !skipped.is_empty() {
+        if strict {
+            for s in &skipped {
+                print_warning(s);
+            }
+            bail!(
+                "{} input entr(ies) could not be converted (--strict)",
+                skipped.len()
+            );
+        } else if !json_output {
+            // Non-strict: don't fail, but surface what was dropped (and why) so a
+            // silent count isn't the only signal. Mirrors the validation-violation path.
+            for s in &skipped {
+                print_info(s);
+            }
         }
-        bail!(
-            "{} input entr(ies) could not be converted (--strict)",
-            skipped.len()
-        );
     }
 
     // 2. Validate against the schema's notes rules.
@@ -257,18 +265,12 @@ fn gate_permissions(pd: &mut PermissionDefault, platform: TargetPlatform) {
     });
 }
 
-/// Resolve the org domain: `--org` flag → `CONTOUR_ORG` env → error.
-/// Never falls back to `com.example`.
+/// Resolve the org domain via the shared resolver:
+/// `--org` flag → `CONTOUR_ORG` env → `.contour/config.toml` → error.
+/// The clap default `com.example` is treated as "unset"; never emits `com.example`.
 fn resolve_org(flag: &str) -> Result<String> {
-    if !flag.is_empty() && flag != "com.example" {
-        return Ok(flag.to_string());
-    }
-    if let Ok(env) = std::env::var("CONTOUR_ORG") {
-        if !env.is_empty() {
-            return Ok(env);
-        }
-    }
-    bail!("organization domain required — pass --org <domain> or set CONTOUR_ORG")
+    let explicit = (!flag.is_empty() && flag != "com.example").then(|| flag.to_string());
+    contour_core::resolve_org(explicit)
 }
 
 // Reference build constants so a rename keeps this module in sync.

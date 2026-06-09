@@ -306,8 +306,14 @@ pub fn declaration_errors(
             }
         }
     } else {
-        warnings.push(format!(
-            "Unknown declaration type: {}",
+        // An unknown declaration type is a hard error, not a warning: the active
+        // schema can't validate it at all. Mirrors `library validate`'s
+        // `ddm-unknown-type` (error) and compose's fail-closed rejection. When
+        // validating against the stable channel, the likely cause is a
+        // pre-release OS seed type — hint at `--beta`.
+        errors.push(format!(
+            "Unknown declaration type: {} (not in the active schema; if this is a \
+             pre-release OS seed type, re-run with --beta)",
             decl.declaration_type
         ));
     }

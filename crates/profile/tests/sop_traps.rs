@@ -629,7 +629,7 @@ fn trap_31_ddm_compose_wires_asset_reference() {
 type = "com.apple.asset.credential.userpassword"
 
 [asset.payload]
-Username = "user@example.com"
+Reference = { DataURL = "https://example.com/credential.json" }
 
 [configuration]
 type = "com.apple.configuration.account.exchange"
@@ -637,6 +637,7 @@ asset_ref_field = "AuthenticationCredentialsAssetReference"
 
 [configuration.payload]
 HostName = "outlook.example.com"
+EnabledProtocolTypes = ["EAS"]
 
 [activation]
 "#,
