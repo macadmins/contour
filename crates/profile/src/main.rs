@@ -855,6 +855,7 @@ fn run(cli: Cli) -> Result<()> {
                 recursive,
                 max_depth,
                 no_parallel,
+                beta,
             } => {
                 let parallel = !no_parallel;
                 cli::ddm::handle_ddm_validate(
@@ -863,6 +864,7 @@ fn run(cli: Cli) -> Result<()> {
                     recursive,
                     max_depth,
                     parallel,
+                    beta,
                     output_mode,
                 )?;
             }

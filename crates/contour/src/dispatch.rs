@@ -981,6 +981,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 recursive,
                 max_depth,
                 no_parallel,
+                beta,
             } => {
                 let parallel = !no_parallel;
                 profile::cli::ddm::handle_ddm_validate(
@@ -989,6 +990,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     recursive,
                     max_depth,
                     parallel,
+                    beta,
                     output_mode,
                 )?;
             }
@@ -1858,6 +1860,31 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
                 )
             }
         }
+
+        Commands::AppSettings {
+            input,
+            from_rules,
+            permissions,
+            scaffold,
+            always_allow_managed,
+            rule_type,
+            deny,
+            org,
+            strict,
+            output,
+        } => santa::cli::app_settings::run(
+            &input,
+            from_rules,
+            permissions.as_deref(),
+            scaffold,
+            always_allow_managed,
+            rule_type,
+            deny,
+            &org,
+            strict,
+            output.as_deref(),
+            json,
+        ),
 
         Commands::Allow {
             input,

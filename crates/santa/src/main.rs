@@ -390,6 +390,31 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::AppSettings {
+            input,
+            from_rules,
+            permissions,
+            scaffold,
+            always_allow_managed,
+            rule_type,
+            deny,
+            org,
+            strict,
+            output,
+        } => santa::cli::app_settings::run(
+            &input,
+            from_rules,
+            permissions.as_deref(),
+            scaffold,
+            always_allow_managed,
+            rule_type,
+            deny,
+            &org,
+            strict,
+            output.as_deref(),
+            cli.json,
+        ),
+
         Commands::Allow {
             input,
             output,

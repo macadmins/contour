@@ -1,5 +1,6 @@
 pub mod add;
 pub mod allow_cmd;
+pub mod app_settings;
 pub mod cel_cmd;
 pub mod classify;
 pub mod completions;
@@ -60,6 +61,9 @@ pub enum ScanOutputFormat {
     Mobileconfig,
     /// baseline.toml format - curated rules merged with existing file (deny-wins)
     Baseline,
+    /// com.apple.configuration.app.settings DDM declaration (macOS 27+).
+    /// Emits scanned apps as Allowed.AllowedBinaries by code-signing identifier.
+    AppSettings,
 }
 
 /// Rule type strategy for scan output
@@ -646,6 +650,55 @@ pub enum Commands {
         /// Merge multiple scan CSVs into one (for aggregating from multiple machines)
         #[arg(long)]
         merge: Option<Vec<PathBuf>>,
+    },
+
+    /// Generate a com.apple.configuration.app.settings declaration (macOS 27+)
+    ///
+    /// Converts existing Santa rules (`--from-rules`) or a scan CSV into Apple's
+    /// declarative binary-execution-control declaration. Add app privacy
+    /// permission defaults from a policy file (`--permissions`) or scaffold an
+    /// editable one (`--scaffold`).
+    #[command(name = "app-settings")]
+    AppSettings {
+        /// Input: Santa rule files (with --from-rules) or scan CSV file(s)
+        #[arg(required = true)]
+        input: Vec<PathBuf>,
+
+        /// Treat input as Santa rules to convert (policy taken per rule)
+        #[arg(long)]
+        from_rules: bool,
+
+        /// Privacy permission policy file (TOML) → Privacy.PermissionDefaults
+        #[arg(long, value_name = "FILE")]
+        permissions: Option<PathBuf>,
+
+        /// Emit an editable Privacy policy skeleton from a scan (not a declaration)
+        #[arg(long)]
+        scaffold: bool,
+
+        /// Implicitly allow managed apps (AlwaysAllowManagedApps)
+        #[arg(long)]
+        always_allow_managed: bool,
+
+        /// Identifier strategy for scan input
+        #[arg(long, value_enum, default_value = "auto")]
+        rule_type: ScanRuleType,
+
+        /// Route scan entries to DeniedBinaries instead of AllowedBinaries
+        #[arg(long)]
+        deny: bool,
+
+        /// Organization reverse domain (or set CONTOUR_ORG)
+        #[arg(long, default_value = "com.example")]
+        org: String,
+
+        /// Fail if any input entry can't be converted or fails validation
+        #[arg(long)]
+        strict: bool,
+
+        /// Output file (default: app-settings.json, or app-permissions.toml for --scaffold)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// Convert CSV to a Santa allowlist mobileconfig (no bundles needed)

@@ -206,6 +206,9 @@ pub fn run(
         ScanOutputFormat::Baseline => {
             baseline_summary = Some(write_baseline(&scanned, &output_path, rule_type)?);
         }
+        ScanOutputFormat::AppSettings => {
+            write_app_settings(&scanned, &output_path, org, rule_type, json_output)?;
+        }
     }
 
     if json_output {
@@ -269,6 +272,7 @@ fn default_output_path(format: ScanOutputFormat) -> PathBuf {
         ScanOutputFormat::Rules => PathBuf::from("rules.yaml"),
         ScanOutputFormat::Mobileconfig => PathBuf::from("santa-rules.mobileconfig"),
         ScanOutputFormat::Baseline => PathBuf::from("baseline.toml"),
+        ScanOutputFormat::AppSettings => PathBuf::from("app-settings.json"),
     }
 }
 
@@ -317,6 +321,15 @@ fn print_next_steps(format: ScanOutputFormat, output: &Path) {
             );
             println!("     (or `santa fleet` for Fleet GitOps)");
             println!("  3. Re-run this command to grow the baseline across machines");
+        }
+        ScanOutputFormat::AppSettings => {
+            print_info("Next steps:");
+            println!("  1. Review {}", output.display());
+            println!(
+                "  2. contour profile ddm validate --beta {}",
+                output.display()
+            );
+            println!("  3. Deploy the declaration via your MDM (macOS 27+)");
         }
     }
 }
@@ -716,6 +729,47 @@ fn write_rules(apps: &[ScannedApp], output: &Path, rule_type: ScanRuleType) -> R
     Ok(())
 }
 
+/// Write scanned apps as a `com.apple.configuration.app.settings` declaration.
+///
+/// A scan is an inventory, so every app is emitted as an **allow** entry
+/// (`Allowed.AllowedBinaries`) by its code-signing identifier. Use the standalone
+/// `santa app-settings` command (with `--from-rules` or `--policy`) for deny
+/// entries and privacy defaults. Invalid identifiers (per the schema's allow
+/// rules) are dropped with a count.
+fn write_app_settings(
+    apps: &[ScannedApp],
+    output: &Path,
+    org: &str,
+    rule_type: ScanRuleType,
+    json_output: bool,
+) -> Result<()> {
+    use crate::app_settings::{AppSettings, BinaryPolicy, map, partition_binaries};
+
+    let entries: Vec<_> = apps
+        .iter()
+        .filter_map(|a| map::from_scanned_app(a, rule_type, BinaryPolicy::Allow))
+        .collect();
+    let (valid, violations) = partition_binaries(entries);
+
+    if !violations.is_empty() && !json_output {
+        print_info(&format!(
+            "Dropped {} app(s) with no schema-valid allow identifier (need CDHash or TeamID)",
+            violations.len()
+        ));
+    }
+
+    let settings = AppSettings {
+        binaries: valid,
+        ..Default::default()
+    };
+    let declaration = settings.to_declaration(org, "scan");
+    let json = serde_json::to_string_pretty(&declaration)?;
+    std::fs::write(output, json)
+        .with_context(|| format!("Failed to write app.settings to {}", output.display()))?;
+
+    Ok(())
+}
+
 /// Write scanned apps to mobileconfig format (ready for MDM deployment).
 fn write_mobileconfig(
     apps: &[ScannedApp],
@@ -847,24 +901,20 @@ fn apps_to_rules(apps: &[ScannedApp], rule_type: ScanRuleType) -> RuleSet {
 }
 
 /// Merge multiple scan CSVs into one (for aggregating from multiple machines).
-pub fn merge_scans(inputs: &[PathBuf], output: &Path) -> Result<()> {
+/// Read scanned apps from one or more scan CSV files, deduplicated by
+/// `signing_id`/`sha256`/`name`. The CSV has no `cdhash` column, so `cdhash`
+/// is always `None` on the result (re-scan locally for CDHash identifiers).
+pub fn read_scan_csvs(inputs: &[PathBuf]) -> Result<Vec<ScannedApp>> {
     let mut all_apps: HashMap<String, ScannedApp> = HashMap::new();
-    let mut device_names: Vec<String> = Vec::new();
 
     for input in inputs {
-        let mut rdr = csv::Reader::from_path(input)?;
+        let mut rdr = csv::Reader::from_path(input)
+            .with_context(|| format!("opening scan CSV {}", input.display()))?;
 
         for result in rdr.deserialize() {
             let record: HashMap<String, String> = result?;
 
-            // Track device names
-            if let Some(device) = record.get("device_name") {
-                if !device_names.contains(device) {
-                    device_names.push(device.clone());
-                }
-            }
-
-            // Deduplicate by signing_id or sha256
+            // Deduplicate by signing_id, then sha256, then name.
             let key = record
                 .get("signing_id")
                 .filter(|s| !s.is_empty())
@@ -887,8 +937,25 @@ pub fn merge_scans(inputs: &[PathBuf], output: &Path) -> Result<()> {
         }
     }
 
-    // Write merged output
-    let apps: Vec<ScannedApp> = all_apps.into_values().collect();
+    Ok(all_apps.into_values().collect())
+}
+
+pub fn merge_scans(inputs: &[PathBuf], output: &Path) -> Result<()> {
+    // Collect device names for the merged CSV header.
+    let mut device_names: Vec<String> = Vec::new();
+    for input in inputs {
+        let mut rdr = csv::Reader::from_path(input)?;
+        for result in rdr.deserialize() {
+            let record: HashMap<String, String> = result?;
+            if let Some(device) = record.get("device_name") {
+                if !device.is_empty() && !device_names.contains(device) {
+                    device_names.push(device.clone());
+                }
+            }
+        }
+    }
+
+    let apps = read_scan_csvs(inputs)?;
     let device_str = device_names.join(",");
     write_csv(&apps, output, &device_str)?;
 

@@ -337,12 +337,14 @@ fn validate_single_ddm(path: &Path, registry: &SchemaRegistry) -> Result<DdmVali
 }
 
 /// Validate DDM declaration(s) against embedded schema
+#[allow(clippy::too_many_arguments, reason = "CLI handler mirrors clap args")]
 pub fn handle_ddm_validate(
     paths: &[String],
     schema_path: Option<&str>,
     recursive: bool,
     max_depth: Option<usize>,
     parallel: bool,
+    beta: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
     let files = collect_ddm_files(paths, recursive, max_depth);
@@ -356,8 +358,8 @@ pub fn handle_ddm_validate(
         return Ok(());
     }
 
-    // Load schema registry once
-    let registry = load_registry(schema_path)?;
+    // Load schema registry once (beta seed schema when requested).
+    let registry = load_registry_opts(schema_path, beta)?;
 
     let results: Vec<DdmValidationResult> = if parallel && files.len() > 1 {
         files

@@ -1173,6 +1173,12 @@ pub enum DdmAction {
 
         #[arg(long, help = "Disable parallel processing")]
         no_parallel: bool,
+
+        #[arg(
+            long,
+            help = "Validate against the beta seed schema (pre-release OS keys, e.g. app.settings)"
+        )]
+        beta: bool,
     },
 
     #[command(

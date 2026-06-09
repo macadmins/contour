@@ -1,3 +1,4 @@
+pub mod app_settings;
 pub mod bundle;
 pub mod cel;
 pub mod cli;
