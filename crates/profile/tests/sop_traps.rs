@@ -4199,3 +4199,64 @@ EnableAssessment = true
         "--combined --no-combined: last flag (--no-combined) must win"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 86: `ddm info`/`ddm search` honor `--beta` for the seed schema, and the
+//          stable channel stays isolated (seed-only types are invisible there).
+// Guards: a seed-only declaration (app.settings, introduced 27.0) must be
+//         lookupable ONLY under --beta; stable read commands must not see it.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_86_ddm_read_commands_honor_beta_channel() {
+    // info --beta finds the seed-only type.
+    let beta = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "info", "app.settings", "--beta"])
+        .output()
+        .unwrap();
+    assert!(
+        beta.status.success(),
+        "ddm info --beta must find the seed-only app.settings; stderr: {}",
+        String::from_utf8_lossy(&beta.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&beta.stdout).contains("com.apple.configuration.app.settings"),
+        "ddm info --beta output must name the declaration type"
+    );
+
+    // info on the stable channel must NOT find it (channel isolation).
+    let stable = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "info", "app.settings"])
+        .output()
+        .unwrap();
+    assert!(
+        !stable.status.success(),
+        "ddm info (stable) must not find the seed-only app.settings"
+    );
+
+    // search --beta surfaces seed-only network configs; stable search does not.
+    let search_beta = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "search", "vpn", "--beta", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        search_beta.status.success(),
+        "ddm search --beta must succeed"
+    );
+    assert!(
+        String::from_utf8_lossy(&search_beta.stdout).contains("network.vpn.ikev2"),
+        "ddm search vpn --beta must include the seed-only network.vpn.ikev2"
+    );
+
+    let search_stable = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "search", "vpn", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&search_stable.stdout).contains("network.vpn.ikev2"),
+        "stable ddm search must not surface the seed-only network.vpn.ikev2"
+    );
+}

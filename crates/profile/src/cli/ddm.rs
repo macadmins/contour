@@ -452,9 +452,10 @@ pub fn handle_ddm_validate(
 pub fn handle_ddm_search(
     query: &str,
     schema_path: Option<&str>,
+    beta: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let registry = load_registry(schema_path)?;
+    let registry = load_registry_opts(schema_path, beta)?;
     let mut results: Vec<_> = registry
         .search(query)
         .into_iter()
@@ -505,9 +506,10 @@ pub fn handle_ddm_search(
 pub fn handle_ddm_list(
     category: Option<&str>,
     schema_path: Option<&str>,
+    beta: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let registry = load_registry(schema_path)?;
+    let registry = load_registry_opts(schema_path, beta)?;
 
     // Get DDM declarations (categories starting with ddm-)
     let ddm_categories = [
@@ -607,9 +609,10 @@ pub fn handle_ddm_list(
 pub fn handle_ddm_info(
     name: &str,
     schema_path: Option<&str>,
+    beta: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let registry = load_registry(schema_path)?;
+    let registry = load_registry_opts(schema_path, beta)?;
 
     let manifest = registry.get_by_name(name).ok_or_else(|| {
         anyhow::anyhow!(

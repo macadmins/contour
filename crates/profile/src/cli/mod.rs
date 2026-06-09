@@ -1194,6 +1194,12 @@ pub enum DdmAction {
             help = "Path to external Apple device-management repo"
         )]
         schema_path: Option<String>,
+
+        #[arg(
+            long,
+            help = "Include the beta seed schema (pre-release OS types, e.g. app.settings)"
+        )]
+        beta: bool,
     },
 
     #[command(about = "List available DDM declaration types (42 embedded)")]
@@ -1211,6 +1217,12 @@ pub enum DdmAction {
             help = "Path to external Apple device-management repo"
         )]
         schema_path: Option<String>,
+
+        #[arg(
+            long,
+            help = "Include the beta seed schema (pre-release OS types, e.g. app.settings)"
+        )]
+        beta: bool,
     },
 
     #[command(about = "Show DDM declaration schema info")]
@@ -1224,6 +1236,12 @@ pub enum DdmAction {
             help = "Path to external Apple device-management repo"
         )]
         schema_path: Option<String>,
+
+        #[arg(
+            long,
+            help = "Use the beta seed schema (pre-release OS types, e.g. app.settings)"
+        )]
+        beta: bool,
     },
 
     #[command(about = "Generate a DDM declaration JSON from schema")]

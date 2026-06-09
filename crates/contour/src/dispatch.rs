@@ -994,21 +994,41 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output_mode,
                 )?;
             }
-            DdmAction::Search { query, schema_path } => {
-                profile::cli::ddm::handle_ddm_search(&query, schema_path.as_deref(), output_mode)?;
+            DdmAction::Search {
+                query,
+                schema_path,
+                beta,
+            } => {
+                profile::cli::ddm::handle_ddm_search(
+                    &query,
+                    schema_path.as_deref(),
+                    beta,
+                    output_mode,
+                )?;
             }
             DdmAction::List {
                 category,
                 schema_path,
+                beta,
             } => {
                 profile::cli::ddm::handle_ddm_list(
                     category.as_deref(),
                     schema_path.as_deref(),
+                    beta,
                     output_mode,
                 )?;
             }
-            DdmAction::Info { name, schema_path } => {
-                profile::cli::ddm::handle_ddm_info(&name, schema_path.as_deref(), output_mode)?;
+            DdmAction::Info {
+                name,
+                schema_path,
+                beta,
+            } => {
+                profile::cli::ddm::handle_ddm_info(
+                    &name,
+                    schema_path.as_deref(),
+                    beta,
+                    output_mode,
+                )?;
             }
             DdmAction::Generate {
                 name,
