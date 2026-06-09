@@ -146,6 +146,24 @@ mod tests {
     }
 
     #[test]
+    fn groups_apps_into_allowed_and_denied() {
+        let app = |id: &str| AppIdentifier {
+            app_identifier: id.to_string(),
+        };
+        let settings = AppSettings {
+            apps: vec![
+                (app("com.allow.app"), BinaryPolicy::Allow),
+                (app("com.deny.app"), BinaryPolicy::Deny),
+            ],
+            ..Default::default()
+        };
+        let decl = settings.to_declaration("com.acme", "x");
+        let allowed = &decl["Payload"]["Allowed"];
+        assert_eq!(allowed["AllowedApps"][0]["AppIdentifier"], "com.allow.app");
+        assert_eq!(allowed["DeniedApps"][0]["AppIdentifier"], "com.deny.app");
+    }
+
+    #[test]
     fn signing_state_serializes_in_binary_entry() {
         let bi = BinaryIdentifier {
             team_id: Some("ABCDE12345".to_string()),

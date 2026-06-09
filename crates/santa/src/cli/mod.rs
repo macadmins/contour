@@ -86,6 +86,53 @@ pub enum ScanRuleType {
     Auto,
 }
 
+/// Target platform for an app.settings declaration.
+///
+/// The schema gates keys per platform: `AllowedBinaries`/`DeniedBinaries` are
+/// macOS-only; `AllowedApps`/`DeniedApps` are iOS/tvOS/visionOS-only; `Privacy`
+/// is macOS + iOS. `Combined` (default) emits every applicable key in one
+/// `apply: combined` declaration; the others narrow output to a single platform.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum TargetPlatform {
+    /// One declaration carrying every platform's applicable keys (default).
+    #[default]
+    Combined,
+    /// macOS only: binaries + Privacy (drops iOS-only keys).
+    Macos,
+    /// iOS only: app bundle-ID lists + Privacy.
+    Ios,
+    /// tvOS only: app bundle-ID lists.
+    Tvos,
+    /// visionOS only: app bundle-ID lists.
+    Visionos,
+}
+
+impl TargetPlatform {
+    /// Whether macOS `AllowedBinaries`/`DeniedBinaries` apply.
+    pub fn includes_binaries(self) -> bool {
+        matches!(self, TargetPlatform::Combined | TargetPlatform::Macos)
+    }
+
+    /// Whether iOS/tvOS/visionOS `AllowedApps`/`DeniedApps` apply.
+    pub fn includes_apps(self) -> bool {
+        matches!(
+            self,
+            TargetPlatform::Combined
+                | TargetPlatform::Ios
+                | TargetPlatform::Tvos
+                | TargetPlatform::Visionos
+        )
+    }
+
+    /// Whether `Privacy.PermissionDefaults` applies (macOS + iOS only).
+    pub fn includes_privacy(self) -> bool {
+        matches!(
+            self,
+            TargetPlatform::Combined | TargetPlatform::Macos | TargetPlatform::Ios
+        )
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "santa",
@@ -683,6 +730,10 @@ pub enum Commands {
         /// Identifier strategy for scan input
         #[arg(long, value_enum, default_value = "auto")]
         rule_type: ScanRuleType,
+
+        /// Target platform (combined emits every applicable key)
+        #[arg(long, value_enum, default_value = "combined")]
+        platform: TargetPlatform,
 
         /// Route scan entries to DeniedBinaries instead of AllowedBinaries
         #[arg(long)]

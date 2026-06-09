@@ -4,8 +4,10 @@ use std::process::Command;
 fn main() {
     // Re-run when either embedded snapshot changes (or is created/deleted).
     println!("cargo:rerun-if-changed=data/capabilities.parquet");
-    // The beta seed snapshot is embedded via `embedded_capabilities_beta`;
-    // rebuild when it is refreshed.
+    // The beta seed snapshot (embedded via `embedded_capabilities_beta`) ships
+    // inside the regular mdm-schema.zip under `mdm-schema/data/beta/`, so the
+    // stable download below extracts it alongside the top-level parquet — no
+    // separate download. Rebuild when it is refreshed.
     println!("cargo:rerun-if-changed=data/beta/capabilities.parquet");
 
     // Allow skipping downloads entirely for offline / CI-cached builds.
@@ -13,22 +15,14 @@ fn main() {
         return;
     }
 
-    // Stable channel — embedded via `embedded_capabilities`.
+    // Stable channel — embedded via `embedded_capabilities`. The same archive
+    // carries `data/beta/` (embedded via `embedded_capabilities_beta`);
+    // `download_and_extract` relocates the `beta/` subdir wholesale.
     ensure_dataset(
         Path::new("data"),
         "mdm-schema/data",
         "CONTOUR_MDM_SCHEMA_URL",
         "mdm-schema.zip",
-    );
-
-    // Beta seed channel — embedded via `embedded_capabilities_beta`. Handled
-    // exactly like stable: a gitignored snapshot downloaded from Cloudflare
-    // (via CONTOUR_MDM_SCHEMA_BETA_URL) when the local copy is missing.
-    ensure_dataset(
-        Path::new("data/beta"),
-        "mdm-schema/data/beta",
-        "CONTOUR_MDM_SCHEMA_BETA_URL",
-        "mdm-schema-beta.zip",
     );
 }
 

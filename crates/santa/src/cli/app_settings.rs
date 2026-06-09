@@ -10,16 +10,20 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::app_settings::{
-    AppSettings, BinaryIdentifier, BinaryPolicy, build, from_permission_policy, map,
-    partition_binaries, scaffold_policy, validate::validate_permission_default,
+    AppIdentifier, AppSettings, BinaryIdentifier, BinaryPolicy, PermissionDefault, build,
+    from_permission_policy, map, partition_binaries, scaffold_policy,
+    validate::{permission_ios_na, permission_macos_na, validate_permission_default},
 };
-use crate::cli::ScanRuleType;
 use crate::cli::scan::read_scan_csvs;
+use crate::cli::{ScanRuleType, TargetPlatform};
 use crate::output::{print_info, print_success, print_warning};
 use crate::parser::parse_files;
 
 /// Collected binary entries paired with reasons for any skipped inputs.
 type CollectedBinaries = (Vec<(BinaryIdentifier, BinaryPolicy)>, Vec<String>);
+
+/// App bundle-ID list entries (`AllowedApps`/`DeniedApps`).
+type AppEntries = Vec<(AppIdentifier, BinaryPolicy)>;
 
 /// What the binary input is.
 #[derive(Debug, Clone, Copy)]
@@ -38,6 +42,7 @@ pub fn run(
     scaffold: bool,
     always_allow_managed: bool,
     rule_type: ScanRuleType,
+    platform: TargetPlatform,
     deny: bool,
     org: &str,
     strict: bool,
@@ -62,10 +67,44 @@ pub fn run(
         BinaryPolicy::Allow
     };
 
-    // 1. Collect binary identifiers from the chosen source.
+    // 1. Collect binary + app entries from the source, gated by the target
+    //    platform (macOS → binaries, iOS/tvOS/visionOS → app bundle IDs).
+    let mut app_entries: AppEntries = Vec::new();
     let (raw_binaries, skipped) = match source {
-        Source::Rules => collect_from_rules(input)?,
-        Source::Scan => collect_from_scan(input, rule_type, default_policy)?,
+        Source::Rules => {
+            if platform.includes_apps() && !platform.includes_binaries() {
+                print_warning(
+                    "Santa rules carry no bundle IDs — AllowedApps/DeniedApps need a scan CSV",
+                );
+            }
+            if platform.includes_binaries() {
+                collect_from_rules(input)?
+            } else {
+                (Vec::new(), Vec::new())
+            }
+        }
+        Source::Scan => {
+            let apps = read_scan_csvs(input)?;
+            let mut binaries = Vec::new();
+            let mut skipped = Vec::new();
+            if platform.includes_binaries() {
+                for app in &apps {
+                    match map::from_scanned_app(app, rule_type, default_policy) {
+                        Some(entry) => binaries.push(entry),
+                        None => {
+                            skipped.push(format!("{}: no usable code-signing identifier", app.name))
+                        }
+                    }
+                }
+            }
+            if platform.includes_apps() {
+                app_entries.extend(
+                    apps.iter()
+                        .filter_map(|app| map::app_from_scanned(app, default_policy)),
+                );
+            }
+            (binaries, skipped)
+        }
     };
 
     if strict && !skipped.is_empty() {
@@ -97,15 +136,25 @@ pub fn run(
         }
     }
 
-    // 3. Privacy permission defaults from an authored policy file (optional).
+    // 3. Privacy permission defaults from an authored policy file (optional),
+    //    with permissions gated to those the target platform supports.
     let privacy = match permissions {
-        Some(path) => {
-            let defaults = from_permission_policy(path)?;
+        Some(path) if platform.includes_privacy() => {
+            let mut defaults = from_permission_policy(path)?;
+            for pd in &mut defaults {
+                gate_permissions(pd, platform);
+            }
             for pd in &defaults {
                 validate_permission_default(pd)
                     .map_err(|e| anyhow::anyhow!("{}: {e}", pd.app_identifier))?;
             }
             defaults
+        }
+        Some(_) => {
+            print_warning(
+                "Privacy is not available on the selected platform — ignoring --permissions",
+            );
+            Vec::new()
         }
         None => Vec::new(),
     };
@@ -113,7 +162,7 @@ pub fn run(
     // 4. Assemble + write.
     let settings = AppSettings {
         binaries,
-        apps: Vec::new(),
+        apps: app_entries,
         privacy,
         always_allow_managed,
     };
@@ -198,22 +247,14 @@ fn collect_from_rules(input: &[PathBuf]) -> Result<CollectedBinaries> {
     Ok((binaries, skipped))
 }
 
-/// Map scanned apps (CSV) into binary entries under one policy.
-fn collect_from_scan(
-    input: &[PathBuf],
-    rule_type: ScanRuleType,
-    policy: BinaryPolicy,
-) -> Result<CollectedBinaries> {
-    let apps = read_scan_csvs(input)?;
-    let mut binaries = Vec::new();
-    let mut skipped = Vec::new();
-    for app in &apps {
-        match map::from_scanned_app(app, rule_type, policy) {
-            Some(entry) => binaries.push(entry),
-            None => skipped.push(format!("{}: no usable code-signing identifier", app.name)),
-        }
-    }
-    Ok((binaries, skipped))
+/// Drop permission keys that are `n/a` on the target platform (no-op for
+/// `Combined`, which lets each platform ignore keys that don't apply).
+fn gate_permissions(pd: &mut PermissionDefault, platform: TargetPlatform) {
+    pd.permissions.retain(|perm, _| match platform {
+        TargetPlatform::Macos => !permission_macos_na(*perm),
+        TargetPlatform::Ios => !permission_ios_na(*perm),
+        _ => true,
+    });
 }
 
 /// Resolve the org domain: `--org` flag → `CONTOUR_ORG` env → error.
@@ -232,3 +273,67 @@ fn resolve_org(flag: &str) -> Result<String> {
 
 // Reference build constants so a rename keeps this module in sync.
 const _: &str = build::APP_SETTINGS_TYPE;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_settings::Permission;
+    use std::collections::BTreeMap;
+
+    fn pd(perms: &[(Permission, &str)]) -> PermissionDefault {
+        PermissionDefault {
+            app_identifier: "com.x".to_string(),
+            organization_justification: "j".to_string(),
+            permissions: perms
+                .iter()
+                .map(|(p, v)| (*p, v.to_string()))
+                .collect::<BTreeMap<_, _>>(),
+        }
+    }
+
+    #[test]
+    fn platform_inclusion_flags() {
+        assert!(TargetPlatform::Macos.includes_binaries());
+        assert!(!TargetPlatform::Macos.includes_apps());
+        assert!(TargetPlatform::Ios.includes_apps());
+        assert!(!TargetPlatform::Ios.includes_binaries());
+        assert!(TargetPlatform::Combined.includes_binaries());
+        assert!(TargetPlatform::Combined.includes_apps());
+        assert!(TargetPlatform::Macos.includes_privacy());
+        assert!(!TargetPlatform::Tvos.includes_privacy());
+    }
+
+    #[test]
+    fn macos_gating_drops_location_accuracy_keeps_accessibility() {
+        let mut p = pd(&[
+            (Permission::LocationAccuracy, "Precise"),
+            (Permission::Accessibility, "Allow"),
+            (Permission::Camera, "Allow"),
+        ]);
+        gate_permissions(&mut p, TargetPlatform::Macos);
+        assert!(!p.permissions.contains_key(&Permission::LocationAccuracy));
+        assert!(p.permissions.contains_key(&Permission::Accessibility));
+        assert!(p.permissions.contains_key(&Permission::Camera));
+    }
+
+    #[test]
+    fn ios_gating_drops_accessibility_keeps_location_accuracy() {
+        let mut p = pd(&[
+            (Permission::Accessibility, "Allow"),
+            (Permission::LocationAccuracy, "Precise"),
+        ]);
+        gate_permissions(&mut p, TargetPlatform::Ios);
+        assert!(!p.permissions.contains_key(&Permission::Accessibility));
+        assert!(p.permissions.contains_key(&Permission::LocationAccuracy));
+    }
+
+    #[test]
+    fn combined_gating_keeps_everything() {
+        let mut p = pd(&[
+            (Permission::Accessibility, "Allow"),
+            (Permission::LocationAccuracy, "Precise"),
+        ]);
+        gate_permissions(&mut p, TargetPlatform::Combined);
+        assert_eq!(p.permissions.len(), 2);
+    }
+}
