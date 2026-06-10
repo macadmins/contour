@@ -72,9 +72,16 @@ pub fn parse_skip_list_file(path: &Path) -> Result<SkipListFile> {
 }
 
 /// Load and filter skip keys for a given platform and optional OS version.
-fn load_skip_keys(platform: &str, os_version: Option<&str>) -> Result<Vec<SkipKey>> {
-    let all = mdm_schema::skip_keys::read(mdm_schema::embedded_skip_keys())
-        .context("Failed to read embedded skip_keys")?;
+///
+/// `beta` selects the pre-release OS seed dataset (e.g. OS 27.0 keys like
+/// `AccessibilityAppearance` / `LiquidGlass`); the stable set is the default.
+fn load_skip_keys(platform: &str, os_version: Option<&str>, beta: bool) -> Result<Vec<SkipKey>> {
+    let raw = if beta {
+        mdm_schema::embedded_skip_keys_beta()
+    } else {
+        mdm_schema::embedded_skip_keys()
+    };
+    let all = mdm_schema::skip_keys::read(raw).context("Failed to read embedded skip_keys")?;
 
     let filtered = all
         .into_iter()
@@ -97,9 +104,10 @@ fn load_skip_keys(platform: &str, os_version: Option<&str>) -> Result<Vec<SkipKe
 pub fn handle_enrollment_list(
     platform: &str,
     os_version: Option<&str>,
+    beta: bool,
     mode: OutputMode,
 ) -> Result<()> {
-    let keys = load_skip_keys(platform, os_version)?;
+    let keys = load_skip_keys(platform, os_version, beta)?;
 
     if keys.is_empty() {
         if mode == OutputMode::Json {
@@ -176,6 +184,7 @@ pub fn handle_enrollment_generate(
     output: Option<&str>,
     profile_name: &str,
     interactive: bool,
+    beta: bool,
     mode: OutputMode,
 ) -> Result<()> {
     // Load skip-list file first so its fields can supply defaults.
@@ -214,7 +223,7 @@ pub fn handle_enrollment_generate(
             profile_name
         };
 
-    let available_keys = load_skip_keys(resolved_platform, resolved_os_version)?;
+    let available_keys = load_skip_keys(resolved_platform, resolved_os_version, beta)?;
 
     if available_keys.is_empty() {
         anyhow::bail!(
@@ -453,6 +462,7 @@ skip = ["Siri", "FileVault"]
             None,
             "Automatic enrollment profile",
             false,
+            false,
             OutputMode::Json,
         )
         .unwrap_err();
@@ -473,6 +483,7 @@ skip = ["Siri", "FileVault"]
             None,
             None,
             "Automatic enrollment profile",
+            false,
             false,
             OutputMode::Json,
         )

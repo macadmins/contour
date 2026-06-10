@@ -1086,10 +1086,12 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             EnrollmentAction::List {
                 platform,
                 os_version,
+                beta,
             } => {
                 profile::cli::enrollment::handle_enrollment_list(
                     &platform,
                     os_version.as_deref(),
+                    beta,
                     output_mode,
                 )?;
             }
@@ -1102,6 +1104,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 output,
                 profile_name,
                 interactive,
+                beta,
             } => {
                 profile::cli::enrollment::handle_enrollment_generate(
                     &platform,
@@ -1112,6 +1115,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output.as_deref(),
                     &profile_name,
                     interactive,
+                    beta,
                     output_mode,
                 )?;
             }

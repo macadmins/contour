@@ -950,10 +950,12 @@ fn run(cli: Cli) -> Result<()> {
             EnrollmentAction::List {
                 platform,
                 os_version,
+                beta,
             } => {
                 cli::enrollment::handle_enrollment_list(
                     &platform,
                     os_version.as_deref(),
+                    beta,
                     output_mode,
                 )?;
             }
@@ -966,6 +968,7 @@ fn run(cli: Cli) -> Result<()> {
                 output,
                 profile_name,
                 interactive,
+                beta,
             } => {
                 cli::enrollment::handle_enrollment_generate(
                     &platform,
@@ -976,6 +979,7 @@ fn run(cli: Cli) -> Result<()> {
                     output.as_deref(),
                     &profile_name,
                     interactive,
+                    beta,
                     output_mode,
                 )?;
             }

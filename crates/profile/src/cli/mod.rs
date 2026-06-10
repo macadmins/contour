@@ -1455,6 +1455,9 @@ pub enum EnrollmentAction {
         /// Filter by OS version (only show keys available for this version)
         #[arg(long)]
         os_version: Option<String>,
+        /// Include the beta seed skip keys (pre-release OS, e.g. AccessibilityAppearance, LiquidGlass)
+        #[arg(long)]
+        beta: bool,
     },
     /// Generate a DEP enrollment profile JSON
     Generate {
@@ -1464,6 +1467,9 @@ pub enum EnrollmentAction {
         /// OS version to target
         #[arg(long)]
         os_version: Option<String>,
+        /// Include the beta seed skip keys (pre-release OS, e.g. AccessibilityAppearance, LiquidGlass)
+        #[arg(long)]
+        beta: bool,
         /// Skip ALL available setup items
         #[arg(long, conflicts_with_all = ["skip_list", "interactive"])]
         skip_all: bool,
