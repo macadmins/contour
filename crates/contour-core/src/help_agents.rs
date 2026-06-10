@@ -146,6 +146,14 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     writeln!(buf, "- `--sop ddm` — generate DDM declarations")?;
     writeln!(
         buf,
+        "- `--sop beta` — `--beta` pre-release OS seed schema (OS 27): scope, channel isolation, provenance"
+    )?;
+    writeln!(
+        buf,
+        "- `--sop generative` — OS 27 Apple Intelligence / app-control payloads (seed-only)"
+    )?;
+    writeln!(
+        buf,
         "- `--sop santa` — Santa allowlist generation + Fleet ring deployment"
     )?;
     writeln!(buf, "- `--sop pppc` — PPPC/TCC profile generation")?;
@@ -205,11 +213,13 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "schema-data" | "schema" | "data" | "parquet" => SOP_SCHEMA_DATA,
         "enrollment" | "dep" | "ade" | "setup-assistant" => SOP_ENROLLMENT,
         "osquery" => SOP_OSQUERY,
+        "beta" | "seed" | "seed-os" | "os27" | "os-27" => SOP_BETA,
+        "generative" | "intelligence" | "apple-intelligence" | "ai" | "genai" => SOP_GENERATIVE,
         "precommit" | "pre-commit" | "hook" | "git-hook" | "githook" => SOP_PRECOMMIT,
         "profile-changes" | "plan" | "rollback" | "change-impact" | "review" => SOP_PROFILE_CHANGES,
         "profile-naming" | "naming" | "classify" | "rename" | "display-name" => SOP_PROFILE_NAMING,
         _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, mscp, ddm, santa, pppc, btm, notifications, support, osquery, precommit, profile-changes"
+            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes"
         ),
     };
     writer.write_all(sop.as_bytes())?;
@@ -234,6 +244,14 @@ const SOP_MSCP: &str = include_str!("../skills/contour/references/sop-mscp.md");
 /// SOP_PROFILE and SOP_ROUTING_TEMPLATE) so the procedure blocks (which
 /// contain nested backticks and quotes) are easier to author and review.
 const SOP_DDM: &str = include_str!("../skills/contour/references/sop-ddm.md");
+
+/// SOP_BETA — the `--beta` (pre-release OS seed) channel: scope, channel
+/// isolation, the short-name resolver gotcha, provenance, and safety.
+const SOP_BETA: &str = include_str!("../skills/contour/references/sop-beta.md");
+
+/// SOP_GENERATIVE — OS 27 generative-AI / app-control payloads (Apple
+/// Intelligence, external intelligence, app.settings). Seed-only; builds on SOP_BETA.
+const SOP_GENERATIVE: &str = include_str!("../skills/contour/references/sop-generative.md");
 
 /// SOP_SANTA — 11th SOP. Different format from procedural: a decision
 /// tree at the top + 6 named recipes (cookbook). Procedural would
