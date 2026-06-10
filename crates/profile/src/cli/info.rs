@@ -66,6 +66,11 @@ fn output_json(
                     "commit": sv.apple_device_management_commit,
                     "date": sv.apple_device_management_date,
                 },
+                "apple_device_management_seed": {
+                    "commit": sv.apple_device_management_seed_commit,
+                    "date": sv.apple_device_management_seed_date,
+                    "release": sv.apple_device_management_seed_release,
+                },
                 "profile_manifests": {
                     "commit": sv.profile_manifests_commit,
                     "date": sv.profile_manifests_date,
@@ -149,6 +154,15 @@ fn output_human(
         "  Apple device-management: {} ({})",
         apple_sha, sv.apple_device_management_date
     );
+    if !sv.apple_device_management_seed_commit.is_empty() {
+        let seed_sha = sv.apple_device_management_seed_commit
+            [..7.min(sv.apple_device_management_seed_commit.len())]
+            .to_string();
+        println!(
+            "  Apple seed (--beta):     {} ({}, {})",
+            seed_sha, sv.apple_device_management_seed_release, sv.apple_device_management_seed_date
+        );
+    }
     println!(
         "  ProfileManifests:        {} ({})",
         pm_sha, sv.profile_manifests_date

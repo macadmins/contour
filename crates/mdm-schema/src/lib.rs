@@ -38,6 +38,16 @@ pub fn embedded_skip_keys() -> &'static [u8] {
     include_bytes!("../data/skip_keys.parquet")
 }
 
+/// Embedded **beta** skip keys Parquet data (Apple device-management seed).
+///
+/// Mirrors [`embedded_capabilities_beta`] for skip keys: built from the OS seed
+/// and published to `data/beta/` by the posture pipeline. Carries the stable set
+/// plus seed-only keys (for example `AccessibilityAppearance` and `LiquidGlass`
+/// introduced in OS 27.0). Consumers opt in explicitly via `--beta`.
+pub fn embedded_skip_keys_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/skip_keys.parquet")
+}
+
 /// Embedded schema version metadata (upstream SHAs, generation date).
 pub fn schema_versions_toml() -> &'static str {
     include_str!("../data/schema-versions.toml")
@@ -48,6 +58,11 @@ pub fn schema_versions_toml() -> &'static str {
 pub struct SchemaVersionInfo {
     pub apple_device_management_commit: String,
     pub apple_device_management_date: String,
+    /// Beta seed pin (empty when no seed channel is recorded). Provenance for the
+    /// `data/beta/` parquet exposed via the `*_beta` accessors and `--beta`.
+    pub apple_device_management_seed_commit: String,
+    pub apple_device_management_seed_date: String,
+    pub apple_device_management_seed_release: String,
     pub profile_manifests_commit: String,
     pub profile_manifests_date: String,
     pub generation_date: String,
@@ -55,10 +70,20 @@ pub struct SchemaVersionInfo {
 
 /// Parse the embedded schema-versions.toml into structured version info.
 pub fn schema_versions() -> SchemaVersionInfo {
-    let Ok(toml) = toml::from_str::<toml::Value>(schema_versions_toml()) else {
+    parse_schema_versions(schema_versions_toml())
+}
+
+/// Parse a schema-versions TOML string. Split out from [`schema_versions`] so the
+/// parsing — including the optional `[apple_device_management_seed]` pin — can be
+/// unit-tested deterministically without depending on the pipeline-fetched file.
+fn parse_schema_versions(toml_str: &str) -> SchemaVersionInfo {
+    let Ok(toml) = toml::from_str::<toml::Value>(toml_str) else {
         return SchemaVersionInfo {
             apple_device_management_commit: String::new(),
             apple_device_management_date: String::new(),
+            apple_device_management_seed_commit: String::new(),
+            apple_device_management_seed_date: String::new(),
+            apple_device_management_seed_release: String::new(),
             profile_manifests_commit: String::new(),
             profile_manifests_date: String::new(),
             generation_date: String::new(),
@@ -76,6 +101,9 @@ pub fn schema_versions() -> SchemaVersionInfo {
     SchemaVersionInfo {
         apple_device_management_commit: get("apple_device_management", "commit"),
         apple_device_management_date: get("apple_device_management", "date"),
+        apple_device_management_seed_commit: get("apple_device_management_seed", "commit"),
+        apple_device_management_seed_date: get("apple_device_management_seed", "date"),
+        apple_device_management_seed_release: get("apple_device_management_seed", "release"),
         profile_manifests_commit: get("profile_manifests", "commit"),
         profile_manifests_date: get("profile_manifests", "date"),
         generation_date: get("generation", "date"),
@@ -124,6 +152,74 @@ mod tests {
             "Expected at least 20 skip keys, got {}",
             keys.len()
         );
+    }
+
+    #[test]
+    fn test_beta_skip_keys_contain_seed_additions() {
+        let keys = skip_keys::read(embedded_skip_keys_beta())
+            .expect("Failed to read embedded beta skip_keys");
+        assert!(
+            keys.len() >= 20,
+            "Expected 20+ beta skip keys, got {}",
+            keys.len()
+        );
+        // Seed-only skip keys introduced in OS 27.0.
+        assert!(
+            keys.iter().any(|k| k.key == "AccessibilityAppearance"),
+            "beta skip_keys should carry the 27.0 AccessibilityAppearance key"
+        );
+        assert!(
+            keys.iter().any(|k| k.key == "LiquidGlass"),
+            "beta skip_keys should carry the 27.0 LiquidGlass key"
+        );
+    }
+
+    #[test]
+    fn test_stable_skip_keys_lack_seed_additions() {
+        // Guard: the stable channel must NOT carry seed-only skip keys.
+        let keys =
+            skip_keys::read(embedded_skip_keys()).expect("Failed to read embedded skip_keys");
+        assert!(
+            !keys.iter().any(|k| k.key == "AccessibilityAppearance"),
+            "stable skip_keys must not contain the 27.0 AccessibilityAppearance key"
+        );
+        assert!(
+            !keys.iter().any(|k| k.key == "LiquidGlass"),
+            "stable skip_keys must not contain the 27.0 LiquidGlass key"
+        );
+    }
+
+    #[test]
+    fn parse_schema_versions_extracts_seed_pin() {
+        // Deterministic: tests the parser, not the pipeline-fetched (gitignored)
+        // schema-versions.toml, whose seed section is supplied by posture-ingest.
+        let toml = r#"
+[apple_device_management]
+commit = "67045e2"
+date = "2026-03-25"
+
+[apple_device_management_seed]
+commit = "1548d422768fe7a125e4a6f30ee0cb121a0cc333"
+date = "2026-06-08"
+release = "seed_OS_27_0"
+"#;
+        let sv = parse_schema_versions(toml);
+        assert_eq!(sv.apple_device_management_commit, "67045e2");
+        assert_eq!(
+            sv.apple_device_management_seed_commit,
+            "1548d422768fe7a125e4a6f30ee0cb121a0cc333"
+        );
+        assert_eq!(sv.apple_device_management_seed_release, "seed_OS_27_0");
+    }
+
+    #[test]
+    fn parse_schema_versions_tolerates_missing_seed() {
+        // Stable-only data (no seed section) must parse with empty seed fields,
+        // not panic — the seed channel is optional.
+        let sv = parse_schema_versions("[apple_device_management]\ncommit = \"abc\"\n");
+        assert_eq!(sv.apple_device_management_commit, "abc");
+        assert!(sv.apple_device_management_seed_commit.is_empty());
+        assert!(sv.apple_device_management_seed_release.is_empty());
     }
 
     #[test]
