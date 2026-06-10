@@ -1,7 +1,10 @@
 # SOP: Beta (pre-release OS seed) schema
 
-This SOP covers contour's **beta channel** — Apple's pre-release OS *seed* schema
-(currently `seed_OS_27_0`, OS 27.0), exposed opt-in via `--beta`. The beta dataset
+This SOP covers contour's **beta channel** — Apple's pre-release OS *seed* schema,
+exposed opt-in via `--beta`. The channel is **rolling**: it always means *the current
+seed* (`seed_OS_27_0` / OS 27 at time of writing — run `contour profile info` for the
+live pin). When that OS ships, its payloads graduate into stable and the channel
+rolls forward to the next seed; nothing here is version-specific. The beta dataset
 is a strict **superset** of stable for additions: it carries seed-only declarations
 and keys that do not exist in the stable channel. The two channels are isolated by
 construction — seed-only types are invisible to (and rejected by) every stable

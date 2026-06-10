@@ -4201,62 +4201,114 @@ EnableAssessment = true
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trap 86: `ddm info`/`ddm search` honor `--beta` for the seed schema, and the
-//          stable channel stays isolated (seed-only types are invisible there).
-// Guards: a seed-only declaration (app.settings, introduced 27.0) must be
-//         lookupable ONLY under --beta; stable read commands must not see it.
+// Trap 86: `ddm info` honors `--beta` for the seed schema, and the stable channel
+//          stays isolated (seed-only types are invisible there).
+// Guards: a seed-only declaration must be lookupable ONLY under --beta; stable
+//         read commands must not see it. The probe type is discovered at runtime
+//         (beta list − stable list) so the test survives OS GA — when the seed
+//         graduates and the delta is empty, the isolation check is skipped.
 // ─────────────────────────────────────────────────────────────────────────────
 #[test]
 fn trap_86_ddm_read_commands_honor_beta_channel() {
+    use std::collections::BTreeSet;
+
+    // The set of declaration `type` strings from `ddm list`, optionally beta.
+    let list_types = |beta: bool| -> BTreeSet<String> {
+        let mut args = vec!["ddm", "list", "--json"];
+        if beta {
+            args.push("--beta");
+        }
+        let out = Command::cargo_bin("profile")
+            .unwrap()
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "ddm list --json must succeed");
+        let arr: Vec<Value> = serde_json::from_slice(&out.stdout).expect("ddm list JSON array");
+        arr.iter()
+            .filter_map(|d| d["type"].as_str().map(String::from))
+            .collect()
+    };
+
+    let stable_types = list_types(false);
+    let beta_types = list_types(true);
+
+    // Invariant regardless of OS: beta ⊇ stable.
+    assert!(
+        beta_types.is_superset(&stable_types),
+        "beta ddm list must be a superset of stable"
+    );
+
+    // Pick a seed-only type at runtime (deterministic: first lexicographically).
+    let Some(seed_only) = beta_types.difference(&stable_types).next().cloned() else {
+        println!(
+            "trap_86: no seed-only declarations (empty-beta window post-GA); \
+             skipping the channel-isolation probe"
+        );
+        return;
+    };
+
     // info --beta finds the seed-only type.
     let beta = Command::cargo_bin("profile")
         .unwrap()
-        .args(["ddm", "info", "app.settings", "--beta"])
+        .args(["ddm", "info", &seed_only, "--beta"])
         .output()
         .unwrap();
     assert!(
         beta.status.success(),
-        "ddm info --beta must find the seed-only app.settings; stderr: {}",
+        "ddm info --beta must find the seed-only {seed_only}; stderr: {}",
         String::from_utf8_lossy(&beta.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&beta.stdout).contains("com.apple.configuration.app.settings"),
-        "ddm info --beta output must name the declaration type"
+        String::from_utf8_lossy(&beta.stdout).contains(&seed_only),
+        "ddm info --beta output must name {seed_only}"
     );
 
     // info on the stable channel must NOT find it (channel isolation).
     let stable = Command::cargo_bin("profile")
         .unwrap()
-        .args(["ddm", "info", "app.settings"])
+        .args(["ddm", "info", &seed_only])
         .output()
         .unwrap();
     assert!(
         !stable.status.success(),
-        "ddm info (stable) must not find the seed-only app.settings"
+        "ddm info (stable) must not find the seed-only {seed_only}"
     );
+}
 
-    // search --beta surfaces seed-only network configs; stable search does not.
-    let search_beta = Command::cargo_bin("profile")
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 87: `ddm generate <short-name>` resolves at dot boundaries, never to a
+//          substring-colliding type.
+// Guards: `intelligence.settings` is a substring of `external-intelligence.settings`;
+//         the old `.contains()` resolver could silently emit the wrong Type.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_87_ddm_generate_short_name_resolves_at_dot_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("intel.json");
+
+    let r = Command::cargo_bin("profile")
         .unwrap()
-        .args(["ddm", "search", "vpn", "--beta", "--json"])
+        .env("CONTOUR_ORG", "com.acme")
+        .args([
+            "ddm",
+            "generate",
+            "intelligence.settings",
+            "--beta",
+            "-o",
+            out.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(
-        search_beta.status.success(),
-        "ddm search --beta must succeed"
-    );
-    assert!(
-        String::from_utf8_lossy(&search_beta.stdout).contains("network.vpn.ikev2"),
-        "ddm search vpn --beta must include the seed-only network.vpn.ikev2"
+        r.status.success(),
+        "generate intelligence.settings --beta must succeed; stderr: {}",
+        String::from_utf8_lossy(&r.stderr)
     );
 
-    let search_stable = Command::cargo_bin("profile")
-        .unwrap()
-        .args(["ddm", "search", "vpn", "--json"])
-        .output()
-        .unwrap();
-    assert!(
-        !String::from_utf8_lossy(&search_stable.stdout).contains("network.vpn.ikev2"),
-        "stable ddm search must not surface the seed-only network.vpn.ikev2"
+    let decl: Value = serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(
+        decl["Type"], "com.apple.configuration.intelligence.settings",
+        "short name must resolve to intelligence.settings, NOT external-intelligence.settings"
     );
 }

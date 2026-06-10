@@ -155,37 +155,24 @@ mod tests {
     }
 
     #[test]
-    fn test_beta_skip_keys_contain_seed_additions() {
-        let keys = skip_keys::read(embedded_skip_keys_beta())
-            .expect("Failed to read embedded beta skip_keys");
+    fn beta_skip_keys_superset_of_stable() {
+        // Version-independent invariant: beta ⊇ stable holds for every OS, so this
+        // survives OS GA (when seed keys graduate into stable). No key-name literals.
+        use std::collections::BTreeSet;
+        let stable: BTreeSet<String> = skip_keys::read(embedded_skip_keys())
+            .expect("stable skip_keys")
+            .into_iter()
+            .map(|k| k.key)
+            .collect();
+        let beta: BTreeSet<String> = skip_keys::read(embedded_skip_keys_beta())
+            .expect("beta skip_keys")
+            .into_iter()
+            .map(|k| k.key)
+            .collect();
         assert!(
-            keys.len() >= 20,
-            "Expected 20+ beta skip keys, got {}",
-            keys.len()
-        );
-        // Seed-only skip keys introduced in OS 27.0.
-        assert!(
-            keys.iter().any(|k| k.key == "AccessibilityAppearance"),
-            "beta skip_keys should carry the 27.0 AccessibilityAppearance key"
-        );
-        assert!(
-            keys.iter().any(|k| k.key == "LiquidGlass"),
-            "beta skip_keys should carry the 27.0 LiquidGlass key"
-        );
-    }
-
-    #[test]
-    fn test_stable_skip_keys_lack_seed_additions() {
-        // Guard: the stable channel must NOT carry seed-only skip keys.
-        let keys =
-            skip_keys::read(embedded_skip_keys()).expect("Failed to read embedded skip_keys");
-        assert!(
-            !keys.iter().any(|k| k.key == "AccessibilityAppearance"),
-            "stable skip_keys must not contain the 27.0 AccessibilityAppearance key"
-        );
-        assert!(
-            !keys.iter().any(|k| k.key == "LiquidGlass"),
-            "stable skip_keys must not contain the 27.0 LiquidGlass key"
+            beta.is_superset(&stable),
+            "beta skip_keys must be a superset of stable; missing from beta: {:?}",
+            stable.difference(&beta).collect::<Vec<_>>()
         );
     }
 
@@ -223,45 +210,78 @@ release = "seed_OS_27_0"
     }
 
     #[test]
-    fn test_beta_capabilities_contain_seed_additions() {
-        let caps = capabilities::read(embedded_capabilities_beta())
-            .expect("Failed to read embedded beta capabilities");
-        assert!(!caps.is_empty());
-
-        // Seed-only declaration: app.settings (introduced 27.0).
+    fn beta_capabilities_superset_of_stable() {
+        // Version-independent invariant: beta ⊇ stable, true for every OS. Survives
+        // GA (seed declarations graduate into stable) with no edits.
+        use std::collections::BTreeSet;
+        let stable: BTreeSet<String> = capabilities::read(embedded_capabilities())
+            .expect("stable capabilities")
+            .into_iter()
+            .map(|c| c.payload_type)
+            .collect();
+        let beta: BTreeSet<String> = capabilities::read(embedded_capabilities_beta())
+            .expect("beta capabilities")
+            .into_iter()
+            .map(|c| c.payload_type)
+            .collect();
         assert!(
-            caps.iter()
-                .any(|c| c.payload_type == "com.apple.configuration.app.settings"),
-            "beta dataset should carry com.apple.configuration.app.settings"
-        );
-
-        // Seed-only key on an existing declaration: package gained UninstallBehavior.
-        let package = caps
-            .iter()
-            .find(|c| c.payload_type == "com.apple.configuration.package")
-            .expect("beta dataset should carry com.apple.configuration.package");
-        assert!(
-            package.keys.iter().any(|k| k.name == "UninstallBehavior"),
-            "package should expose the 27.0 UninstallBehavior key in the beta dataset"
-        );
-        assert!(
-            package.keys.iter().any(|k| k.name == "Remove"),
-            "package UninstallBehavior should include the Remove subkey"
+            beta.is_superset(&stable),
+            "beta capabilities must be a superset of stable; missing from beta: {:?}",
+            stable.difference(&beta).collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn test_stable_capabilities_lack_seed_additions() {
-        // Guard: the stable channel must NOT carry seed-only additions, so the
-        // beta accessor is the only path to 27.0 keys.
-        let caps = capabilities::read(embedded_capabilities())
-            .expect("Failed to read embedded capabilities");
-        assert!(
-            !caps
-                .iter()
-                .any(|c| c.payload_type == "com.apple.configuration.app.settings"),
-            "stable dataset must not contain the 27.0 app.settings declaration"
-        );
+    fn beta_has_seed_additions_when_pinned() {
+        // GA-proof: when a seed is pinned, beta must STRICTLY exceed stable (a seed
+        // adds declarations and/or skip keys — historically app.settings, the
+        // network.vpn.* family, AccessibilityAppearance, LiquidGlass for OS 27).
+        // In the empty-beta window (post-GA, before the next seed), there is no pin
+        // and beta == stable. Driven entirely by the seed pin — no OS-version literals.
+        use std::collections::BTreeSet;
+        let pinned = !schema_versions()
+            .apple_device_management_seed_commit
+            .is_empty();
+
+        let stable_caps: BTreeSet<String> = capabilities::read(embedded_capabilities())
+            .expect("stable caps")
+            .into_iter()
+            .map(|c| c.payload_type)
+            .collect();
+        let beta_caps: BTreeSet<String> = capabilities::read(embedded_capabilities_beta())
+            .expect("beta caps")
+            .into_iter()
+            .map(|c| c.payload_type)
+            .collect();
+        let stable_keys: BTreeSet<String> = skip_keys::read(embedded_skip_keys())
+            .expect("stable skip_keys")
+            .into_iter()
+            .map(|k| k.key)
+            .collect();
+        let beta_keys: BTreeSet<String> = skip_keys::read(embedded_skip_keys_beta())
+            .expect("beta skip_keys")
+            .into_iter()
+            .map(|k| k.key)
+            .collect();
+
+        if pinned {
+            let cap_added = beta_caps.difference(&stable_caps).count();
+            let key_added = beta_keys.difference(&stable_keys).count();
+            assert!(
+                cap_added + key_added > 0,
+                "a pinned seed must add declarations or skip keys to beta \
+                 (caps +{cap_added}, keys +{key_added})"
+            );
+        } else {
+            assert_eq!(
+                beta_caps, stable_caps,
+                "with no seed pinned, beta capabilities must equal stable"
+            );
+            assert_eq!(
+                beta_keys, stable_keys,
+                "with no seed pinned, beta skip keys must equal stable"
+            );
+        }
     }
 
     #[test]

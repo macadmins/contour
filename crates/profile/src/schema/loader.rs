@@ -738,33 +738,36 @@ mod tests {
     }
 
     #[test]
-    fn test_load_embedded_beta_exposes_seed_declarations() {
-        // The beta registry must surface OS-seed declarations/keys that the
-        // stable registry does not: app.settings (new in 27.0) and package's
-        // UninstallBehavior key.
-        let beta = load_embedded_beta().expect("Failed to load beta manifests");
+    fn test_load_embedded_beta_is_superset_of_stable() {
+        // Version-independent: the beta registry is a superset of stable for every
+        // OS, and strictly exceeds it whenever a seed is pinned (historically
+        // app.settings and package.UninstallBehavior for OS 27). Post-GA, before the
+        // next seed, there is no pin and the two are equal. No OS-version literals.
+        use std::collections::BTreeSet;
+        let stable: BTreeSet<String> = load_embedded()
+            .expect("stable manifests")
+            .into_iter()
+            .map(|m| m.payload_type)
+            .collect();
+        let beta: BTreeSet<String> = load_embedded_beta()
+            .expect("beta manifests")
+            .into_iter()
+            .map(|m| m.payload_type)
+            .collect();
         assert!(
-            beta.iter()
-                .any(|m| m.payload_type == "com.apple.configuration.app.settings"),
-            "beta registry should expose app.settings"
+            beta.is_superset(&stable),
+            "beta registry must be a superset of stable; missing from beta: {:?}",
+            stable.difference(&beta).collect::<Vec<_>>()
         );
-        let package = beta
-            .iter()
-            .find(|m| m.payload_type == "com.apple.configuration.package")
-            .expect("beta registry should expose package");
-        assert!(
-            package.fields.contains_key("UninstallBehavior"),
-            "beta package manifest should carry the 27.0 UninstallBehavior field"
-        );
-
-        // Guard: stable must NOT carry the seed-only declaration.
-        let stable = load_embedded().expect("Failed to load stable manifests");
-        assert!(
-            !stable
-                .iter()
-                .any(|m| m.payload_type == "com.apple.configuration.app.settings"),
-            "stable registry must not contain the 27.0 app.settings declaration"
-        );
+        if !mdm_schema::schema_versions()
+            .apple_device_management_seed_commit
+            .is_empty()
+        {
+            assert!(
+                beta.len() > stable.len(),
+                "a pinned seed must add declarations to the beta registry"
+            );
+        }
     }
 
     #[test]

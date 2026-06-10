@@ -114,9 +114,11 @@ See `--sop santa` for the full identifier-strategy detail (`--rule-type`,
 
 ## SAFETY
 
-- These payloads target an unreleased OS (27.0). They validate against the current
-  seed but the seed can change before GA — author ahead, don't ship to production
-  fleets as final. See `--sop beta` SAFETY.
+- These payloads come from the current pre-release seed (OS 27 at time of writing;
+  `contour profile info` shows the live pin). They validate against the seed, but a
+  seed can change before GA — author ahead, don't ship to production fleets as final.
+  Once the OS ships, these graduate to stable and `--beta` is no longer required.
+  See `--sop beta` SAFETY.
 - `app.settings` deny rules are high-impact (process termination). Stage them through
   a rollout cohort (a Fleet label / ring) before fleet-wide application.
 

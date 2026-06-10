@@ -202,27 +202,52 @@ impl SchemaRegistry {
         self.manifests.get(payload_type)
     }
 
-    /// Get manifest by short name (e.g., "wifi" -> "com.apple.wifi.managed")
+    /// Get manifest by short name (e.g., "wifi" -> "com.apple.wifi.managed").
+    ///
+    /// Matching is **dot-boundary aware and deterministic**: a short name aligns
+    /// to dot segments of the payload type, so `intelligence.settings` resolves to
+    /// `com.apple.configuration.intelligence.settings` and never to
+    /// `com.apple.configuration.external-intelligence.settings` (whose boundary is
+    /// `-`, not `.`). When several types match, the shortest (most specific)
+    /// enclosing type wins, broken by lexicographic order — so the result does not
+    /// depend on `HashMap` iteration order.
     pub fn get_by_name(&self, name: &str) -> Option<&PayloadManifest> {
         let name_lower = name.to_lowercase();
 
-        // Try exact match first
+        // 1. Exact key match.
         if let Some(m) = self.manifests.get(name) {
             return Some(m);
         }
 
-        // Try title match (case-insensitive)
+        // 2. Title match (case-insensitive).
         for m in self.manifests.values() {
             if m.title.to_lowercase() == name_lower {
                 return Some(m);
             }
         }
 
-        // Try partial payload_type match
-        self.manifests
+        // 3. Dot-boundary segment match (deterministic). The name must align to
+        //    `.`-delimited segments of the payload type — full type, dot-suffix,
+        //    dot-prefix, or a dot-bounded interior run — which excludes substring
+        //    collisions like `intelligence.settings` ⊂ `external-intelligence.settings`.
+        let mut matches: Vec<&PayloadManifest> = self
+            .manifests
             .values()
-            .find(|&m| m.payload_type.to_lowercase().contains(&name_lower))
-            .map(|v| v as _)
+            .filter(|m| {
+                let pt = m.payload_type.to_lowercase();
+                pt == name_lower
+                    || pt.ends_with(&format!(".{name_lower}"))
+                    || pt.starts_with(&format!("{name_lower}."))
+                    || pt.contains(&format!(".{name_lower}."))
+            })
+            .collect();
+        matches.sort_by(|a, b| {
+            a.payload_type
+                .len()
+                .cmp(&b.payload_type.len())
+                .then_with(|| a.payload_type.cmp(&b.payload_type))
+        });
+        matches.into_iter().next()
     }
 
     /// List all payload types
@@ -492,6 +517,32 @@ mod tests {
 
         let result = registry.get_by_name("nonexistent_manifest_xyz");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_by_name_dot_boundary_no_substring_collision() {
+        // Regression: `intelligence.settings` is a substring of
+        // `external-intelligence.settings`. The old `.contains()` resolver could
+        // (non-deterministically) return the wrong type. A short name must align to
+        // dot boundaries. Both types are seed-only → use the beta registry.
+        let registry = SchemaRegistry::embedded_beta().unwrap();
+
+        let intel = registry
+            .get_by_name("intelligence.settings")
+            .expect("intelligence.settings must resolve in the beta registry");
+        assert_eq!(
+            intel.payload_type, "com.apple.configuration.intelligence.settings",
+            "intelligence.settings must NOT resolve to external-intelligence.settings"
+        );
+
+        // The other direction still resolves to itself.
+        let ext = registry
+            .get_by_name("external-intelligence.settings")
+            .expect("external-intelligence.settings must resolve");
+        assert_eq!(
+            ext.payload_type,
+            "com.apple.configuration.external-intelligence.settings"
+        );
     }
 
     // ========== Search Tests ==========
