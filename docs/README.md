@@ -19,6 +19,7 @@ toolkits. Start with the umbrella guide, then the toolkit you need.
 | [contour-support.md](contour-support.md) | Root3 Support App per-brand configuration profiles |
 | [contour-osquery.md](contour-osquery.md) | Offline osquery schema reference (table/column lookup) |
 | [contour-config.md](contour-config.md) | `.contour/config.toml` reference — the shared, cross-toolkit configuration |
+| [WWDC-beta-examples.md](WWDC-beta-examples.md) | `--beta` OS 27 seed DDM (Apple Intelligence, app.settings, network.*): list, show, generate, validate — and the common/stable path |
 
 ## Examples
 
