@@ -40,6 +40,15 @@ pub struct Cli {
     /// Output in JSON format for CI/CD integration
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Schema channel: stable (released) or beta (pre-release OS seed)
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value_t = profile::schema::Channel::Stable
+    )]
+    pub channel: profile::schema::Channel,
 }
 
 #[derive(Debug, Subcommand)]

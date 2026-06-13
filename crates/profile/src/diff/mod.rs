@@ -5,4 +5,4 @@
 pub mod profile_diff;
 
 // Re-export profile diff
-pub use profile_diff::{diff_profiles, print_diff, save_diff};
+pub use profile_diff::{diff_markdown, diff_profiles, print_diff, save_diff};

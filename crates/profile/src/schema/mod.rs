@@ -21,6 +21,45 @@ use std::path::{Path, PathBuf};
 pub use loader::SchemaFormat;
 pub use types::{FieldDefinition, FieldType, OsSupportDetail, PayloadManifest, Platform};
 
+/// Schema channel — selects the stable vs. pre-release (OS seed) dataset.
+///
+/// Set globally with `--channel <stable|beta>` or per-command with `--beta`.
+/// The effective channel is beta if *either* is requested (see dispatch).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum Channel {
+    /// Released Apple schema (the default).
+    #[default]
+    Stable,
+    /// Pre-release OS seed schema — includes seed-only declarations and keys.
+    Beta,
+}
+
+impl Channel {
+    /// True when this is the beta (OS seed) channel.
+    pub fn is_beta(self) -> bool {
+        matches!(self, Channel::Beta)
+    }
+
+    /// Combine a global channel with a per-command `--beta` flag: beta wins
+    /// if either side asks for it.
+    pub fn or_beta(self, beta_flag: bool) -> Self {
+        if beta_flag || self.is_beta() {
+            Channel::Beta
+        } else {
+            Channel::Stable
+        }
+    }
+}
+
+impl std::fmt::Display for Channel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Channel::Stable => "stable",
+            Channel::Beta => "beta",
+        })
+    }
+}
+
 /// Schema source indicator
 #[derive(Debug, Clone)]
 pub enum SchemaSource {
@@ -69,6 +108,14 @@ impl SchemaRegistry {
     pub fn embedded_beta() -> Result<Self> {
         let manifests_vec = loader::load_embedded_beta()?;
         Self::from_manifests(manifests_vec, SchemaSource::Embedded)
+    }
+
+    /// Load the embedded schema for the given [`Channel`].
+    pub fn embedded_channel(channel: Channel) -> Result<Self> {
+        match channel {
+            Channel::Stable => Self::embedded(),
+            Channel::Beta => Self::embedded_beta(),
+        }
     }
 
     /// Load from external ultra-compact directory
@@ -445,6 +492,26 @@ impl SchemaRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_or_beta_combines_global_and_local() {
+        // Beta wins if either the global channel or the local --beta flag asks.
+        assert_eq!(Channel::Stable.or_beta(false), Channel::Stable);
+        assert_eq!(Channel::Stable.or_beta(true), Channel::Beta);
+        assert_eq!(Channel::Beta.or_beta(false), Channel::Beta);
+        assert_eq!(Channel::Beta.or_beta(true), Channel::Beta);
+        assert!(!Channel::Stable.is_beta());
+        assert!(Channel::Beta.is_beta());
+        assert_eq!(Channel::default(), Channel::Stable);
+    }
+
+    #[test]
+    fn embedded_channel_routes_to_dataset() {
+        // Beta is a superset: it must contain at least as many manifests as stable.
+        let stable = SchemaRegistry::embedded_channel(Channel::Stable).expect("stable loads");
+        let beta = SchemaRegistry::embedded_channel(Channel::Beta).expect("beta loads");
+        assert!(beta.len() >= stable.len());
+    }
 
     // ========== SchemaRegistry Basic Tests ==========
 

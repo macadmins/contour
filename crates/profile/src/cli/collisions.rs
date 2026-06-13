@@ -22,7 +22,7 @@ use crate::output::OutputMode;
 use crate::profile::parser::parse_profile_lenient;
 
 /// Classify a path as a scannable config file, by extension (+ content for DDM).
-fn config_format(p: &Path) -> Option<Format> {
+pub(crate) fn config_format(p: &Path) -> Option<Format> {
     match p
         .extension()
         .and_then(|e| e.to_str())
@@ -36,7 +36,7 @@ fn config_format(p: &Path) -> Option<Format> {
 }
 
 /// Collect `.mobileconfig` + DDM `.json` files from the given paths.
-fn collect_config_files(
+pub(crate) fn collect_config_files(
     paths: &[String],
     recursive: bool,
     max_depth: Option<usize>,
@@ -72,7 +72,7 @@ fn collect_config_files(
 
 /// Parse one file into its managed-payload records (best-effort: unparseable files
 /// yield no records rather than failing the whole scan).
-fn parse_file(path: &Path, flat: bool) -> Vec<PayloadRecord> {
+pub(crate) fn parse_file(path: &Path, flat: bool) -> Vec<PayloadRecord> {
     let scope = if flat {
         "<flat>".to_string()
     } else {

@@ -29,6 +29,7 @@ pub mod payload;
 pub mod plan;
 pub mod post_generate;
 pub mod reidentify;
+pub mod report;
 pub mod rollback;
 pub mod scan;
 pub mod search;
@@ -63,6 +64,15 @@ pub struct Cli {
         help = "Output in JSON format for CI/CD integration"
     )]
     pub json: bool,
+
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value_t = crate::schema::Channel::Stable,
+        help = "Schema channel: stable (released) or beta (pre-release OS seed)"
+    )]
+    pub channel: crate::schema::Channel,
 }
 
 #[derive(Debug, Subcommand)]
@@ -554,6 +564,50 @@ pub enum Commands {
     },
 
     #[command(
+        about = "Consolidated repo-hygiene report (audit + collisions + deprecations + validate)",
+        long_about = "Run all four hygiene analyses over a profile repo and merge them into ONE \
+                      markdown report: audit (secrets/certs/binary), cross-profile collisions, \
+                      deprecations, and schema validation. Writes to --output or stdout; --json \
+                      for structured output. Gate CI with --fail-on-secrets / --fail-on-conflict."
+    )]
+    Report {
+        #[arg(help = "Profile/declaration file(s) or directory to scan", required = true, num_args = 1..)]
+        paths: Vec<String>,
+
+        #[arg(short, long, help = "Process directories recursively")]
+        recursive: bool,
+
+        #[arg(
+            long,
+            help = "Maximum directory depth for recursive search (requires --recursive)"
+        )]
+        max_depth: Option<usize>,
+
+        #[arg(
+            long,
+            help = "Collisions: treat the whole tree as one co-apply scope (default: per-directory)"
+        )]
+        flat: bool,
+
+        #[arg(
+            short,
+            long,
+            value_name = "PATH",
+            help = "Write the Markdown report to this path (default: stdout)"
+        )]
+        output: Option<String>,
+
+        #[arg(long, help = "Exit non-zero if any profile carries a secret")]
+        fail_on_secrets: bool,
+
+        #[arg(
+            long,
+            help = "Exit non-zero if any payload domain has value conflicts across profiles"
+        )]
+        fail_on_conflict: bool,
+    },
+
+    #[command(
         about = "Search payload schemas by keyword, by exact field name, or in polymorphic mode",
         long_about = "Three modes:\n\
                       \n\
@@ -651,6 +705,13 @@ pub enum Commands {
 
         #[arg(short, long, help = "Output diff to file (optional)")]
         output: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Also write a markdown report to PATH"
+        )]
+        md_report: Option<String>,
     },
 
     #[command(
@@ -710,6 +771,13 @@ pub enum Commands {
 
         #[arg(long, help = "Fleet size (used for blast-radius narrative on REPLACE)")]
         fleet_size: Option<usize>,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Also write a markdown report to PATH"
+        )]
+        md_report: Option<String>,
     },
 
     #[command(
@@ -984,6 +1052,12 @@ pub enum Commands {
             help = "Leave secret references (op://, env:, file:, secret:) unresolved in the output so it is safe to share"
         )]
         sanitize: bool,
+
+        #[arg(
+            long,
+            help = "Generate against the beta seed schema (shorthand for --channel beta)"
+        )]
+        beta: bool,
     },
 
     #[command(about = "Work with Declarative Device Management (DDM) declarations")]
