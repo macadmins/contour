@@ -10,6 +10,7 @@
 pub mod audit;
 pub mod classify;
 pub mod cli;
+pub mod collisions;
 pub mod config;
 pub mod ddm;
 pub mod diff;

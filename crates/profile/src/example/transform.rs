@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn apply_find_replace_text_skips_empty_find() {
         let text = "hello world";
-        let pairs = vec![("".to_string(), "SHOULD_NOT_APPEAR".to_string())];
+        let pairs = vec![(String::new(), "SHOULD_NOT_APPEAR".to_string())];
         assert_eq!(apply_find_replace_text(text, &pairs), "hello world");
     }
 

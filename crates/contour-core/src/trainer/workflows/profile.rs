@@ -39,9 +39,10 @@ impl TrainerWorkflow for ProfileWorkflow {
     }
 
     fn description(&self) -> &'static str {
-        "Work with Apple configuration profiles: scan, validate, normalize, sign, and document. \
+        "Work with Apple configuration profiles: scan, validate, normalize, detect \
+         cross-profile collisions, sign, and document. \
          This workflow helps ensure profiles are properly formatted, have valid UUIDs, \
-         and are ready for MDM deployment."
+         don't split a payload domain across files, and are ready for MDM deployment."
     }
 
     fn steps(&self) -> Vec<TrainerStep> {
@@ -377,8 +378,43 @@ impl TrainerWorkflow for ProfileWorkflow {
                     ),
                 ])
                 .with_action(StepAction::ConfirmContinue),
-            // Step 12: Git Commit
-            TrainerStep::new(12, "Commit Changes to Git")
+            // Step 12: Detect cross-profile collisions
+            TrainerStep::new(12, "Detect Cross-Profile Collisions")
+                .with_explanation(
+                    "Check whether two separate profiles manage the SAME payload \
+                     domain (PayloadType) — macOS does not reliably merge those, so \
+                     it's a deployment hazard.\n\n\
+                     Per key, `collisions` reports a verdict:\n\
+                     - conflict: same key, different values (the dangerous case)\n\
+                     - redundant: same value everywhere (safe to dedupe)\n\
+                     - complementary: set in only one (the keys to port when merging)\n\n\
+                     Scope is per-directory by default (so separate tenants don't \
+                     false-positive); --flat asks 'if ONE host got every profile here, \
+                     what would be split?'. Use --fail-on-conflict as a CI gate.",
+                )
+                .with_commands(vec![
+                    CommandPreview::new(
+                        format!("contour profile collisions {} -r", profile_path.display()),
+                        "Per-directory collision scan",
+                    ),
+                    CommandPreview::new(
+                        format!(
+                            "contour profile collisions {} -r --flat --fail-on-conflict --md-report collisions.md",
+                            profile_path.display()
+                        ),
+                        "Whole-repo view + CI gate + markdown matrix",
+                    ),
+                ])
+                .with_action(StepAction::ContourCommand {
+                    args: vec![
+                        "profile".to_string(),
+                        "collisions".to_string(),
+                        profile_path.display().to_string(),
+                        "--recursive".to_string(),
+                    ],
+                }),
+            // Step 13: Git Commit
+            TrainerStep::new(13, "Commit Changes to Git")
                 .with_explanation(
                     "Commit your normalized and validated profiles.\n\n\
                      Include:\n\
@@ -397,7 +433,7 @@ impl TrainerWorkflow for ProfileWorkflow {
                     },
                 }),
             // Step 13: Create PR
-            TrainerStep::new(13, "Create Pull Request")
+            TrainerStep::new(14, "Create Pull Request")
                 .with_explanation(
                     "Create a pull request for profile changes.\n\n\
                      Profile changes should be reviewed for:\n\

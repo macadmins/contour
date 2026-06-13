@@ -533,6 +533,28 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 output_mode,
             )?;
         }
+        Commands::Collisions {
+            paths,
+            recursive,
+            max_depth,
+            flat,
+            fail_on_conflict,
+            fail_on_split,
+            no_parallel,
+            md_report,
+        } => {
+            profile::cli::collisions::handle_collisions(
+                &paths,
+                recursive,
+                max_depth,
+                flat,
+                fail_on_conflict,
+                fail_on_split,
+                !no_parallel,
+                md_report.as_deref(),
+                output_mode,
+            )?;
+        }
         Commands::Search {
             query,
             field,

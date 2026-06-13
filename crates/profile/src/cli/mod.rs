@@ -6,6 +6,7 @@
 // Core modules
 pub mod audit;
 pub mod classify;
+pub mod collisions;
 pub mod command;
 pub mod ddm;
 pub mod diff;
@@ -500,6 +501,54 @@ pub enum Commands {
             long,
             value_name = "PATH",
             help = "Write a Markdown audit report to this path"
+        )]
+        md_report: Option<String>,
+    },
+
+    #[command(
+        about = "Detect cross-profile payload-domain collisions (two profiles managing the same PayloadType)",
+        long_about = "Recursively scan .mobileconfig profiles and DDM .json declarations and \
+                      report any payload domain (PayloadType / declaration Type) managed by 2+ \
+                      separate files that co-apply to the same host — which macOS doesn't reliably \
+                      merge. Per key, classifies each as a value conflict, redundant, or \
+                      complementary. Scope is per-directory by default (so different tenants don't \
+                      collide); use --flat to treat the whole tree as one scope."
+    )]
+    Collisions {
+        #[arg(help = "Profile/declaration file(s) or directory to scan", required = true, num_args = 1..)]
+        paths: Vec<String>,
+
+        #[arg(short, long, help = "Process directories recursively")]
+        recursive: bool,
+
+        #[arg(
+            long,
+            help = "Maximum directory depth for recursive search (requires --recursive)"
+        )]
+        max_depth: Option<usize>,
+
+        #[arg(
+            long,
+            help = "Treat the whole tree as one co-apply scope (default: each directory is a scope)"
+        )]
+        flat: bool,
+
+        #[arg(
+            long,
+            help = "Exit non-zero if any key is set to conflicting values across profiles"
+        )]
+        fail_on_conflict: bool,
+
+        #[arg(long, help = "Exit non-zero if any domain is split across 2+ profiles")]
+        fail_on_split: bool,
+
+        #[arg(long, help = "Disable parallel processing")]
+        no_parallel: bool,
+
+        #[arg(
+            long,
+            value_name = "PATH",
+            help = "Write a Markdown collision report to this path"
         )]
         md_report: Option<String>,
     },

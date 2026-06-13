@@ -6,6 +6,7 @@
 mod audit;
 mod classify;
 mod cli;
+mod collisions;
 mod config;
 mod ddm;
 mod diff;
@@ -378,6 +379,28 @@ fn run(cli: Cli) -> Result<()> {
                 fail_on_secrets,
                 route_into.as_deref(),
                 dry_run,
+                md_report.as_deref(),
+                output_mode,
+            )?;
+        }
+        Commands::Collisions {
+            paths,
+            recursive,
+            max_depth,
+            flat,
+            fail_on_conflict,
+            fail_on_split,
+            no_parallel,
+            md_report,
+        } => {
+            cli::collisions::handle_collisions(
+                &paths,
+                recursive,
+                max_depth,
+                flat,
+                fail_on_conflict,
+                fail_on_split,
+                !no_parallel,
                 md_report.as_deref(),
                 output_mode,
             )?;

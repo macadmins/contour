@@ -26,7 +26,10 @@ pub fn read(bytes: &[u8]) -> Result<Vec<ExampleConfig>> {
     let mut out = Vec::new();
     for batch in reader {
         let batch = batch.context("reading examples record batch")?;
-        let pt = batch.column_by_name("payload_type").unwrap().as_string::<i32>();
+        let pt = batch
+            .column_by_name("payload_type")
+            .unwrap()
+            .as_string::<i32>();
         let kind = batch.column_by_name("kind").unwrap().as_string::<i32>();
         let idx = batch
             .column_by_name("index")

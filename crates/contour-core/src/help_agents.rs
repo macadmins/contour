@@ -102,6 +102,10 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     )?;
     writeln!(
         buf,
+        "- audit/clean up/consolidate a profile repo, detect collisions, two profiles same domain, split management → `--sop maintain`"
+    )?;
+    writeln!(
+        buf,
         "- generate/send an MDM command (restart, lock, erase, remote desktop) → `--sop profile`"
     )?;
     writeln!(
@@ -138,6 +142,10 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     writeln!(
         buf,
         "- `--sop profile` — generate/validate mobileconfig profiles + MDM command payloads"
+    )?;
+    writeln!(
+        buf,
+        "- `--sop maintain` — bulk-maintain an existing repo: import, audit, normalize, detect cross-profile collisions, consolidate"
     )?;
     writeln!(
         buf,
@@ -218,8 +226,10 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "precommit" | "pre-commit" | "hook" | "git-hook" | "githook" => SOP_PRECOMMIT,
         "profile-changes" | "plan" | "rollback" | "change-impact" | "review" => SOP_PROFILE_CHANGES,
         "profile-naming" | "naming" | "classify" | "rename" | "display-name" => SOP_PROFILE_NAMING,
+        "maintain" | "maintenance" | "hygiene" | "collisions" | "collision" | "consolidate"
+        | "audit" => SOP_MAINTAIN,
         _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes"
+            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, maintain, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes"
         ),
     };
     writer.write_all(sop.as_bytes())?;
@@ -233,6 +243,11 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
 /// procedure blocks (which contain nested backticks and quotes) are easier to
 /// author and review. Same pattern as `SOP_ROUTING_TEMPLATE` below.
 const SOP_PROFILE: &str = include_str!("../skills/contour/references/sop-profile.md");
+
+/// SOP_MAINTAIN — end-to-end maintenance/hygiene of an existing profile repo:
+/// import → audit → name → re-identify → normalize → collision-check → validate,
+/// centered on the `collisions` consolidation workflow.
+const SOP_MAINTAIN: &str = include_str!("../skills/contour/references/sop-maintain.md");
 
 /// SOP_MSCP — third SOP migrated to the procedural format. Same external-
 /// markdown pattern as SOP_PROFILE and SOP_DDM.
