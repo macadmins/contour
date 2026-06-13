@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 contour-core.workspace = true
 contour-profiles = { path = "../contour-profiles" }
+santa = { path = "../santa" }
 
 # CLI
 clap.workspace = true

@@ -22,6 +22,18 @@ fn team_id_from_signing_id(signing_id: &str) -> Option<String> {
     crate::cel::is_valid_team_id(team).then(|| team.to_string())
 }
 
+/// Apple's `SigningID` field is the **bare** code-signing identifier (the
+/// `Identifier=` from `codesign -dvvv`), e.g. `us.zoom.xos`. Santa formats signing
+/// IDs as `<TeamID-or-"platform">:<signing-id>`; strip that prefix. A payload whose
+/// SigningID still carries the prefix is rejected on-device as malformed (Code -319).
+/// The TeamID part is captured separately via [`team_id_from_signing_id`].
+fn apple_signing_id(santa_signing_id: &str) -> String {
+    santa_signing_id
+        .split_once(':')
+        .map(|(_, sid)| sid.to_string())
+        .unwrap_or_else(|| santa_signing_id.to_string())
+}
+
 /// Build a [`BinaryIdentifier`] from a scanned app using the selected match type.
 ///
 /// `Auto` chooses a schema-valid identifier for the policy: allow prefers
@@ -45,7 +57,7 @@ pub fn from_scanned_app(
         },
         ScanRuleType::SigningId => BinaryIdentifier {
             team_id: app.signing_id.as_deref().and_then(team_id_from_signing_id),
-            signing_id: app.signing_id.clone(),
+            signing_id: app.signing_id.as_deref().map(apple_signing_id),
             ..Default::default()
         },
         ScanRuleType::Cdhash => BinaryIdentifier {
@@ -63,7 +75,8 @@ pub fn from_scanned_app(
             BinaryPolicy::Deny => {
                 if let Some(signing_id) = &app.signing_id {
                     BinaryIdentifier {
-                        signing_id: Some(signing_id.clone()),
+                        team_id: team_id_from_signing_id(signing_id),
+                        signing_id: Some(apple_signing_id(signing_id)),
                         ..Default::default()
                     }
                 } else if let Some(team_id) = &app.team_id {
@@ -110,7 +123,7 @@ pub fn from_santa_rule(rule: &Rule) -> Result<(BinaryIdentifier, BinaryPolicy), 
         },
         RuleType::SigningId => BinaryIdentifier {
             team_id: team_id_from_signing_id(&id),
-            signing_id: Some(id),
+            signing_id: Some(apple_signing_id(&id)),
             ..Default::default()
         },
         RuleType::Cdhash => BinaryIdentifier {
@@ -194,10 +207,8 @@ mod tests {
         );
 
         let (deny, _) = from_scanned_app(&app(), ScanRuleType::Auto, BinaryPolicy::Deny).unwrap();
-        assert_eq!(
-            deny.signing_id.as_deref(),
-            Some("ABCDE12345:com.example.app")
-        );
+        // Apple SigningID is the bare identifier — the TEAMID: prefix is stripped.
+        assert_eq!(deny.signing_id.as_deref(), Some("com.example.app"));
     }
 
     #[test]
@@ -227,7 +238,7 @@ mod tests {
 
         let block = Rule::new(RuleType::SigningId, "ABCDE12345:com.x", Policy::Blocklist);
         let (bi, pol) = from_santa_rule(&block).unwrap();
-        assert_eq!(bi.signing_id.as_deref(), Some("ABCDE12345:com.x"));
+        assert_eq!(bi.signing_id.as_deref(), Some("com.x"));
         assert_eq!(pol, BinaryPolicy::Deny);
     }
 
@@ -238,7 +249,7 @@ mod tests {
         let allow = Rule::new(RuleType::SigningId, "ABCDE12345:com.x", Policy::Allowlist);
         let (bi, pol) = from_santa_rule(&allow).unwrap();
         assert_eq!(bi.team_id.as_deref(), Some("ABCDE12345"));
-        assert_eq!(bi.signing_id.as_deref(), Some("ABCDE12345:com.x"));
+        assert_eq!(bi.signing_id.as_deref(), Some("com.x"));
         assert_eq!(pol, BinaryPolicy::Allow);
         // It now passes allow validation (which requires CDHash or TeamID).
         super::super::validate::validate_binary(&bi, BinaryPolicy::Allow).unwrap();
@@ -246,7 +257,8 @@ mod tests {
 
     #[test]
     fn signing_id_without_valid_team_prefix_stays_signing_only() {
-        // `platform:` SigningIDs have no derivable TeamID.
+        // `platform:` SigningIDs have no derivable TeamID; the prefix is stripped to
+        // the bare Apple signing identifier.
         let r = Rule::new(
             RuleType::SigningId,
             "platform:com.apple.x",
@@ -254,7 +266,7 @@ mod tests {
         );
         let (bi, _) = from_santa_rule(&r).unwrap();
         assert!(bi.team_id.is_none());
-        assert_eq!(bi.signing_id.as_deref(), Some("platform:com.apple.x"));
+        assert_eq!(bi.signing_id.as_deref(), Some("com.apple.x"));
     }
 
     #[test]

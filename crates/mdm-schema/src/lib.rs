@@ -6,6 +6,7 @@
 //! - `skip_keys` — Setup Assistant skip keys with platform gating
 
 pub mod capabilities;
+pub mod examples;
 pub mod profiles;
 pub mod skip_keys;
 pub mod types;
@@ -15,6 +16,16 @@ pub use types::*;
 /// Embedded capabilities Parquet data (Apple device-management).
 pub fn embedded_capabilities() -> &'static [u8] {
     include_bytes!("../data/capabilities.parquet")
+}
+
+/// Embedded examples Parquet data (Apple example configs).
+pub fn embedded_examples() -> &'static [u8] {
+    include_bytes!("../data/examples.parquet")
+}
+
+/// Embedded **beta** examples Parquet data (Apple device-management seed).
+pub fn embedded_examples_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/examples.parquet")
 }
 
 /// Embedded **beta** capabilities Parquet data (Apple device-management seed).
@@ -140,6 +151,18 @@ mod tests {
         assert!(
             caps.iter()
                 .any(|c| c.payload_type == "com.apple.wifi.managed")
+        );
+    }
+
+    #[test]
+    fn test_beta_examples_contain_app_settings() {
+        let ex = examples::read(embedded_examples_beta()).expect("read beta examples");
+        assert!(
+            ex.iter()
+                .filter(|e| e.payload_type == "com.apple.configuration.app.settings")
+                .count()
+                >= 2,
+            "beta app.settings should have 2 examples"
         );
     }
 

@@ -17,6 +17,42 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// List Apple-provided examples for a declaration type.
+pub fn handle_ddm_examples(name: &str, beta: bool, output_mode: OutputMode) -> Result<()> {
+    let registry = load_registry_opts(None, beta)?;
+    let manifest = registry
+        .get_by_name(name)
+        .ok_or_else(|| anyhow::anyhow!("type '{name}' not found"))?;
+    let examples = crate::example::lookup::for_type(&manifest.payload_type, beta)?;
+    if output_mode == OutputMode::Json {
+        let rows: Vec<_> = examples
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "index": e.index,
+                    "tab": e.tab,
+                    "description": e.description,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else if examples.is_empty() {
+        println!("No examples for {}", manifest.payload_type);
+    } else {
+        for e in &examples {
+            println!(
+                "  [{}] {}",
+                e.index,
+                e.tab.as_deref().unwrap_or("(example)")
+            );
+            if let Some(d) = &e.description {
+                println!("      {d}");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Load schema registry (embedded or from external path)
 fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
     load_registry_opts(schema_path, false)
@@ -26,7 +62,7 @@ fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
 ///
 /// An explicit `schema_path` always wins (external dir); `beta` only selects
 /// the embedded **seed** schema (pre-release OS keys) when no path is given.
-fn load_registry_opts(schema_path: Option<&str>, beta: bool) -> Result<SchemaRegistry> {
+pub(crate) fn load_registry_opts(schema_path: Option<&str>, beta: bool) -> Result<SchemaRegistry> {
     match schema_path {
         Some(p) => SchemaRegistry::from_auto_detect(Path::new(p)),
         None if beta => SchemaRegistry::embedded_beta(),
@@ -44,7 +80,7 @@ fn load_registry_opts(schema_path: Option<&str>, beta: bool) -> Result<SchemaReg
 ///
 /// Returns `None` only when no source provides a value; the caller emits
 /// the typed error envelope.
-fn resolve_ddm_org_domain(
+pub(crate) fn resolve_ddm_org_domain(
     cli_flag: Option<&str>,
     config: Option<&ProfileConfig>,
 ) -> Option<String> {

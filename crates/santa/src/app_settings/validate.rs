@@ -60,8 +60,14 @@ pub fn validate_binary(bi: &BinaryIdentifier, policy: BinaryPolicy) -> Result<()
         }
     }
     if let Some(signing_id) = &bi.signing_id {
-        if !crate::cel::is_valid_signing_id(signing_id) {
-            return Err(format!("invalid SigningID '{signing_id}'"));
+        // Apple's app.settings SigningID is the BARE code-signing identifier (e.g.
+        // `us.zoom.xos`) — NOT Santa's `TeamID:signing-id` composite. A colon means
+        // a Santa prefix leaked through; the device rejects it as malformed (-319).
+        if signing_id.trim().is_empty() || signing_id.contains(':') {
+            return Err(format!(
+                "invalid SigningID '{signing_id}' (use the bare signing identifier, \
+                 e.g. us.zoom.xos — no 'TeamID:' prefix)"
+            ));
         }
     }
 
@@ -138,14 +144,27 @@ mod tests {
 
     #[test]
     fn allow_requires_cdhash_or_teamid() {
-        // SigningID alone is invalid for allow.
+        // SigningID alone is invalid for allow. (Bare Apple signing identifier — no
+        // TeamID: prefix, which would be rejected as malformed.)
         let only_signing = BinaryIdentifier {
-            signing_id: Some("ABCDE12345:com.x".to_string()),
+            signing_id: Some("com.x".to_string()),
             ..Default::default()
         };
         assert!(validate_binary(&only_signing, BinaryPolicy::Allow).is_err());
         // ...but valid for deny.
         validate_binary(&only_signing, BinaryPolicy::Deny).unwrap();
+    }
+
+    #[test]
+    fn santa_prefixed_signing_id_is_rejected() {
+        // Regression: a Santa-format `TeamID:signing-id` in Apple's SigningID field
+        // must be rejected — the device returns Code -319 for the malformed prefix.
+        let bad = BinaryIdentifier {
+            signing_id: Some("BJ4HAAB9B3:us.zoom.xos".to_string()),
+            ..Default::default()
+        };
+        let err = validate_binary(&bad, BinaryPolicy::Deny).unwrap_err();
+        assert!(err.contains("bare signing identifier"), "{err}");
     }
 
     #[test]

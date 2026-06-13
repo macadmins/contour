@@ -1051,6 +1051,38 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     output_mode,
                 )?;
             }
+            DdmAction::Transform {
+                example_file,
+                values,
+                org,
+                output,
+                strict,
+                scan,
+                permissions,
+                deny,
+                type_name,
+                example,
+                beta,
+            } => {
+                profile::cli::transform::handle_ddm_transform(
+                    example_file.as_deref(),
+                    values.as_deref(),
+                    &scan,
+                    permissions.as_deref(),
+                    deny,
+                    org.as_deref(),
+                    output.as_deref(),
+                    strict,
+                    config.as_ref(),
+                    output_mode,
+                    type_name.as_deref(),
+                    example,
+                    beta,
+                )?;
+            }
+            DdmAction::Examples { name, beta } => {
+                profile::cli::ddm::handle_ddm_examples(&name, beta, output_mode)?;
+            }
             DdmAction::Compose {
                 bundle,
                 output,

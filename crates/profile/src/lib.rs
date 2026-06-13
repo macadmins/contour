@@ -14,6 +14,7 @@ pub mod config;
 pub mod ddm;
 pub mod diff;
 pub mod docs;
+pub mod example;
 pub mod link;
 pub mod mdm_vars;
 pub mod migrate;

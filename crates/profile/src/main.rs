@@ -10,6 +10,7 @@ mod config;
 mod ddm;
 mod diff;
 mod docs;
+mod example;
 mod link;
 mod mdm_vars;
 mod migrate;
@@ -914,6 +915,38 @@ fn run(cli: Cli) -> Result<()> {
                     config.as_ref(),
                     output_mode,
                 )?;
+            }
+            DdmAction::Transform {
+                example_file,
+                values,
+                org,
+                output,
+                strict,
+                scan,
+                permissions,
+                deny,
+                type_name,
+                example,
+                beta,
+            } => {
+                cli::transform::handle_ddm_transform(
+                    example_file.as_deref(),
+                    values.as_deref(),
+                    &scan,
+                    permissions.as_deref(),
+                    deny,
+                    org.as_deref(),
+                    output.as_deref(),
+                    strict,
+                    config.as_ref(),
+                    output_mode,
+                    type_name.as_deref(),
+                    example,
+                    beta,
+                )?;
+            }
+            DdmAction::Examples { name, beta } => {
+                cli::ddm::handle_ddm_examples(&name, beta, output_mode)?;
             }
             DdmAction::Compose {
                 bundle,

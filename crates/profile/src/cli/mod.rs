@@ -33,6 +33,7 @@ pub mod scan;
 pub mod search;
 pub mod sign;
 pub mod synthesize;
+pub mod transform;
 pub mod unsign;
 pub mod uuid;
 pub mod validate;
@@ -1279,6 +1280,63 @@ pub enum DdmAction {
             long,
             help = "Use the beta seed schema (pre-release OS keys, e.g. app.settings, package UninstallBehavior)"
         )]
+        beta: bool,
+    },
+
+    #[command(about = "Transform an Apple example declaration into a working config")]
+    Transform {
+        #[arg(help = "Path to an example declaration JSON file (or use --type + --example)")]
+        example_file: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "find→replace values map (JSON/TOML)"
+        )]
+        values: Option<String>,
+
+        #[arg(long, help = "Organization reverse domain (or set CONTOUR_ORG)")]
+        org: Option<String>,
+
+        #[arg(short, long, help = "Output file (default: stdout)")]
+        output: Option<String>,
+
+        #[arg(long, help = "Fail if known placeholders remain after transform")]
+        strict: bool,
+
+        #[arg(
+            long,
+            value_name = "CSV",
+            help = "santa scan CSV — fill app.settings lists with real entries"
+        )]
+        scan: Vec<String>,
+
+        #[arg(long, value_name = "FILE", help = "Privacy permission policy (TOML)")]
+        permissions: Option<String>,
+
+        #[arg(long, help = "Route scanned entries to DeniedBinaries")]
+        deny: bool,
+
+        #[arg(
+            long = "type",
+            value_name = "TYPE",
+            help = "Declaration type for an embedded example (instead of <example-file>)"
+        )]
+        type_name: Option<String>,
+
+        #[arg(long, value_name = "N", help = "Embedded example index (with --type)")]
+        example: Option<u32>,
+
+        #[arg(long, help = "Use beta seed examples (with --type)")]
+        beta: bool,
+    },
+
+    #[command(about = "List Apple-provided examples for a declaration type")]
+    Examples {
+        #[arg(help = "Declaration type name (e.g., app.settings)")]
+        name: String,
+
+        #[arg(long, help = "Use the beta seed examples")]
         beta: bool,
     },
 
