@@ -1,7 +1,10 @@
 # SOP: Beta (pre-release OS seed) schema
 
 This SOP covers contour's **beta channel** — Apple's pre-release OS *seed* schema,
-exposed opt-in via `--beta`. The channel is **rolling**: it always means *the current
+exposed opt-in via the per-command `--beta` flag OR the global `--channel beta` flag
+(both select the seed; the effective channel is beta if **either** is set). The
+global flag goes before the subcommand: `contour --channel beta profile ...`. The
+channel is **rolling**: it always means *the current
 seed* (`seed_OS_27_0` / OS 27 at time of writing — run `contour profile info` for the
 live pin). When that OS ships, its payloads graduate into stable and the channel
 rolls forward to the next seed; nothing here is version-specific. The beta dataset
@@ -18,7 +21,8 @@ Companion SOPs: `--sop generative` (Apple Intelligence payloads), `--sop ddm`,
 ## SCOPE — what `--beta` does and does NOT cover
 
 ```
-BETA-AWARE (accept --beta):
+BETA-AWARE (accept --beta, and honor the global --channel beta):
+  contour profile generate      <type> --beta   # .mobileconfig from the seed schema
   contour profile ddm generate  <type> --beta
   contour profile ddm validate  <path> --beta
   contour profile ddm search    <kw>   --beta
@@ -27,13 +31,18 @@ BETA-AWARE (accept --beta):
   contour profile enrollment list       --beta
   contour profile enrollment generate    --beta
 
-NOT beta-aware (stable schema only — documented limitation):
-  contour profile generate ...        # .mobileconfig generation is DDM-channel
-                                       # only for beta; seed PROFILE keys are not
-                                       # surfaced. Use DDM where the seed adds the
-                                       # capability (most OS 27 additions are DDM).
+  # Equivalent global form (flag BEFORE the subcommand):
+  contour --channel beta profile generate <type> --org <org> -o out.mobileconfig
+
+NOT beta-aware (stable schema only):
   contour mscp ... / contour santa ... # no beta channel
 ```
+
+When `profile generate` runs on the beta channel it **stamps** the artifact:
+`PayloadDescription` is suffixed with `[contour: beta-seed schema]` (visible in MDM
+consoles), and a stderr badge prints the pinned seed, e.g.
+`⚠ generated from BETA seed schema (Apple seed seed_OS_27_0 <sha>)`. The stamp marks
+the profile as built against pre-release schema — see SAFETY before deploying.
 
 Data layer (for reference; agents use the CLI, not these directly):
 `mdm_schema::embedded_capabilities_beta()`, `embedded_skip_keys_beta()` read

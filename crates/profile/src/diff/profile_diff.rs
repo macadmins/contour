@@ -66,3 +66,48 @@ pub fn save_diff(diff_result: &DiffResult, path: &str) -> Result<()> {
     fs::write(path, &diff_result.diff_text)?;
     Ok(())
 }
+
+/// Render the diff as a markdown report: a heading plus a plain (ANSI-free)
+/// unified diff wrapped in a ```diff fence so it renders with red/green
+/// gutters on GitHub. Recomputes the diff so the file output never carries
+/// terminal color codes.
+pub fn diff_markdown(
+    profile1: &ConfigurationProfile,
+    profile2: &ConfigurationProfile,
+    label1: &str,
+    label2: &str,
+) -> Result<String> {
+    use std::fmt::Write as _;
+    let profile1_str = serialize_for_diff(profile1)?;
+    let profile2_str = serialize_for_diff(profile2)?;
+    let diff = TextDiff::from_lines(&profile1_str, &profile2_str);
+
+    let mut md = String::with_capacity(4096);
+    writeln!(md, "# Profile Diff Report\n").unwrap();
+    writeln!(md, "- **Baseline:** `{label1}`").unwrap();
+    writeln!(md, "- **Proposed:** `{label2}`\n").unwrap();
+
+    let mut body = String::new();
+    let mut has_differences = false;
+    for change in diff.iter_all_changes() {
+        let sign = match change.tag() {
+            ChangeTag::Delete => {
+                has_differences = true;
+                "-"
+            }
+            ChangeTag::Insert => {
+                has_differences = true;
+                "+"
+            }
+            ChangeTag::Equal => " ",
+        };
+        write!(body, "{sign} {change}").unwrap();
+    }
+
+    if has_differences {
+        writeln!(md, "Profiles differ:\n\n```diff\n{body}```").unwrap();
+    } else {
+        writeln!(md, "Profiles are identical.").unwrap();
+    }
+    Ok(md)
+}

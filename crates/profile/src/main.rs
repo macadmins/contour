@@ -102,12 +102,16 @@ fn run(cli: Cli) -> Result<()> {
         println!("{}", "✓ Using config from profile.toml".to_string().green());
     }
 
+    // Global schema channel (`--channel`); per-command `--beta` flags OR into it.
+    let channel = cli.channel;
+
     match cli.command {
         Commands::Info {
             payload_type,
             schema_path,
             full,
             os,
+            beta,
         } => {
             if let Some(t) = payload_type {
                 cli::info::handle_payload_info(
@@ -115,6 +119,7 @@ fn run(cli: Cli) -> Result<()> {
                     schema_path.as_deref(),
                     full,
                     os.as_deref(),
+                    channel.or_beta(beta),
                     output_mode,
                 )?;
             } else {
@@ -297,6 +302,7 @@ fn run(cli: Cli) -> Result<()> {
                 deprecations,
                 md_report.as_deref(),
                 fail_on_deprecations,
+                channel,
                 config.as_ref(),
                 output_mode,
             )?;
@@ -405,17 +411,39 @@ fn run(cli: Cli) -> Result<()> {
                 output_mode,
             )?;
         }
+        Commands::Report {
+            paths,
+            recursive,
+            max_depth,
+            flat,
+            output,
+            fail_on_secrets,
+            fail_on_conflict,
+        } => {
+            cli::report::handle_report(
+                &paths,
+                recursive,
+                max_depth,
+                flat,
+                output.as_deref(),
+                fail_on_secrets,
+                fail_on_conflict,
+                output_mode,
+            )?;
+        }
         Commands::Search {
             query,
             field,
             include_fields,
             schema_path,
+            beta,
         } => {
             cli::search::handle_search(
                 query.as_deref(),
                 field.as_deref(),
                 include_fields,
                 schema_path.as_deref(),
+                channel.or_beta(beta),
                 output_mode,
             )?;
         }
@@ -447,8 +475,9 @@ fn run(cli: Cli) -> Result<()> {
             file1,
             file2,
             output,
+            md_report,
         } => {
-            cli::diff::handle_diff(&file1, &file2, output.as_deref())?;
+            cli::diff::handle_diff(&file1, &file2, output.as_deref(), md_report.as_deref())?;
         }
         Commands::Plan {
             baseline,
@@ -460,6 +489,7 @@ fn run(cli: Cli) -> Result<()> {
             accept_replace,
             accept_scope_change,
             fleet_size,
+            md_report,
         } => {
             let opts = cli::plan::PlanOptions {
                 recursive,
@@ -470,6 +500,7 @@ fn run(cli: Cli) -> Result<()> {
                 accept_replace,
                 accept_scope_change,
                 fleet_size,
+                md_report,
             };
             cli::plan::handle_plan(&baseline, &proposed, &opts)?;
         }
@@ -594,7 +625,9 @@ fn run(cli: Cli) -> Result<()> {
             combined,
             no_combined,
             sanitize,
+            beta,
         } => {
+            let gen_channel = channel.or_beta(beta);
             // Tristate: --combined wins true, --no-combined wins false,
             // neither leaves the value as None so the recipe TOML's
             // `[recipe.output] combined` controls.
@@ -658,6 +691,7 @@ fn run(cli: Cli) -> Result<()> {
                     config.as_ref(),
                     output_mode,
                     &format,
+                    gen_channel,
                 )?;
             } else {
                 anyhow::bail!(
@@ -683,6 +717,7 @@ fn run(cli: Cli) -> Result<()> {
                     payload.as_deref(),
                     category.as_deref(),
                     schema_path.as_deref(),
+                    channel,
                     output_mode,
                 )?;
             }
@@ -693,6 +728,7 @@ fn run(cli: Cli) -> Result<()> {
                 cli::docs::handle_docs_list(
                     category.as_deref(),
                     schema_path.as_deref(),
+                    channel,
                     output_mode,
                 )?;
             }
@@ -881,6 +917,7 @@ fn run(cli: Cli) -> Result<()> {
                 no_parallel,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 let parallel = !no_parallel;
                 cli::ddm::handle_ddm_validate(
                     &paths,
@@ -897,6 +934,7 @@ fn run(cli: Cli) -> Result<()> {
                 schema_path,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 cli::ddm::handle_ddm_search(&query, schema_path.as_deref(), beta, output_mode)?;
             }
             DdmAction::List {
@@ -904,6 +942,7 @@ fn run(cli: Cli) -> Result<()> {
                 schema_path,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 cli::ddm::handle_ddm_list(
                     category.as_deref(),
                     schema_path.as_deref(),
@@ -916,6 +955,7 @@ fn run(cli: Cli) -> Result<()> {
                 schema_path,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 cli::ddm::handle_ddm_info(&name, schema_path.as_deref(), beta, output_mode)?;
             }
             DdmAction::Generate {
@@ -927,6 +967,7 @@ fn run(cli: Cli) -> Result<()> {
                 payload,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 cli::ddm::handle_ddm_generate(
                     &name,
                     output.as_deref(),
@@ -952,6 +993,7 @@ fn run(cli: Cli) -> Result<()> {
                 example,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 cli::transform::handle_ddm_transform(
                     example_file.as_deref(),
                     values.as_deref(),
@@ -969,7 +1011,7 @@ fn run(cli: Cli) -> Result<()> {
                 )?;
             }
             DdmAction::Examples { name, beta } => {
-                cli::ddm::handle_ddm_examples(&name, beta, output_mode)?;
+                cli::ddm::handle_ddm_examples(&name, beta || channel.is_beta(), output_mode)?;
             }
             DdmAction::Compose {
                 bundle,
@@ -1008,6 +1050,7 @@ fn run(cli: Cli) -> Result<()> {
                 os_version,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 cli::enrollment::handle_enrollment_list(
                     &platform,
                     os_version.as_deref(),
@@ -1026,6 +1069,7 @@ fn run(cli: Cli) -> Result<()> {
                 interactive,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 cli::enrollment::handle_enrollment_generate(
                     &platform,
                     os_version.as_deref(),

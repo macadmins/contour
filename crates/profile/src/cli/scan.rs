@@ -69,6 +69,7 @@ pub fn handle_scan(
     deprecations: bool,
     md_report: Option<&str>,
     fail_on_deprecations: bool,
+    channel: crate::schema::Channel,
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -76,9 +77,10 @@ pub fn handle_scan(
     let deprecations = deprecations || md_report.is_some();
 
     // Build the deprecation registries once when scanning is requested.
+    // The beta channel surfaces seed removals (`os_support[macOS].removed`).
     let registries = if deprecations {
         let migration = MigrationRegistry::new();
-        let schema = SchemaRegistry::embedded()
+        let schema = SchemaRegistry::embedded_channel(channel)
             .context("Failed to load embedded schema for deprecation scan")?;
         Some((migration, schema))
     } else {

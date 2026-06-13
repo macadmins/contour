@@ -472,12 +472,13 @@ mod tests {
         let workflow = ProfileWorkflow::default_workflow();
         let steps = workflow.steps();
 
-        assert_eq!(steps.len(), 13);
+        assert_eq!(steps.len(), 14);
         assert_eq!(steps[0].title, "Initialize Profile Configuration");
         assert_eq!(steps[2].title, "Scan for Deprecations");
         assert_eq!(steps[5].title, "Generate from a Recipe");
         assert_eq!(steps[6].title, "Secrets and MDM Variables");
-        assert_eq!(steps[12].title, "Create Pull Request");
+        assert_eq!(steps[11].title, "Detect Cross-Profile Collisions");
+        assert_eq!(steps[13].title, "Create Pull Request");
     }
 
     #[test]

@@ -6,7 +6,7 @@
 use crate::config::ProfileConfig;
 use crate::output::OutputMode;
 use crate::recipe;
-use crate::schema::{FieldDefinition, FieldType, SchemaRegistry};
+use crate::schema::{Channel, FieldDefinition, FieldType, SchemaRegistry};
 use anyhow::{Context, Result};
 use base64::Engine;
 use colored::Colorize;
@@ -46,12 +46,46 @@ pub fn resolve_recipe_path(cli_value: Option<&str>) -> Option<String> {
 
 /// Load schema registry — embedded base, optionally merged with external schemas.
 pub fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
-    let mut registry = SchemaRegistry::embedded()?;
+    load_registry_channel(schema_path, Channel::Stable)
+}
+
+/// Load the schema registry for a specific [`Channel`] (stable vs. beta seed),
+/// optionally merged with external schemas.
+pub fn load_registry_channel(
+    schema_path: Option<&str>,
+    channel: Channel,
+) -> Result<SchemaRegistry> {
+    let mut registry = SchemaRegistry::embedded_channel(channel)?;
     if let Some(p) = schema_path {
         let external = SchemaRegistry::from_auto_detect(Path::new(p))?;
         registry.merge(external);
     }
     Ok(registry)
+}
+
+/// Marker appended to `PayloadDescription` for beta-channel generation.
+const BETA_STAMP: &str = "[contour: beta-seed schema]";
+
+/// Emit a stderr badge announcing beta-seed generation, with the pinned Apple
+/// seed release/commit when available. Stderr keeps stdout (incl. `--json`) clean.
+fn emit_beta_badge() {
+    let v = mdm_schema::schema_versions();
+    let provenance = if v.apple_device_management_seed_commit.is_empty() {
+        "no seed pinned; beta == stable".to_string()
+    } else {
+        let short = &v.apple_device_management_seed_commit
+            [..v.apple_device_management_seed_commit.len().min(8)];
+        let release = if v.apple_device_management_seed_release.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", v.apple_device_management_seed_release)
+        };
+        format!("Apple seed {release}{short}")
+    };
+    eprintln!(
+        "{}",
+        format!("⚠ generated from BETA seed schema ({provenance})").yellow()
+    );
 }
 
 /// Convert a TOML value to a plist value.
@@ -682,6 +716,7 @@ fn find_placeholders(content: &str) -> Vec<String> {
 }
 
 /// Generate a single profile from schema.
+#[allow(clippy::too_many_arguments, reason = "CLI handler mirrors clap args")]
 pub fn handle_generate(
     payload_type: &str,
     output: Option<&str>,
@@ -691,8 +726,9 @@ pub fn handle_generate(
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
     format: &str,
+    channel: Channel,
 ) -> Result<()> {
-    let registry = load_registry(schema_path)?;
+    let registry = load_registry_channel(schema_path, channel)?;
 
     let manifest = registry.get_by_name(payload_type).ok_or_else(|| {
         anyhow::anyhow!(
@@ -747,9 +783,17 @@ pub fn handle_generate(
             .unwrap_or("profile");
         let identifier = format!("{domain}.{short}");
 
+        // Beta channel: stamp the profile so the artifact records that it was
+        // generated against the pre-release seed schema (visible in MDM consoles).
+        let description = if channel.is_beta() {
+            format!("{} {BETA_STAMP}", manifest.description)
+        } else {
+            manifest.description.clone()
+        };
+
         let bytes = ProfileBuilder::new(&domain, &identifier)
             .display_name(&manifest.title)
-            .description(&manifest.description)
+            .description(&description)
             .build(&manifest.payload_type, payload_content)?;
         (bytes, "mobileconfig")
     };
@@ -787,6 +831,10 @@ pub fn handle_generate(
         )?;
     }
 
+    if channel.is_beta() {
+        emit_beta_badge();
+    }
+
     if output_mode == OutputMode::Json {
         let result = serde_json::json!({
             "success": true,
@@ -794,6 +842,7 @@ pub fn handle_generate(
             "title": manifest.title,
             "output": output_path,
             "format": format,
+            "channel": channel.to_string(),
             "fields": if full { "all" } else { "required" }
         });
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -816,6 +865,9 @@ pub fn handle_generate(
             "Fields:".bold(),
             if full { "all" } else { "required only" }
         );
+        if channel.is_beta() {
+            println!("  {} {}", "Channel:".bold(), "beta (seed schema)".yellow());
+        }
         if is_plist {
             println!(
                 "\n{}",
@@ -2342,6 +2394,7 @@ mod tests {
             None, // no profile.toml
             OutputMode::Json,
             "mobileconfig",
+            Channel::Stable,
         );
 
         assert!(result.is_err(), "expected error when --org is missing");

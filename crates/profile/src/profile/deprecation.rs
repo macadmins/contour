@@ -11,7 +11,7 @@
 //!     deprecated the key; it still works)
 
 use crate::migrate::mapping::{MigrationRegistry, MigrationStatus};
-use crate::schema::SchemaRegistry;
+use crate::schema::{Platform, SchemaRegistry};
 use plist::Value;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -21,6 +21,10 @@ use std::path::{Path, PathBuf};
 pub enum DeprecationKind {
     PayloadType,
     Key,
+    /// Payload type hard-removed on a target OS — it no longer installs.
+    /// Sourced from `os_support[macOS].removed`, populated by the
+    /// posture-ingest pipeline for the seed/beta schema.
+    RemovedPayloadType,
 }
 
 /// Severity of a deprecation finding.
@@ -43,6 +47,9 @@ pub struct DeprecationFinding {
     pub locator: String,
     /// OS version the element was deprecated in, when known.
     pub deprecated_in: Option<String>,
+    /// OS version the element was *removed* in (no longer installs), when known.
+    /// Set only for [`DeprecationKind::RemovedPayloadType`].
+    pub removed_in: Option<String>,
     /// DDM replacement type or successor key, when known.
     pub replacement: Option<String>,
     pub detail: String,
@@ -81,6 +88,7 @@ fn walk_payload_types(
             payload_type: pt.to_string(),
             locator: pt.to_string(),
             deprecated_in: Some("macOS 26".to_string()),
+            removed_in: None,
             replacement: Some(mapping.ddm_type.to_string()),
             detail: format!(
                 "{scope}: PayloadType {pt:?} has a DDM replacement \
@@ -132,6 +140,7 @@ fn walk_keys(
                     payload_type: pt.to_string(),
                     locator: format!("{pt}.{key}"),
                     deprecated_in: Some(dep.clone()),
+                    removed_in: None,
                     replacement: None,
                     detail: format!(
                         "{scope}: key {key:?} in {pt:?} was deprecated by Apple \
@@ -145,6 +154,125 @@ fn walk_keys(
     if let Some(Value::Array(items)) = dict.get("PayloadContent") {
         for (i, item) in items.iter().enumerate() {
             walk_keys(item, Some(i), schema, out);
+        }
+    }
+}
+
+/// Scan a parsed profile tree for payload types the schema marks as **removed**
+/// on macOS — i.e. the type no longer installs (stronger than deprecation, which
+/// still works). The signal is `os_support[macOS].removed`, populated by the
+/// posture-ingest pipeline for the seed/beta schema. With the released (stable)
+/// schema this returns nothing; pass a beta registry to detect seed removals.
+pub fn scan_removed_payload_types(
+    value: &Value,
+    schema: &SchemaRegistry,
+) -> Vec<DeprecationFinding> {
+    let mut findings = Vec::new();
+    walk_removed(value, None, schema, &mut findings);
+    findings
+}
+
+fn walk_removed(
+    value: &Value,
+    idx: Option<usize>,
+    schema: &SchemaRegistry,
+    out: &mut Vec<DeprecationFinding>,
+) {
+    let Value::Dictionary(dict) = value else {
+        return;
+    };
+    if let Some(pt) = dict.get("PayloadType").and_then(Value::as_string)
+        && let Some(manifest) = schema.get(pt)
+        && let Some(removed) = manifest
+            .os_support
+            .get(&Platform::MacOS)
+            .and_then(|d| d.removed.as_ref())
+    {
+        let scope = idx.map_or("Profile".to_string(), |i| format!("PayloadContent[{i}]"));
+        out.push(DeprecationFinding {
+            kind: DeprecationKind::RemovedPayloadType,
+            payload_index: idx,
+            payload_type: pt.to_string(),
+            locator: pt.to_string(),
+            deprecated_in: None,
+            removed_in: Some(removed.clone()),
+            replacement: None,
+            detail: format!(
+                "{scope}: PayloadType {pt:?} was REMOVED in {removed} — it no longer \
+                 installs on that OS or later. Migrate off this payload before upgrading."
+            ),
+            severity: DeprecationSeverity::Critical,
+        });
+    }
+    if let Some(Value::Array(items)) = dict.get("PayloadContent") {
+        for (i, item) in items.iter().enumerate() {
+            walk_removed(item, Some(i), schema, out);
+        }
+    }
+}
+
+/// Scan a parsed profile tree for payload types the schema marks **deprecated**
+/// on any platform (`os_support[*].deprecated`). Deprecated payloads still
+/// install but Apple has flagged them for removal — weaker than
+/// [`scan_removed_payload_types`]. Works on both channels: the stable schema
+/// carries existing deprecations (e.g. iOS-era payloads); a beta registry adds
+/// the seed/OS-27 ones (e.g. `AssetCache.managed` deprecated 27.0).
+pub fn scan_deprecated_payload_types(
+    value: &Value,
+    schema: &SchemaRegistry,
+) -> Vec<DeprecationFinding> {
+    let mut findings = Vec::new();
+    walk_deprecated(value, None, schema, &mut findings);
+    findings
+}
+
+fn walk_deprecated(
+    value: &Value,
+    idx: Option<usize>,
+    schema: &SchemaRegistry,
+    out: &mut Vec<DeprecationFinding>,
+) {
+    let Value::Dictionary(dict) = value else {
+        return;
+    };
+    if let Some(pt) = dict.get("PayloadType").and_then(Value::as_string)
+        && let Some(manifest) = schema.get(pt)
+    {
+        // Collect every platform that carries a deprecation marker, in a
+        // deterministic order (HashMap iteration order is otherwise unstable).
+        let mut deps: Vec<(String, String)> = manifest
+            .os_support
+            .iter()
+            .filter_map(|(p, d)| d.deprecated.as_ref().map(|v| (format!("{p:?}"), v.clone())))
+            .collect();
+        deps.sort();
+        if !deps.is_empty() {
+            let scope = idx.map_or("Profile".to_string(), |i| format!("PayloadContent[{i}]"));
+            let platforms = deps
+                .iter()
+                .map(|(p, v)| format!("{p} {v}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let earliest = deps.iter().map(|(_, v)| v.clone()).min();
+            out.push(DeprecationFinding {
+                kind: DeprecationKind::PayloadType,
+                payload_index: idx,
+                payload_type: pt.to_string(),
+                locator: pt.to_string(),
+                deprecated_in: earliest,
+                removed_in: None,
+                replacement: None,
+                detail: format!(
+                    "{scope}: PayloadType {pt:?} is deprecated by Apple ({platforms}); \
+                     it still installs but is scheduled for removal."
+                ),
+                severity: DeprecationSeverity::Warning,
+            });
+        }
+    }
+    if let Some(Value::Array(items)) = dict.get("PayloadContent") {
+        for (i, item) in items.iter().enumerate() {
+            walk_deprecated(item, Some(i), schema, out);
         }
     }
 }
@@ -192,9 +320,45 @@ pub fn scan_deprecations(
     migration: &MigrationRegistry,
     schema: &SchemaRegistry,
 ) -> DeprecationReport {
-    let mut findings = scan_payload_types(value, migration);
+    // Three payload-type-level sources can flag the same payload: the migration
+    // registry (legacy→DDM), the schema's `removed` marker, and the schema's
+    // `deprecated` marker. Collect all, then keep the strongest signal per
+    // payload so a single payload isn't reported two or three times.
+    let mut payload_level = scan_payload_types(value, migration);
+    payload_level.extend(scan_removed_payload_types(value, schema));
+    payload_level.extend(scan_deprecated_payload_types(value, schema));
+
+    let mut findings = dedup_payload_findings(payload_level);
     findings.extend(scan_keys(value, schema));
     DeprecationReport::for_file(path, findings)
+}
+
+/// Keep one payload-type-level finding per `(payload_index, payload_type)`,
+/// preferring the strongest signal: removed > migration (critical) > schema
+/// deprecation (warning). Key findings are handled separately and untouched.
+fn dedup_payload_findings(findings: Vec<DeprecationFinding>) -> Vec<DeprecationFinding> {
+    fn rank(f: &DeprecationFinding) -> u8 {
+        match (f.kind, f.severity) {
+            (DeprecationKind::RemovedPayloadType, _) => 3,
+            (DeprecationKind::PayloadType, DeprecationSeverity::Critical) => 2,
+            (DeprecationKind::PayloadType, DeprecationSeverity::Warning) => 1,
+            _ => 0,
+        }
+    }
+    let mut best: Vec<DeprecationFinding> = Vec::new();
+    for f in findings {
+        if let Some(existing) = best
+            .iter_mut()
+            .find(|e| e.payload_index == f.payload_index && e.payload_type == f.payload_type)
+        {
+            if rank(&f) > rank(existing) {
+                *existing = f;
+            }
+        } else {
+            best.push(f);
+        }
+    }
+    best
 }
 
 #[cfg(test)]
@@ -254,6 +418,136 @@ mod tests {
         assert_eq!(findings[0].kind, DeprecationKind::PayloadType);
         assert_eq!(findings[0].severity, DeprecationSeverity::Critical);
         assert_eq!(findings[0].payload_index, Some(0));
+    }
+
+    /// Build a one-payload registry whose macOS `removed` slot is populated —
+    /// mirrors what posture-ingest will emit for a seed-removed payload type.
+    fn registry_with_removed(payload_type: &str, removed_ver: &str) -> SchemaRegistry {
+        use crate::schema::types::{OsSupportDetail, PayloadManifest, Platforms};
+        let mut os_support = std::collections::HashMap::new();
+        os_support.insert(
+            Platform::MacOS,
+            OsSupportDetail {
+                removed: Some(removed_ver.to_string()),
+                ..Default::default()
+            },
+        );
+        let manifest = PayloadManifest {
+            payload_type: payload_type.to_string(),
+            title: payload_type.to_string(),
+            description: String::new(),
+            platforms: Platforms::parse("*"),
+            min_versions: std::collections::HashMap::new(),
+            os_support,
+            apply_mode: None,
+            category: "apple".to_string(),
+            fields: std::collections::HashMap::new(),
+            field_order: vec![],
+            segments: vec![],
+        };
+        SchemaRegistry::from_manifests_for_test(vec![manifest])
+    }
+
+    #[test]
+    fn removed_payload_type_is_flagged() {
+        let schema = registry_with_removed("com.apple.system.logging", "26.0");
+        let v = profile(vec![payload("com.apple.system.logging")]);
+        let findings = scan_removed_payload_types(&v, &schema);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, DeprecationKind::RemovedPayloadType);
+        assert_eq!(findings[0].severity, DeprecationSeverity::Critical);
+        assert_eq!(findings[0].removed_in.as_deref(), Some("26.0"));
+        assert_eq!(findings[0].payload_index, Some(0));
+    }
+
+    /// One-payload registry whose macOS `deprecated` slot is populated.
+    fn registry_with_deprecated(payload_type: &str, dep_ver: &str) -> SchemaRegistry {
+        use crate::schema::types::{OsSupportDetail, PayloadManifest, Platforms};
+        let mut os_support = std::collections::HashMap::new();
+        os_support.insert(
+            Platform::MacOS,
+            OsSupportDetail {
+                deprecated: Some(dep_ver.to_string()),
+                ..Default::default()
+            },
+        );
+        let manifest = PayloadManifest {
+            payload_type: payload_type.to_string(),
+            title: payload_type.to_string(),
+            description: String::new(),
+            platforms: Platforms::parse("*"),
+            min_versions: std::collections::HashMap::new(),
+            os_support,
+            apply_mode: None,
+            category: "apple".to_string(),
+            fields: std::collections::HashMap::new(),
+            field_order: vec![],
+            segments: vec![],
+        };
+        SchemaRegistry::from_manifests_for_test(vec![manifest])
+    }
+
+    #[test]
+    fn deprecated_payload_type_is_flagged_warning() {
+        let schema = registry_with_deprecated("com.apple.AssetCache.managed", "27.0");
+        let v = profile(vec![payload("com.apple.AssetCache.managed")]);
+        let findings = scan_deprecated_payload_types(&v, &schema);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, DeprecationKind::PayloadType);
+        assert_eq!(findings[0].severity, DeprecationSeverity::Warning);
+        assert_eq!(findings[0].deprecated_in.as_deref(), Some("27.0"));
+        assert_eq!(findings[0].payload_index, Some(0));
+    }
+
+    #[test]
+    fn removed_wins_over_deprecated_for_same_payload() {
+        // A payload marked BOTH removed and deprecated should yield ONE finding
+        // (the stronger "removed"), not two.
+        use crate::schema::types::{OsSupportDetail, PayloadManifest, Platforms};
+        let mut os_support = std::collections::HashMap::new();
+        os_support.insert(
+            Platform::MacOS,
+            OsSupportDetail {
+                deprecated: Some("26.0".to_string()),
+                removed: Some("27.0".to_string()),
+                ..Default::default()
+            },
+        );
+        let schema = SchemaRegistry::from_manifests_for_test(vec![PayloadManifest {
+            payload_type: "com.apple.SoftwareUpdate".to_string(),
+            title: "SoftwareUpdate".to_string(),
+            description: String::new(),
+            platforms: Platforms::parse("*"),
+            min_versions: std::collections::HashMap::new(),
+            os_support,
+            apply_mode: None,
+            category: "apple".to_string(),
+            fields: std::collections::HashMap::new(),
+            field_order: vec![],
+            segments: vec![],
+        }]);
+        let v = profile(vec![payload("com.apple.SoftwareUpdate")]);
+        let report = scan_deprecations(
+            &v,
+            Path::new("t.mobileconfig"),
+            &MigrationRegistry::new(),
+            &schema,
+        );
+        let pt: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.payload_type == "com.apple.SoftwareUpdate")
+            .collect();
+        assert_eq!(pt.len(), 1, "one payload-level finding, not two");
+        assert_eq!(pt[0].kind, DeprecationKind::RemovedPayloadType);
+    }
+
+    #[test]
+    fn payload_not_marked_removed_is_clean() {
+        // Same type, but the schema carries no `removed` marker → no finding.
+        let schema = SchemaRegistry::embedded().unwrap();
+        let v = profile(vec![payload("com.apple.system.logging")]);
+        assert!(scan_removed_payload_types(&v, &schema).is_empty());
     }
 
     #[test]

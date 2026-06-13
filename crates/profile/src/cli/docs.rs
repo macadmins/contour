@@ -2,7 +2,7 @@
 //!
 //! Generate markdown documentation from embedded payload schemas.
 
-use crate::cli::generate::load_registry;
+use crate::cli::generate::{load_registry, load_registry_channel};
 use crate::docs;
 use crate::output::OutputMode;
 use anyhow::Result;
@@ -15,9 +15,10 @@ pub fn handle_docs_generate(
     payload: Option<&str>,
     category: Option<&str>,
     schema_path: Option<&str>,
+    channel: crate::schema::Channel,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let registry = load_registry(schema_path)?;
+    let registry = load_registry_channel(schema_path, channel)?;
 
     if stdout {
         // Stream matching payload markdown to stdout — no disk I/O,
@@ -87,9 +88,10 @@ pub fn handle_docs_generate(
 pub fn handle_docs_list(
     category: Option<&str>,
     schema_path: Option<&str>,
+    channel: crate::schema::Channel,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let registry = load_registry(schema_path)?;
+    let registry = load_registry_channel(schema_path, channel)?;
 
     let manifests: Vec<_> = if let Some(cat) = category {
         registry.by_category(cat)

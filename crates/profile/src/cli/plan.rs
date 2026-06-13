@@ -26,9 +26,11 @@ pub struct PlanOptions {
     pub accept_scope_change: bool,
     /// Optional fleet size — when set, blast-radius narrative is multiplied.
     pub fleet_size: Option<usize>,
+    /// Optional path for a markdown report, written alongside the primary output.
+    pub md_report: Option<String>,
 }
 
-#[derive(Debug, Default, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
     #[default]
     Text,
@@ -77,6 +79,14 @@ pub fn handle_plan(baseline: &str, proposed: &str, opts: &PlanOptions) -> Result
         OutputFormat::Text => render_text(&file_plans, opts),
         OutputFormat::Json => render_json(&file_plans, exit_blocked, opts)?,
         OutputFormat::Sarif => render_sarif(&file_plans)?,
+    }
+
+    if let Some(path) = &opts.md_report {
+        std::fs::write(path, render_markdown(&file_plans, exit_blocked))
+            .with_context(|| format!("writing {path}"))?;
+        if opts.format == OutputFormat::Text {
+            println!("{}", format!("Report written to {path}").green());
+        }
     }
 
     if exit_blocked {
@@ -539,4 +549,106 @@ fn render_json(file_plans: &[FilePlan], exit_blocked: bool, _opts: &PlanOptions)
     let s = serde_json::to_string_pretty(&out)?;
     println!("{s}");
     Ok(())
+}
+
+/// Snake-case tier label shared by SARIF/markdown reporters.
+fn tier_label(tier: ChangeTier) -> &'static str {
+    match tier {
+        ChangeTier::Noop => "noop",
+        ChangeTier::InPlaceUpdate => "in_place_update",
+        ChangeTier::Add => "add",
+        ChangeTier::Remove => "remove",
+        ChangeTier::Replace => "replace",
+        ChangeTier::RefBroken => "ref_broken",
+        ChangeTier::ScopeBroadened => "scope_broadened",
+        ChangeTier::TypeInvalid => "type_invalid",
+        ChangeTier::Deprecated => "deprecated",
+    }
+}
+
+/// Render the plan as a markdown report — summary table plus a per-file
+/// change matrix. Mirrors the text/JSON reporters over `Vec<FilePlan>`.
+fn render_markdown(file_plans: &[FilePlan], exit_blocked: bool) -> String {
+    use std::fmt::Write as _;
+    let mut md = String::with_capacity(4096);
+    let mut totals = SummaryTotals::default();
+    for fp in file_plans {
+        totals.add(&fp.plan.summary);
+    }
+
+    writeln!(md, "# Profile Plan Report\n").unwrap();
+    writeln!(
+        md,
+        "**Status:** {}\n",
+        if exit_blocked {
+            "BLOCKED — blocking changes detected"
+        } else {
+            "OK — no blocking changes"
+        }
+    )
+    .unwrap();
+    writeln!(
+        md,
+        "| Files | Noop | In-place | Add | Remove | Replace | Ref-broken | Scope | Type-invalid | Deprecated |\n|---|---|---|---|---|---|---|---|---|---|"
+    )
+    .unwrap();
+    writeln!(
+        md,
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+        file_plans.len(),
+        totals.noop,
+        totals.in_place_update,
+        totals.add,
+        totals.remove,
+        totals.replace,
+        totals.ref_broken,
+        totals.scope_broadened,
+        totals.type_invalid,
+        totals.deprecated
+    )
+    .unwrap();
+
+    for fp in file_plans {
+        let changed: Vec<&PayloadChange> = fp
+            .plan
+            .changes
+            .iter()
+            .filter(|c| c.tier != ChangeTier::Noop)
+            .collect();
+        if changed.is_empty() {
+            continue;
+        }
+        writeln!(md, "## `{}`\n", fp.label).unwrap();
+        writeln!(
+            md,
+            "| Tier | Payload type | Identifier | Fields | Evidence |\n|---|---|---|---|---|"
+        )
+        .unwrap();
+        for c in changed {
+            let fields = if c.fields_changed.is_empty() {
+                String::new()
+            } else {
+                format!("`{}`", c.fields_changed.join("`, `"))
+            };
+            writeln!(
+                md,
+                "| {} | `{}` | `{}` | {} | {} |",
+                tier_label(c.tier),
+                c.payload_type,
+                c.payload_identifier,
+                fields,
+                c.evidence.replace('|', "\\|")
+            )
+            .unwrap();
+        }
+        writeln!(md).unwrap();
+    }
+
+    if file_plans
+        .iter()
+        .all(|fp| fp.plan.changes.iter().all(|c| c.tier == ChangeTier::Noop))
+    {
+        writeln!(md, "_No payload-level changes._").unwrap();
+    }
+    md
 }

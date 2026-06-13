@@ -46,9 +46,10 @@ pub fn handle_search(
     field: Option<&str>,
     include_fields: bool,
     schema_path: Option<&str>,
+    channel: crate::schema::Channel,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let registry = crate::cli::generate::load_registry(schema_path)?;
+    let registry = crate::cli::generate::load_registry_channel(schema_path, channel)?;
 
     if let Some(name) = field {
         return handle_field_lookup(&registry, name, output_mode);

@@ -51,7 +51,9 @@ pub fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Commands::Trainer { .. } => unreachable!(), // Already handled above
-        Commands::Profile { action } => dispatch_profile(action, cli.verbose, cli.json),
+        Commands::Profile { action } => {
+            dispatch_profile(action, cli.verbose, cli.json, cli.channel)
+        }
         Commands::Pppc {
             action,
             path,
@@ -232,7 +234,12 @@ fn dispatch_trainer(tool: &TrainerTool, cli: &Cli) -> Result<()> {
 }
 
 /// Dispatch profile commands.
-fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) -> Result<()> {
+fn dispatch_profile(
+    action: profile::cli::Commands,
+    _verbose: bool,
+    json: bool,
+    channel: profile::schema::Channel,
+) -> Result<()> {
     use colored::Colorize;
     use profile::cli::{
         CommandAction, Commands, DdmAction, DocsAction, EnrollmentAction, LibraryAction,
@@ -258,6 +265,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             schema_path,
             full,
             os,
+            beta,
         } => {
             if let Some(t) = payload_type {
                 profile::cli::info::handle_payload_info(
@@ -265,6 +273,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     schema_path.as_deref(),
                     full,
                     os.as_deref(),
+                    channel.or_beta(beta),
                     output_mode,
                 )?;
             } else {
@@ -447,6 +456,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 deprecations,
                 md_report.as_deref(),
                 fail_on_deprecations,
+                channel,
                 config.as_ref(),
                 output_mode,
             )?;
@@ -555,17 +565,39 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 output_mode,
             )?;
         }
+        Commands::Report {
+            paths,
+            recursive,
+            max_depth,
+            flat,
+            output,
+            fail_on_secrets,
+            fail_on_conflict,
+        } => {
+            profile::cli::report::handle_report(
+                &paths,
+                recursive,
+                max_depth,
+                flat,
+                output.as_deref(),
+                fail_on_secrets,
+                fail_on_conflict,
+                output_mode,
+            )?;
+        }
         Commands::Search {
             query,
             field,
             include_fields,
             schema_path,
+            beta,
         } => {
             profile::cli::search::handle_search(
                 query.as_deref(),
                 field.as_deref(),
                 include_fields,
                 schema_path.as_deref(),
+                channel.or_beta(beta),
                 output_mode,
             )?;
         }
@@ -597,8 +629,14 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             file1,
             file2,
             output,
+            md_report,
         } => {
-            profile::cli::diff::handle_diff(&file1, &file2, output.as_deref())?;
+            profile::cli::diff::handle_diff(
+                &file1,
+                &file2,
+                output.as_deref(),
+                md_report.as_deref(),
+            )?;
         }
         Commands::Unsign {
             paths,
@@ -699,7 +737,9 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             combined,
             no_combined,
             sanitize,
+            beta,
         } => {
+            let gen_channel = channel.or_beta(beta);
             // Tristate: --combined wins true, --no-combined wins false,
             // neither leaves the value as None so the recipe TOML
             // controls.
@@ -760,6 +800,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     config.as_ref(),
                     output_mode,
                     &format,
+                    gen_channel,
                 )?;
             } else {
                 anyhow::bail!(
@@ -785,6 +826,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                     payload.as_deref(),
                     category.as_deref(),
                     schema_path.as_deref(),
+                    channel,
                     output_mode,
                 )?;
             }
@@ -795,6 +837,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 profile::cli::docs::handle_docs_list(
                     category.as_deref(),
                     schema_path.as_deref(),
+                    channel,
                     output_mode,
                 )?;
             }
@@ -1005,6 +1048,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 no_parallel,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 let parallel = !no_parallel;
                 profile::cli::ddm::handle_ddm_validate(
                     &paths,
@@ -1021,6 +1065,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 schema_path,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 profile::cli::ddm::handle_ddm_search(
                     &query,
                     schema_path.as_deref(),
@@ -1033,6 +1078,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 schema_path,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 profile::cli::ddm::handle_ddm_list(
                     category.as_deref(),
                     schema_path.as_deref(),
@@ -1045,6 +1091,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 schema_path,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 profile::cli::ddm::handle_ddm_info(
                     &name,
                     schema_path.as_deref(),
@@ -1061,6 +1108,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 payload,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 profile::cli::ddm::handle_ddm_generate(
                     &name,
                     output.as_deref(),
@@ -1086,6 +1134,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 example,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 profile::cli::transform::handle_ddm_transform(
                     example_file.as_deref(),
                     values.as_deref(),
@@ -1103,7 +1152,11 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 )?;
             }
             DdmAction::Examples { name, beta } => {
-                profile::cli::ddm::handle_ddm_examples(&name, beta, output_mode)?;
+                profile::cli::ddm::handle_ddm_examples(
+                    &name,
+                    beta || channel.is_beta(),
+                    output_mode,
+                )?;
             }
             DdmAction::Compose {
                 bundle,
@@ -1142,6 +1195,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 os_version,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 profile::cli::enrollment::handle_enrollment_list(
                     &platform,
                     os_version.as_deref(),
@@ -1160,6 +1214,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 interactive,
                 beta,
             } => {
+                let beta = beta || channel.is_beta();
                 profile::cli::enrollment::handle_enrollment_generate(
                     &platform,
                     os_version.as_deref(),
@@ -1184,6 +1239,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
             accept_replace,
             accept_scope_change,
             fleet_size,
+            md_report,
         } => {
             let opts = profile::cli::plan::PlanOptions {
                 recursive,
@@ -1194,6 +1250,7 @@ fn dispatch_profile(action: profile::cli::Commands, _verbose: bool, json: bool) 
                 accept_replace,
                 accept_scope_change,
                 fleet_size,
+                md_report,
             };
             profile::cli::plan::handle_plan(&baseline, &proposed, &opts)?;
         }

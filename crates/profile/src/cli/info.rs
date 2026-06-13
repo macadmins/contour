@@ -186,12 +186,13 @@ pub fn handle_payload_info(
     schema_path: Option<&str>,
     full: bool,
     os_filter: Option<&str>,
+    channel: crate::schema::Channel,
     output_mode: OutputMode,
 ) -> Result<()> {
     let registry = if let Some(p) = schema_path {
         SchemaRegistry::from_auto_detect(Path::new(p))?
     } else {
-        SchemaRegistry::embedded()?
+        SchemaRegistry::embedded_channel(channel)?
     };
 
     let manifest = registry.get(payload_type).ok_or_else(|| {

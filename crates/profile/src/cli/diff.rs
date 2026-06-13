@@ -3,7 +3,12 @@ use crate::profile::parser;
 use anyhow::Result;
 use colored::Colorize;
 
-pub fn handle_diff(file1: &str, file2: &str, output: Option<&str>) -> Result<()> {
+pub fn handle_diff(
+    file1: &str,
+    file2: &str,
+    output: Option<&str>,
+    md_report: Option<&str>,
+) -> Result<()> {
     println!("{}", "Comparing configuration profiles...".cyan());
 
     let profile1 = parser::parse_profile_auto_unsign(file1)?;
@@ -20,6 +25,12 @@ pub fn handle_diff(file1: &str, file2: &str, output: Option<&str>) -> Result<()>
         println!("{}", format!("✓ Diff saved to: {output_path}").green());
     } else {
         diff::print_diff(&diff_result);
+    }
+
+    if let Some(md_path) = md_report {
+        let md = diff::diff_markdown(&profile1, &profile2, file1, file2)?;
+        std::fs::write(md_path, md).map_err(|e| anyhow::anyhow!("writing {md_path}: {e}"))?;
+        println!("{}", format!("✓ Report written to: {md_path}").green());
     }
 
     if diff_result.has_differences {
