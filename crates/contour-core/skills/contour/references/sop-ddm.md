@@ -309,6 +309,28 @@ contour profile ddm coverage --json
 # seed declaration types.
 ```
 
+### Populate `app.settings` allow/deny from a signing catalog
+
+`com.apple.configuration.app.settings` (a seed/`--beta` type) gates apps by
+`AllowedBinaries`/`DeniedBinaries` keyed on `{CDHash, SigningID, TeamID}` — the
+same code-signing vocabulary Santa uses. The Santa toolkit can emit this
+declaration directly from the community **fleet-maintained-apps** catalog, so you
+don't hand-write binary entries:
+
+```
+# Catalog of ~1,200 known-good Mac apps with signingId/teamId/cdhash/sha256:
+#   https://github.com/allenhouchins/fleet-maintained-apps-growth-tracker/blob/main/data/app_security_info.json
+curl -sSL <raw-url> -o app_security_info.json
+
+# Emit the DDM app.settings declaration (and a matching Santa profile):
+contour santa fetch fleet-apps app_security_info.json --org com.yourco --emit ddm -o out/
+#   → out/app-settings.json   (AllowedBinaries: {SigningID, TeamID} per app)
+contour profile ddm validate out/app-settings.json --beta     # validate vs seed schema
+
+# --match signingid|teamid|cdhash · --policy allow|deny · --emit santa,ddm,rules
+```
+See `--sop santa` (Recipe 5.5) for the full Santa+DDM workflow.
+
 ### Generate a single declaration directly (advanced)
 
 ```

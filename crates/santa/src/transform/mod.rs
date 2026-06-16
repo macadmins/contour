@@ -1,9 +1,11 @@
+pub mod fleet_apps;
 pub mod fleet_csv;
 pub mod installomator;
 pub mod mobileconfig;
 pub mod osquery;
 pub mod santactl;
 
+pub use fleet_apps::{MatchOn, parse_fleet_apps, parse_fleet_apps_file};
 pub use fleet_csv::{parse_fleet_csv, parse_fleet_csv_file};
 pub use installomator::parse_installomator;
 pub use mobileconfig::parse_mobileconfig;

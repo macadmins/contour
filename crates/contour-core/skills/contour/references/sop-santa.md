@@ -252,9 +252,42 @@ contour santa fetch mobileconfig <file>     # extract from existing profile
 contour santa fetch santactl <output>       # `santactl fileinfo` output
 contour santa fetch installomator <labels>  # Installomator TeamIDs
 contour santa fetch fleet-csv <csv>         # Fleet software CSV export
+contour santa fetch fleet-apps <json>       # fleet-maintained-apps catalog → Santa + DDM
 ```
 
-Each emits a normalized rules CSV/JSON you can hand to Recipes 2–4.
+The first five emit a normalized rules CSV/JSON you can hand to Recipes 2–4.
+
+## Recipe 5.5: fleet-maintained-apps catalog → Santa rules + DDM app.settings
+
+The community **fleet-maintained-apps** tracker publishes a signing-info catalog
+for ~1,200 known-good Mac apps — each record carries `signingId`
+(`TEAMID:bundle`), `teamId`, `cdhash`, and `sha256`. That is exactly the
+vocabulary both Santa rules and the DDM `com.apple.configuration.app.settings`
+binary entries need, so one source feeds both.
+
+Source (download first — contour is offline by design):
+`https://github.com/allenhouchins/fleet-maintained-apps-growth-tracker/blob/main/data/app_security_info.json`
+(raw: `https://raw.githubusercontent.com/allenhouchins/fleet-maintained-apps-growth-tracker/main/data/app_security_info.json`)
+
+```bash
+curl -sSL <raw-url> -o app_security_info.json
+
+# Default: SigningID match, allow policy, emit BOTH a Santa .mobileconfig and a
+# DDM app.settings declaration into ./out
+contour santa fetch fleet-apps app_security_info.json --org com.yourco -o out/
+#   → out/santa-rules.mobileconfig   (SIGNINGID allow rules)
+#   → out/app-settings.json          (AllowedBinaries: {SigningID, TeamID})
+
+# Options
+#   --match signingid|teamid|cdhash   signingid = per-app (default, stable across
+#                                       updates); teamid = per-vendor (fewest rules);
+#                                       cdhash = per-build (strict, churns on update)
+#   --policy allow|deny               allow (known-good catalog, default) or deny
+#   --emit santa,ddm,rules            pick artifacts (default santa,ddm)
+```
+
+Validate the emitted declaration against the **beta** seed schema (app.settings is
+a seed type — see `--sop beta`): `contour profile ddm validate out/app-settings.json --beta`.
 
 ## Recipe 6: CEL classification (Santa 2024.x+)
 
