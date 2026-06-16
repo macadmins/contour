@@ -284,6 +284,29 @@ contour profile ddm list --json
 ```
 contour profile ddm info com.apple.configuration.passcode.settings --json
 # Returns full field schema: types, descriptions, requiredness, defaults.
+# Add --full to expand nested dictionary keys as a tree; --json carries
+# depth/parent/path per field so the hierarchy is machine-reconstructable.
+contour profile ddm info network.vpn.ikev2 --beta --full
+```
+
+### Map a legacy profile payload type to its DDM equivalent
+
+```
+contour profile ddm map com.apple.mail.managed --json
+# Per-key migration detail: direct_keys (same name), transformed_keys
+# (old → new dotted DDM path, e.g. IncomingMailServerUsername →
+# IncomingServer.AuthenticationCredentialsAssetReference), unsupported_keys
+# (no DDM equivalent). With no <type>: the whole table + coverage stats.
+```
+
+### Report DDM migration coverage (what is declarative vs. still legacy)
+
+```
+contour profile ddm coverage --json
+# Assessed types by status (available/partial/legacy/none), native-DDM
+# coverage %, the list still requiring legacy profiles (e.g. wifi.managed,
+# vpn.managed, proxy.http.global), and schema counts. --channel beta counts
+# seed declaration types.
 ```
 
 ### Generate a single declaration directly (advanced)

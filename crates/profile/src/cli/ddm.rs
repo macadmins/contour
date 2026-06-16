@@ -646,6 +646,7 @@ pub fn handle_ddm_info(
     name: &str,
     schema_path: Option<&str>,
     beta: bool,
+    full: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
     let registry = load_registry_opts(schema_path, beta)?;
@@ -675,6 +676,11 @@ pub fn handle_ddm_info(
                     "required": f.flags.required,
                     "default": f.default,
                     "allowed_values": f.allowed_values,
+                    // Hierarchy: depth, immediate parent, and full dotted path so
+                    // consumers can reconstruct the nested dictionary structure.
+                    "depth": f.depth,
+                    "parent": f.parent_key,
+                    "path": manifest.field_path(&f.name),
                 })
             })
             .collect();
@@ -711,57 +717,321 @@ pub fn handle_ddm_info(
     println!("\n{}", "Description:".cyan());
     println!("  {}", manifest.description);
 
-    // Show fields
-    let fields: Vec<_> = manifest.top_level_fields();
-
-    if !fields.is_empty() {
-        println!("\n{} ({}):", "Payload Keys".cyan().bold(), fields.len());
-
-        for field in fields {
-            let mut markers = Vec::new();
-            if field.flags.required {
-                markers.push("required".red().to_string());
-            }
-
-            let marker_str = if markers.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", markers.join(", "))
-            };
-
+    // Show fields. Top-level keys always; nested keys when `--full` is set
+    // (otherwise each dictionary is annotated with its nested-key count).
+    let top = manifest.top_level_fields();
+    if !top.is_empty() {
+        let total = manifest.fields.len();
+        let header = if full || total == top.len() {
+            format!("Payload Keys ({total})")
+        } else {
+            format!("Payload Keys ({} top-level, {total} total)", top.len())
+        };
+        println!("\n{}:", header.cyan().bold());
+        for field in &top {
+            print_ddm_field(manifest, field, 1, full);
+        }
+        if !full && total > top.len() {
             println!(
-                "  {} ({}){}",
-                field.name.yellow(),
-                field.field_type.as_str().dimmed(),
-                marker_str
+                "\n  {}",
+                "Pass --full to expand nested dictionary keys.".dimmed()
             );
-
-            // Show default if present
-            if let Some(ref default) = field.default {
-                println!("    Default: {}", default.dimmed());
-            }
-
-            // Show allowed values if present
-            if !field.allowed_values.is_empty() {
-                println!("    Allowed: {}", field.allowed_values.join(", ").dimmed());
-            }
         }
     }
 
-    // Show required fields summary
-    let required = manifest.required_fields();
+    // Required-fields summary — use dotted paths so nested requireds
+    // (e.g. Allowed.AllowedApps.AppIdentifier) are unambiguous.
+    let mut required: Vec<String> = manifest
+        .required_fields()
+        .iter()
+        .map(|f| manifest.field_path(&f.name))
+        .collect();
+    required.sort();
     if !required.is_empty() {
-        println!(
-            "\n{}: {}",
-            "Required fields".red(),
-            required
-                .iter()
-                .map(|f| f.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        println!("\n{}: {}", "Required fields".red(), required.join(", "));
     }
 
+    Ok(())
+}
+
+/// Render one schema field and (recursively, when `recurse`) its nested
+/// children as an indented tree. A dictionary with children shows its
+/// nested-key count even when not recursing.
+fn print_ddm_field(
+    manifest: &crate::schema::PayloadManifest,
+    field: &crate::schema::FieldDefinition,
+    indent: usize,
+    recurse: bool,
+) {
+    let pad = "  ".repeat(indent);
+    let children = manifest.children_of(&manifest.field_path(&field.name));
+    let type_label = if children.is_empty() {
+        field.field_type.as_str().to_string()
+    } else {
+        let n = children.len();
+        let noun = if n == 1 { "key" } else { "keys" };
+        format!("{}, {n} {noun}", field.field_type.as_str())
+    };
+    let req = if field.flags.required {
+        " [required]".red().to_string()
+    } else {
+        String::new()
+    };
+    println!(
+        "{pad}{} ({}){}",
+        field.name.yellow(),
+        type_label.dimmed(),
+        req
+    );
+    if let Some(ref default) = field.default {
+        println!("{pad}  Default: {}", default.dimmed());
+    }
+    if !field.allowed_values.is_empty() {
+        println!(
+            "{pad}  Allowed: {}",
+            field.allowed_values.join(", ").dimmed()
+        );
+    }
+    if recurse {
+        for child in children {
+            print_ddm_field(manifest, child, indent + 1, true);
+        }
+    }
+}
+
+/// `ddm map` — surface the legacy MDM → DDM migration mapping: the DDM
+/// equivalent for a profile payload type, plus per-key detail (keys that
+/// carry over directly, keys that are renamed/restructured, and keys with
+/// no DDM equivalent). With no `name`, prints the whole table + coverage.
+pub fn handle_ddm_map(name: Option<&str>, output_mode: OutputMode) -> Result<()> {
+    use crate::migrate::mapping::{MigrationRegistry, MigrationStatus};
+    let registry = MigrationRegistry::new();
+
+    // Whole-table mode.
+    let Some(query) = name else {
+        let mut all: Vec<_> = registry.all().collect();
+        all.sort_by_key(|m| m.mdm_type);
+        if output_mode == OutputMode::Json {
+            let stats = registry.stats();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "mappings": all,
+                    "stats": {
+                        "total": stats.total,
+                        "available": stats.available,
+                        "partial": stats.partial,
+                        "legacy": stats.legacy,
+                        "none": stats.none,
+                    },
+                }))?
+            );
+            return Ok(());
+        }
+        println!("{}\n", "Legacy MDM → DDM migration map".bold());
+        for m in &all {
+            println!(
+                "  {:<11} {}  {}  {}",
+                format!("[{}]", m.status.as_str()).dimmed(),
+                m.mdm_type.yellow(),
+                "→".dimmed(),
+                m.ddm_type.cyan()
+            );
+        }
+        let s = registry.stats();
+        println!(
+            "\n{} types: {} available, {} partial, {} legacy, {} none",
+            s.total, s.available, s.partial, s.legacy, s.none
+        );
+        println!(
+            "{}",
+            "\nRun `contour profile ddm map <mdm-type>` for per-key detail.".dimmed()
+        );
+        return Ok(());
+    };
+
+    // Single-type mode — exact key, else a unique fuzzy match.
+    let mapping = registry.get(query).or_else(|| {
+        let hits = registry.search(query);
+        if hits.len() == 1 { Some(hits[0]) } else { None }
+    });
+    let Some(m) = mapping else {
+        let hits = registry.search(query);
+        if hits.is_empty() {
+            anyhow::bail!(
+                "No migration mapping for '{query}'.\nRun `contour profile ddm map` to list all mapped types."
+            );
+        }
+        let names: Vec<&str> = hits.iter().map(|h| h.mdm_type).collect();
+        anyhow::bail!("'{query}' is ambiguous. Did you mean: {}", names.join(", "));
+    };
+
+    if output_mode == OutputMode::Json {
+        println!("{}", serde_json::to_string_pretty(m)?);
+        return Ok(());
+    }
+
+    println!(
+        "{}  {}  {}   {}",
+        m.mdm_type.yellow().bold(),
+        "→".dimmed(),
+        m.ddm_type.cyan().bold(),
+        format!("[{}]", m.status.as_str()).dimmed()
+    );
+    println!("{}\n", m.notes);
+    if m.status == MigrationStatus::None {
+        println!(
+            "{}",
+            "No DDM migration path — keep the legacy profile.".dimmed()
+        );
+        return Ok(());
+    }
+
+    if !m.direct_keys.is_empty() {
+        println!(
+            "{} ({}) {}",
+            "Direct keys".green().bold(),
+            m.direct_keys.len(),
+            "— same key name in DDM:".dimmed()
+        );
+        println!("  {}", m.direct_keys.join(", "));
+    }
+    if !m.transformed_keys.is_empty() {
+        println!(
+            "\n{} ({}) {}",
+            "Transformed keys".yellow().bold(),
+            m.transformed_keys.len(),
+            "— renamed / restructured:".dimmed()
+        );
+        for (old, new) in m.transformed_keys {
+            println!("  {} {} {}", old.yellow(), "→".dimmed(), new.cyan());
+        }
+    }
+    if !m.unsupported_keys.is_empty() {
+        println!(
+            "\n{} ({}) {}",
+            "Unsupported keys".red().bold(),
+            m.unsupported_keys.len(),
+            "— no DDM equivalent:".dimmed()
+        );
+        println!("  {}", m.unsupported_keys.join(", "));
+    }
+    Ok(())
+}
+
+/// `ddm coverage` — how much of the legacy MDM surface has a declarative
+/// (DDM) equivalent today, and what still requires legacy configuration
+/// profiles. Combines the migration registry (assessed types, by status)
+/// with the embedded schema counts (DDM declaration vs. profile payload
+/// types). Honors `--channel` so the schema counts reflect the seed.
+pub fn handle_ddm_coverage(channel: crate::schema::Channel, output_mode: OutputMode) -> Result<()> {
+    use crate::migrate::mapping::{MigrationRegistry, MigrationStatus};
+    let migration = MigrationRegistry::new();
+    let stats = migration.stats();
+    let registry = SchemaRegistry::embedded_channel(channel)?;
+    let schema = registry.stats();
+
+    // The gap: types with no native DDM equivalent — `legacy` (wrap in
+    // com.apple.configuration.legacy) and `none` (no path at all).
+    let mut gap: Vec<_> = migration.by_status(MigrationStatus::Legacy);
+    gap.extend(migration.by_status(MigrationStatus::None));
+    gap.sort_by_key(|m| m.mdm_type);
+
+    // Apple profile payload types with no migration assessment at all.
+    let assessed: std::collections::HashSet<&str> = migration.all().map(|m| m.mdm_type).collect();
+    let unassessed = registry
+        .all()
+        .filter(|m| m.category == "apple")
+        .filter(|m| !assessed.contains(m.payload_type.as_str()))
+        .count();
+
+    if output_mode == OutputMode::Json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "channel": channel.to_string(),
+                "assessed_total": stats.total,
+                "available": stats.available,
+                "partial": stats.partial,
+                "legacy": stats.legacy,
+                "none": stats.none,
+                "native_ddm_coverage_pct": stats.ddm_coverage(),
+                "requires_legacy": gap.iter().map(|m| serde_json::json!({
+                    "mdm_type": m.mdm_type,
+                    "status": m.status.as_str(),
+                    "ddm_type": m.ddm_type,
+                })).collect::<Vec<_>>(),
+                "schema": {
+                    "ddm_declaration_types": schema.ddm_count,
+                    "apple_profile_types": schema.apple_count,
+                    "apple_unassessed": unassessed,
+                },
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!(
+        "{}  {}",
+        "DDM Migration Coverage".bold(),
+        format!("(channel: {channel})").dimmed()
+    );
+    println!("\nLegacy MDM types assessed: {}", stats.total);
+    println!(
+        "  {:<10} {:>3}  {}",
+        "available",
+        stats.available,
+        "— direct DDM equivalent".dimmed()
+    );
+    println!(
+        "  {:<10} {:>3}  {}",
+        "partial",
+        stats.partial,
+        "— some keys migrate; rest stay legacy".dimmed()
+    );
+    println!(
+        "  {:<10} {:>3}  {}",
+        "legacy",
+        stats.legacy,
+        "— no native DDM; wrap in com.apple.configuration.legacy".dimmed()
+    );
+    println!(
+        "  {:<10} {:>3}  {}",
+        "none",
+        stats.none,
+        "— no DDM path at all".dimmed()
+    );
+    println!(
+        "\nNative DDM coverage: {:.0}% ({} of {} assessed types fully or partially declarative)",
+        stats.ddm_coverage(),
+        stats.available + stats.partial,
+        stats.total
+    );
+
+    if !gap.is_empty() {
+        println!(
+            "\n{} ({}):",
+            "Still require legacy profiles".yellow().bold(),
+            gap.len()
+        );
+        for m in &gap {
+            println!(
+                "  {} {} {}",
+                m.mdm_type.yellow(),
+                "→".dimmed(),
+                m.ddm_type.dimmed()
+            );
+        }
+    }
+
+    println!(
+        "\n{}",
+        format!(
+            "Schema ({channel}): {} DDM declaration types · {} apple profile payload types ({unassessed} not yet assessed for DDM migration).",
+            schema.ddm_count, schema.apple_count
+        )
+        .dimmed()
+    );
     Ok(())
 }
 

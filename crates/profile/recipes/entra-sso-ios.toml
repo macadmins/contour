@@ -22,12 +22,12 @@
 #     https://learn.microsoft.com/intune/device-configuration/settings-catalog/configure-enterprise-sso-plugin-ios
 
 [recipe]
-name = "entra-psso-ios"
+name = "entra-sso-ios"
 description = "Microsoft Entra ID SSO extension for iOS / iPadOS (redirect)"
 vendor = "Microsoft"
 
 [[profile]]
-filename = "entra-psso-ios.mobileconfig"
+filename = "entra-sso-ios.mobileconfig"
 payload_type = "com.apple.extensiblesso"
 display_name = "SSO Extension – Entra ID (iOS)"
 description = "Configures the Microsoft Entra ID redirect SSO extension for iOS / iPadOS"

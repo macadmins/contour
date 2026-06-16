@@ -1375,6 +1375,45 @@ pub enum DdmAction {
             help = "Use the beta seed schema (pre-release OS types, e.g. app.settings)"
         )]
         beta: bool,
+
+        #[arg(long, help = "Expand nested dictionary keys as an indented tree")]
+        full: bool,
+    },
+
+    #[command(
+        about = "Show the legacy MDM → DDM migration mapping for a payload type",
+        long_about = "Map a legacy configuration-profile payload type to its DDM \
+                      declaration equivalent, with per-key detail: keys that carry \
+                      over directly, keys that are renamed/restructured (old → new), \
+                      and keys with no DDM equivalent.\n\n\
+                      With no <name>, prints the whole mapping table plus coverage \
+                      stats. Pair with `--json` for agent/LLM consumption.\n\n\
+                      Examples:\n  \
+                      contour profile ddm map com.apple.caldav.account\n  \
+                      contour profile ddm map --json"
+    )]
+    Map {
+        #[arg(help = "Legacy MDM payload type (omit to list all mappings)")]
+        name: Option<String>,
+    },
+
+    #[command(
+        about = "Report DDM migration coverage — what is declarative vs. still legacy",
+        long_about = "Summarize how much of the legacy MDM surface has a DDM \
+                      equivalent today: assessed types by status (available / \
+                      partial / legacy / none), the native-DDM coverage percentage, \
+                      the list of types that still require legacy configuration \
+                      profiles, and the embedded schema counts. Honors `--channel \
+                      beta` to count seed declaration types.\n\n\
+                      Example:\n  \
+                      contour profile ddm coverage --json"
+    )]
+    Coverage {
+        #[arg(
+            long,
+            help = "Count seed declaration types (shorthand for --channel beta)"
+        )]
+        beta: bool,
     },
 
     #[command(about = "Generate a DDM declaration JSON from schema")]

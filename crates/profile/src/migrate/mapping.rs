@@ -377,7 +377,6 @@ impl MigrationRegistry {
     }
 
     /// Search mappings by query
-    #[allow(dead_code, reason = "reserved for future use")]
     pub fn search(&self, query: &str) -> Vec<&MigrationMapping> {
         let query_lower = query.to_lowercase();
         self.mappings
@@ -418,7 +417,6 @@ impl MigrationStats {
         }
     }
 
-    #[allow(dead_code, reason = "reserved for future use")]
     pub fn ddm_coverage(&self) -> f64 {
         if self.total == 0 {
             0.0
@@ -453,6 +451,43 @@ mod tests {
         let registry = MigrationRegistry::new();
         let available = registry.by_status(MigrationStatus::Available);
         assert!(!available.is_empty());
+    }
+
+    #[test]
+    fn coverage_gap_lists_legacy_only_types() {
+        // `ddm coverage` reports native-DDM coverage and the still-legacy gap.
+        let registry = MigrationRegistry::new();
+        let stats = registry.stats();
+        // ddm_coverage = (available + partial) / total.
+        let expected = (stats.available + stats.partial) as f64 / stats.total as f64 * 100.0;
+        assert!((stats.ddm_coverage() - expected).abs() < 1e-9);
+        // The gap (legacy/none) must include known network types with no DDM.
+        let legacy: Vec<&str> = registry
+            .by_status(MigrationStatus::Legacy)
+            .iter()
+            .map(|m| m.mdm_type)
+            .collect();
+        assert!(legacy.contains(&"com.apple.wifi.managed"));
+        assert!(legacy.contains(&"com.apple.vpn.managed"));
+    }
+
+    #[test]
+    fn key_level_mapping_surfaces_renames_and_drops() {
+        // `ddm map` relies on the per-key detail: renamed keys (old → new
+        // dotted DDM path) and keys with no DDM equivalent.
+        let registry = MigrationRegistry::new();
+        let m = registry
+            .get("com.apple.mail.managed")
+            .expect("mail mapping");
+        assert!(
+            m.transformed_keys.contains(&(
+                "IncomingMailServerUsername",
+                "IncomingServer.AuthenticationCredentialsAssetReference",
+            )),
+            "expected the username → asset-reference restructuring"
+        );
+        assert!(m.unsupported_keys.contains(&"IncomingPassword"));
+        assert!(m.direct_keys.contains(&"EmailAddress"));
     }
 
     #[test]

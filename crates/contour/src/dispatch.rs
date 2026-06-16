@@ -1090,14 +1090,22 @@ fn dispatch_profile(
                 name,
                 schema_path,
                 beta,
+                full,
             } => {
                 let beta = beta || channel.is_beta();
                 profile::cli::ddm::handle_ddm_info(
                     &name,
                     schema_path.as_deref(),
                     beta,
+                    full,
                     output_mode,
                 )?;
+            }
+            DdmAction::Map { name } => {
+                profile::cli::ddm::handle_ddm_map(name.as_deref(), output_mode)?;
+            }
+            DdmAction::Coverage { beta } => {
+                profile::cli::ddm::handle_ddm_coverage(channel.or_beta(beta), output_mode)?;
             }
             DdmAction::Generate {
                 name,

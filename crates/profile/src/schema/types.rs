@@ -324,6 +324,28 @@ impl PayloadManifest {
             .filter(|f| f.depth == 0)
             .collect()
     }
+
+    /// Direct children of a field, identified by the field's **full dotted
+    /// path** (`parent_key` stores the path to the parent, e.g. a child of
+    /// `Allowed.AllowedApps` carries `parent_key = "Allowed.AllowedApps"`).
+    /// Returned in declaration order.
+    pub fn children_of(&self, parent_path: &str) -> Vec<&FieldDefinition> {
+        self.field_order
+            .iter()
+            .filter_map(|name| self.fields.get(name))
+            .filter(|f| f.parent_key.as_deref() == Some(parent_path))
+            .collect()
+    }
+
+    /// Dotted path of a field, e.g. `Allowed.AllowedApps.AppIdentifier`.
+    /// `parent_key` already holds the ancestor path, so this is just
+    /// `<parent_key>.<name>` (or `<name>` at the root).
+    pub fn field_path(&self, name: &str) -> String {
+        match self.fields.get(name).and_then(|f| f.parent_key.as_deref()) {
+            Some(parent) => format!("{parent}.{name}"),
+            None => name.to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -537,6 +559,73 @@ mod tests {
     }
 
     // ========== PayloadManifest Tests ==========
+
+    #[test]
+    fn children_of_and_field_path_resolve_nested_hierarchy() {
+        // parent_key holds the dotted PATH to the parent, so children must be
+        // matched by path (not bare name): Allowed > AllowedApps > AppIdentifier.
+        fn fld(name: &str, depth: u8, parent: Option<&str>) -> FieldDefinition {
+            FieldDefinition {
+                name: name.to_string(),
+                field_type: FieldType::Dictionary,
+                flags: FieldFlags {
+                    required: false,
+                    supervised: false,
+                    sensitive: false,
+                },
+                title: String::new(),
+                description: String::new(),
+                default: None,
+                allowed_values: vec![],
+                depth,
+                parent_key: parent.map(str::to_string),
+                platforms: vec![],
+                min_version: None,
+                deprecated_in: None,
+                introduced_by_platform: HashMap::new(),
+                deprecated_by_platform: HashMap::new(),
+                combinetype: None,
+            }
+        }
+        let mut fields = HashMap::new();
+        fields.insert("Allowed".to_string(), fld("Allowed", 0, None));
+        fields.insert(
+            "AllowedApps".to_string(),
+            fld("AllowedApps", 1, Some("Allowed")),
+        );
+        fields.insert(
+            "AppIdentifier".to_string(),
+            fld("AppIdentifier", 2, Some("Allowed.AllowedApps")),
+        );
+        let m = PayloadManifest {
+            payload_type: "x".to_string(),
+            title: "x".to_string(),
+            description: String::new(),
+            platforms: Platforms::parse("*"),
+            min_versions: HashMap::new(),
+            os_support: HashMap::new(),
+            apply_mode: None,
+            category: "ddm-configuration".to_string(),
+            fields,
+            field_order: vec![
+                "Allowed".to_string(),
+                "AllowedApps".to_string(),
+                "AppIdentifier".to_string(),
+            ],
+            segments: vec![],
+        };
+        assert_eq!(m.top_level_fields().len(), 1);
+        assert_eq!(
+            m.field_path("AppIdentifier"),
+            "Allowed.AllowedApps.AppIdentifier"
+        );
+        // Path-based: the grandchild resolves under the full parent path …
+        let kids = m.children_of("Allowed.AllowedApps");
+        assert_eq!(kids.len(), 1);
+        assert_eq!(kids[0].name, "AppIdentifier");
+        // … and NOT under the bare parent name.
+        assert!(m.children_of("AllowedApps").is_empty());
+    }
 
     fn create_test_manifest() -> PayloadManifest {
         let mut fields = HashMap::new();
