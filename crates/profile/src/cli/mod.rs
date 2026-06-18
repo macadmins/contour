@@ -1687,6 +1687,9 @@ pub enum EnrollmentAction {
         /// Include the beta seed skip keys (pre-release OS, e.g. AccessibilityAppearance, LiquidGlass)
         #[arg(long)]
         beta: bool,
+        /// Show only keys Apple has deprecated or removed (with the version)
+        #[arg(long)]
+        deprecated: bool,
     },
     /// Generate a DEP enrollment profile JSON
     Generate {
@@ -1717,6 +1720,41 @@ pub enum EnrollmentAction {
         /// Interactive mode — select which items to skip
         #[arg(long)]
         interactive: bool,
+
+        /// Use a built-in preset (auto-advance, shared-ipad, manual). Overrides
+        /// platform and the skip selection. See `enrollment presets`.
+        #[arg(long, conflicts_with_all = ["skip_all", "skip_list", "interactive"])]
+        preset: Option<String>,
+
+        /// ISO 639 language code for Setup Assistant (e.g. de, fr, es). Default: en
+        #[arg(long)]
+        language: Option<String>,
+
+        /// ISO 3166 region code (e.g. DE, FR, ES). Default: US
+        #[arg(long)]
+        region: Option<String>,
+    },
+
+    /// List the built-in enrollment presets
+    Presets,
+
+    /// Migrate an enrollment JSON to a target OS version, dropping skip keys
+    /// Apple removed or deprecated by then (remove-only; never adds keys).
+    Migrate {
+        /// Existing enrollment profile JSON
+        input: std::path::PathBuf,
+        /// Target OS version (e.g. 26)
+        #[arg(long)]
+        to_version: String,
+        /// Platform the profile targets (skip keys are platform-scoped)
+        #[arg(long, default_value = "macOS")]
+        platform: String,
+        /// Output file (default: overwrite input)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Use the beta seed skip-key data
+        #[arg(long)]
+        beta: bool,
     },
 }
 

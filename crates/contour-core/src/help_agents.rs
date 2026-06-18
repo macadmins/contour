@@ -16,6 +16,223 @@ const GLOBAL_FLAGS: &[&str] = &["verbose", "json"];
 /// Built-in subcommands to skip.
 const SKIP_SUBCOMMANDS: &[&str] = &["help", "completions"];
 
+/// Meta/discovery commands excluded from `find` results (they're how you search,
+/// not what you search for — and their example text causes self-matches).
+const SEARCH_SKIP: &[&str] = &["find", "help-agents", "help-json", "setup-agent"];
+
+// ── Search mode (fuzzy command finder) ───────────────────────────────
+
+/// One searchable command, flattened from the clap tree.
+#[derive(Debug, Clone)]
+struct CommandEntry {
+    /// Space-joined path without the root, e.g. `"profile ddm coverage"`.
+    path: String,
+    name: String,
+    about: String,
+    long_about: String,
+    /// Flag longs + help joined together; only filled when `deep` search.
+    arg_text: String,
+}
+
+/// Walk the clap tree collecting every non-hidden command (groups + leaves).
+fn flatten_commands(cmd: &clap::Command, prefix: &str, deep: bool, out: &mut Vec<CommandEntry>) {
+    for sub in cmd.get_subcommands() {
+        if sub.is_hide_set()
+            || SKIP_SUBCOMMANDS.contains(&sub.get_name())
+            || SEARCH_SKIP.contains(&sub.get_name())
+        {
+            continue;
+        }
+        let name = sub.get_name().to_string();
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix} {name}")
+        };
+
+        let arg_text = if deep {
+            sub.get_arguments()
+                .filter(|a| {
+                    !a.is_hide_set()
+                        && a.get_id() != "help"
+                        && a.get_id() != "version"
+                        && !a.is_global_set()
+                        && !GLOBAL_FLAGS.contains(&a.get_id().as_str())
+                })
+                .map(|a| {
+                    let long = a.get_long().map(|l| format!("--{l}")).unwrap_or_default();
+                    let help = a.get_help().map(|h| h.to_string()).unwrap_or_default();
+                    format!("{long} {help}")
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            String::new()
+        };
+
+        out.push(CommandEntry {
+            path: path.clone(),
+            name,
+            about: sub.get_about().map(|a| a.to_string()).unwrap_or_default(),
+            long_about: sub
+                .get_long_about()
+                .map(|a| a.to_string())
+                .unwrap_or_default(),
+            arg_text,
+        });
+
+        flatten_commands(sub, &path, deep, out);
+    }
+}
+
+/// Score an entry against a pre-lowercased query + its tokens. `None` below the
+/// minimum threshold. Cheap checks first; levenshtein only on a token miss.
+fn score(query: &str, query_tokens: &[&str], entry: &CommandEntry) -> Option<f32> {
+    let path = entry.path.to_lowercase();
+    let name = entry.name.to_lowercase();
+    let about = entry.about.to_lowercase();
+    let long = entry.long_about.to_lowercase();
+    let args = entry.arg_text.to_lowercase();
+
+    let mut s = 0.0f32;
+
+    if path == query || name == query {
+        s += 100.0;
+    } else if path.contains(query) {
+        s += 40.0;
+    } else if name.contains(query) {
+        s += 30.0;
+    }
+    if about.contains(query) {
+        s += 15.0;
+    }
+    if !args.is_empty() && args.contains(query) {
+        s += 12.0;
+    }
+    if long.contains(query) {
+        s += 8.0;
+    }
+
+    let name_tokens: Vec<&str> = path.split([' ', '.', '-', '_']).collect();
+    let text_tokens: Vec<&str> = about
+        .split([' ', '.', '-', '_', ',', '(', ')'])
+        .chain(args.split([' ', '.', '-', '_']))
+        .collect();
+
+    for qt in query_tokens {
+        if qt.len() < 2 {
+            continue;
+        }
+        if name_tokens.iter().any(|t| t == qt) {
+            s += 12.0;
+        } else if name_tokens.iter().any(|t| t.contains(qt)) {
+            s += 6.0;
+        } else if text_tokens.iter().any(|t| t == qt) {
+            s += 5.0;
+        } else if text_tokens.iter().any(|t| t.contains(qt)) {
+            s += 2.0;
+        } else {
+            // Typo tolerance: fuzzy-match the token against path words first
+            // (high weight), then description/flag words (lower weight). Only
+            // reached after every cheaper substring check missed.
+            // ~1 edit per 4 chars (capped at 2). Short words (<4) get 0, so
+            // "find" can't fuzzy-match "and"; "depricated" still reaches "deprecated".
+            let budget = (qt.len() / 4).min(2);
+            let lev = crate::string_utils::levenshtein_distance;
+            let nearest = |toks: &[&str]| -> usize {
+                toks.iter()
+                    .filter(|t| t.len() >= 3)
+                    .map(|t| lev(qt, t))
+                    .min()
+                    .unwrap_or(usize::MAX)
+            };
+            let name_best = nearest(&name_tokens);
+            if name_best <= budget {
+                s += 8.0 - name_best as f32 * 2.0;
+            } else {
+                let text_best = nearest(&text_tokens);
+                if text_best <= budget {
+                    // Enough to clear MIN_SCORE on a clean 1–2 edit typo.
+                    s += 7.0 - text_best as f32;
+                }
+            }
+        }
+    }
+
+    const MIN_SCORE: f32 = 5.0;
+    (s >= MIN_SCORE).then_some(s)
+}
+
+/// Fuzzy-search the command tree for `query` and write ranked matches.
+pub fn generate_search(
+    cmd: &clap::Command,
+    query: &str,
+    deep: bool,
+    json: bool,
+    writer: &mut impl Write,
+) -> Result<()> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        bail!("search term is empty — provide a term, e.g. `contour find secrets`");
+    }
+    let query_tokens: Vec<&str> = q.split_whitespace().collect();
+
+    let mut entries = Vec::new();
+    flatten_commands(cmd, "", deep, &mut entries);
+
+    let mut hits: Vec<(f32, &CommandEntry)> = entries
+        .iter()
+        .filter_map(|e| score(&q, &query_tokens, e).map(|sc| (sc, e)))
+        .collect();
+    hits.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.path.cmp(&b.1.path))
+    });
+    hits.truncate(10);
+
+    let root = cmd.get_name();
+
+    if json {
+        let arr: Vec<_> = hits
+            .iter()
+            .map(|(sc, e)| {
+                serde_json::json!({ "path": format!("{root} {}", e.path), "about": e.about, "score": sc })
+            })
+            .collect();
+        writer.write_all(serde_json::to_string_pretty(&arr)?.as_bytes())?;
+        writeln!(writer)?;
+        return Ok(());
+    }
+
+    let mut buf = String::with_capacity(2 * 1024);
+    if hits.is_empty() {
+        writeln!(buf, "No commands matched {query:?}.")?;
+        if deep {
+            writeln!(buf, "Try a broader or differently-spelled term.")?;
+        } else {
+            writeln!(
+                buf,
+                "Try a broader term, or --deep to also search flag help."
+            )?;
+        }
+        writer.write_all(buf.as_bytes())?;
+        return Ok(());
+    }
+
+    writeln!(buf, "# {} match(es) for {query:?}\n", hits.len())?;
+    for (_, e) in &hits {
+        writeln!(buf, "  {root} {:32} {}", e.path, e.about)?;
+        writeln!(
+            buf,
+            "      → contour help-ai --command {}",
+            e.path.replace(' ', ".")
+        )?;
+    }
+    writer.write_all(buf.as_bytes())?;
+    Ok(())
+}
+
 // ── Index mode (default) ─────────────────────────────────────────────
 
 /// Generate the agent guide and command index.
@@ -924,6 +1141,91 @@ mod tests {
                             .help("Output format"),
                     ),
             )
+    }
+
+    /// A small command tree with realistic names/about/flags for search tests.
+    fn search_cmd() -> Command {
+        Command::new("contour")
+            .subcommand(Command::new("profile").about("Profile toolkit").subcommand(
+                Command::new("audit").about("Audit profiles for secrets and certificates"),
+            ))
+            .subcommand(
+                Command::new("enrollment")
+                    .about("Enrollment profiles")
+                    .subcommand(Command::new("shared-ipad").about("Shared iPad enrollment profile"))
+                    .subcommand(
+                        Command::new("deprecated-scan").about("Scan for deprecated skip keys"),
+                    )
+                    .subcommand(
+                        Command::new("device").about("Device controls").arg(
+                            Arg::new("erase")
+                                .long("erase")
+                                .action(clap::ArgAction::SetTrue)
+                                .help("Erase the device on enrollment"),
+                        ),
+                    ),
+            )
+            // Meta command that must be excluded from results (SEARCH_SKIP):
+            .subcommand(Command::new("find").about("Fuzzy-search commands"))
+    }
+
+    fn run_search(query: &str, deep: bool) -> String {
+        let cmd = search_cmd();
+        let mut out = Vec::new();
+        generate_search(&cmd, query, deep, false, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn search_matches_about_text() {
+        let text = run_search("secrets", false);
+        assert!(text.contains("profile audit"), "got: {text}");
+    }
+
+    #[test]
+    fn search_is_typo_tolerant() {
+        // "depricated" → "deprecated" (1 edit) should still find the command.
+        let text = run_search("depricated", false);
+        assert!(text.contains("deprecated-scan"), "got: {text}");
+    }
+
+    #[test]
+    fn search_matches_multiword_via_token_split() {
+        let text = run_search("shared ipad", false);
+        assert!(text.contains("shared-ipad"), "got: {text}");
+    }
+
+    #[test]
+    fn search_excludes_meta_commands() {
+        // Searching the literal name of an excluded command finds nothing.
+        let text = run_search("find", false);
+        assert!(text.contains("No commands matched"), "got: {text}");
+    }
+
+    #[test]
+    fn search_deep_matches_flag_help_only() {
+        // "erase" only appears in a flag's help → found with --deep, not without.
+        assert!(run_search("erase", false).contains("No commands matched"));
+        assert!(run_search("erase", true).contains("enrollment device"));
+    }
+
+    #[test]
+    fn search_empty_query_errors() {
+        let cmd = search_cmd();
+        let mut out = Vec::new();
+        let err = generate_search(&cmd, "   ", false, false, &mut out).unwrap_err();
+        assert!(format!("{err:#}").contains("empty"));
+    }
+
+    #[test]
+    fn search_json_is_array_of_path_about_score() {
+        let cmd = search_cmd();
+        let mut out = Vec::new();
+        generate_search(&cmd, "secrets", false, true, &mut out).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        let first = &v.as_array().unwrap()[0];
+        assert!(first.get("path").is_some() && first.get("score").is_some());
+        assert!(first["path"].as_str().unwrap().contains("profile audit"));
     }
 
     #[test]

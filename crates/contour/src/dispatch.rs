@@ -125,6 +125,8 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         Commands::HelpAgents {
             command,
+            search,
+            deep,
             section,
             sop,
             full,
@@ -139,7 +141,10 @@ pub fn run(cli: Cli) -> Result<()> {
             let cmd = Cli::command();
             let mut out = std::io::stdout();
 
-            if let Some(tool) = sop {
+            if let Some(term) = search {
+                // Fuzzy command search (most specific intent).
+                contour_core::help_agents::generate_search(&cmd, &term, deep, cli.json, &mut out)?;
+            } else if let Some(tool) = sop {
                 // SOP for a specific tool
                 contour_core::help_agents::generate_sop(&tool, &mut out)?;
             } else if let Some(path) = command {
@@ -167,6 +172,13 @@ pub fn run(cli: Cli) -> Result<()> {
             let cmd = Cli::command();
             let mut out = std::io::stdout();
             contour_core::help_agents::generate_json(&cmd, command.as_deref(), &mut out)?;
+            Ok(())
+        }
+        Commands::Find { term, deep } => {
+            use clap::CommandFactory;
+            let cmd = Cli::command();
+            let mut out = std::io::stdout();
+            contour_core::help_agents::generate_search(&cmd, &term, deep, cli.json, &mut out)?;
             Ok(())
         }
         Commands::Completions {
@@ -1202,12 +1214,14 @@ fn dispatch_profile(
                 platform,
                 os_version,
                 beta,
+                deprecated,
             } => {
                 let beta = beta || channel.is_beta();
                 profile::cli::enrollment::handle_enrollment_list(
                     &platform,
                     os_version.as_deref(),
                     beta,
+                    deprecated,
                     output_mode,
                 )?;
             }
@@ -1221,6 +1235,9 @@ fn dispatch_profile(
                 profile_name,
                 interactive,
                 beta,
+                preset,
+                language,
+                region,
             } => {
                 let beta = beta || channel.is_beta();
                 profile::cli::enrollment::handle_enrollment_generate(
@@ -1232,6 +1249,29 @@ fn dispatch_profile(
                     output.as_deref(),
                     &profile_name,
                     interactive,
+                    beta,
+                    preset.as_deref(),
+                    language.as_deref(),
+                    region.as_deref(),
+                    output_mode,
+                )?;
+            }
+            EnrollmentAction::Presets => {
+                profile::cli::enrollment::handle_enrollment_presets(output_mode)?;
+            }
+            EnrollmentAction::Migrate {
+                input,
+                to_version,
+                platform,
+                output,
+                beta,
+            } => {
+                let beta = beta || channel.is_beta();
+                profile::cli::enrollment::handle_enrollment_migrate(
+                    &input,
+                    &to_version,
+                    &platform,
+                    output.as_deref(),
                     beta,
                     output_mode,
                 )?;

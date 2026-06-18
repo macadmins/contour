@@ -264,6 +264,14 @@ pub enum Commands {
         #[arg(long)]
         command: Option<String>,
 
+        /// Fuzzy-search commands by term (e.g. "secrets", "shared ipad")
+        #[arg(long)]
+        search: Option<String>,
+
+        /// With --search: also match flag names and flag help (broader, noisier)
+        #[arg(long)]
+        deep: bool,
+
         /// Domain sections to include (comma-separated). Available: cli, profile, pppc, santa, notifications, btm, mscp, ddm
         #[arg(long, value_delimiter = ',')]
         section: Option<Vec<String>>,
@@ -279,6 +287,25 @@ pub enum Commands {
         /// Install a Claude Code / Kilo Code skill file for contour
         #[arg(long)]
         install_skill: bool,
+    },
+
+    /// Fuzzy-search commands by term when you can't recall the exact name
+    #[command(
+        long_about = "Fuzzy-search the whole command tree for a term and get a \
+                      ranked list of matching commands.\n\n\
+                      Examples:\n  \
+                      contour find secrets\n  \
+                      contour find \"shared ipad\"\n  \
+                      contour find depricated        # typo-tolerant\n  \
+                      contour find org --deep        # also search flag help\n  \
+                      contour find secrets --json"
+    )]
+    Find {
+        /// Search term (e.g. "secrets", "shared ipad")
+        term: String,
+        /// Also match flag names and flag help (broader, noisier)
+        #[arg(long)]
+        deep: bool,
     },
 
     /// Install AI agent skill file (.claude/skills/contour.md)

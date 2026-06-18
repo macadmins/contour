@@ -1056,12 +1056,14 @@ fn run(cli: Cli) -> Result<()> {
                 platform,
                 os_version,
                 beta,
+                deprecated,
             } => {
                 let beta = beta || channel.is_beta();
                 cli::enrollment::handle_enrollment_list(
                     &platform,
                     os_version.as_deref(),
                     beta,
+                    deprecated,
                     output_mode,
                 )?;
             }
@@ -1075,6 +1077,9 @@ fn run(cli: Cli) -> Result<()> {
                 profile_name,
                 interactive,
                 beta,
+                preset,
+                language,
+                region,
             } => {
                 let beta = beta || channel.is_beta();
                 cli::enrollment::handle_enrollment_generate(
@@ -1086,6 +1091,29 @@ fn run(cli: Cli) -> Result<()> {
                     output.as_deref(),
                     &profile_name,
                     interactive,
+                    beta,
+                    preset.as_deref(),
+                    language.as_deref(),
+                    region.as_deref(),
+                    output_mode,
+                )?;
+            }
+            EnrollmentAction::Presets => {
+                cli::enrollment::handle_enrollment_presets(output_mode)?;
+            }
+            EnrollmentAction::Migrate {
+                input,
+                to_version,
+                platform,
+                output,
+                beta,
+            } => {
+                let beta = beta || channel.is_beta();
+                cli::enrollment::handle_enrollment_migrate(
+                    &input,
+                    &to_version,
+                    &platform,
+                    output.as_deref(),
                     beta,
                     output_mode,
                 )?;

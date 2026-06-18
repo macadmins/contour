@@ -244,6 +244,36 @@ Precedence rules:
 contour profile enrollment list --platform macOS --json
 contour profile enrollment list --platform iOS --json
 contour profile enrollment list --platform macOS --os-version 26.0 --json
+contour profile enrollment list --platform macOS --beta --deprecated   # only deprecated/removed keys + version
+```
+
+### Presets, language flavors, interactive wizard
+
+```
+# Built-in presets (all schema-backed; keep Biometric + Location visible,
+# skip everything else, NEVER_SKIP panes always preserved):
+contour profile enrollment presets                       # list: auto-advance, shared-ipad, manual
+contour profile enrollment generate --preset auto-advance -o p.json   # macOS, auto_advance_setup=true
+contour profile enrollment generate --preset shared-ipad  -o p.json   # iOS/iPadOS
+contour profile enrollment generate --preset manual       -o p.json   # macOS, no auto-advance
+
+# Language fast-presets — --language pairs a default region (en→US, de→DE,
+# fr→FR, es→ES); --region overrides:
+contour profile enrollment generate --preset manual --language de -o p.json   # language=de region=DE
+
+# Interactive wizard (prompts platform → OS version → language → panes to keep):
+contour profile enrollment generate --interactive
+```
+
+### Migrate an existing profile to a newer OS version
+
+Re-validates `skip_setup_items` against the target OS and drops keys Apple
+removed or deprecated by then (remove-only — never adds panes). Platform is
+required (skip keys are platform-scoped) since the ADE JSON doesn't record it.
+
+```
+contour profile enrollment migrate old15.json --to-version 26 --platform macOS -o new26.json
+# e.g. drops `Wallpaper` (removed in macOS 26.0); keeps everything still valid.
 ```
 
 ### Use the generated profile in a GitOps repo (Fleet v4.83 layout shown)
