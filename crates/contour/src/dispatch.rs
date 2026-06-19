@@ -1238,6 +1238,7 @@ fn dispatch_profile(
                 preset,
                 language,
                 region,
+                readme,
             } => {
                 let beta = beta || channel.is_beta();
                 profile::cli::enrollment::handle_enrollment_generate(
@@ -1253,6 +1254,7 @@ fn dispatch_profile(
                     preset.as_deref(),
                     language.as_deref(),
                     region.as_deref(),
+                    readme,
                     output_mode,
                 )?;
             }

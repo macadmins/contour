@@ -263,6 +263,12 @@ contour profile enrollment generate --preset manual --language de -o p.json   # 
 
 # Interactive wizard (prompts platform → OS version → language → panes to keep):
 contour profile enrollment generate --interactive
+
+# --readme writes a companion <output>.md next to the JSON: a table of the skip
+# keys used (with pane titles from the schema) + links to Apple's Profile and
+# SkipKeys docs. Good for GitOps repos (documents the resource per folder).
+contour profile enrollment generate --preset auto-advance --readme -o out/mac.json
+#   → out/mac.json + out/mac.md
 ```
 
 ### Migrate an existing profile to a newer OS version

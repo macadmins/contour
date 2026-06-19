@@ -1733,6 +1733,10 @@ pub enum EnrollmentAction {
         /// ISO 3166 region code (e.g. DE, FR, ES). Default: US
         #[arg(long)]
         region: Option<String>,
+
+        /// Also write a companion <output>.md documenting the skip keys + Apple doc links
+        #[arg(long)]
+        readme: bool,
     },
 
     /// List the built-in enrollment presets
