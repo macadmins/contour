@@ -69,7 +69,7 @@ pub fn handle_search(
     if output_mode == OutputMode::Json {
         output_json(&results)?;
     } else {
-        output_human(q, &results);
+        output_human(q, &results, channel);
     }
 
     Ok(())
@@ -380,9 +380,12 @@ fn output_json(results: &[&PayloadManifest]) -> Result<()> {
     Ok(())
 }
 
-fn output_human(query: &str, results: &[&PayloadManifest]) {
+fn output_human(query: &str, results: &[&PayloadManifest], channel: crate::schema::Channel) {
     if results.is_empty() {
         println!("{} No schemas matched '{}'", "!".yellow(), query.bold());
+        if let Some(hint) = crate::schema::suggest_other_channel(query, channel, false) {
+            println!("  {hint}");
+        }
         return;
     }
 

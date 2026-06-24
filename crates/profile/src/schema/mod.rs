@@ -60,6 +60,38 @@ impl std::fmt::Display for Channel {
     }
 }
 
+/// On a lookup miss in `current`, check the *other* channel and return an
+/// actionable hint — or `None` when the name is absent there too. Suggest-only:
+/// this never switches channels, it only tells the caller a retry would work.
+///
+/// `by_name` uses the short-name resolver ([`SchemaRegistry::get_by_name`]) for
+/// DDM-style lookups; otherwise it tries exact [`get`](SchemaRegistry::get) and a
+/// substring [`search`](SchemaRegistry::search).
+pub fn suggest_other_channel(name: &str, current: Channel, by_name: bool) -> Option<String> {
+    let other = match current {
+        Channel::Stable => Channel::Beta,
+        Channel::Beta => Channel::Stable,
+    };
+    let reg = SchemaRegistry::embedded_channel(other).ok()?;
+    let found = if by_name {
+        reg.get_by_name(name).is_some()
+    } else {
+        reg.get(name).is_some() || !reg.search(name).is_empty()
+    };
+    if !found {
+        return None;
+    }
+    Some(match other {
+        Channel::Beta => format!(
+            "'{name}' is not in the released schema but exists in the OS 27 beta seed — \
+             re-run with --beta (pre-release: keys may still change)."
+        ),
+        Channel::Stable => format!(
+            "'{name}' is in the released schema — drop --beta to use the stable definition."
+        ),
+    })
+}
+
 /// Schema source indicator
 #[derive(Debug, Clone)]
 pub enum SchemaSource {
@@ -503,6 +535,24 @@ mod tests {
         assert!(!Channel::Stable.is_beta());
         assert!(Channel::Beta.is_beta());
         assert_eq!(Channel::default(), Channel::Stable);
+    }
+
+    #[test]
+    fn suggest_other_channel_points_at_beta_for_seed_type() {
+        // app.settings is an OS-27 seed-only DDM type → hint should point to --beta.
+        let hint = suggest_other_channel(
+            "com.apple.configuration.app.settings",
+            Channel::Stable,
+            true,
+        );
+        assert!(hint.as_deref().is_some_and(|h| h.contains("--beta")));
+        // A type present in stable, queried under beta → suggest dropping --beta.
+        let back = suggest_other_channel("com.apple.dock", Channel::Beta, false);
+        assert!(back.as_deref().is_some_and(|h| h.contains("drop --beta")));
+        // Genuinely unknown → no hint.
+        assert!(
+            suggest_other_channel("com.apple.totally.bogus.xyz", Channel::Stable, true).is_none()
+        );
     }
 
     #[test]

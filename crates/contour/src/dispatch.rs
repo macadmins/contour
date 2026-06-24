@@ -129,6 +129,7 @@ pub fn run(cli: Cli) -> Result<()> {
             deep,
             section,
             sop,
+            at,
             full,
             install_skill,
         } => {
@@ -145,8 +146,12 @@ pub fn run(cli: Cli) -> Result<()> {
                 // Fuzzy command search (most specific intent).
                 contour_core::help_agents::generate_search(&cmd, &term, deep, cli.json, &mut out)?;
             } else if let Some(tool) = sop {
-                // SOP for a specific tool
-                contour_core::help_agents::generate_sop(&tool, &mut out)?;
+                // SOP for a specific tool — whole doc, or one section with --at.
+                if let Some(heading) = at {
+                    contour_core::help_agents::generate_sop_section(&tool, &heading, &mut out)?;
+                } else {
+                    contour_core::help_agents::generate_sop(&tool, &mut out)?;
+                }
             } else if let Some(path) = command {
                 // Single command detail
                 contour_core::help_agents::generate_command(&cmd, &path, &mut out)?;

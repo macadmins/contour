@@ -196,6 +196,10 @@ pub fn handle_payload_info(
     };
 
     let manifest = registry.get(payload_type).ok_or_else(|| {
+        // Cross-channel hint first — the most actionable on a seed-only type.
+        if let Some(hint) = crate::schema::suggest_other_channel(payload_type, channel, false) {
+            return anyhow::anyhow!("Payload type '{payload_type}' not found.\n{hint}");
+        }
         let suggestions = registry.search(payload_type);
         let hint = if suggestions.is_empty() {
             "Use 'contour profile docs list' to see available types.".to_string()

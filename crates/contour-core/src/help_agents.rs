@@ -179,15 +179,32 @@ pub fn generate_search(
 
     let mut entries = Vec::new();
     flatten_commands(cmd, "", deep, &mut entries);
+    let sops = flatten_sops();
 
-    let mut hits: Vec<(f32, &CommandEntry)> = entries
-        .iter()
-        .filter_map(|e| score(&q, &query_tokens, e).map(|sc| (sc, e)))
-        .collect();
+    let mut hits: Vec<(f32, SearchHit)> = Vec::new();
+    for e in &entries {
+        if let Some(sc) = score(&q, &query_tokens, e) {
+            hits.push((sc, SearchHit::Cmd(e)));
+        }
+    }
+    for s in &sops {
+        // Score the heading (as name/path) + body (as about) via a synthetic
+        // entry, then discount so a command outranks a SOP section on a tie.
+        let synthetic = CommandEntry {
+            path: s.heading.clone(),
+            name: s.heading.clone(),
+            about: s.body.clone(),
+            long_about: String::new(),
+            arg_text: String::new(),
+        };
+        if let Some(sc) = score(&q, &query_tokens, &synthetic) {
+            hits.push((sc * 0.7, SearchHit::Sop(s)));
+        }
+    }
     hits.sort_by(|a, b| {
         b.0.partial_cmp(&a.0)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.1.path.cmp(&b.1.path))
+            .then_with(|| a.1.sort_key().cmp(&b.1.sort_key()))
     });
     hits.truncate(10);
 
@@ -196,8 +213,14 @@ pub fn generate_search(
     if json {
         let arr: Vec<_> = hits
             .iter()
-            .map(|(sc, e)| {
-                serde_json::json!({ "path": format!("{root} {}", e.path), "about": e.about, "score": sc })
+            .map(|(sc, h)| match h {
+                SearchHit::Cmd(e) => serde_json::json!({
+                    "kind": "command", "path": format!("{root} {}", e.path),
+                    "about": e.about, "score": sc,
+                }),
+                SearchHit::Sop(s) => serde_json::json!({
+                    "kind": "sop", "sop": s.sop, "heading": s.heading, "score": sc,
+                }),
             })
             .collect();
         writer.write_all(serde_json::to_string_pretty(&arr)?.as_bytes())?;
@@ -207,7 +230,7 @@ pub fn generate_search(
 
     let mut buf = String::with_capacity(2 * 1024);
     if hits.is_empty() {
-        writeln!(buf, "No commands matched {query:?}.")?;
+        writeln!(buf, "No commands or SOP sections matched {query:?}.")?;
         if deep {
             writeln!(buf, "Try a broader or differently-spelled term.")?;
         } else {
@@ -221,16 +244,44 @@ pub fn generate_search(
     }
 
     writeln!(buf, "# {} match(es) for {query:?}\n", hits.len())?;
-    for (_, e) in &hits {
-        writeln!(buf, "  {root} {:32} {}", e.path, e.about)?;
-        writeln!(
-            buf,
-            "      → contour help-ai --command {}",
-            e.path.replace(' ', ".")
-        )?;
+    for (_, h) in &hits {
+        match h {
+            SearchHit::Cmd(e) => {
+                writeln!(buf, "  {root} {:32} {}", e.path, e.about)?;
+                writeln!(
+                    buf,
+                    "      → contour help-ai --command {}",
+                    e.path.replace(' ', ".")
+                )?;
+            }
+            SearchHit::Sop(s) => {
+                writeln!(buf, "  [SOP] {:26} {}", s.sop, s.heading)?;
+                writeln!(
+                    buf,
+                    "      → contour help-ai --sop {} --at {:?}",
+                    s.sop, s.heading
+                )?;
+            }
+        }
     }
     writer.write_all(buf.as_bytes())?;
     Ok(())
+}
+
+/// A ranked search result — a command or a SOP section.
+enum SearchHit<'a> {
+    Cmd(&'a CommandEntry),
+    Sop(&'a SopSection),
+}
+
+impl SearchHit<'_> {
+    /// Stable tiebreak key.
+    fn sort_key(&self) -> String {
+        match self {
+            SearchHit::Cmd(e) => e.path.clone(),
+            SearchHit::Sop(s) => format!("{} {}", s.sop, s.heading),
+        }
+    }
 }
 
 // ── Index mode (default) ─────────────────────────────────────────────
@@ -556,6 +607,131 @@ const SOP_SCHEMA_DATA: &str = include_str!("../skills/contour/references/sop-sch
 /// procedural lookup (find_query_table → write_policy_query) with a
 /// reference cookbook of battle-tested SQL patterns.
 const SOP_OSQUERY: &str = include_str!("../skills/contour/references/sop-osquery.md");
+
+/// Canonical (tool-name, content) catalog of every SOP — for section search and
+/// `--at` extraction. (Alias resolution still lives in `generate_sop`.)
+const SOPS: &[(&str, &str)] = &[
+    ("profile", SOP_PROFILE),
+    ("maintain", SOP_MAINTAIN),
+    ("mscp", SOP_MSCP),
+    ("ddm", SOP_DDM),
+    ("beta", SOP_BETA),
+    ("generative", SOP_GENERATIVE),
+    ("santa", SOP_SANTA),
+    ("pppc", SOP_PPPC),
+    ("btm", SOP_BTM),
+    ("notifications", SOP_NOTIFICATIONS),
+    ("support", SOP_SUPPORT),
+    ("precommit", SOP_PRECOMMIT),
+    ("profile-naming", SOP_PROFILE_NAMING),
+    ("fleet-migrate", SOP_FLEET_MIGRATE),
+    ("enrollment", SOP_ENROLLMENT),
+    ("ci", SOP_CI),
+    ("schema-data", SOP_SCHEMA_DATA),
+    ("osquery", SOP_OSQUERY),
+];
+
+/// One `##`/`###` section of a SOP, with its body text (for search).
+struct SopSection {
+    sop: &'static str,
+    heading: String,
+    body: String,
+}
+
+/// Flatten every SOP into its sections (heading + the body lines under it).
+fn flatten_sops() -> Vec<SopSection> {
+    let mut out = Vec::new();
+    for (name, content) in SOPS {
+        let mut cur: Option<(String, String)> = None;
+        for line in content.lines() {
+            let t = line.trim_start();
+            let heading = t
+                .strip_prefix("## ")
+                .or_else(|| t.strip_prefix("### "))
+                .filter(|_| !t.starts_with("#### "));
+            if let Some(h) = heading {
+                if let Some((heading, body)) = cur.take() {
+                    out.push(SopSection {
+                        sop: name,
+                        heading,
+                        body,
+                    });
+                }
+                cur = Some((h.trim().to_string(), String::new()));
+            } else if let Some((_, body)) = cur.as_mut() {
+                body.push_str(line);
+                body.push(' ');
+            }
+        }
+        if let Some((heading, body)) = cur.take() {
+            out.push(SopSection {
+                sop: name,
+                heading,
+                body,
+            });
+        }
+    }
+    out
+}
+
+/// Print just one section of a SOP (from its heading to the next heading at the
+/// same or higher level), instead of the whole document. `tool` reuses
+/// `generate_sop`'s alias resolution; `heading` is matched case-insensitively as
+/// a substring.
+pub fn generate_sop_section(tool: &str, heading: &str, writer: &mut impl Write) -> Result<()> {
+    // Resolve the SOP content via the same alias map as generate_sop.
+    let mut buf = Vec::new();
+    generate_sop(tool, &mut buf)?;
+    let content = String::from_utf8(buf).unwrap_or_default();
+    let want = heading.to_lowercase();
+
+    let mut lines = content.lines().peekable();
+    let mut capturing: Option<usize> = None; // heading level being captured
+    let mut out = String::new();
+    for line in lines.by_ref() {
+        let t = line.trim_start();
+        let level = if t.starts_with("### ") {
+            Some(3)
+        } else if t.starts_with("## ") {
+            Some(2)
+        } else if t.starts_with("# ") {
+            Some(1)
+        } else {
+            None
+        };
+        match capturing {
+            None => {
+                if let Some(_lvl) = level
+                    && t.trim_start_matches('#')
+                        .trim()
+                        .to_lowercase()
+                        .contains(&want)
+                {
+                    capturing = level;
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+            Some(start_lvl) => {
+                // Stop at the next heading of the same or higher level.
+                if let Some(lvl) = level
+                    && lvl <= start_lvl
+                {
+                    break;
+                }
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    if out.is_empty() {
+        bail!(
+            "No section matching '{heading}' in the {tool} SOP. Run `--sop {tool}` for the full doc."
+        );
+    }
+    writer.write_all(out.as_bytes())?;
+    Ok(())
+}
 
 /// Write a top-level command group and its subcommands as an index.
 fn write_index_group(buf: &mut String, cmd: &clap::Command, root: &str) -> Result<()> {
@@ -1207,6 +1383,37 @@ mod tests {
         // "erase" only appears in a flag's help → found with --deep, not without.
         assert!(run_search("erase", false).contains("No commands matched"));
         assert!(run_search("erase", true).contains("enrollment device"));
+    }
+
+    #[test]
+    fn sops_flatten_into_named_sections() {
+        let sops = flatten_sops();
+        assert!(!sops.is_empty());
+        // The enrollment SOP has a Presets section (added with the presets feature).
+        assert!(
+            sops.iter()
+                .any(|s| s.sop == "enrollment" && s.heading.to_lowercase().contains("preset"))
+        );
+    }
+
+    #[test]
+    fn sop_section_extraction_returns_one_section() {
+        let mut out = Vec::new();
+        generate_sop_section("enrollment", "preset", &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.to_lowercase().contains("preset"));
+        // Not the whole doc — the top-of-file ERROR-CODE ENUM must be excluded.
+        assert!(!text.contains("ERROR-CODE ENUM"));
+    }
+
+    #[test]
+    fn search_surfaces_sop_sections() {
+        // SOP hits come from the embedded SOPs, independent of the command tree.
+        let cmd = search_cmd();
+        let mut out = Vec::new();
+        generate_search(&cmd, "enrollment preset", false, false, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("[SOP] enrollment"), "got: {text}");
     }
 
     #[test]

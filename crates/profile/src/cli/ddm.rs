@@ -652,6 +652,14 @@ pub fn handle_ddm_info(
     let registry = load_registry_opts(schema_path, beta)?;
 
     let manifest = registry.get_by_name(name).ok_or_else(|| {
+        let channel = if beta {
+            crate::schema::Channel::Beta
+        } else {
+            crate::schema::Channel::Stable
+        };
+        if let Some(hint) = crate::schema::suggest_other_channel(name, channel, true) {
+            return anyhow::anyhow!("DDM declaration type '{name}' not found.\n{hint}");
+        }
         anyhow::anyhow!(
             "DDM declaration type '{name}' not found.\nUse 'contour profile ddm list' to see available types."
         )
@@ -692,6 +700,8 @@ pub fn handle_ddm_info(
             "category": manifest.category.strip_prefix("ddm-").unwrap_or(&manifest.category),
             "platforms": manifest.platforms.to_vec(),
             "fields": fields,
+            "beta_only": crate::ddm::notes::is_beta_only(&manifest.payload_type),
+            "deployment_notes": crate::ddm::notes::notes_for(&manifest.payload_type),
         });
         println!("{}", serde_json::to_string_pretty(&info)?);
         return Ok(());
@@ -751,7 +761,29 @@ pub fn handle_ddm_info(
         println!("\n{}: {}", "Required fields".red(), required.join(", "));
     }
 
+    print_deployment_notes(&manifest.payload_type);
     Ok(())
+}
+
+/// Print the pre-release flag + deployment caveats for a declaration type, so
+/// the operator knows what else is needed to actually deploy it.
+fn print_deployment_notes(declaration_type: &str) {
+    let beta_only = crate::ddm::notes::is_beta_only(declaration_type);
+    let notes = crate::ddm::notes::notes_for(declaration_type);
+    if !beta_only && notes.is_empty() {
+        return;
+    }
+    println!("\n{}", "Deployment notes:".yellow().bold());
+    if beta_only {
+        println!(
+            "  • {}",
+            "Pre-release — this type is in the OS 27 beta seed only; keys may still change."
+                .dimmed()
+        );
+    }
+    for n in notes {
+        println!("  • {n}");
+    }
 }
 
 /// Render one schema field and (recursively, when `recurse`) its nested
@@ -1110,6 +1142,14 @@ pub fn handle_ddm_generate(
     let registry = load_registry_opts(schema_path, beta)?;
 
     let manifest = registry.get_by_name(name).ok_or_else(|| {
+        let channel = if beta {
+            crate::schema::Channel::Beta
+        } else {
+            crate::schema::Channel::Stable
+        };
+        if let Some(hint) = crate::schema::suggest_other_channel(name, channel, true) {
+            return anyhow::anyhow!("DDM declaration type '{name}' not found.\n{hint}");
+        }
         anyhow::anyhow!(
             "DDM declaration type '{name}' not found.\nUse 'contour profile ddm list' to see available types."
         )
@@ -1283,6 +1323,7 @@ pub fn handle_ddm_generate(
             "Fields:".bold(),
             if full { "all" } else { "required only" }
         );
+        print_deployment_notes(&manifest.payload_type);
         println!(
             "\n{}",
             "Edit the JSON file to set your values, then deploy via your MDM.".dimmed()

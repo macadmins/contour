@@ -280,6 +280,10 @@ pub enum Commands {
         #[arg(long)]
         sop: Option<String>,
 
+        /// With --sop: print only the section whose heading matches (substring)
+        #[arg(long, value_name = "HEADING")]
+        at: Option<String>,
+
         /// Output the complete reference (all commands, all flags, all domain data)
         #[arg(long)]
         full: bool,

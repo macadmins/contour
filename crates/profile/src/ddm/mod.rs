@@ -7,6 +7,7 @@
 #![allow(dead_code, reason = "module under development")]
 
 pub mod compose;
+pub mod notes;
 pub mod parser;
 pub mod predicate;
 pub mod presets;
