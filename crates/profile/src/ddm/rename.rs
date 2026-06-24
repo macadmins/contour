@@ -17,17 +17,37 @@ use std::path::{Path, PathBuf};
 /// Swap the org prefix of a DDM `Identifier`, preserving the full scope.
 ///
 /// If the identifier is already under `new_org` it is returned unchanged.
-/// Otherwise the old org is assumed to occupy the same number of leading
-/// dot-labels as `new_org` (the common same-depth rename, e.g. `com.acme` →
-/// `com.newco`); those labels are replaced and everything after them — the
-/// scope — is kept intact:
+///
+/// When `from_org` is `Some`, the swap is **exact**: only identifiers equal to
+/// `from_org` or under a `{from_org}.` prefix are rewritten (prefix replaced,
+/// scope kept); anything else is left untouched. This handles cross-depth
+/// renames and mixed directories precisely:
+/// `uk.co.acme.config.settings` + `com.mdoyvr` (from `uk.co.acme`)
+/// → `com.mdoyvr.config.settings`.
+///
+/// When `from_org` is `None`, the old org is assumed to occupy the same number
+/// of leading dot-labels as `new_org` (the common same-depth rename, e.g.
+/// `com.acme` → `com.newco`); those labels are replaced and the scope kept:
 /// `com.acme.config.content-cache.settings` + `com.newco`
 /// → `com.newco.config.content-cache.settings`.
-pub fn rename_identifier(identifier: &str, new_org: &str) -> String {
+pub fn rename_identifier(identifier: &str, new_org: &str, from_org: Option<&str>) -> String {
     // Already under the target org (exact, or a `{new_org}.` prefix) — no change.
     if identifier == new_org || identifier.starts_with(&format!("{new_org}.")) {
         return identifier.to_string();
     }
+
+    // Explicit old-org prefix: swap exactly, leave non-matching identifiers be.
+    if let Some(from) = from_org {
+        if identifier == from {
+            return new_org.to_string();
+        }
+        return match identifier.strip_prefix(&format!("{from}.")) {
+            Some(scope) => format!("{new_org}.{scope}"),
+            None => identifier.to_string(),
+        };
+    }
+
+    // Default: assume the old org is the same depth as the new one.
     let org_labels = new_org.split('.').count();
     let segments: Vec<&str> = identifier.split('.').collect();
     if segments.len() > org_labels {
@@ -141,6 +161,7 @@ fn write_declaration(path: &Path, value: &Value) -> anyhow::Result<()> {
 pub fn rename_ddm_bundle(
     files: &[PathBuf],
     new_org: &str,
+    from_org: Option<&str>,
     output_dir: Option<&str>,
     suffix: &str,
     dry_run: bool,
@@ -180,7 +201,7 @@ pub fn rename_ddm_bundle(
             continue;
         }
         if let Some(old) = value.get("Identifier").and_then(Value::as_str) {
-            let new = rename_identifier(old, new_org);
+            let new = rename_identifier(old, new_org, from_org);
             if new != old {
                 map.insert(old.to_string(), new);
             }
@@ -239,6 +260,7 @@ pub fn rename_ddm_bundle(
 pub fn rename_declaration_value(
     value: &mut Value,
     new_org: &str,
+    from_org: Option<&str>,
 ) -> (Option<(String, String)>, usize) {
     let old_id = value
         .get("Identifier")
@@ -247,7 +269,7 @@ pub fn rename_declaration_value(
 
     let mut map = HashMap::new();
     if let Some(old) = &old_id {
-        let new = rename_identifier(old, new_org);
+        let new = rename_identifier(old, new_org, from_org);
         if &new != old {
             map.insert(old.clone(), new);
         }
@@ -274,6 +296,7 @@ pub fn rename_declaration_file(
     input: &Path,
     output: &Path,
     new_org: &str,
+    from_org: Option<&str>,
     dry_run: bool,
 ) -> anyhow::Result<DdmFileRename> {
     let text = std::fs::read_to_string(input)
@@ -287,7 +310,7 @@ pub fn rename_declaration_file(
         );
     }
 
-    let (identifier, reference_updates) = rename_declaration_value(&mut value, new_org);
+    let (identifier, reference_updates) = rename_declaration_value(&mut value, new_org, from_org);
 
     if !dry_run {
         write_declaration(output, &value)?;
@@ -310,7 +333,7 @@ mod tests {
     #[test]
     fn rename_identifier_replaces_org_keeps_name() {
         assert_eq!(
-            rename_identifier("com.acme.settings", "com.newco"),
+            rename_identifier("com.acme.settings", "com.newco", None),
             "com.newco.settings"
         );
     }
@@ -318,12 +341,12 @@ mod tests {
     #[test]
     fn rename_identifier_leaves_already_under_target_org() {
         assert_eq!(
-            rename_identifier("com.newco.settings", "com.newco"),
+            rename_identifier("com.newco.settings", "com.newco", None),
             "com.newco.settings"
         );
         // A look-alike org with a longer label is NOT under the target org.
         assert_eq!(
-            rename_identifier("com.newcocorp.settings", "com.newco"),
+            rename_identifier("com.newcocorp.settings", "com.newco", None),
             "com.newco.settings"
         );
     }
@@ -331,7 +354,7 @@ mod tests {
     #[test]
     fn rename_identifier_handles_single_segment() {
         assert_eq!(
-            rename_identifier("settings", "com.newco"),
+            rename_identifier("settings", "com.newco", None),
             "com.newco.settings"
         );
     }
@@ -341,8 +364,28 @@ mod tests {
         // The org prefix is swapped but the scope (config.content-cache.settings)
         // is kept intact — it must not collapse to just the trailing segment.
         assert_eq!(
-            rename_identifier("com.acme.config.content-cache.settings", "com.mdoyvr"),
+            rename_identifier("com.acme.config.content-cache.settings", "com.mdoyvr", None),
             "com.mdoyvr.config.content-cache.settings"
+        );
+    }
+
+    #[test]
+    fn rename_identifier_from_org_handles_cross_depth() {
+        // Explicit old org of a different depth than the new one: prefix swapped
+        // exactly, scope preserved.
+        assert_eq!(
+            rename_identifier("uk.co.acme.config.settings", "com.mdoyvr", Some("uk.co.acme")),
+            "com.mdoyvr.config.settings"
+        );
+        // An identifier NOT under the named old org is left untouched.
+        assert_eq!(
+            rename_identifier("io.partner.thing", "com.mdoyvr", Some("uk.co.acme")),
+            "io.partner.thing"
+        );
+        // Bare old org → just the new org.
+        assert_eq!(
+            rename_identifier("uk.co.acme", "com.mdoyvr", Some("uk.co.acme")),
+            "com.mdoyvr"
         );
     }
 
@@ -418,7 +461,7 @@ mod tests {
 
         let files = vec![config_path.clone(), activation_path.clone()];
         // suffix "" + no output_dir => in-place rewrite
-        let result = rename_ddm_bundle(&files, "com.newco", None, "", false);
+        let result = rename_ddm_bundle(&files, "com.newco", None, None, "", false);
         assert!(result.failures.is_empty(), "{:?}", result.failures);
 
         let config: Value =
@@ -448,6 +491,7 @@ mod tests {
         let result = rename_ddm_bundle(
             std::slice::from_ref(&pkg),
             "com.newco",
+            None,
             None,
             "-normalized",
             false,

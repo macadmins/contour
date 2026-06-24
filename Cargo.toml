@@ -199,6 +199,16 @@ if_then_some_else_none = "allow"    # if/else Some/None is clear
 items_after_statements = "allow"    # items after statements is common in this codebase
 ptr_arg = "allow"                   # &PathBuf vs &Path — CLI tool, not a library API
 
+[profile.dev]
+# Faster debug builds on this dependency-heavy workspace: keep panic/backtrace
+# line numbers for our own code but skip full DWARF (big link-time win).
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+# Dependencies are rarely stepped into — drop their debuginfo entirely to cut
+# link time further. One-time recompile, then cached.
+debug = false
+
 [profile.release]
 lto = true
 codegen-units = 1

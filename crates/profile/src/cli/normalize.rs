@@ -226,6 +226,7 @@ pub fn handle_normalize(
     output: Option<&str>,
     org_domain: Option<&str>,
     org_name: Option<&str>,
+    from_org: Option<&str>,
     config: Option<&ProfileConfig>,
     validate: bool,
     regen_uuid: bool,
@@ -254,6 +255,7 @@ pub fn handle_normalize(
             output,
             effective_org,
             org_name,
+            from_org,
             config,
             validate,
             regen_uuid,
@@ -274,6 +276,7 @@ pub fn handle_normalize(
                 path,
                 output,
                 effective_org,
+                from_org,
                 in_place,
                 dry_run,
                 output_mode,
@@ -313,6 +316,7 @@ fn handle_normalize_ddm_single(
     file: &str,
     output: Option<&str>,
     org_domain: Option<&str>,
+    from_org: Option<&str>,
     in_place: bool,
     dry_run: bool,
     output_mode: OutputMode,
@@ -334,7 +338,7 @@ fn handle_normalize_ddm_single(
             .join(format!("{stem}-normalized.json"))
     };
 
-    let renamed = rename_declaration_file(input, &output_path, org, dry_run)?;
+    let renamed = rename_declaration_file(input, &output_path, org, from_org, dry_run)?;
 
     if output_mode == OutputMode::Json {
         let (old_id, new_id) = match &renamed.identifier {
@@ -389,6 +393,7 @@ fn handle_normalize_batch(
     output_dir: Option<&str>,
     org_domain: Option<&str>,
     org_name: Option<&str>,
+    from_org: Option<&str>,
     config: Option<&ProfileConfig>,
     validate: bool,
     regen_uuid: bool,
@@ -428,7 +433,7 @@ fn handle_normalize_batch(
         if !ddm_files.is_empty()
             && let Some(org) = org_domain
         {
-            let preview = rename_ddm_bundle(&ddm_files, org, output_dir, suffix, true);
+            let preview = rename_ddm_bundle(&ddm_files, org, from_org, output_dir, suffix, true);
             report_ddm_bundle(&preview, org_domain, true, output_mode)?;
         }
         return Ok(());
@@ -505,7 +510,7 @@ fn handle_normalize_batch(
     // --- DDM declarations (.json) — bundle-aware org rename ---
     if !ddm_files.is_empty() {
         if let Some(org) = org_domain {
-            let result = rename_ddm_bundle(&ddm_files, org, output_dir, suffix, false);
+            let result = rename_ddm_bundle(&ddm_files, org, from_org, output_dir, suffix, false);
             total_failed += result.failures.len();
             report_ddm_bundle(&result, org_domain, false, output_mode)?;
         } else if output_mode == OutputMode::Human {

@@ -210,6 +210,12 @@ pub enum Commands {
         #[arg(long, help = "Organization reverse domain (e.g., com.yourorg)")]
         org: Option<String>,
 
+        #[arg(
+            long = "from-org",
+            help = "Existing org prefix to replace exactly (DDM .json; default infers a same-depth prefix)"
+        )]
+        from_org: Option<String>,
+
         #[arg(long, help = "Organization name (sets PayloadOrganization)")]
         name: Option<String>,
 
