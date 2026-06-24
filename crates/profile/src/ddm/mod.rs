@@ -11,6 +11,7 @@ pub mod notes;
 pub mod parser;
 pub mod predicate;
 pub mod presets;
+pub mod rename;
 pub mod schema;
 pub mod types;
 pub mod verify;

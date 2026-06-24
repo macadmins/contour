@@ -183,9 +183,11 @@ pub enum Commands {
         jamf: bool,
     },
 
-    #[command(about = "Normalize a configuration profile (standardize identifiers)")]
+    #[command(
+        about = "Normalize identifiers / rename org across .mobileconfig and DDM .json declarations"
+    )]
     Normalize {
-        #[arg(help = "Profile file(s) or directory to normalize", required_unless_present = "pasteboard", num_args = 1..)]
+        #[arg(help = "Profile/DDM file(s) or directory to normalize (.mobileconfig + DDM .json)", required_unless_present = "pasteboard", num_args = 1..)]
         paths: Vec<String>,
 
         #[arg(long, help = "Read profile from macOS pasteboard")]

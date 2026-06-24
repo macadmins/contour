@@ -168,6 +168,89 @@ pub fn collect_profile_files_multi_with_depth(
     Ok(all_files)
 }
 
+/// Check if a file has a `.json` extension (a candidate DDM declaration).
+///
+/// Extension-only — content is filtered to actual DDM declarations downstream
+/// by [`crate::ddm::rename::is_ddm_declaration`], so unrelated `.json` files
+/// (e.g. `package.json`) are gathered here but skipped, not rewritten.
+pub fn is_ddm_json_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+}
+
+/// Collect `.json` files (candidate DDM declarations) from multiple paths.
+///
+/// The `.json` sibling of [`collect_profile_files_multi_with_depth`]: supports
+/// explicit files, directories (honoring `recursive`/`max_depth`), and globs.
+/// Unlike the mobileconfig collector this is lenient — explicit non-`.json`
+/// files and non-existent paths are ignored rather than erroring, because the
+/// mobileconfig collector runs first and already reports those.
+pub fn collect_ddm_files_multi_with_depth(
+    paths: &[String],
+    recursive: bool,
+    max_depth: Option<usize>,
+) -> Result<Vec<PathBuf>> {
+    let mut all_files = Vec::new();
+
+    for path in paths {
+        if is_glob_pattern(path) {
+            for entry in glob(path).context("Invalid glob pattern")? {
+                if let Ok(p) = entry
+                    && p.is_file()
+                    && is_ddm_json_file(&p)
+                    && !all_files.contains(&p)
+                {
+                    all_files.push(p);
+                }
+            }
+        } else {
+            let path_obj = Path::new(path);
+            if path_obj.is_file() {
+                if is_ddm_json_file(path_obj) {
+                    let canonical = path_obj.to_path_buf();
+                    if !all_files.contains(&canonical) {
+                        all_files.push(canonical);
+                    }
+                }
+            } else if path_obj.is_dir() {
+                collect_ddm_from_directory(path_obj, recursive, max_depth, &mut all_files);
+            }
+        }
+    }
+
+    all_files.sort();
+    Ok(all_files)
+}
+
+/// Collect `.json` files from a directory, honoring `recursive`/`max_depth`.
+fn collect_ddm_from_directory(
+    dir: &Path,
+    recursive: bool,
+    max_depth: Option<usize>,
+    files: &mut Vec<PathBuf>,
+) {
+    if recursive {
+        let mut walker = WalkDir::new(dir).follow_links(true);
+        if let Some(depth) = max_depth {
+            walker = walker.max_depth(depth);
+        }
+        for entry in walker.into_iter().filter_map(std::result::Result::ok) {
+            let p = entry.path();
+            if p.is_file() && is_ddm_json_file(p) {
+                files.push(p.to_path_buf());
+            }
+        }
+    } else if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let p = entry.path();
+            if p.is_file() && is_ddm_json_file(&p) {
+                files.push(p);
+            }
+        }
+    }
+}
+
 /// Check if we should use batch mode for multiple paths
 pub fn should_batch_process_multi(paths: &[String]) -> bool {
     // Batch mode if:

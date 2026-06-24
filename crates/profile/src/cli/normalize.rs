@@ -1,8 +1,10 @@
 use crate::cli::glob_utils::{
-    BatchResult, collect_profile_files_multi_with_depth, compute_batch_output_path,
-    output_batch_json, print_batch_summary, print_dry_run_preview, should_batch_process_multi,
+    BatchResult, collect_ddm_files_multi_with_depth, collect_profile_files_multi_with_depth,
+    compute_batch_output_path, is_ddm_json_file, output_batch_json, print_batch_summary,
+    print_dry_run_preview, should_batch_process_multi,
 };
 use crate::config::{ProfileConfig, renaming::ProfileRenamer};
+use crate::ddm::rename::{DdmBundleRename, rename_ddm_bundle, rename_declaration_file};
 use crate::output::OutputMode;
 use crate::profile::{normalizer, parser, validator};
 use crate::uuid::{self, UuidConfig};
@@ -10,7 +12,7 @@ use anyhow::Result;
 use colored::Colorize;
 use rayon::prelude::*;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Restore placeholder sentinels and XML comments in a written profile file.
@@ -263,6 +265,11 @@ pub fn handle_normalize(
         )
     } else {
         let path = &paths[0];
+        // A single `.json` argument is a DDM declaration — route to the DDM
+        // org-rename path instead of the plist normalizer.
+        if is_ddm_json_file(Path::new(path)) {
+            return handle_normalize_ddm_single(path, output, effective_org, dry_run, output_mode);
+        }
         if dry_run {
             if output_mode == OutputMode::Human {
                 println!("{}", "Dry run mode - no files will be written\n".yellow());
@@ -289,6 +296,67 @@ pub fn handle_normalize(
     }
 }
 
+/// Rename the org of a single DDM `.json` declaration. `output` is treated as a
+/// destination file when given, otherwise the declaration is rewritten in place.
+fn handle_normalize_ddm_single(
+    file: &str,
+    output: Option<&str>,
+    org_domain: Option<&str>,
+    dry_run: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let Some(org) = org_domain else {
+        anyhow::bail!("--org is required to rename a DDM declaration (e.g. --org com.yourorg)");
+    };
+
+    let input = Path::new(file);
+    let output_path = output.map_or_else(|| input.to_path_buf(), PathBuf::from);
+
+    let renamed = rename_declaration_file(input, &output_path, org, dry_run)?;
+
+    if output_mode == OutputMode::Json {
+        let (old_id, new_id) = match &renamed.identifier {
+            Some((old, new)) => (Some(old.as_str()), Some(new.as_str())),
+            None => (None, None),
+        };
+        let json_result = serde_json::json!({
+            "operation": "normalize",
+            "format": "ddm",
+            "success": true,
+            "dry_run": dry_run,
+            "files": [{
+                "input": renamed.input.to_string_lossy(),
+                "output": renamed.output.to_string_lossy(),
+                "identifier_old": old_id,
+                "identifier_new": new_id,
+                "reference_updates": renamed.reference_updates,
+            }],
+        });
+        println!("{}", serde_json::to_string_pretty(&json_result)?);
+    } else {
+        let verb = if dry_run { "Would rename" } else { "Renamed" };
+        println!(
+            "{} {} {} -> {}",
+            "✓".green(),
+            format!("{verb} DDM declaration:").bold(),
+            renamed.input.display(),
+            renamed.output.display()
+        );
+        match &renamed.identifier {
+            Some((old, new)) => println!("  Identifier: {old} -> {new}"),
+            None => println!(
+                "  {}",
+                format!("Identifier already under {org} — no change").dimmed()
+            ),
+        }
+        if renamed.reference_updates > 0 {
+            println!("  {} reference(s) updated", renamed.reference_updates);
+        }
+    }
+
+    Ok(())
+}
+
 #[expect(
     clippy::too_many_arguments,
     clippy::fn_params_excessive_bools,
@@ -310,30 +378,33 @@ fn handle_normalize_batch(
     output_mode: OutputMode,
 ) -> Result<()> {
     let files = collect_profile_files_multi_with_depth(paths, recursive, max_depth)?;
+    let ddm_files = collect_ddm_files_multi_with_depth(paths, recursive, max_depth)?;
 
-    if files.is_empty() {
+    if files.is_empty() && ddm_files.is_empty() {
         if output_mode == OutputMode::Human {
-            println!("{}", "No .mobileconfig files found".yellow());
+            println!("{}", "No .mobileconfig or DDM .json files found".yellow());
         } else {
             let result = serde_json::json!({
                 "success": true,
                 "total": 0,
-                "message": "No .mobileconfig files found"
+                "message": "No .mobileconfig or DDM .json files found"
             });
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         return Ok(());
     }
 
-    if output_mode == OutputMode::Human && !dry_run {
-        println!(
-            "{}",
-            format!("Normalizing {} profile(s)...", files.len()).cyan()
-        );
-    }
-
+    // Dry run — preview both formats and stop.
     if dry_run {
-        print_dry_run_preview(&files, output_dir, "-normalized", output_mode);
+        if !files.is_empty() {
+            print_dry_run_preview(&files, output_dir, "-normalized", output_mode);
+        }
+        if !ddm_files.is_empty()
+            && let Some(org) = org_domain
+        {
+            let preview = rename_ddm_bundle(&ddm_files, org, output_dir, "-normalized", true);
+            report_ddm_bundle(&preview, org_domain, true, output_mode)?;
+        }
         return Ok(());
     }
 
@@ -342,58 +413,187 @@ fn handle_normalize_batch(
         fs::create_dir_all(dir)?;
     }
 
-    let config_clone = config.cloned();
-    let org_domain_owned = org_domain.map(String::from);
-    let org_name_owned = org_name.map(String::from);
+    let mut total_failed = 0usize;
 
-    let normalize_file = |input: &Path, output_path: &Path| -> Result<Vec<String>> {
-        normalize_single_file_internal(
-            input,
-            output_path,
-            org_domain_owned.as_deref(),
-            org_name_owned.as_deref(),
-            config_clone.as_ref(),
-            validate,
-            regen_uuid,
-        )
-    };
+    // --- Configuration profiles (.mobileconfig) ---
+    if !files.is_empty() {
+        if output_mode == OutputMode::Human {
+            println!(
+                "{}",
+                format!("Normalizing {} profile(s)...", files.len()).cyan()
+            );
+        }
 
-    let result = if parallel {
-        process_parallel_with_output(
-            &files,
-            output_dir,
-            "-normalized",
-            normalize_file,
-            output_mode,
-        )
-    } else {
-        process_sequential_with_output(
-            &files,
-            output_dir,
-            "-normalized",
-            normalize_file,
-            output_mode,
-        )
-    };
+        let config_clone = config.cloned();
+        let org_domain_owned = org_domain.map(String::from);
+        let org_name_owned = org_name.map(String::from);
 
-    // Output summary
-    if output_mode == OutputMode::Human {
-        print_batch_summary(&result, "Normalize");
-    } else {
-        output_batch_json(&result, "normalize")?;
+        let normalize_file = |input: &Path, output_path: &Path| -> Result<Vec<String>> {
+            normalize_single_file_internal(
+                input,
+                output_path,
+                org_domain_owned.as_deref(),
+                org_name_owned.as_deref(),
+                config_clone.as_ref(),
+                validate,
+                regen_uuid,
+            )
+        };
+
+        let result = if parallel {
+            process_parallel_with_output(
+                &files,
+                output_dir,
+                "-normalized",
+                normalize_file,
+                output_mode,
+            )
+        } else {
+            process_sequential_with_output(
+                &files,
+                output_dir,
+                "-normalized",
+                normalize_file,
+                output_mode,
+            )
+        };
+
+        if output_mode == OutputMode::Human {
+            print_batch_summary(&result, "Normalize");
+        } else {
+            output_batch_json(&result, "normalize")?;
+        }
+
+        // Write markdown report if requested
+        if let Some(report_path) = report {
+            let md = generate_normalize_report(&result);
+            fs::write(report_path, &md)?;
+            if output_mode == OutputMode::Human {
+                println!("{}", format!("Report written to {report_path}").green());
+            }
+        }
+
+        total_failed += result.failed;
     }
 
-    // Write markdown report if requested
-    if let Some(report_path) = report {
-        let md = generate_normalize_report(&result);
-        fs::write(report_path, &md)?;
-        if output_mode == OutputMode::Human {
-            println!("{}", format!("Report written to {report_path}").green());
+    // --- DDM declarations (.json) — bundle-aware org rename ---
+    if !ddm_files.is_empty() {
+        if let Some(org) = org_domain {
+            let result = rename_ddm_bundle(&ddm_files, org, output_dir, "-normalized", false);
+            total_failed += result.failures.len();
+            report_ddm_bundle(&result, org_domain, false, output_mode)?;
+        } else if output_mode == OutputMode::Human {
+            println!(
+                "{}",
+                format!(
+                    "Found {} DDM .json declaration(s) but no --org resolved — skipping (DDM org rename requires --org)",
+                    ddm_files.len()
+                )
+                .yellow()
+            );
         }
     }
 
-    if result.failed > 0 {
-        anyhow::bail!("{} file(s) failed to normalize", result.failed);
+    if total_failed > 0 {
+        anyhow::bail!("{total_failed} file(s) failed to normalize");
+    }
+
+    Ok(())
+}
+
+/// Report the outcome of a DDM bundle rename (human summary or JSON object).
+fn report_ddm_bundle(
+    result: &DdmBundleRename,
+    org_domain: Option<&str>,
+    dry_run: bool,
+    output_mode: OutputMode,
+) -> Result<()> {
+    let renamed = result
+        .files
+        .iter()
+        .filter(|f| f.identifier.is_some())
+        .count();
+    let skipped = result.files.iter().filter(|f| f.skipped_non_ddm).count();
+
+    if output_mode == OutputMode::Json {
+        let files: Vec<_> = result
+            .files
+            .iter()
+            .filter(|f| !f.skipped_non_ddm)
+            .map(|f| {
+                let (old_id, new_id) = match &f.identifier {
+                    Some((old, new)) => (Some(old.as_str()), Some(new.as_str())),
+                    None => (None, None),
+                };
+                serde_json::json!({
+                    "input": f.input.to_string_lossy(),
+                    "output": f.output.to_string_lossy(),
+                    "identifier_old": old_id,
+                    "identifier_new": new_id,
+                    "reference_updates": f.reference_updates,
+                })
+            })
+            .collect();
+        let json_result = serde_json::json!({
+            "operation": "normalize",
+            "format": "ddm",
+            "success": result.failures.is_empty(),
+            "dry_run": dry_run,
+            "renamed": renamed,
+            "skipped_non_ddm": skipped,
+            "failed": result.failures.len(),
+            "files": files,
+            "failures": result.failures.iter().map(|(p, e)| {
+                serde_json::json!({ "file": p.to_string_lossy(), "error": e })
+            }).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&json_result)?);
+        return Ok(());
+    }
+
+    let verb = if dry_run { "Would rename" } else { "Rename" };
+    println!("\n{}", format!("DDM {verb} Summary:").cyan().bold());
+    if let Some(org) = org_domain {
+        println!("  Target org:      {org}");
+    }
+    println!(
+        "  {} {}",
+        "✓".green(),
+        format!("Renamed:        {renamed}").green()
+    );
+    if skipped > 0 {
+        println!(
+            "  {} {}",
+            "⊘".yellow(),
+            format!("Skipped (non-DDM): {skipped}").yellow()
+        );
+    }
+    if !result.failures.is_empty() {
+        println!(
+            "  {} {}",
+            "✗".red(),
+            format!("Failed:         {}", result.failures.len()).red()
+        );
+    }
+
+    for file in result.files.iter().filter(|f| f.identifier.is_some()) {
+        if let Some((old, new)) = &file.identifier {
+            let arrow = if dry_run { "would ->" } else { "->" };
+            println!(
+                "  {} {} {arrow} {}",
+                "·".dimmed(),
+                file.input.display(),
+                file.output.display()
+            );
+            println!("      Identifier: {old} -> {new}");
+            if file.reference_updates > 0 {
+                println!("      {} reference(s) updated", file.reference_updates);
+            }
+        }
+    }
+
+    for (path, err) in &result.failures {
+        println!("  {} {}: {err}", "✗".red(), path.display());
     }
 
     Ok(())
