@@ -200,6 +200,13 @@ pub enum Commands {
         )]
         output: Option<String>,
 
+        #[arg(
+            long = "in-place",
+            help = "Overwrite the original files instead of writing -normalized siblings",
+            conflicts_with = "output"
+        )]
+        in_place: bool,
+
         #[arg(long, help = "Organization reverse domain (e.g., com.yourorg)")]
         org: Option<String>,
 

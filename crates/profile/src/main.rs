@@ -190,6 +190,7 @@ fn run(cli: Cli) -> Result<()> {
             paths,
             pasteboard,
             output,
+            in_place,
             org,
             name,
             no_validate,
@@ -226,6 +227,7 @@ fn run(cli: Cli) -> Result<()> {
                     max_depth,
                     parallel,
                     dry_run,
+                    in_place,
                     report.as_deref(),
                     output_mode,
                 )?;

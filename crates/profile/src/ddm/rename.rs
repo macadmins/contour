@@ -14,22 +14,31 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Rewrite the org prefix of a DDM `Identifier`, keeping the final segment.
+/// Swap the org prefix of a DDM `Identifier`, preserving the full scope.
 ///
-/// Mirrors `profile::normalizer::normalize_identifier`: if the identifier is
-/// already under `new_org` it is returned unchanged; otherwise the last
-/// dot-separated segment is preserved as the name and re-prefixed with
-/// `new_org`. `com.acme.settings` + `com.newco` → `com.newco.settings`.
+/// If the identifier is already under `new_org` it is returned unchanged.
+/// Otherwise the old org is assumed to occupy the same number of leading
+/// dot-labels as `new_org` (the common same-depth rename, e.g. `com.acme` →
+/// `com.newco`); those labels are replaced and everything after them — the
+/// scope — is kept intact:
+/// `com.acme.config.content-cache.settings` + `com.newco`
+/// → `com.newco.config.content-cache.settings`.
 pub fn rename_identifier(identifier: &str, new_org: &str) -> String {
     // Already under the target org (exact, or a `{new_org}.` prefix) — no change.
     if identifier == new_org || identifier.starts_with(&format!("{new_org}.")) {
         return identifier.to_string();
     }
-    let name = match identifier.rsplit_once('.') {
-        Some((_, last)) => last,
-        None => identifier,
-    };
-    format!("{new_org}.{name}")
+    let org_labels = new_org.split('.').count();
+    let segments: Vec<&str> = identifier.split('.').collect();
+    if segments.len() > org_labels {
+        // Replace the org-sized prefix, keep the remaining scope verbatim.
+        let scope = segments[org_labels..].join(".");
+        format!("{new_org}.{scope}")
+    } else {
+        // No scope beyond the org-sized prefix — fall back to the trailing name.
+        let name = segments.last().copied().unwrap_or(identifier);
+        format!("{new_org}.{name}")
+    }
 }
 
 /// Is this JSON value a DDM declaration? Requires an Apple-namespaced `Type`
@@ -324,6 +333,16 @@ mod tests {
         assert_eq!(
             rename_identifier("settings", "com.newco"),
             "com.newco.settings"
+        );
+    }
+
+    #[test]
+    fn rename_identifier_preserves_multi_segment_scope() {
+        // The org prefix is swapped but the scope (config.content-cache.settings)
+        // is kept intact — it must not collapse to just the trailing segment.
+        assert_eq!(
+            rename_identifier("com.acme.config.content-cache.settings", "com.mdoyvr"),
+            "com.mdoyvr.config.content-cache.settings"
         );
     }
 

@@ -233,6 +233,7 @@ pub fn handle_normalize(
     max_depth: Option<usize>,
     parallel: bool,
     dry_run: bool,
+    in_place: bool,
     report: Option<&str>,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -260,6 +261,7 @@ pub fn handle_normalize(
             max_depth,
             parallel,
             dry_run,
+            in_place,
             report,
             output_mode,
         )
@@ -268,7 +270,14 @@ pub fn handle_normalize(
         // A single `.json` argument is a DDM declaration — route to the DDM
         // org-rename path instead of the plist normalizer.
         if is_ddm_json_file(Path::new(path)) {
-            return handle_normalize_ddm_single(path, output, effective_org, dry_run, output_mode);
+            return handle_normalize_ddm_single(
+                path,
+                output,
+                effective_org,
+                in_place,
+                dry_run,
+                output_mode,
+            );
         }
         if dry_run {
             if output_mode == OutputMode::Human {
@@ -291,17 +300,20 @@ pub fn handle_normalize(
             config,
             validate,
             regen_uuid,
+            in_place,
             output_mode,
         )
     }
 }
 
-/// Rename the org of a single DDM `.json` declaration. `output` is treated as a
-/// destination file when given, otherwise the declaration is rewritten in place.
+/// Rename the org of a single DDM `.json` declaration. Output target: `--output`
+/// if given; else the original file when `in_place`; else a `-normalized.json`
+/// sibling.
 fn handle_normalize_ddm_single(
     file: &str,
     output: Option<&str>,
     org_domain: Option<&str>,
+    in_place: bool,
     dry_run: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -310,7 +322,17 @@ fn handle_normalize_ddm_single(
     };
 
     let input = Path::new(file);
-    let output_path = output.map_or_else(|| input.to_path_buf(), PathBuf::from);
+    let output_path = if let Some(out) = output {
+        PathBuf::from(out)
+    } else if in_place {
+        input.to_path_buf()
+    } else {
+        let stem = input.file_stem().unwrap_or_default().to_string_lossy();
+        input
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("{stem}-normalized.json"))
+    };
 
     let renamed = rename_declaration_file(input, &output_path, org, dry_run)?;
 
@@ -374,9 +396,13 @@ fn handle_normalize_batch(
     max_depth: Option<usize>,
     parallel: bool,
     dry_run: bool,
+    in_place: bool,
     report: Option<&str>,
     output_mode: OutputMode,
 ) -> Result<()> {
+    // In place → overwrite originals (no suffix); otherwise write `-normalized` siblings.
+    let suffix = if in_place { "" } else { "-normalized" };
+
     let files = collect_profile_files_multi_with_depth(paths, recursive, max_depth)?;
     let ddm_files = collect_ddm_files_multi_with_depth(paths, recursive, max_depth)?;
 
@@ -397,12 +423,12 @@ fn handle_normalize_batch(
     // Dry run — preview both formats and stop.
     if dry_run {
         if !files.is_empty() {
-            print_dry_run_preview(&files, output_dir, "-normalized", output_mode);
+            print_dry_run_preview(&files, output_dir, suffix, output_mode);
         }
         if !ddm_files.is_empty()
             && let Some(org) = org_domain
         {
-            let preview = rename_ddm_bundle(&ddm_files, org, output_dir, "-normalized", true);
+            let preview = rename_ddm_bundle(&ddm_files, org, output_dir, suffix, true);
             report_ddm_bundle(&preview, org_domain, true, output_mode)?;
         }
         return Ok(());
@@ -444,7 +470,7 @@ fn handle_normalize_batch(
             process_parallel_with_output(
                 &files,
                 output_dir,
-                "-normalized",
+                suffix,
                 normalize_file,
                 output_mode,
             )
@@ -452,7 +478,7 @@ fn handle_normalize_batch(
             process_sequential_with_output(
                 &files,
                 output_dir,
-                "-normalized",
+                suffix,
                 normalize_file,
                 output_mode,
             )
@@ -479,7 +505,7 @@ fn handle_normalize_batch(
     // --- DDM declarations (.json) — bundle-aware org rename ---
     if !ddm_files.is_empty() {
         if let Some(org) = org_domain {
-            let result = rename_ddm_bundle(&ddm_files, org, output_dir, "-normalized", false);
+            let result = rename_ddm_bundle(&ddm_files, org, output_dir, suffix, false);
             total_failed += result.failures.len();
             report_ddm_bundle(&result, org_domain, false, output_mode)?;
         } else if output_mode == OutputMode::Human {
@@ -705,6 +731,7 @@ fn handle_normalize_single(
     config: Option<&ProfileConfig>,
     validate: bool,
     regen_uuid: bool,
+    in_place: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
     if output_mode == OutputMode::Human {
@@ -813,9 +840,12 @@ fn handle_normalize_single(
         }
     }
 
-    // Determine output path using config renaming or CLI output
+    // Determine output path: explicit --output → in-place overwrite → config
+    // renaming → default.
     let output_path = if let Some(output_file) = output {
         output_file.to_string()
+    } else if in_place {
+        file.to_string()
     } else if let Some(cfg) = config {
         let renamer = ProfileRenamer::new(cfg);
         let path = renamer.generate_output_path(&profile, Some(Path::new(file)));

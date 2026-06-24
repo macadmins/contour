@@ -360,6 +360,7 @@ fn dispatch_profile(
         Commands::Normalize {
             paths,
             output,
+            in_place,
             org,
             name,
             no_validate,
@@ -397,6 +398,7 @@ fn dispatch_profile(
                     max_depth,
                     parallel,
                     dry_run,
+                    in_place,
                     report.as_deref(),
                     output_mode,
                 )?;
