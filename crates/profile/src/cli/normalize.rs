@@ -472,21 +472,9 @@ fn handle_normalize_batch(
         };
 
         let result = if parallel {
-            process_parallel_with_output(
-                &files,
-                output_dir,
-                suffix,
-                normalize_file,
-                output_mode,
-            )
+            process_parallel_with_output(&files, output_dir, suffix, normalize_file, output_mode)
         } else {
-            process_sequential_with_output(
-                &files,
-                output_dir,
-                suffix,
-                normalize_file,
-                output_mode,
-            )
+            process_sequential_with_output(&files, output_dir, suffix, normalize_file, output_mode)
         };
 
         if output_mode == OutputMode::Human {

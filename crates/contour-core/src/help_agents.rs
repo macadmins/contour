@@ -1373,15 +1373,17 @@ mod tests {
 
     #[test]
     fn search_excludes_meta_commands() {
-        // Searching the literal name of an excluded command finds nothing.
+        // The `find` meta-command is never suggested as a command result (it's how
+        // you search) — even though SOP sections about finding things may surface.
         let text = run_search("find", false);
-        assert!(text.contains("No commands matched"), "got: {text}");
+        assert!(!text.contains("help-ai --command find"), "got: {text}");
     }
 
     #[test]
     fn search_deep_matches_flag_help_only() {
-        // "erase" only appears in a flag's help → found with --deep, not without.
-        assert!(run_search("erase", false).contains("No commands matched"));
+        // "erase" only appears in a flag's help → the command surfaces only with
+        // --deep, never in the shallow command search.
+        assert!(!run_search("erase", false).contains("enrollment device"));
         assert!(run_search("erase", true).contains("enrollment device"));
     }
 
@@ -1425,14 +1427,25 @@ mod tests {
     }
 
     #[test]
-    fn search_json_is_array_of_path_about_score() {
+    fn search_json_is_array_of_hits_with_score() {
         let cmd = search_cmd();
         let mut out = Vec::new();
         generate_search(&cmd, "secrets", false, true, &mut out).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
-        let first = &v.as_array().unwrap()[0];
-        assert!(first.get("path").is_some() && first.get("score").is_some());
-        assert!(first["path"].as_str().unwrap().contains("profile audit"));
+        let arr = v.as_array().unwrap();
+        assert!(!arr.is_empty());
+        // Every hit (command or SOP) carries a kind + score.
+        assert!(
+            arr.iter()
+                .all(|h| h.get("kind").is_some() && h.get("score").is_some())
+        );
+        // The profile audit command is surfaced for "secrets" (regardless of rank
+        // relative to any SOP sections that also match).
+        assert!(arr.iter().any(|h| {
+            h.get("path")
+                .and_then(|p| p.as_str())
+                .is_some_and(|p| p.contains("profile audit"))
+        }));
     }
 
     #[test]

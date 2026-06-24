@@ -21,7 +21,10 @@ clap_complete = "4.5"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# preserve_order keeps JSON object keys in their original/insertion order on
+# round-trip (e.g. DDM declarations keep Type/Identifier/Payload order) instead
+# of alphabetizing them.
+serde_json = { version = "1.0", features = ["preserve_order"] }
 yaml_serde = "0.10"
 toml = "1"
 plist = "1.8"

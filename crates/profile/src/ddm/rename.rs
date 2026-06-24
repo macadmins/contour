@@ -374,7 +374,11 @@ mod tests {
         // Explicit old org of a different depth than the new one: prefix swapped
         // exactly, scope preserved.
         assert_eq!(
-            rename_identifier("uk.co.acme.config.settings", "com.mdoyvr", Some("uk.co.acme")),
+            rename_identifier(
+                "uk.co.acme.config.settings",
+                "com.mdoyvr",
+                Some("uk.co.acme")
+            ),
             "com.mdoyvr.config.settings"
         );
         // An identifier NOT under the named old org is left untouched.
