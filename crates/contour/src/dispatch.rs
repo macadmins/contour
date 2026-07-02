@@ -963,6 +963,7 @@ fn dispatch_profile(
             validate,
             dry_run,
             interactive,
+            keys_md,
         } => {
             profile::cli::synthesize::handle_synthesize(
                 &paths,
@@ -971,6 +972,7 @@ fn dispatch_profile(
                 validate,
                 dry_run,
                 interactive,
+                keys_md.as_deref(),
                 output_mode,
             )?;
         }

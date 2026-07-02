@@ -1160,6 +1160,13 @@ pub enum Commands {
 
         #[arg(long, help = "Interactive mode -- select which plists to synthesize")]
         interactive: bool,
+
+        #[arg(
+            long = "keys-md",
+            value_name = "FILE",
+            help = "Also write a Markdown key reference (keys, descriptions, Apple source links)"
+        )]
+        keys_md: Option<std::path::PathBuf>,
     },
 }
 
