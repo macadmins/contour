@@ -169,6 +169,7 @@ pub fn generate_search(
     query: &str,
     deep: bool,
     json: bool,
+    scope: Option<&str>,
     writer: &mut impl Write,
 ) -> Result<()> {
     let q = query.trim().to_lowercase();
@@ -179,7 +180,17 @@ pub fn generate_search(
 
     let mut entries = Vec::new();
     flatten_commands(cmd, "", deep, &mut entries);
-    let sops = flatten_sops();
+    // Scoped search (e.g. `contour profile find`): keep only descendants of the
+    // scope prefix and drop SOP sections, so results stay within that subtree.
+    if let Some(prefix) = scope {
+        let want = format!("{prefix} ");
+        entries.retain(|e| e.path.starts_with(&want));
+    }
+    let sops = if scope.is_some() {
+        Vec::new()
+    } else {
+        flatten_sops()
+    };
 
     let mut hits: Vec<(f32, SearchHit)> = Vec::new();
     for e in &entries {
@@ -1348,7 +1359,7 @@ mod tests {
     fn run_search(query: &str, deep: bool) -> String {
         let cmd = search_cmd();
         let mut out = Vec::new();
-        generate_search(&cmd, query, deep, false, &mut out).unwrap();
+        generate_search(&cmd, query, deep, false, None, &mut out).unwrap();
         String::from_utf8(out).unwrap()
     }
 
@@ -1387,6 +1398,25 @@ mod tests {
         assert!(run_search("erase", true).contains("enrollment device"));
     }
 
+    fn run_search_scoped(query: &str, scope: &str) -> String {
+        let cmd = search_cmd();
+        let mut out = Vec::new();
+        generate_search(&cmd, query, false, false, Some(scope), &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn scoped_search_restricts_to_subtree_and_drops_sops() {
+        // Under `profile` scope a profile command still surfaces, rendered with
+        // the full `contour profile …` path.
+        let text = run_search_scoped("audit", "profile");
+        assert!(text.contains("contour profile audit"), "got: {text}");
+        // SOP sections are suppressed in scoped mode (commands only).
+        assert!(!text.contains("[SOP]"), "got: {text}");
+        // Sibling subtrees are excluded — `deprecated-scan` lives under enrollment.
+        assert!(!run_search_scoped("scan", "profile").contains("deprecated-scan"));
+    }
+
     #[test]
     fn sops_flatten_into_named_sections() {
         let sops = flatten_sops();
@@ -1413,7 +1443,7 @@ mod tests {
         // SOP hits come from the embedded SOPs, independent of the command tree.
         let cmd = search_cmd();
         let mut out = Vec::new();
-        generate_search(&cmd, "enrollment preset", false, false, &mut out).unwrap();
+        generate_search(&cmd, "enrollment preset", false, false, None, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("[SOP] enrollment"), "got: {text}");
     }
@@ -1422,7 +1452,7 @@ mod tests {
     fn search_empty_query_errors() {
         let cmd = search_cmd();
         let mut out = Vec::new();
-        let err = generate_search(&cmd, "   ", false, false, &mut out).unwrap_err();
+        let err = generate_search(&cmd, "   ", false, false, None, &mut out).unwrap_err();
         assert!(format!("{err:#}").contains("empty"));
     }
 
@@ -1430,7 +1460,7 @@ mod tests {
     fn search_json_is_array_of_hits_with_score() {
         let cmd = search_cmd();
         let mut out = Vec::new();
-        generate_search(&cmd, "secrets", false, true, &mut out).unwrap();
+        generate_search(&cmd, "secrets", false, true, None, &mut out).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
         let arr = v.as_array().unwrap();
         assert!(!arr.is_empty());

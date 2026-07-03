@@ -220,7 +220,7 @@ fn add_comments(toml_str: &str) -> String {
 #   name: Organization display name for PayloadOrganization (e.g., "Macadmin")
 #
 # settings.mscp_repo: Path to a local macos_security checkout.
-#   `contour mscp init --sync` clones the mSCP 2.0 layout (the dev_2.0
+#   `contour mscp init --sync` clones the mSCP 2.0 layout (the `main`
 #   branch) here; `mscp generate` auto-detects 1.x vs 2.0 from the repo.
 #
 # settings.python_method: "auto" | "uv" | "python3"

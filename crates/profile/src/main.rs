@@ -836,6 +836,23 @@ fn run(cli: Cli) -> Result<()> {
                 output_mode,
             )?;
         }
+        Commands::Find { term, deep } => {
+            use clap::CommandFactory;
+            // Wrap the standalone profile tree under a synthetic `contour` root so
+            // results and help-ai hints match the unified `contour profile …`
+            // surface (the standalone binary has no top-level `find`/`help-ai`).
+            let root = clap::Command::new("contour").subcommand(Cli::command().name("profile"));
+            let json = output_mode == OutputMode::Json;
+            let mut out = std::io::stdout();
+            contour_core::help_agents::generate_search(
+                &root,
+                &term,
+                deep,
+                json,
+                Some("profile"),
+                &mut out,
+            )?;
+        }
         Commands::Library { action } => match action {
             LibraryAction::New {
                 path,

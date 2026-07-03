@@ -94,12 +94,12 @@ script_nopkg = false
 [[baselines]]
 name = "cis_lvl1"
 enabled = true
-branch = "dev_2.0"               # mSCP branch (dev_2.0 = 2.0 layout; tahoe = legacy 1.x)
+branch = "main"               # mSCP branch (main = 2.0 layout; tahoe = legacy 1.x)
 
 [[baselines]]
 name = "800-53r5_moderate"
 enabled = true
-branch = "dev_2.0"
+branch = "main"
 excluded_rules = []
 [baselines.labels]
 include_any = ["compliance-moderate"]
@@ -234,6 +234,40 @@ For output layout specifically: `--jamf-mode` / `--fleet-mode` CLI flags overrid
 
 ---
 
+## Compliance presets
+
+Presets are friendly, memorable names for the common compliance baselines, so
+generating one is a one-liner — no keyword or `--os` to remember. They mirror
+the profile enrollment presets.
+
+```bash
+contour mscp presets                       # list the built-in presets
+contour mscp generate --preset cmmc2 -m ./macos_security -o ./out
+contour mscp generate --preset nist-high -m ./macos_security -o ./out
+```
+
+A preset expands to a baseline keyword **and** its platform (e.g. `ios-stig` →
+`ios_stig` on iOS). **Raw keywords keep working** — both via `-k/--keyword` and
+via `--preset` (a non-preset value passes through unchanged), so
+`--preset 800-53r5_high` and `-k 800-53r5_high` are equivalent.
+
+| Preset | Expands to | Framework |
+|--------|-----------|-----------|
+| `nist-high` / `nist-moderate` / `nist-low` | `800-53r5_high` / `_moderate` / `_low` | NIST 800-53 Rev 5 |
+| `nist-privacy` | `800-53r5_privacy` | NIST 800-53 Rev 5 (Privacy) |
+| `cui` | `800-171` | NIST 800-171 (CUI) |
+| `cmmc1` / `cmmc2` | `cmmc_lvl1` / `cmmc_lvl2` | CMMC 2.0 |
+| `stig` | `disa_stig` | DISA STIG (macOS) |
+| `ios-stig` | `ios_stig` | DISA STIG (iOS) |
+| `cis1` / `cis2` | `cis_lvl1` / `cis_lvl2` | CIS Benchmark (macOS) |
+| `cis1-byod` / `cis2-byod` | `cis_lvl1_byod` / `cis_lvl2_byod` | CIS Benchmark (iOS, BYOD) |
+| `cis1-enterprise` / `cis2-enterprise` | `cis_lvl1_enterprise` / `cis_lvl2_enterprise` | CIS Benchmark (iOS, Enterprise) |
+| `cis-controls` | `cisv8` | CIS Controls v8 |
+| `cnssi-high` / `cnssi-moderate` / `cnssi-low` | `cnssi-1253_high` / `_moderate` / `_low` | CNSSI-1253 |
+
+`contour mscp presets --json` emits the same table for tooling. `--preset` is
+mutually exclusive with `--keyword`; one is required on `generate`.
+
 ## Available Baselines
 
 24 baselines across 3 platforms. Each baseline maps to a security framework and produces a different set of rules (mobileconfig profiles, scripts, DDM declarations).
@@ -287,8 +321,12 @@ shapes**, and contour detects which one `--mscp-repo` points at:
 
 | Layout | Branch | Rule schema |
 |--------|--------|-------------|
-| **2.0** — current | `dev_2.0` | Multi-OS — `platforms.{macOS,iOS,visionOS}.<version>`, nested `enforcement_info`, array-shaped `mobileconfig_info`, `references.{vendor}…`; baselines are derived from rule metadata. |
+| **2.0** — current | `main` | Multi-OS — `platforms.{macOS,iOS,visionOS}.<version>`, nested `enforcement_info`, array-shaped `mobileconfig_info`, `references.{vendor}…`; baselines are derived from rule metadata. |
 | **1.x** — legacy | `tahoe` and earlier release branches | Flat — top-level `tags`, `check`, `fix`, `result`; dict-shaped `mobileconfig_info`; baselines are explicit files under `baselines/`. |
+
+> **Branch note:** mSCP merged the 2.0 layout into `main`, so `main` is now
+> the default contour clones/checks out. The older `dev_2.0` branch still
+> exists as a legacy alias of `main` and continues to work.
 
 contour treats **2.0 as the standard layout**. 1.x repositories remain
 fully supported — detection is automatic, so existing 1.x workflows keep
@@ -297,7 +335,7 @@ work is 2.0.
 
 **Auto-detection.** For commands that read mSCP rule YAML *directly*,
 contour sniffs the first rule file: a top-level `platforms:` key ⇒ 2.0;
-an `id:` without `platforms:` ⇒ 1.x. The `dev_2.0` branch keeps the
+an `id:` without `platforms:` ⇒ 1.x. The `main` branch keeps the
 `rules/` and `baselines/` symlinks in place, so path-based access still
 works — only the schema underneath differs. A 2.0 rule can describe
 several OSes at once, and contour adapts it to the normalized internal
@@ -313,7 +351,7 @@ output from `build/<name>` or `build/<name>_<os>_<version>` accordingly.
 
 mSCP 2.0 is verified on both build paths and produces an identical
 Fleet GitOps structure either way:
-- a local `dev_2.0` checkout built with `--use-uv` / `--use-python3` —
+- a local `main` checkout built with `--use-uv` / `--use-python3` —
   point `--mscp-repo` at it and run `generate`;
 - the `--use-container` route against the default mSCP 2.0 image
   `ghcr.io/brodjieski/mscp_2.0:latest` (the image checks the project
@@ -383,7 +421,7 @@ contour mscp init [flags]
 | `--jamf` | Enable Jamf Pro mode (sets `output.structure = "flat"`) | `false` |
 | `--munki` | Enable Munki integration (sets `output.structure = "nested"`) | `false` |
 | `--sync` | Clone/sync mSCP repository | `false` |
-| `--branch <BRANCH>` | mSCP branch to clone (`dev_2.0` = mSCP 2.0 layout; `tahoe` and macOS-version branches = legacy 1.x) | `dev_2.0` |
+| `--branch <BRANCH>` | mSCP branch to clone (`main` = mSCP 2.0 layout; `tahoe` and macOS-version branches = legacy 1.x) | `main` |
 | `--keywords <BASELINES>` | Baselines to enable (comma-separated, used with `--sync`) | none |
 | `--force` | Overwrite existing configuration | `false` |
 
@@ -963,13 +1001,13 @@ contour mscp container init [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | `./macos_security` |
-| `--branch <BRANCH>` | Git branch to use (`dev_2.0` = mSCP 2.0 layout; `tahoe` / `sequoia` / `sonoma` = legacy 1.x) | `dev_2.0` |
+| `--branch <BRANCH>` | Git branch to use (`main` = mSCP 2.0 layout; `tahoe` / `sequoia` / `sonoma` = legacy 1.x) | `main` |
 | `-t, --tag <TAG>` | Custom image name/tag | `mscp:local` |
 | `--no-build` | Only create Dockerfile, don't build | `false` |
 | `--docker` | Force Docker runtime | auto-detect |
 
 ```bash
-contour mscp container init -m ./macos_security --branch dev_2.0
+contour mscp container init -m ./macos_security --branch main
 ```
 
 #### `mscp container pull`
@@ -1208,7 +1246,7 @@ contour mscp verify -o ./output
 ## Extended CLI Examples
 
 Full, copy-pasteable command lines using the long-form CLI. These mirror
-runs validated against an mSCP **2.0** checkout (`dev_2.0`) and show the
+runs validated against an mSCP **2.0** checkout (`main`) and show the
 key flags in realistic combinations. They use the primary `--keyword`
 form; substitute `--baseline` if you prefer the alias.
 
@@ -1282,7 +1320,7 @@ contour mscp generate \
 ```
 
 If your checkout is still on the legacy 1.x layout, this fails fast with
-a message telling you to `git checkout dev_2.0` (the 2.0 image can't read
+a message telling you to `git checkout main` (the 2.0 image can't read
 1.x rules) or to drop `--use-container` and use `--use-uv` /
 `--use-python3` instead, which work with either layout.
 

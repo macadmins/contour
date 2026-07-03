@@ -59,6 +59,11 @@ crates/osquery-schema/data/*.parquet
 crates/mdm-schema/data/beta/*.parquet
 crates/mscp-schema/data/beta/*.parquet
 crates/osquery-schema/data/beta/*.parquet
+# Top-level schema archives — orphaned build-time data, never read by build.rs
+# (it extracts the gitignored data/*.parquet or downloads via CONTOUR_*_SCHEMA_URL)
+crates/mdm-schema.zip
+crates/mscp-schema.zip
+crates/osquery-schema.zip
 
 # Local mSCP source clone (used by `contour mscp generate` / `list-baselines`)
 /macos_security/

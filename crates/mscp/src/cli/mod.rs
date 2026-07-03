@@ -13,6 +13,7 @@ pub mod glob_interactive;
 pub mod info;
 pub mod init;
 pub mod odv;
+pub mod presets;
 pub mod process;
 pub mod schema_cmd;
 pub mod validate;
@@ -105,10 +106,10 @@ pub enum Commands {
         #[arg(long)]
         sync: bool,
 
-        /// mSCP branch to clone — `dev_2.0` is the mSCP 2.0 layout
+        /// mSCP branch to clone — `main` is the mSCP 2.0 layout
         /// (default); `tahoe` and other macOS-version branches are
-        /// legacy 1.x.
-        #[arg(long, default_value = "dev_2.0")]
+        /// legacy 1.x. (`dev_2.0` remains as a legacy alias of `main`.)
+        #[arg(long, default_value = "main")]
         branch: String,
 
         /// Baselines to enable (comma-separated, used with --sync)
@@ -301,14 +302,23 @@ pub enum Commands {
         #[arg(long)]
         branch: Option<String>,
 
-        /// Baseline name to generate (e.g., `cis_lvl1`, 800-53r5_high)
+        /// Baseline name to generate (e.g., `cis_lvl1`, 800-53r5_high).
+        /// Mutually exclusive with `--preset`.
         #[arg(
             short = 'k',
             long = "keyword",
             visible_alias = "baseline",
-            short_alias = 'b'
+            short_alias = 'b',
+            required_unless_present = "preset",
+            conflicts_with = "preset"
         )]
-        keyword: String,
+        keyword: Option<String>,
+
+        /// Compliance preset — a friendly name (see `contour mscp presets`)
+        /// that expands to a baseline keyword + platform. Also accepts a raw
+        /// baseline keyword (e.g. `800-53r5_high`).
+        #[arg(long)]
+        preset: Option<String>,
 
         /// mSCP repository layout: `auto` (sniff the rule schema),
         /// `1.x` (flat `baselines/<name>.yaml`), or `2.0` (multi-OS,
@@ -714,6 +724,9 @@ pub enum Commands {
         mscp_repo: PathBuf,
     },
 
+    /// List built-in compliance presets (friendly names → baseline keywords)
+    Presets,
+
     /// Extract remediation scripts from mSCP rules (separate from detection/audit)
     ExtractScripts {
         /// Path to mSCP repository (falls back to embedded data if omitted)
@@ -994,9 +1007,9 @@ pub enum ContainerAction {
         #[arg(short, long, default_value = "./macos_security")]
         mscp_repo: PathBuf,
 
-        /// Git branch to use — `dev_2.0` is the mSCP 2.0 layout
+        /// Git branch to use — `main` is the mSCP 2.0 layout
         /// (default); `tahoe` / `sequoia` / `sonoma` are legacy 1.x.
-        #[arg(long, default_value = "dev_2.0")]
+        #[arg(long, default_value = "main")]
         branch: String,
 
         /// Custom image name/tag

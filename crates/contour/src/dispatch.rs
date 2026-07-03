@@ -144,7 +144,9 @@ pub fn run(cli: Cli) -> Result<()> {
 
             if let Some(term) = search {
                 // Fuzzy command search (most specific intent).
-                contour_core::help_agents::generate_search(&cmd, &term, deep, cli.json, &mut out)?;
+                contour_core::help_agents::generate_search(
+                    &cmd, &term, deep, cli.json, None, &mut out,
+                )?;
             } else if let Some(tool) = sop {
                 // SOP for a specific tool — whole doc, or one section with --at.
                 if let Some(heading) = at {
@@ -183,7 +185,9 @@ pub fn run(cli: Cli) -> Result<()> {
             use clap::CommandFactory;
             let cmd = Cli::command();
             let mut out = std::io::stdout();
-            contour_core::help_agents::generate_search(&cmd, &term, deep, cli.json, &mut out)?;
+            contour_core::help_agents::generate_search(
+                &cmd, &term, deep, cli.json, None, &mut out,
+            )?;
             Ok(())
         }
         Commands::Completions {
@@ -974,6 +978,21 @@ fn dispatch_profile(
                 interactive,
                 keys_md.as_deref(),
                 output_mode,
+            )?;
+        }
+        Commands::Find { term, deep } => {
+            use clap::CommandFactory;
+            // Search the full contour tree, scoped to the `profile` subtree, so
+            // results render as `contour profile …` with correct help-ai hints.
+            let cmd = crate::Cli::command();
+            let mut out = std::io::stdout();
+            contour_core::help_agents::generate_search(
+                &cmd,
+                &term,
+                deep,
+                json,
+                Some("profile"),
+                &mut out,
             )?;
         }
         Commands::Library { action } => match action {
@@ -2363,6 +2382,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             mscp_repo,
             branch,
             keyword,
+            preset,
             mscp_version,
             os,
             os_version,
@@ -2409,6 +2429,11 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             osquery_format,
             osquery_audit,
         } => {
+            // Resolve the preset/keyword pair to a concrete baseline keyword +
+            // OS target (a friendly preset overrides platform; a raw keyword
+            // handed to --preset passes through, keeping --os).
+            let (keyword, os) = mscp::cli::presets::resolve(preset.as_deref(), keyword, os)?;
+
             let python_method = if use_container {
                 Some(mscp::cli::generate::PythonMethod::Container)
             } else if use_uv {
@@ -2812,6 +2837,10 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
 
         Commands::ListBaselines { mscp_repo } => {
             mscp::cli::list_available_baselines(mscp_repo, output_mode)?;
+        }
+
+        Commands::Presets => {
+            mscp::cli::presets::handle_presets(output_mode)?;
         }
 
         Commands::Schema { action } => match action {
@@ -3290,7 +3319,7 @@ fn write_llm_domain_reference(writer: &mut impl Write, has: &dyn Fn(&str) -> boo
         writeln!(buf, "Builds and deploys mSCP security keywords.\n")?;
 
         if let Ok(registry) = mscp::registry::MscpRegistry::embedded() {
-            // Platform coverage. mSCP 2.0 (dev_2.0) stamps platform/OS on the rule,
+            // Platform coverage. mSCP 2.0 (main) stamps platform/OS on the rule,
             // not the baseline edge, so coverage comes from the versioned rules.
             writeln!(buf, "### Platform coverage\n")?;
             for c in mscp::api::platform_coverage().unwrap_or_default() {

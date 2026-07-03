@@ -94,7 +94,7 @@ contour mscp generate --mscp-repo ./macos_security --keyword cis_lvl1 \
 contour mscp verify --output ./output
 ```
 
-`--sync` clones the mSCP 2.0 repo (`dev_2.0` branch); `--use-uv` runs the
+`--sync` clones the mSCP 2.0 repo (`main` branch); `--use-uv` runs the
 Python toolchain `uv` [by astral](https://docs.astral.sh/uv/) as interpreter. Full pipeline in
 [contour-mscp.md](contour-mscp.md).
 

@@ -64,8 +64,9 @@ const MSCP_PYTHON_VERSION_LEGACY: &str = "3.13";
 /// and the wrong one is silently miscompiled into the wrong feature:
 ///
 /// - mSCP **1.x** (`tahoe` branch): `-D` is `--ddm`.
-/// - mSCP **2.0** (`dev_2.0` branch — contour's default since
-///   v0.3.0-beta.3): `-D` was repurposed for `--debug` (hidden via
+/// - mSCP **2.0** (`main` branch — contour's default; mSCP merged the
+///   2.0 layout to `main`, so `dev_2.0` is now a legacy alias):
+///   `-D` was repurposed for `--debug` (hidden via
 ///   `argparse.SUPPRESS`), and `-d`/`--ddm` is the DDM flag. Passing
 ///   `-D` on 2.0 silently enables debug mode and produces zero DDM
 ///   artifacts.
@@ -1206,8 +1207,8 @@ fn assert_compatible_layout(mscp_repo_abs: &Path, image: &str) -> Result<()> {
              rules, so the run would fail with a confusing error after the \
              container exits.\n\n\
              Fix by switching the local repo to 2.0:\n  \
-             git -C {repo} fetch origin dev_2.0:dev_2.0 && \\\n  \
-             git -C {repo} checkout dev_2.0\n\n\
+             git -C {repo} fetch origin main && \\\n  \
+             git -C {repo} checkout main\n\n\
              Or drop `--use-container` and use the local Python interpreter \
              (`--use-uv` / `--use-python3`), which works with either layout.",
             repo = mscp_repo_abs.display(),
@@ -2092,8 +2093,8 @@ mod tests {
             "error must name the layout: {msg}"
         );
         assert!(
-            msg.contains("dev_2.0"),
-            "error must point at the dev_2.0 branch: {msg}"
+            msg.contains("checkout main"),
+            "error must point at the mSCP 2.0 `main` branch: {msg}"
         );
         assert!(
             msg.contains("--use-uv") || msg.contains("--use-python3"),

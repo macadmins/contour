@@ -298,7 +298,7 @@ pub fn init_project<P: AsRef<Path>>(
         let mscp_path = output.join("macos_security");
         sync_mscp_repo(&mscp_path, branch)?;
 
-        // Clarify which mSCP layout the synced repo carries — `dev_2.0`
+        // Clarify which mSCP layout the synced repo carries — `main`
         // is 2.0, `tahoe` and other macOS-version branches are 1.x.
         match crate::layout::MscpLayout::detect(&mscp_path) {
             Ok(layout) => {
@@ -470,9 +470,9 @@ pub fn init_project<P: AsRef<Path>>(
             println!("     (--config picks up [settings.munki]/[settings.jamf]/[settings.fleet])");
         } else {
             println!(
-                "  1. Clone mSCP 2.0: git clone -b dev_2.0 https://github.com/usnistgov/macos_security.git"
+                "  1. Clone mSCP 2.0: git clone -b main https://github.com/usnistgov/macos_security.git"
             );
-            if branch == "dev_2.0" {
+            if branch == "main" {
                 println!("  2. Or re-run with: contour mscp init --sync");
             } else {
                 println!("  2. Or re-run with: contour mscp init --sync --branch {branch}");

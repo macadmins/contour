@@ -211,6 +211,7 @@ fn main() -> Result<()> {
             mscp_repo,
             branch,
             keyword,
+            preset,
             mscp_version,
             os,
             os_version,
@@ -257,6 +258,11 @@ fn main() -> Result<()> {
             osquery_format,
             osquery_audit,
         } => {
+            // Resolve the preset/keyword pair to a concrete baseline keyword +
+            // OS target (a friendly preset overrides platform; a raw keyword
+            // handed to --preset passes through, keeping --os).
+            let (keyword, os) = cli::presets::resolve(preset.as_deref(), keyword, os)?;
+
             let python_method = if use_container {
                 Some(cli::generate::PythonMethod::Container)
             } else if use_uv {
@@ -700,6 +706,15 @@ fn main() -> Result<()> {
                 output::OutputMode::Human
             };
             cli::list_available_baselines(mscp_repo, output_mode)?;
+        }
+
+        Commands::Presets => {
+            let output_mode = if cli.json {
+                output::OutputMode::Json
+            } else {
+                output::OutputMode::Human
+            };
+            cli::presets::handle_presets(output_mode)?;
         }
 
         Commands::ExtractScripts {

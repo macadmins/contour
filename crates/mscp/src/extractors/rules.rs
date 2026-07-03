@@ -389,7 +389,7 @@ mod tests {
         assert!(ex.baseline_rule_ids("Nope").is_none());
     }
 
-    /// Live: extract from dev_2.0 tree and confirm V2x path runs.
+    /// Live: extract from the mSCP 2.0 (`main`) tree and confirm V2x path runs.
     #[test]
     fn live_v2x_extraction_smoke() {
         let repo = Path::new("/Users/henry/Projects/Dev/macos_security");
@@ -398,7 +398,7 @@ mod tests {
         }
         let extractor = RuleExtractor::new(repo);
         let rules = extractor.extract_all_rules().expect("extract");
-        assert!(!rules.is_empty(), "expected non-zero rules from dev_2.0");
+        assert!(!rules.is_empty(), "expected non-zero rules from main");
         // At least some rules should have macOS as a target.
         assert!(
             rules.iter().any(|r| !r.macos.is_empty()),

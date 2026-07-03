@@ -58,6 +58,7 @@ pub struct Cli {
 )]
 pub enum Commands {
     /// Apple configuration profile toolkit (normalize, validate, sign, etc.)
+    #[command(after_help = profile::cli::PROFILE_AFTER_HELP)]
     Profile {
         #[command(subcommand)]
         action: profile::cli::Commands,

@@ -45,11 +45,24 @@ use clap::{Parser, Subcommand};
 
 const ABOUT: &str = "Profile - Apple configuration profile toolkit (Community Edition)";
 
+/// Newcomer tips appended to `profile --help` — shown under both the
+/// `contour profile` group and the standalone `profile` binary. Points at the
+/// discovery aids a first-time user can't see from the command list alone
+/// (search, guided SOP, tab-completion, tutorial).
+pub const PROFILE_AFTER_HELP: &str = "\
+Getting started:
+  contour profile find <term>        search these commands (typo-tolerant)
+  contour profile generate --help    generate a profile (alias: gen)
+  contour help-ai --sop profile      guided profile workflow for AI agents
+  contour completions zsh --install  enable <TAB> shell completion
+  contour trainer profile            step-by-step interactive tutorial";
+
 #[derive(Debug, Parser)]
 #[command(name = "profile")]
 #[command(author = env!("CARGO_PKG_AUTHORS"))]
 #[command(version = concat!(env!("CARGO_PKG_VERSION"), "+", env!("BUILD_TIMESTAMP"), "\nCopyright (c) 2025 Mac Admins Open Source\nLicense: Apache-2.0"))]
 #[command(about = ABOUT, long_about = None)]
+#[command(after_help = PROFILE_AFTER_HELP)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -184,6 +197,7 @@ pub enum Commands {
     },
 
     #[command(
+        visible_alias = "norm",
         about = "Normalize identifiers / rename org across .mobileconfig and DDM .json declarations"
     )]
     Normalize {
@@ -265,7 +279,10 @@ pub enum Commands {
         dry_run: bool,
     },
 
-    #[command(about = "Validate a configuration profile against Apple schema")]
+    #[command(
+        visible_alias = "check",
+        about = "Validate a configuration profile against Apple schema"
+    )]
     Validate {
         #[arg(help = "Profile file(s) or directory to validate", required = true, num_args = 1..)]
         paths: Vec<String>,
@@ -1001,7 +1018,10 @@ pub enum Commands {
         action: PayloadAction,
     },
 
-    #[command(about = "Generate a profile from schema or recipe")]
+    #[command(
+        visible_alias = "gen",
+        about = "Generate a profile from schema or recipe"
+    )]
     Generate {
         #[arg(help = "Payload type(s) — one for generate, multiple for --create-recipe")]
         payload_type: Vec<String>,
@@ -1142,6 +1162,7 @@ pub enum Commands {
     },
 
     /// Synthesize mobileconfig profiles from managed preference plists
+    #[command(visible_alias = "synth")]
     Synthesize {
         #[arg(help = "Plist file(s) or directory of managed preferences", required = true, num_args = 1..)]
         paths: Vec<std::path::PathBuf>,
@@ -1167,6 +1188,27 @@ pub enum Commands {
             help = "Also write a Markdown key reference (keys, descriptions, Apple source links)"
         )]
         keys_md: Option<std::path::PathBuf>,
+    },
+
+    #[command(
+        about = "Search profile commands by keyword (typo-tolerant)",
+        long_about = "Fuzzy-search the profile command tree by keyword — the fast way\n\
+                      to reach a command without memorizing the full name.\n\
+                      \n\
+                      Matches command names, descriptions, and (with --deep)\n\
+                      flag help. Tolerant of typos.\n\
+                      \n\
+                      Examples:\n  \
+                      contour profile find cache\n  \
+                      contour profile find \"rename org\"\n  \
+                      contour profile find sign --deep"
+    )]
+    Find {
+        /// Search term (e.g. "cache", "rename org")
+        term: String,
+        /// Also match flag names and flag help (broader, noisier)
+        #[arg(long)]
+        deep: bool,
     },
 }
 

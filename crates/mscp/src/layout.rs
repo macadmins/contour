@@ -1,8 +1,9 @@
 //! mSCP repository layout detection (1.x vs 2.0).
 //!
 //! Today the macos_security project ships in two coexisting shapes. The
-//! `dev_2.0` branch leaves the 1.x-style `rules`/`baselines` symlinks in
-//! place, so path-based extraction keeps reaching the YAML files — but the
+//! `main` branch (mSCP 2.0; `dev_2.0` is now a legacy alias) leaves the
+//! 1.x-style `rules`/`baselines` symlinks in place, so path-based
+//! extraction keeps reaching the YAML files — but the
 //! schema underneath has changed substantially. We need to detect which
 //! shape the operator pointed `--mscp-repo` at and parse accordingly.
 //!
@@ -57,8 +58,8 @@ impl MscpLayout {
     }
 
     /// Subpath under the repo root holding rule YAML files.
-    /// Both layouts use `rules/` thanks to the dev_2.0 symlink, but
-    /// callers may want the canonical 2.0 path for diagnostics.
+    /// Both layouts use `rules/` thanks to the mSCP 2.0 (`main`) symlink,
+    /// but callers may want the canonical 2.0 path for diagnostics.
     pub fn rules_subdir(self) -> &'static str {
         match self {
             Self::V1x => "rules",
@@ -243,15 +244,15 @@ mod tests {
         );
     }
 
-    /// Live smoke: only runs if the dev_2.0 checkout is present.
-    /// Skipped silently in CI where the path doesn't exist.
+    /// Live smoke: only runs if the local mSCP 2.0 (`main`) checkout is
+    /// present. Skipped silently in CI where the path doesn't exist.
     #[test]
-    fn detect_live_dev_2_0_tree() {
+    fn detect_live_main_tree() {
         let repo = Path::new("/Users/henry/Projects/Dev/macos_security");
         if !repo.join("rules").exists() {
             return;
         }
         let detected = MscpLayout::detect(repo).expect("live detect");
-        assert_eq!(detected, MscpLayout::V2x, "dev_2.0 should detect as V2x");
+        assert_eq!(detected, MscpLayout::V2x, "main should detect as V2x");
     }
 }
