@@ -119,8 +119,45 @@ pub fn run(cli: Cli) -> Result<()> {
             cli.json,
         ),
         Commands::Osquery { action } => crate::osquery::handle(action, cli.json),
-        Commands::SetupAgent => {
-            contour_core::help_agents::install_skill(env!("CARGO_PKG_VERSION"))?;
+        Commands::SetupAgent { org, yes } => {
+            use contour_core::help_agents::{SkillInstallOptions, install_skill_with};
+            use std::io::IsTerminal;
+
+            // Guide a human through it: prompt for org + target files, unless
+            // --yes, an explicit --org, or a non-interactive stdin (CI/pipes).
+            let interactive = !yes && org.is_none() && std::io::stdin().is_terminal();
+            let (org, write_claude_md, write_agents_md) = if interactive {
+                let entered = inquire::Text::new("Organization reverse-domain (e.g. com.acme):")
+                    .with_help_message(
+                        "Pins the skill so agents never fall back to com.example. Enter to skip.",
+                    )
+                    .prompt()
+                    .unwrap_or_default();
+                let org = {
+                    let t = entered.trim();
+                    (!t.is_empty()).then(|| t.to_string())
+                };
+                let write_claude_md =
+                    inquire::Confirm::new("Write CLAUDE.md (for CI/GitHub agents)?")
+                        .with_default(true)
+                        .prompt()
+                        .unwrap_or(true);
+                let write_agents_md =
+                    inquire::Confirm::new("Write AGENTS.md (for Kilo Code and others)?")
+                        .with_default(true)
+                        .prompt()
+                        .unwrap_or(true);
+                (org, write_claude_md, write_agents_md)
+            } else {
+                (org, true, true)
+            };
+
+            let opts = SkillInstallOptions {
+                org: org.as_deref(),
+                write_claude_md,
+                write_agents_md,
+            };
+            install_skill_with(env!("CARGO_PKG_VERSION"), &opts)?;
             Ok(())
         }
         Commands::HelpAgents {

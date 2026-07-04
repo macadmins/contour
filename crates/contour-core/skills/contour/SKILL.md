@@ -32,7 +32,7 @@ Activate when the user mentions:
 Resolution order: `--org` flag → `CONTOUR_ORG` env var → `.contour/config.toml` → error.
 In CI: set `CONTOUR_ORG` as a repository secret/variable.
 Interactive: ask the user if not configured.
-NEVER fall back to `com.example`.
+NEVER fall back to `com.example`.{{ORG_LINE}}
 
 ## Auto-validation
 

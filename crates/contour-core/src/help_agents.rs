@@ -1241,11 +1241,61 @@ const SOP_ROUTING_TEMPLATE: &str = include_str!("../skills/contour/references/so
 /// The full content goes into CLAUDE.md/AGENTS.md because CI agents read those
 /// but NOT `.claude/skills/`. A pointer isn't enough — the full instructions
 /// must be in the file the agent reads at session start.
+/// Options for [`install_skill_with`] — org domain to bake into the skill and
+/// which CI agent files to write. Defaults (via [`install_skill`]) bake no org
+/// and write both `CLAUDE.md` and `AGENTS.md`.
+#[derive(Debug, Default, Clone)]
+pub struct SkillInstallOptions<'a> {
+    /// Organization reverse-domain to pin in the skill (so agents don't fall
+    /// back to `com.example`). `None` leaves the skill org-agnostic.
+    pub org: Option<&'a str>,
+    /// Write the full skill into `CLAUDE.md` (read by CI/GitHub agents).
+    pub write_claude_md: bool,
+    /// Write the full skill into `AGENTS.md` (read by Kilo Code and others).
+    pub write_agents_md: bool,
+}
+
+impl SkillInstallOptions<'_> {
+    /// The default install: no pinned org, both CI files written.
+    pub fn all() -> Self {
+        Self {
+            org: None,
+            write_claude_md: true,
+            write_agents_md: true,
+        }
+    }
+}
+
+/// Install contour skill files with the default options (see [`install_skill_with`]).
 pub fn install_skill(version: &str) -> Result<()> {
+    install_skill_with(version, &SkillInstallOptions::all())
+}
+
+/// Render the skill markdown from the template — substitutes the version and,
+/// when `org` is set, pins a default org domain so agents avoid `com.example`.
+fn render_skill(version: &str, org: Option<&str>) -> String {
+    let org_line = match org {
+        Some(org) => format!(
+            "\n\nDefault org domain for this project: `{org}` — pass `--org {org}` \
+             (or set `CONTOUR_ORG={org}`)."
+        ),
+        None => String::new(),
+    };
+    SKILL_TEMPLATE
+        .replace("{{VERSION}}", version)
+        .replace("{{ORG_LINE}}", &org_line)
+}
+
+/// Install contour skill files for AI agents, honoring [`SkillInstallOptions`].
+///
+/// Always writes `.claude/skills/contour/SKILL.md` (+ references); writes
+/// `CLAUDE.md` / `AGENTS.md` per the options. When `opts.org` is set, the
+/// skill pins that org domain so agents never fall back to `com.example`.
+pub fn install_skill_with(version: &str, opts: &SkillInstallOptions<'_>) -> Result<()> {
     use std::fs;
     use std::path::Path;
 
-    let skill_content = SKILL_TEMPLATE.replace("{{VERSION}}", version);
+    let skill_content = render_skill(version, opts.org);
 
     // 1. Install .claude/skills/contour/ directory (for local sessions)
     let skill_dir = Path::new(".claude/skills/contour");
@@ -1256,7 +1306,14 @@ pub fn install_skill(version: &str) -> Result<()> {
     eprintln!("\u{2713} Installed .claude/skills/contour/SKILL.md");
 
     // 2. Write full content into CLAUDE.md and AGENTS.md (for CI)
-    for agent_file in &["CLAUDE.md", "AGENTS.md"] {
+    let mut agent_files: Vec<&str> = Vec::new();
+    if opts.write_claude_md {
+        agent_files.push("CLAUDE.md");
+    }
+    if opts.write_agents_md {
+        agent_files.push("AGENTS.md");
+    }
+    for agent_file in &agent_files {
         let path = Path::new(agent_file);
         if path.exists() {
             let existing = fs::read_to_string(path)?;
@@ -1287,11 +1344,42 @@ pub fn install_skill(version: &str) -> Result<()> {
     eprintln!("  Agents will now discover contour in both local and CI environments.");
     eprintln!("  Regenerate with: contour help-ai --install-skill");
     eprintln!();
-    eprintln!("  TIP: Set your org domain in CLAUDE.md to avoid com.example defaults:");
-    eprintln!("    ## Organization");
-    eprintln!("    Default org domain: com.yourcompany");
+    if let Some(org) = opts.org {
+        eprintln!("  \u{2713} Skill pinned to org domain: {org}");
+    } else {
+        eprintln!("  TIP: pin your org domain so agents avoid com.example defaults:");
+        eprintln!("    contour init-skill --org com.yourcompany");
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod skill_tests {
+    use super::*;
+
+    #[test]
+    fn template_carries_version_and_org_placeholders() {
+        assert!(SKILL_TEMPLATE.contains("{{VERSION}}"));
+        assert!(SKILL_TEMPLATE.contains("{{ORG_LINE}}"));
+    }
+
+    #[test]
+    fn render_skill_substitutes_version_and_drops_placeholders() {
+        let out = render_skill("9.9.9-test", None);
+        assert!(out.contains("9.9.9-test"));
+        assert!(!out.contains("{{VERSION}}"));
+        assert!(!out.contains("{{ORG_LINE}}"));
+    }
+
+    #[test]
+    fn render_skill_pins_org_when_given() {
+        let out = render_skill("1.0.0", Some("com.acme"));
+        assert!(out.contains("Default org domain for this project: `com.acme`"));
+        assert!(out.contains("CONTOUR_ORG=com.acme"));
+        // Org-agnostic render must not leak an org line.
+        assert!(!render_skill("1.0.0", None).contains("Default org domain for this project"));
+    }
 }
 
 #[cfg(test)]

@@ -144,6 +144,23 @@ workflows that print the exact commands as you go:
 contour trainer
 ```
 
+## Set up the AI skill — `contour init-skill`
+
+Using contour with an AI agent (Claude Code, CI bots)? One command installs the
+skill file so the agent knows how to drive contour and which org domain to use:
+
+```bash
+contour init-skill                 # guided: prompts for your org domain
+contour init-skill --org com.acme  # non-interactive (CI): pin the org up front
+```
+
+It writes `.claude/skills/contour/SKILL.md` (for local Claude Code sessions)
+plus `CLAUDE.md` / `AGENTS.md` (read by CI/GitHub agents). Pinning your org
+domain means agents never fall back to `com.example`. Regenerate any time after
+upgrading contour — `contour init-skill --yes` re-stamps the current version.
+
+(`contour setup-agent` is the same command; `init-skill` is the friendly alias.)
+
 ## Where to go next
 
 | Guide | Covers |

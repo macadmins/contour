@@ -26,7 +26,8 @@ const ABOUT: &str = "Contour - macOS MDM configuration toolkit";
 #[command(version = concat!(env!("CARGO_PKG_VERSION"), "+", env!("BUILD_TIMESTAMP")))]
 #[command(about = ABOUT, long_about = None)]
 #[command(
-    after_help = "Tip: AI agents should run `contour help-ai` for a machine-readable CLI reference."
+    after_help = "New here? Run `contour init-skill` to set up the AI skill file for your org.\n\
+                  AI agents: run `contour help-ai` for a machine-readable CLI reference."
 )]
 #[derive(Debug)]
 pub struct Cli {
@@ -313,9 +314,17 @@ pub enum Commands {
         deep: bool,
     },
 
-    /// Install AI agent skill file (.claude/skills/contour.md)
-    #[command(name = "setup-agent")]
-    SetupAgent,
+    /// Set up the contour AI skill file (.claude/skills/contour, CLAUDE.md, AGENTS.md)
+    #[command(name = "setup-agent", visible_alias = "init-skill")]
+    SetupAgent {
+        /// Organization reverse-domain to pin in the skill (skips the prompt)
+        #[arg(long)]
+        org: Option<String>,
+
+        /// Non-interactive: skip prompts, write all files org-agnostic
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 
     /// Output CLI schema as JSON for tooling integration
     #[command(name = "help-json", hide = true)]
