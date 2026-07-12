@@ -188,7 +188,9 @@ generation), wire contour's agent skills:
     CONTOUR_ORG: ${{ vars.CONTOUR_ORG }}
   run: |
     sudo installer -pkg contour.pkg -target /
-    contour setup-agent          # writes CLAUDE.md + .claude/skills/
+    # init-skill pins the org into the skill so agents never hit com.example.
+    # --yes is required in CI (no TTY to prompt). `setup-agent` is the alias.
+    contour init-skill --org "$CONTOUR_ORG" --yes   # writes CLAUDE.md + .claude/skills/
 ```
 
 This makes the SOPs (`--sop profile`, `--sop ddm`, etc.) discoverable

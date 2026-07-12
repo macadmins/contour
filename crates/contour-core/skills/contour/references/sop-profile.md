@@ -9,6 +9,15 @@ progressively being migrated as each operation is end-to-end traced.
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Drift detector: `crates/profile/tests/sop_traps.rs`
 
+## Finding a command
+
+Not sure which subcommand to use? `contour profile find <term>` fuzzy-searches
+the profile command tree (typo-tolerant) and prints matching
+`contour profile …` invocations plus a `help-ai --command` pointer — faster than
+scanning `--help`. E.g. `contour profile find "rename org"` → `normalize`.
+
+---
+
 ## ERROR-CODE ENUM
 
 All procedures return failures with a stable typed `error_code` from this enum.

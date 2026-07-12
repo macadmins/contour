@@ -124,6 +124,29 @@ DDM-native replacement is in scope for `create_ddm_config`, not
 
 ---
 
+## Presets — quick baseline selection
+
+`contour mscp presets` lists friendly names for the common frameworks; each
+expands to a baseline keyword **and** its platform, so you don't have to
+remember keywords or `--os`:
+
+```
+contour mscp presets                                   # list them (--json for tooling)
+contour mscp generate --preset cmmc2    -m {repo} -o {out} --org {org}
+contour mscp generate --preset nist-high -m {repo} -o {out} --org {org}
+```
+
+Name → keyword: `nist-high|moderate|low` → `800-53r5_*`, `cui` → `800-171`,
+`cmmc1|cmmc2` → `cmmc_lvl1|2`, `stig` → `disa_stig`, `ios-stig` → `ios_stig`,
+`cis1|cis2` → `cis_lvl1|2`, `cis1-byod|cis2-byod|cis1-enterprise|cis2-enterprise`,
+`cis-controls` → `cisv8`, `cnssi-high|moderate|low` → `cnssi-1253_*`.
+
+Raw keywords still work everywhere: `--preset 800-53r5_high` and
+`-k 800-53r5_high` are equivalent. `--preset` and `--keyword` are mutually
+exclusive; exactly one is required on `generate`.
+
+---
+
 ## PROCEDURE generate_baseline_compliance(baseline, org, mscp_repo, output_dir)
 
 ```
