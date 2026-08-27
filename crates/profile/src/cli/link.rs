@@ -230,7 +230,21 @@ fn handle_merge(
     config: &LinkConfig,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let (merged, uuid_mapping) = merge_profiles_v2(profiles.to_vec(), config)?;
+    let result = merge_profiles_v2(profiles.to_vec(), config)?;
+    let merged = &result.profile;
+    let uuid_mapping = &result.uuid_mapping;
+
+    if !result.dropped_payloads.is_empty() && output_mode == OutputMode::Human {
+        for id in &result.dropped_payloads {
+            println!(
+                "{} dropped duplicate payload '{}' — an earlier input already \
+                 carries this PayloadIdentifier; rename it before linking if \
+                 both payloads should survive",
+                "⚠".yellow(),
+                id
+            );
+        }
+    }
 
     // Determine output path
     let output_path = if let Some(out) = output {
@@ -247,7 +261,7 @@ fn handle_merge(
         fs::create_dir_all(parent)?;
     }
 
-    parser::write_profile(&merged, &output_path)?;
+    parser::write_profile(merged, &output_path)?;
 
     if output_mode == OutputMode::Human {
         println!(
@@ -261,15 +275,23 @@ fn handle_merge(
         );
         println!("  Total payloads: {}", merged.payload_content.len());
         println!("  UUIDs updated:  {}", uuid_mapping.mapping.len());
+        if !result.dropped_payloads.is_empty() {
+            println!(
+                "  {} {}",
+                "Payloads dropped:".yellow(),
+                result.dropped_payloads.len()
+            );
+        }
     } else {
-        let result = serde_json::json!({
+        let json_result = serde_json::json!({
             "success": true,
             "output": output_path.to_string_lossy(),
             "profiles_merged": profiles.len(),
             "total_payloads": merged.payload_content.len(),
             "uuids_updated": uuid_mapping.mapping.len(),
+            "dropped_payloads": result.dropped_payloads,
         });
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        println!("{}", serde_json::to_string_pretty(&json_result)?);
     }
 
     Ok(())

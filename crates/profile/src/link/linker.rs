@@ -221,11 +221,26 @@ pub fn merge_profiles(
     Ok(merged)
 }
 
+/// Outcome of [`merge_profiles_v2`].
+#[derive(Debug)]
+pub struct MergeResult {
+    /// The merged profile.
+    pub profile: ConfigurationProfile,
+    /// UUID rewrites applied across the inputs.
+    pub uuid_mapping: UuidMapping,
+    /// `PayloadIdentifier`s of payloads dropped by the dedupe — an
+    /// identifier already present in the merged set wins, later payloads
+    /// with the same identifier are discarded. Callers must surface these:
+    /// a silent drop loses configuration (e.g. one of two CA certificates
+    /// that share an identifier).
+    pub dropped_payloads: Vec<String>,
+}
+
 /// Merge multiple profiles into a single profile (improved version).
 pub fn merge_profiles_v2(
     profiles: Vec<(PathBuf, ConfigurationProfile)>,
     config: &LinkConfig,
-) -> Result<(ConfigurationProfile, UuidMapping)> {
+) -> Result<MergeResult> {
     if profiles.is_empty() {
         anyhow::bail!("No profiles to merge");
     }
@@ -257,11 +272,17 @@ pub fn merge_profiles_v2(
     let mut iter = linked.into_iter();
     let (_, mut merged) = iter.next().unwrap();
 
-    // Generate a new identifier and UUID for the merged profile
-    let merged_identifier = format!(
-        "{}.merged",
-        config.org_domain.as_deref().unwrap_or("com.example")
-    );
+    // Generate a new identifier and UUID for the merged profile. The merged
+    // identifier is deployed to devices, so an org domain is mandatory —
+    // there is deliberately no com.example fallback.
+    let Some(org_domain) = config.org_domain.as_deref() else {
+        anyhow::bail!(
+            "--merge requires an organization domain for the merged profile's \
+             identifier: pass --org <domain>, or set organization.domain in \
+             profile.toml or .contour/config.toml"
+        );
+    };
+    let merged_identifier = format!("{org_domain}.merged");
 
     let uuid_config = UuidConfig {
         org_domain: config.org_domain.clone(),
@@ -271,22 +292,29 @@ pub fn merge_profiles_v2(
     merged.payload_identifier = merged_identifier;
     merged.payload_display_name = format!("{} (Merged)", merged.payload_display_name);
 
-    // Add payloads from other profiles
+    // Add payloads from other profiles, deduplicating by identifier and
+    // recording every drop so the caller can warn.
+    let mut dropped_payloads = Vec::new();
     for (_, profile) in iter {
         for payload in profile.payload_content {
-            // Check if we already have a payload with the same identifier
             let exists = merged
                 .payload_content
                 .iter()
                 .any(|p| p.payload_identifier == payload.payload_identifier);
 
-            if !exists {
+            if exists {
+                dropped_payloads.push(payload.payload_identifier);
+            } else {
                 merged.payload_content.push(payload);
             }
         }
     }
 
-    Ok((merged, uuid_mapping))
+    Ok(MergeResult {
+        profile: merged,
+        uuid_mapping,
+        dropped_payloads,
+    })
 }
 
 #[cfg(test)]
@@ -384,6 +412,96 @@ mod tests {
 
         // Verify it matches the cert's new UUID
         assert_eq!(referenced_uuid, cert.payload_uuid);
+    }
+
+    /// Merge dedupes by PayloadIdentifier. Dropping a payload is sometimes
+    /// right (true duplicates) but must never be silent — a root and an
+    /// intermediate CA sharing an identifier would lose one certificate.
+    #[test]
+    fn merge_reports_payloads_dropped_by_identifier_dedupe() {
+        let make_profile =
+            |profile_id: &str, payload_uuid: &str, display: &str| ConfigurationProfile {
+                payload_type: "Configuration".to_string(),
+                payload_version: 1,
+                payload_identifier: profile_id.to_string(),
+                payload_uuid: format!("{payload_uuid}-PROFILE"),
+                payload_display_name: display.to_string(),
+                payload_content: vec![create_test_payload(
+                    "com.apple.security.root",
+                    payload_uuid,
+                    "com.test.shared-ca",
+                    BTreeMap::new(),
+                )],
+                additional_fields: BTreeMap::new(),
+            };
+
+        let config = LinkConfig {
+            org_domain: Some("com.test".to_string()),
+            predictable: true,
+            merge: true,
+            validate: false,
+        };
+
+        let result = merge_profiles_v2(
+            vec![
+                (
+                    PathBuf::from("a.mobileconfig"),
+                    make_profile("com.test.a", "UUID-A", "A"),
+                ),
+                (
+                    PathBuf::from("b.mobileconfig"),
+                    make_profile("com.test.b", "UUID-B", "B"),
+                ),
+            ],
+            &config,
+        )
+        .unwrap();
+
+        assert_eq!(result.profile.payload_content.len(), 1);
+        assert_eq!(
+            result.dropped_payloads,
+            vec!["com.test.shared-ca".to_string()],
+            "the dropped payload's identifier must be reported"
+        );
+    }
+
+    #[test]
+    fn merge_without_org_domain_is_rejected() {
+        let cert_payload = create_test_payload(
+            "com.apple.security.root",
+            "OLD-UUID",
+            "com.test.cert",
+            BTreeMap::new(),
+        );
+
+        let profile = ConfigurationProfile {
+            payload_type: "Configuration".to_string(),
+            payload_version: 1,
+            payload_identifier: "com.test.profile".to_string(),
+            payload_uuid: "OLD-PROFILE-UUID".to_string(),
+            payload_display_name: "Test".to_string(),
+            payload_content: vec![cert_payload],
+            additional_fields: BTreeMap::new(),
+        };
+
+        let config = LinkConfig {
+            org_domain: None,
+            predictable: false,
+            merge: true,
+            validate: false,
+        };
+
+        let err = merge_profiles_v2(vec![(PathBuf::from("test.mobileconfig"), profile)], &config)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--org"),
+            "error should tell the user how to fix it, got: {msg}"
+        );
+        assert!(
+            !msg.contains("com.example"),
+            "com.example must never be suggested, got: {msg}"
+        );
     }
 
     #[test]

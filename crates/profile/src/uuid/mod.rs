@@ -17,13 +17,15 @@ pub struct UuidConfig {
 
 pub fn generate_uuid(config: &UuidConfig, identifier: &str) -> Result<String> {
     if config.predictable {
-        if let Some(org_domain) = &config.org_domain {
-            let namespace = create_namespace_from_domain(org_domain);
-            let uuid = Uuid::new_v5(&namespace, identifier.as_bytes());
-            Ok(uuid.to_string().to_uppercase())
-        } else {
-            Ok(Uuid::new_v4().to_string().to_uppercase())
-        }
+        let Some(org_domain) = &config.org_domain else {
+            anyhow::bail!(
+                "predictable UUIDs require an organization domain: pass --org <domain>, \
+                 or set organization.domain in profile.toml or .contour/config.toml"
+            );
+        };
+        let namespace = create_namespace_from_domain(org_domain);
+        let uuid = Uuid::new_v5(&namespace, identifier.as_bytes());
+        Ok(uuid.to_string().to_uppercase())
     } else {
         Ok(Uuid::new_v4().to_string().to_uppercase())
     }
@@ -96,6 +98,20 @@ mod tests {
 
         assert_eq!(uuid1, uuid2);
         assert!(is_valid_uuid(&uuid1));
+    }
+
+    #[test]
+    fn predictable_without_org_domain_is_an_error() {
+        let config = UuidConfig {
+            org_domain: None,
+            predictable: true,
+        };
+
+        let err = generate_uuid(&config, "test.identifier").unwrap_err();
+        assert!(
+            err.to_string().contains("--org"),
+            "error should tell the user how to fix it, got: {err}"
+        );
     }
 
     #[test]
