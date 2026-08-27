@@ -69,10 +69,87 @@ pub fn embedded_envelope_meta_keys() -> &'static [u8] {
     include_bytes!("../data/envelope_meta_keys.parquet")
 }
 
+// ── Beta channel ────────────────────────────────────────────────────────
+//
+// Built from the mSCP OS-preview branch (e.g. `dev_27`) and published to
+// `data/beta/` by the posture pipeline — same layout as the stable set,
+// plus preview-only rules (Apple Intelligence PCC, visual intelligence,
+// Siri AI, …). Consumers opt in explicitly via `--beta` so the stable
+// channel is never affected. Mirrors mdm-schema's `*_beta` accessors.
+
+/// Embedded **beta** baseline metadata Parquet data.
+pub fn embedded_baseline_meta_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/baseline_meta.parquet")
+}
+
+/// Embedded **beta** sections Parquet data.
+pub fn embedded_sections_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/sections.parquet")
+}
+
+/// Embedded **beta** NIST control tiers Parquet data.
+pub fn embedded_control_tiers_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/control_tiers.parquet")
+}
+
+/// Embedded **beta** rule metadata Parquet data.
+pub fn embedded_rule_meta_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/rule_meta.parquet")
+}
+
+/// Embedded **beta** baseline edges Parquet data.
+pub fn embedded_baseline_edges_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/baseline_edges.parquet")
+}
+
+/// Embedded **beta** versioned rules Parquet data.
+pub fn embedded_rules_versioned_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/rules_versioned.parquet")
+}
+
+/// Embedded **beta** rule payloads Parquet data.
+pub fn embedded_rule_payloads_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/rule_payloads.parquet")
+}
+
+/// Embedded **beta** envelope patterns Parquet data.
+pub fn embedded_envelope_patterns_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/envelope_patterns.parquet")
+}
+
+/// Embedded **beta** envelope meta keys Parquet data.
+pub fn embedded_envelope_meta_keys_beta() -> &'static [u8] {
+    include_bytes!("../data/beta/envelope_meta_keys.parquet")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// The beta channel is the mSCP OS-preview branch — it must carry
+    /// preview-only rules (Apple Intelligence PCC) that stable does not,
+    /// or `--beta` adds nothing.
+    #[test]
+    fn beta_rules_carry_os_preview_only_rules() {
+        let beta = rules_versioned::read(embedded_rules_versioned_beta())
+            .expect("read beta rules_versioned");
+        assert!(
+            beta.iter()
+                .any(|r| r.rule_id == "os_apple_intelligence_pcc_disable"),
+            "beta channel should carry os_apple_intelligence_pcc_disable"
+        );
+
+        let stable =
+            rules_versioned::read(embedded_rules_versioned()).expect("read stable rules_versioned");
+        assert!(
+            !stable
+                .iter()
+                .any(|r| r.rule_id == "os_apple_intelligence_pcc_disable"),
+            "stable channel should NOT carry the OS-preview rule — if it does, \
+             the preview graduated and this pin needs a new preview-only rule"
+        );
+    }
 
     #[test]
     fn test_read_embedded_baseline_meta() {

@@ -135,6 +135,13 @@ pub enum Commands {
 
         #[arg(long, help = "Use the beta seed schema (shorthand for --channel beta)")]
         beta: bool,
+
+        #[arg(
+            long,
+            conflicts_with = "beta",
+            help = "Look up the Windows CSP dataset (DDF v2) instead of the Apple schema"
+        )]
+        windows: bool,
     },
 
     #[command(about = "Initialize a new profile.toml configuration file")]
@@ -700,6 +707,13 @@ pub enum Commands {
             help = "Search the beta seed schema (shorthand for --channel beta)"
         )]
         beta: bool,
+
+        #[arg(
+            long,
+            conflicts_with = "beta",
+            help = "Search the Windows CSP dataset (DDF v2) instead of the Apple schema"
+        )]
+        windows: bool,
     },
 
     #[command(about = "Manage UUIDs in configuration profile")]

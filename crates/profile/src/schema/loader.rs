@@ -36,6 +36,18 @@ pub fn load_embedded_beta() -> Result<Vec<PayloadManifest>> {
     load_embedded_from(mdm_schema::embedded_capabilities_beta())
 }
 
+/// Load the embedded **Windows CSP** dataset as manifests.
+///
+/// Standalone by design — Windows CSP nodes (kinds `CspSetting`/`AdmxPolicy`,
+/// categories `windows-csp`/`windows-admx`) are never merged into the Apple
+/// registry; `--windows` on `profile search`/`info` opts into this set.
+/// No ProfileCreator overlay applies.
+pub fn load_embedded_windows() -> Result<Vec<PayloadManifest>> {
+    let capabilities = mdm_schema::capabilities::read(mdm_schema::embedded_windows_capabilities())
+        .context("Failed to read embedded Windows capabilities from Parquet")?;
+    Ok(capabilities.iter().map(capability_to_manifest).collect())
+}
+
 /// Shared body for [`load_embedded`] / [`load_embedded_beta`]: merges the
 /// ProfileCreator manifests with the supplied Apple capabilities Parquet bytes.
 fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>> {
@@ -187,6 +199,7 @@ fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>>
                     tvos: pm.platforms.tvos,
                     watchos: pm.platforms.watchos,
                     visionos: pm.platforms.visionos,
+                    windows: false,
                 },
                 min_versions,
                 os_support,
@@ -402,6 +415,7 @@ fn convert_platform_map(
                 mdm_schema::Platform::TvOS => Platform::TvOS,
                 mdm_schema::Platform::WatchOS => Platform::WatchOS,
                 mdm_schema::Platform::VisionOS => Platform::VisionOS,
+                mdm_schema::Platform::Windows => Platform::Windows,
             };
             (mapped, v.clone())
         })
@@ -474,6 +488,7 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             mdm_schema::Platform::TvOS => platforms.tvos = true,
             mdm_schema::Platform::WatchOS => platforms.watchos = true,
             mdm_schema::Platform::VisionOS => platforms.visionos = true,
+            mdm_schema::Platform::Windows => platforms.windows = true,
         }
     }
 
@@ -485,6 +500,8 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             .as_ref()
             .map(|c| format!("ddm-{}", c.as_str()))
             .unwrap_or_else(|| "ddm-configuration".to_string()),
+        mdm_schema::PayloadKind::CspSetting => "windows-csp".to_string(),
+        mdm_schema::PayloadKind::AdmxPolicy => "windows-admx".to_string(),
         mdm_schema::PayloadKind::MdmCommand | mdm_schema::PayloadKind::MdmCheckin => {
             "apple".to_string()
         }
@@ -502,6 +519,7 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             mdm_schema::Platform::TvOS => Platform::TvOS,
             mdm_schema::Platform::WatchOS => Platform::WatchOS,
             mdm_schema::Platform::VisionOS => Platform::VisionOS,
+            mdm_schema::Platform::Windows => Platform::Windows,
         };
         if let Some(ref v) = os.introduced {
             min_versions.entry(platform).or_insert_with(|| v.clone());

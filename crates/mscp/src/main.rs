@@ -894,11 +894,15 @@ fn main() -> Result<()> {
                 } => {
                     cli::handle_schema_compare(&mscp_repo, &keyword, &platform, output_mode)?;
                 }
-                SchemaAction::Search { query, platform } => {
-                    cli::handle_schema_search(&query, platform.as_deref(), output_mode)?;
+                SchemaAction::Search {
+                    query,
+                    platform,
+                    beta,
+                } => {
+                    cli::handle_schema_search(&query, platform.as_deref(), beta, output_mode)?;
                 }
-                SchemaAction::Rule { rule_id } => {
-                    cli::handle_schema_rule(&rule_id, output_mode)?;
+                SchemaAction::Rule { rule_id, beta } => {
+                    cli::handle_schema_rule(&rule_id, beta, output_mode)?;
                 }
             }
         }

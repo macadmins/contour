@@ -324,6 +324,7 @@ fn dispatch_profile(
             full,
             os,
             beta,
+            windows,
         } => {
             if let Some(t) = payload_type {
                 profile::cli::info::handle_payload_info(
@@ -332,6 +333,7 @@ fn dispatch_profile(
                     full,
                     os.as_deref(),
                     channel.or_beta(beta),
+                    windows,
                     output_mode,
                 )?;
             } else {
@@ -653,6 +655,7 @@ fn dispatch_profile(
             include_fields,
             schema_path,
             beta,
+            windows,
         } => {
             profile::cli::search::handle_search(
                 query.as_deref(),
@@ -660,6 +663,7 @@ fn dispatch_profile(
                 include_fields,
                 schema_path.as_deref(),
                 channel.or_beta(beta),
+                windows,
                 output_mode,
             )?;
         }
@@ -2897,11 +2901,15 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             } => {
                 mscp::cli::handle_schema_compare(&mscp_repo, &keyword, &platform, output_mode)?;
             }
-            mscp::cli::SchemaAction::Search { query, platform } => {
-                mscp::cli::handle_schema_search(&query, platform.as_deref(), output_mode)?;
+            mscp::cli::SchemaAction::Search {
+                query,
+                platform,
+                beta,
+            } => {
+                mscp::cli::handle_schema_search(&query, platform.as_deref(), beta, output_mode)?;
             }
-            mscp::cli::SchemaAction::Rule { rule_id } => {
-                mscp::cli::handle_schema_rule(&rule_id, output_mode)?;
+            mscp::cli::SchemaAction::Rule { rule_id, beta } => {
+                mscp::cli::handle_schema_rule(&rule_id, beta, output_mode)?;
             }
         },
 

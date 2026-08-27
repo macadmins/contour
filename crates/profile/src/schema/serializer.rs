@@ -192,6 +192,9 @@ fn format_platforms_full(platforms: &super::types::Platforms) -> String {
     if platforms.watchos {
         parts.push("watchOS");
     }
+    if platforms.windows {
+        parts.push("Windows");
+    }
 
     if parts.is_empty() {
         "iOS,macOS".to_string()

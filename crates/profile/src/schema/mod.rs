@@ -142,6 +142,14 @@ impl SchemaRegistry {
         Self::from_manifests(manifests_vec, SchemaSource::Embedded)
     }
 
+    /// Load the embedded **Windows CSP** dataset (DDF v2 nodes; categories
+    /// `windows-csp` / `windows-admx`). A standalone registry — Windows
+    /// nodes are never mixed into the Apple set.
+    pub fn embedded_windows() -> Result<Self> {
+        let manifests_vec = loader::load_embedded_windows()?;
+        Self::from_manifests(manifests_vec, SchemaSource::Embedded)
+    }
+
     /// Load the embedded schema for the given [`Channel`].
     pub fn embedded_channel(channel: Channel) -> Result<Self> {
         match channel {
@@ -572,6 +580,32 @@ mod tests {
         assert!(registry.len() >= 200, "Expected ~219 manifests");
         assert!(registry.stats().apple_count > 0);
         assert!(registry.stats().apps_count > 0);
+    }
+
+    /// The Windows CSP registry (`--windows`) is standalone: CSP/ADMX nodes
+    /// with `windows-*` categories, the Windows platform flag, and MSFT
+    /// AllowedValues surfaced as allowed_values.
+    #[test]
+    fn test_schema_registry_embedded_windows() {
+        let registry = SchemaRegistry::embedded_windows().expect("load Windows registry");
+
+        assert!(registry.len() > 100, "expected 100+ CSPs");
+
+        let bitlocker = registry.get("BitLocker").expect("BitLocker CSP");
+        assert_eq!(bitlocker.category, "windows-csp");
+        assert!(bitlocker.platforms.windows, "platform flag must be Windows");
+        assert!(
+            !bitlocker.platforms.macos,
+            "a CSP must not claim macOS support"
+        );
+
+        assert!(
+            registry
+                .all()
+                .flat_map(|m| m.fields.values())
+                .any(|f| !f.allowed_values.is_empty()),
+            "MSFT AllowedValues enumerations should reach allowed_values"
+        );
     }
 
     #[test]

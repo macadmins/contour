@@ -43,6 +43,8 @@ pub enum Platform {
     VisionOS,
     #[serde(alias = "watchOS")]
     WatchOS,
+    /// Windows (windows_capabilities.parquet only).
+    Windows,
 }
 
 impl Platform {
@@ -54,6 +56,7 @@ impl Platform {
             Self::TvOS => "tvOS",
             Self::VisionOS => "visionOS",
             Self::WatchOS => "watchOS",
+            Self::Windows => "Windows",
         }
     }
 }
@@ -69,6 +72,12 @@ pub enum PayloadKind {
     MdmCommand,
     /// MDM check-in protocol message (e.g. TokenUpdate, Authenticate).
     MdmCheckin,
+    /// Windows CSP setting node (from Microsoft's DDF v2 files;
+    /// `windows_capabilities.parquet` only).
+    CspSetting,
+    /// Windows ADMX-backed policy surfaced through a CSP
+    /// (`windows_capabilities.parquet` only).
+    AdmxPolicy,
 }
 
 /// DDM declaration category within the device-management schema.

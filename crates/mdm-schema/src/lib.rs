@@ -44,6 +44,18 @@ pub fn embedded_profile_manifests() -> &'static [u8] {
     include_bytes!("../data/profilecreator.parquet")
 }
 
+/// Embedded Windows CSP capabilities Parquet data.
+///
+/// Windows Configuration Service Provider nodes parsed from Microsoft's
+/// DDF v2 files, in the same column layout as [`embedded_capabilities`]
+/// (`csp_name` populated, kinds `CspSetting`/`AdmxPolicy`, MSFT
+/// AllowedValues enumerations in `key_rangelist`). Kept as a dedicated
+/// file so Apple-only consumers never pay for it; read it with
+/// [`capabilities::read`].
+pub fn embedded_windows_capabilities() -> &'static [u8] {
+    include_bytes!("../data/windows_capabilities.parquet")
+}
+
 /// Embedded skip keys Parquet data (Setup Assistant skip keys).
 pub fn embedded_skip_keys() -> &'static [u8] {
     include_bytes!("../data/skip_keys.parquet")
@@ -278,6 +290,34 @@ mod tests {
                 "AlwaysOn".to_string(),
                 "AlwaysOff".to_string(),
             ])
+        );
+    }
+
+    /// The Windows CSP dataset shares the capabilities layout — the same
+    /// reader must parse it, with kinds mapped and MSFT AllowedValues
+    /// enumerations arriving through `range_list`.
+    #[test]
+    fn windows_capabilities_read_with_kinds_and_rangelists() {
+        let caps =
+            capabilities::read(embedded_windows_capabilities()).expect("read windows_capabilities");
+        assert!(caps.len() > 100, "expected 100+ CSPs, got {}", caps.len());
+        assert!(
+            caps.iter().any(|c| c.kind == PayloadKind::CspSetting),
+            "expected CspSetting capabilities"
+        );
+        assert!(
+            caps.iter().any(|c| c.kind == PayloadKind::AdmxPolicy),
+            "expected AdmxPolicy capabilities"
+        );
+        assert!(
+            caps.iter()
+                .flat_map(|c| &c.keys)
+                .any(|k| k.range_list.as_ref().is_some_and(|v| !v.is_empty())),
+            "expected MSFT AllowedValues enumerations in range_list"
+        );
+        assert!(
+            caps.iter().any(|c| c.csp_name.is_some()),
+            "expected csp_name to be populated"
         );
     }
 

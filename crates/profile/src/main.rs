@@ -112,6 +112,7 @@ fn run(cli: Cli) -> Result<()> {
             full,
             os,
             beta,
+            windows,
         } => {
             if let Some(t) = payload_type {
                 cli::info::handle_payload_info(
@@ -120,6 +121,7 @@ fn run(cli: Cli) -> Result<()> {
                     full,
                     os.as_deref(),
                     channel.or_beta(beta),
+                    windows,
                     output_mode,
                 )?;
             } else {
@@ -441,6 +443,7 @@ fn run(cli: Cli) -> Result<()> {
             include_fields,
             schema_path,
             beta,
+            windows,
         } => {
             cli::search::handle_search(
                 query.as_deref(),
@@ -448,6 +451,7 @@ fn run(cli: Cli) -> Result<()> {
                 include_fields,
                 schema_path.as_deref(),
                 channel.or_beta(beta),
+                windows,
                 output_mode,
             )?;
         }

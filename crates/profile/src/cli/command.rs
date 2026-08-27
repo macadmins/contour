@@ -56,6 +56,7 @@ fn load_commands() -> Result<Vec<MdmCommand>> {
                         mdm_schema::Platform::TvOS => "tvOS".to_string(),
                         mdm_schema::Platform::WatchOS => "watchOS".to_string(),
                         mdm_schema::Platform::VisionOS => "visionOS".to_string(),
+                        mdm_schema::Platform::Windows => "Windows".to_string(),
                     })
                     .collect();
 

@@ -989,12 +989,19 @@ pub enum SchemaAction {
         /// Platform filter
         #[arg(long)]
         platform: Option<String>,
+        /// Query the OS-preview (beta) dataset — mSCP preview-branch rules
+        /// (Apple Intelligence PCC, visual intelligence, Siri AI, …)
+        #[arg(long)]
+        beta: bool,
     },
 
     /// Show full detail for a specific rule
     Rule {
         /// Rule ID (e.g., os_airdrop_disable)
         rule_id: String,
+        /// Query the OS-preview (beta) dataset
+        #[arg(long)]
+        beta: bool,
     },
 }
 

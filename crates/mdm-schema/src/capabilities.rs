@@ -171,6 +171,8 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                     "DdmDeclaration" => PayloadKind::DdmDeclaration,
                     "MdmCommand" => PayloadKind::MdmCommand,
                     "MdmCheckin" => PayloadKind::MdmCheckin,
+                    "CspSetting" => PayloadKind::CspSetting,
+                    "AdmxPolicy" => PayloadKind::AdmxPolicy,
                     _ => PayloadKind::MdmProfile,
                 };
                 Capability {
@@ -229,6 +231,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                     "tvOS" => Platform::TvOS,
                     "visionOS" => Platform::VisionOS,
                     "watchOS" => Platform::WatchOS,
+                    "Windows" => Platform::Windows,
                     _ => Platform::MacOS,
                 };
 
@@ -308,6 +311,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                 "tvOS" => Platform::TvOS,
                 "visionOS" => Platform::VisionOS,
                 "watchOS" => Platform::WatchOS,
+                "Windows" => Platform::Windows,
                 _ => Platform::MacOS,
             };
             // Per-key supportedOS — the key's OWN introduced/deprecated/

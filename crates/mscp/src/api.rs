@@ -251,9 +251,35 @@ pub struct RuleDetail {
 }
 
 /// Search rules by keyword across rule_id, title, and tags. Case-insensitive.
-pub fn search_rules(query: &str, platform: Option<&str>) -> Result<Vec<RuleVersioned>> {
+/// Versioned-rules bytes for the requested channel: stable, or the
+/// OS-preview (beta) dataset built from the mSCP preview branch.
+fn rules_versioned_bytes(beta: bool) -> &'static [u8] {
+    if beta {
+        mscp_schema::embedded_rules_versioned_beta()
+    } else {
+        mscp_schema::embedded_rules_versioned()
+    }
+}
+
+fn rule_payloads_bytes(beta: bool) -> &'static [u8] {
+    if beta {
+        mscp_schema::embedded_rule_payloads_beta()
+    } else {
+        mscp_schema::embedded_rule_payloads()
+    }
+}
+
+fn baseline_edges_bytes(beta: bool) -> &'static [u8] {
+    if beta {
+        mscp_schema::embedded_baseline_edges_beta()
+    } else {
+        mscp_schema::embedded_baseline_edges()
+    }
+}
+
+pub fn search_rules(query: &str, platform: Option<&str>, beta: bool) -> Result<Vec<RuleVersioned>> {
     let query_lower = query.to_lowercase();
-    let rules = mscp_schema::rules_versioned::read(mscp_schema::embedded_rules_versioned())?;
+    let rules = mscp_schema::rules_versioned::read(rules_versioned_bytes(beta))?;
     Ok(rules
         .into_iter()
         .filter(|r| {
@@ -269,8 +295,8 @@ pub fn search_rules(query: &str, platform: Option<&str>) -> Result<Vec<RuleVersi
 }
 
 /// Get full detail for a single rule.
-pub fn get_rule_detail(rule_id: &str) -> Result<Option<RuleDetail>> {
-    let rules = mscp_schema::rules_versioned::read(mscp_schema::embedded_rules_versioned())?;
+pub fn get_rule_detail(rule_id: &str, beta: bool) -> Result<Option<RuleDetail>> {
+    let rules = mscp_schema::rules_versioned::read(rules_versioned_bytes(beta))?;
     // Prefer the latest macOS variant — in mSCP 2.0 the shell check is macOS-only,
     // so it's the richest row to surface; fall back to any platform otherwise.
     let rule = rules
@@ -283,13 +309,13 @@ pub fn get_rule_detail(rule_id: &str) -> Result<Option<RuleDetail>> {
         return Ok(None);
     };
 
-    let payloads = mscp_schema::rule_payloads::read(mscp_schema::embedded_rule_payloads())?;
+    let payloads = mscp_schema::rule_payloads::read(rule_payloads_bytes(beta))?;
     // Payloads are keyed by (rule_id, platform, os_version); match the chosen rule.
     let payload = payloads.into_iter().find(|p| {
         p.rule_id == rule_id && p.platform == rule.platform && p.os_version == rule.os_version
     });
 
-    let edges = mscp_schema::baseline_edges::read(mscp_schema::embedded_baseline_edges())?;
+    let edges = mscp_schema::baseline_edges::read(baseline_edges_bytes(beta))?;
     let baselines: Vec<String> = edges
         .iter()
         .filter(|e| e.rule_id == rule_id)
@@ -308,6 +334,26 @@ pub fn get_rule_detail(rule_id: &str) -> Result<Option<RuleDetail>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The beta channel carries mSCP OS-preview rules (Apple Intelligence
+    /// PCC etc.) that stable does not — `--beta` must reach them.
+    #[test]
+    fn beta_channel_reaches_os_preview_rules() {
+        let detail = get_rule_detail("os_apple_intelligence_pcc_disable", true)
+            .expect("get_rule_detail beta failed");
+        assert!(detail.is_some(), "beta channel should carry the PCC rule");
+
+        let stable = get_rule_detail("os_apple_intelligence_pcc_disable", false)
+            .expect("get_rule_detail stable failed");
+        assert!(stable.is_none(), "stable channel should not carry it yet");
+
+        let hits = search_rules("intelligence", None, true).expect("beta search failed");
+        assert!(
+            hits.iter()
+                .any(|r| r.rule_id == "os_apple_intelligence_pcc_disable"),
+            "beta search should surface the PCC rule"
+        );
+    }
 
     #[test]
     fn test_list_baselines() {
@@ -430,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_search_rules_airdrop() {
-        let results = search_rules("airdrop", None).expect("search_rules failed");
+        let results = search_rules("airdrop", None, false).expect("search_rules failed");
         assert!(
             !results.is_empty(),
             "Expected non-empty results for 'airdrop'"
@@ -444,8 +490,8 @@ mod tests {
 
     #[test]
     fn test_search_rules_with_platform() {
-        let results =
-            search_rules("airdrop", Some("macOS")).expect("search_rules with platform failed");
+        let results = search_rules("airdrop", Some("macOS"), false)
+            .expect("search_rules with platform failed");
         assert!(
             !results.is_empty(),
             "Expected non-empty results for 'airdrop' on macOS"
@@ -455,7 +501,7 @@ mod tests {
     #[test]
     fn test_search_rules_no_results() {
         let results =
-            search_rules("zzz_nonexistent", None).expect("search_rules no results failed");
+            search_rules("zzz_nonexistent", None, false).expect("search_rules no results failed");
         assert!(
             results.is_empty(),
             "Expected empty results for nonsense query"
@@ -464,7 +510,7 @@ mod tests {
 
     #[test]
     fn test_get_rule_detail_exists() {
-        let detail = get_rule_detail("os_airdrop_disable").expect("get_rule_detail failed");
+        let detail = get_rule_detail("os_airdrop_disable", false).expect("get_rule_detail failed");
         assert!(detail.is_some(), "Expected Some for os_airdrop_disable");
         let detail = detail.unwrap();
         assert!(
@@ -475,7 +521,7 @@ mod tests {
 
     #[test]
     fn test_get_rule_detail_missing() {
-        let detail = get_rule_detail("nonexistent").expect("get_rule_detail failed");
+        let detail = get_rule_detail("nonexistent", false).expect("get_rule_detail failed");
         assert!(detail.is_none(), "Expected None for nonexistent rule");
     }
 }

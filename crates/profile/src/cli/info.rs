@@ -187,9 +187,12 @@ pub fn handle_payload_info(
     full: bool,
     os_filter: Option<&str>,
     channel: crate::schema::Channel,
+    windows: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
-    let registry = if let Some(p) = schema_path {
+    let registry = if windows {
+        SchemaRegistry::embedded_windows()?
+    } else if let Some(p) = schema_path {
         SchemaRegistry::from_auto_detect(Path::new(p))?
     } else {
         SchemaRegistry::embedded_channel(channel)?
@@ -250,6 +253,7 @@ fn manifest_supports_platform(m: &PayloadManifest, p: Platform) -> bool {
         Platform::TvOS => m.platforms.tvos,
         Platform::WatchOS => m.platforms.watchos,
         Platform::VisionOS => m.platforms.visionos,
+        Platform::Windows => m.platforms.windows,
     }
 }
 
@@ -269,6 +273,9 @@ fn supported_platform_list(m: &PayloadManifest) -> String {
     }
     if m.platforms.visionos {
         p.push("visionOS");
+    }
+    if m.platforms.windows {
+        p.push("Windows");
     }
     if p.is_empty() {
         "(none)".into()
@@ -458,6 +465,9 @@ fn supported_platform_vec(m: &PayloadManifest, os: Option<Platform>) -> Vec<&'st
     }
     if m.platforms.visionos {
         v.push("visionOS");
+    }
+    if m.platforms.windows {
+        v.push("Windows");
     }
     v
 }

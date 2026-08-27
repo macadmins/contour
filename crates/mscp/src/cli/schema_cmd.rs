@@ -360,8 +360,13 @@ fn print_json_report(report: &CompatReport) -> Result<()> {
 }
 
 /// Search rules by keyword and display matching results.
-pub fn handle_schema_search(query: &str, platform: Option<&str>, mode: OutputMode) -> Result<()> {
-    let rules = crate::api::search_rules(query, platform)?;
+pub fn handle_schema_search(
+    query: &str,
+    platform: Option<&str>,
+    beta: bool,
+    mode: OutputMode,
+) -> Result<()> {
+    let rules = crate::api::search_rules(query, platform, beta)?;
 
     match mode {
         OutputMode::Human => {
@@ -437,8 +442,8 @@ fn truncate_lines(s: &str, max_lines: usize) -> String {
 }
 
 /// Show full detail for a specific rule.
-pub fn handle_schema_rule(rule_id: &str, mode: OutputMode) -> Result<()> {
-    let detail = crate::api::get_rule_detail(rule_id)?;
+pub fn handle_schema_rule(rule_id: &str, beta: bool, mode: OutputMode) -> Result<()> {
+    let detail = crate::api::get_rule_detail(rule_id, beta)?;
 
     let Some(detail) = detail else {
         match mode {

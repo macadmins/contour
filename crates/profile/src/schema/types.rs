@@ -96,6 +96,7 @@ pub struct Platforms {
     pub tvos: bool,
     pub watchos: bool,
     pub visionos: bool,
+    pub windows: bool,
 }
 
 /// Platform identifier
@@ -106,6 +107,8 @@ pub enum Platform {
     TvOS,
     WatchOS,
     VisionOS,
+    /// Windows (the CSP dataset behind `--windows` only).
+    Windows,
 }
 
 impl Platform {
@@ -127,6 +130,7 @@ impl Platform {
             Platform::TvOS => "tvOS",
             Platform::WatchOS => "watchOS",
             Platform::VisionOS => "visionOS",
+            Platform::Windows => "Windows",
         }
     }
 
@@ -139,6 +143,7 @@ impl Platform {
             "tvos" | "tv" => Some(Platform::TvOS),
             "watchos" | "watch" => Some(Platform::WatchOS),
             "visionos" | "vision" => Some(Platform::VisionOS),
+            "windows" | "win" => Some(Platform::Windows),
             _ => None,
         }
     }
@@ -263,6 +268,8 @@ impl Platforms {
                 tvos: true,
                 watchos: true,
                 visionos: true,
+                // "*" means every Apple platform — never Windows.
+                windows: false,
             };
         }
         if s == "-" {
