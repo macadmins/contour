@@ -91,4 +91,4 @@ contour help-ai --sop <tool>                     # detailed SOP
 
 ## Embedded data (offline, no network)
 
-283 osquery tables · 13,500+ Apple MDM keys · 540 mSCP rules · 14 baselines · 71 skip keys · 200+ app schemas
+283 osquery tables · 13,500+ Apple MDM keys · 1,400+ mSCP rules · 51 baselines · 71 skip keys · 200+ app schemas · 2,925 Windows CSP nodes (`--windows`) · 622 AI-tool policy keys · OS-preview beta channels (`--beta`)
