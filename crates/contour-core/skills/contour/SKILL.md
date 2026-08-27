@@ -56,6 +56,9 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 | Santa rules, CEL, FAA | `contour help-ai --sop santa` |
 | DDM declarations | `contour help-ai --sop ddm` |
 | Rename display names, friendly naming, name.toml, reidentify | `contour help-ai --sop profile-naming` |
+| Windows CSP, ADMX, DDF node lookup | `contour help-ai --sop windows` |
+| Claude Code / Codex / Cursor managed settings | `contour help-ai --sop app-policy` |
+| OS-preview compliance rules (Apple Intelligence, Siri AI) | `contour help-ai --sop beta` |
 
 For the full routing table with examples, read `references/sop-routing.md`.
 

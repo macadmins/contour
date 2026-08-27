@@ -173,6 +173,27 @@ reads `CONTOUR_ORG` / `CONTOUR_NAME` automatically — no `--org` flag
 needed in CI when env vars are set. See `--sop ci` for the full wiring
 contract and example workflow.
 
+## Windows CSP lookup → `--sop windows`
+
+Use when: finding which Windows CSP controls a feature, reading CSP node
+types/enums/version gates. Exploration only — contour emits no SyncML.
+
+```bash
+contour profile search bitlocker --windows
+contour profile info BitLocker --windows --full
+```
+
+## AI-tool managed configuration → `--sop app-policy`
+
+Use when: managing Claude Code / Codex / Cursor on managed Macs. The working
+path today is an `mcx_domain` recipe (e.g. `com.anthropic.claudecode`);
+the embedded app-policy dataset has no query CLI yet.
+
+## mSCP OS-preview rules → `--sop beta`
+
+Use when: querying preview-only compliance rules (Apple Intelligence PCC,
+Siri AI). `contour mscp schema search <kw> --beta` / `schema rule <id> --beta`.
+
 ## Other SOPs
 
 | SOP | Use when |
@@ -182,3 +203,5 @@ contract and example workflow.
 | `--sop notifications` | Notification settings profiles |
 | `--sop support` | Root3 Support App profiles |
 | `--sop ci` | GitHub Actions setup, env vars, workflow config |
+| `--sop windows` | Windows CSP schema exploration (`--windows`) |
+| `--sop app-policy` | AI-tool managed configuration (Claude Code, Codex, Cursor) |

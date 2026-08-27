@@ -34,8 +34,15 @@ BETA-AWARE (accept --beta, and honor the global --channel beta):
   # Equivalent global form (flag BEFORE the subcommand):
   contour --channel beta profile generate <type> --org <org> -o out.mobileconfig
 
+  # mSCP OS-preview rules (separate dataset, same opt-in idea — see the
+  # "mSCP OS-preview rules" section below):
+  contour mscp schema search <kw>       --beta
+  contour mscp schema rule   <rule_id>  --beta
+
 NOT beta-aware (stable schema only):
-  contour mscp ... / contour santa ... # no beta channel
+  contour santa ...                     # no beta channel
+  contour mscp recipe / baselines ...   # reads a repo checkout, not the
+                                        # embedded dataset — --beta does not apply
 ```
 
 When `profile generate` runs on the beta channel it **stamps** the artifact:
@@ -147,6 +154,38 @@ error. To refresh: re-publish from posture-ingest (a *beta* config prints the ex
 seed-pin block to paste).
 
 ---
+
+## mSCP OS-preview rules
+
+The mSCP compliance dataset has its own beta channel, built from the mSCP
+OS-preview branch (`dev_27` at time of writing) instead of Apple's seed repo.
+Same opt-in contract, different content: preview-only **rules**, not payload
+schemas. What it carries beyond stable:
+
+- ~1,650 rules including rows at `os_version: 27.0`
+- OS-27-only rules — Apple Intelligence Private Cloud Compute
+  (`os_apple_intelligence_pcc_disable`), visual intelligence,
+  natural-language editing, Siri AI
+
+```bash
+contour mscp schema search "apple intelligence" --beta   # 65 hits on dev_27
+contour mscp schema rule os_apple_intelligence_pcc_disable --beta
+```
+
+Contracts:
+
+- **Channel isolation holds**: the same lookup without `--beta` returns
+  nothing for a preview-only rule — that's the isolation test.
+- **Graduation**: when a preview rule ships in the stable mSCP branch,
+  `--beta` still resolves it; the flag stops being *needed*, mirrors the
+  seed-payload graduation model above.
+- **`mscp recipe` is unaffected**: it reads rule YAML from a repo checkout
+  (`-r ./macos_security`), not the embedded dataset. To build recipes from
+  preview rules, check out the preview branch — `--beta` on `recipe` is not
+  a thing.
+- Enforcement caveat: several preview AI rules are `ScriptOnly` or
+  `AuditOnly` (no mobileconfig) — read `enforcement_type` before promising a
+  profile.
 
 ## SAFETY — beta is pre-release
 

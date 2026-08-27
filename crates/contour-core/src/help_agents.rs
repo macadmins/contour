@@ -459,7 +459,9 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
         "- `--sop fleet-migrate` — migrate Fleet GitOps repo from legacy/v4.82 to v4.83 structure\n\
          - `--sop enrollment` — DEP/ADE enrollment profiles (Setup Assistant skip keys)\n\
          - `--sop ci` — GitHub Actions setup, env vars (CONTOUR_ORG, CONTOUR_NAME), workflow config\n\
-         - `--sop precommit` — wire contour validators into a Git pre-commit hook (uvx pre-commit)"
+         - `--sop precommit` — wire contour validators into a Git pre-commit hook (uvx pre-commit)\n\
+         - `--sop windows` — Windows CSP schema exploration (--windows on profile search/info)\n\
+         - `--sop app-policy` — AI-tool managed configuration (Claude Code, Codex, Cursor)"
     )?;
     // schema-data is intentionally NOT advertised — it's a contour-developer
     // SOP about refreshing embedded parquet data from the upstream `posture`
@@ -507,8 +509,11 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "profile-naming" | "naming" | "classify" | "rename" | "display-name" => SOP_PROFILE_NAMING,
         "maintain" | "maintenance" | "hygiene" | "collisions" | "collision" | "consolidate"
         | "audit" => SOP_MAINTAIN,
+        "windows" | "windows-csp" | "csp" | "ddf" | "admx" | "syncml" => SOP_WINDOWS_CSP,
+        "app-policy" | "app-policies" | "ai-tools" | "claude-code" | "claudecode" | "codex"
+        | "cursor" => SOP_APP_POLICY,
         _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, maintain, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes"
+            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, maintain, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes, windows, app-policy"
         ),
     };
     writer.write_all(sop.as_bytes())?;
@@ -541,7 +546,19 @@ const SOP_DDM: &str = include_str!("../skills/contour/references/sop-ddm.md");
 
 /// SOP_BETA — the `--beta` (pre-release OS seed) channel: scope, channel
 /// isolation, the short-name resolver gotcha, provenance, and safety.
+/// Also carries the mSCP OS-preview section (`mscp schema … --beta`).
 const SOP_BETA: &str = include_str!("../skills/contour/references/sop-beta.md");
+
+/// SOP_WINDOWS_CSP — exploration of the embedded Windows CSP dataset
+/// (`--windows` on `profile search`/`info`). Recipe/cookbook format;
+/// explicitly scoped to lookup — contour emits no SyncML yet.
+const SOP_WINDOWS_CSP: &str = include_str!("../skills/contour/references/sop-windows-csp.md");
+
+/// SOP_APP_POLICY — AI-tool managed configuration (Claude Code, Codex,
+/// Cursor, Gemini). Starter SOP: documents the embedded app-policy
+/// dataset and the working mcx_domain recipe path; a query CLI is the
+/// documented roadmap, not yet implemented.
+const SOP_APP_POLICY: &str = include_str!("../skills/contour/references/sop-app-policy.md");
 
 /// SOP_GENERATIVE — OS 27 generative-AI / app-control payloads (Apple
 /// Intelligence, external intelligence, app.settings). Seed-only; builds on SOP_BETA.

@@ -4,6 +4,12 @@ This SOP covers the macOS Security Compliance Project (mSCP) integration:
 generating MDM-deployable compliance artifacts (mobileconfigs, scripts,
 policies, labels) for baselines like CIS Level 1, 800-53, STIG, CMMC.
 
+> **OS-preview rules** (Apple Intelligence PCC, Siri AI, …) live on a
+> separate embedded beta channel: `contour mscp schema search <kw> --beta` /
+> `schema rule <id> --beta`. See the "mSCP OS-preview rules" section in
+> `--sop beta`. Note `mscp recipe` reads a repo checkout, not the embedded
+> dataset — `--beta` does not apply to it.
+
 ## Layout: 1.x vs 2.0 (auto-detected)
 
 mSCP ships in two coexisting shapes; contour auto-detects which one a
