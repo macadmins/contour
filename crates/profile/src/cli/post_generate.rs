@@ -70,11 +70,23 @@ pub fn validate_generated_profile(
                 || (i.code == "TYPE_MISMATCH" && is_apple(&i.payload_type)))
     };
 
-    let errors: Vec<_> = result
+    let mut errors: Vec<String> = result
         .issues
         .iter()
         .filter(|i| i.severity == Severity::Error && !demoted(i))
+        .map(|i| i.message.clone())
         .collect();
+
+    // Set-level identity collisions — per-payload schema checks can't see
+    // them, and macOS keeps only one of two payloads sharing a PayloadUUID.
+    // Always fatal, even on the lenient recipe path.
+    if let Ok(raw_value) = plist::from_bytes::<plist::Value>(&raw) {
+        errors.extend(
+            crate::profile::lint::check_duplicate_payload_uuids(&raw_value)
+                .into_iter()
+                .map(|f| f.message),
+        );
+    }
     let warnings: Vec<_> = result
         .issues
         .iter()
@@ -92,7 +104,7 @@ pub fn validate_generated_profile(
                     errors.len()
                 );
                 for e in &errors {
-                    println!("    {} {}", "·".red(), e.message);
+                    println!("    {} {}", "·".red(), e);
                 }
             }
             if !warnings.is_empty() {
@@ -124,4 +136,58 @@ pub fn validate_generated_profile(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two payloads sharing a PayloadUUID/PayloadIdentifier install as ONE on
+    /// macOS — the second silently wins. The generate-time gate must fail
+    /// this even in lenient (recipe) mode; per-payload schema checks can't
+    /// see set-level collisions.
+    #[test]
+    fn duplicate_payload_identity_fails_generation_gate() {
+        let payload = |name: &str| {
+            format!(
+                r"<dict>
+                <key>PayloadType</key><string>com.apple.security.root</string>
+                <key>PayloadVersion</key><integer>1</integer>
+                <key>PayloadIdentifier</key><string>com.acme.wifi.root.payload</string>
+                <key>PayloadUUID</key><string>EA6C839A-F050-5AC2-893A-02501B33F5B4</string>
+                <key>PayloadDisplayName</key><string>{name}</string>
+            </dict>"
+            )
+        };
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>PayloadType</key><string>Configuration</string>
+    <key>PayloadVersion</key><integer>1</integer>
+    <key>PayloadIdentifier</key><string>com.acme.wifi</string>
+    <key>PayloadUUID</key><string>57F10930-FEC3-5D9C-A937-B23C98FA9662</string>
+    <key>PayloadDisplayName</key><string>Wifi</string>
+    <key>PayloadContent</key><array>{}{}</array>
+</dict></plist>"#,
+            payload("Root CA"),
+            payload("Intermediate CA"),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dup.mobileconfig");
+        std::fs::write(&path, xml).unwrap();
+
+        let policy = ValidationConfig {
+            fail_on_errors: true,
+            fail_on_warnings: false,
+            fail_on_deprecations: false,
+        };
+        let err = validate_generated_profile(&path, OutputMode::Human, &policy, true)
+            .expect_err("duplicate payload identity must fail the gate");
+        assert!(
+            err.to_string().contains("error"),
+            "unexpected error text: {err}"
+        );
+    }
 }

@@ -107,40 +107,62 @@ fn toml_to_plist(val: &toml::Value) -> Value {
     }
 }
 
+/// One inner payload of a combined (multi-payload) recipe render.
+struct CombinedEntry {
+    payload_type: String,
+    content: Dictionary,
+    display_name: String,
+    description: String,
+    removal_disallowed: bool,
+    /// The `[[profile]]` block's filename stem — the identity
+    /// discriminator. Filename stems are per-block, so two payloads of
+    /// the same type (root + intermediate CA) stay distinct; the
+    /// payload-type tail used previously collapsed them into one
+    /// identity and macOS silently kept only the last.
+    file_stem: String,
+}
+
 /// Build a multi-payload `.mobileconfig` containing every entry of
 /// `inner_payloads` under one outer Configuration envelope. Mirror
 /// of `contour_profiles::ProfileBuilder::build` but for the bundle
 /// case — used by recipes whose `[recipe.output]` has `combined =
 /// true` (or the `--combined` CLI override).
 ///
-/// Each tuple entry: `(payload_type, payload_content, display_name,
-/// description, removal_disallowed_at_inner_level)`. The bundle's
-/// outer `PayloadRemovalDisallowed` is the OR of every inner spec's
-/// flag — keeping the union prevents users from setting a bundle to
-/// removable when a constituent declared itself locked.
+/// The bundle's outer `PayloadRemovalDisallowed` is the OR of every
+/// inner spec's flag — keeping the union prevents users from setting a
+/// bundle to removable when a constituent declared itself locked.
 fn build_combined_profile_bytes(
     org: &str,
     outer_identifier: &str,
     outer_display_name: &str,
     outer_description: &str,
     outer_removal_disallowed: bool,
-    inner_payloads: &[(String, Dictionary, String, String, bool)],
+    inner_payloads: &[CombinedEntry],
 ) -> Result<Vec<u8>> {
     use contour_profiles::uuid::deterministic_uuid;
 
+    let mut seen_ids = std::collections::HashSet::new();
     let mut payload_array: Vec<Value> = Vec::with_capacity(inner_payloads.len());
-    for (payload_type, content, display_name, description, _inner_removal) in inner_payloads {
-        let inner_id = format!("{outer_identifier}.{}", payload_type_tail(payload_type));
+    for entry in inner_payloads {
+        let inner_id = format!("{outer_identifier}.{}", entry.file_stem);
         let inner_payload_id = format!("{inner_id}.payload");
+        if !seen_ids.insert(inner_payload_id.clone()) {
+            anyhow::bail!(
+                "combined recipe would emit two payloads with identity \
+                 '{inner_payload_id}' — give each [[profile]] block a distinct \
+                 filename (macOS keeps only one of two payloads sharing a \
+                 PayloadIdentifier)"
+            );
+        }
         let inner_uuid = deterministic_uuid(&inner_payload_id);
 
         let mut payload = Dictionary::new();
-        for (k, v) in content {
+        for (k, v) in &entry.content {
             payload.insert(k.clone(), v.clone());
         }
         payload.insert(
             "PayloadType".to_string(),
-            Value::String(payload_type.clone()),
+            Value::String(entry.payload_type.clone()),
         );
         payload.insert("PayloadEnabled".to_string(), Value::Boolean(true));
         payload.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
@@ -151,12 +173,12 @@ fn build_combined_profile_bytes(
         payload.insert("PayloadUUID".to_string(), Value::String(inner_uuid));
         payload.insert(
             "PayloadDisplayName".to_string(),
-            Value::String(display_name.clone()),
+            Value::String(entry.display_name.clone()),
         );
-        if !description.is_empty() {
+        if !entry.description.is_empty() {
             payload.insert(
                 "PayloadDescription".to_string(),
-                Value::String(description.clone()),
+                Value::String(entry.description.clone()),
             );
         }
         payload.insert(
@@ -207,11 +229,6 @@ fn build_combined_profile_bytes(
     plist::to_writer_xml(&mut buffer, &Value::Dictionary(profile))
         .context("Failed to serialize combined profile")?;
     Ok(buffer)
-}
-
-/// `com.apple.security.firewall` → `firewall`.
-fn payload_type_tail(payload_type: &str) -> &str {
-    payload_type.rsplit('.').next().unwrap_or(payload_type)
 }
 
 /// Wrap a flat preferences dict into the legacy MCX (Managed Client
@@ -1034,7 +1051,7 @@ pub fn handle_generate_recipe(
     let mut all_placeholders = Vec::new();
     // Combined-mode buffer: holds each inner payload's content +
     // metadata until the end of the loop, then we emit one .mobileconfig.
-    let mut combined_buffer: Vec<(String, Dictionary, String, String, bool)> = Vec::new();
+    let mut combined_buffer: Vec<CombinedEntry> = Vec::new();
 
     for spec in &r.profiles {
         let manifest = registry.get_by_name(&spec.payload_type);
@@ -1089,13 +1106,17 @@ pub fn handle_generate_recipe(
         // there's no plist analogue to a multi-payload Configuration
         // envelope.
         if combined_emit && !is_plist {
-            combined_buffer.push((
-                spec.payload_type.clone(),
-                payload_content,
-                spec.display_name.clone(),
-                spec.description.clone(),
-                spec.removal_disallowed,
-            ));
+            combined_buffer.push(CombinedEntry {
+                payload_type: spec.payload_type.clone(),
+                content: payload_content,
+                display_name: spec.display_name.clone(),
+                description: spec.description.clone(),
+                removal_disallowed: spec.removal_disallowed,
+                file_stem: Path::new(&spec.filename).file_stem().map_or_else(
+                    || spec.filename.clone(),
+                    |s| s.to_string_lossy().into_owned(),
+                ),
+            });
             continue;
         }
 
@@ -1170,7 +1191,7 @@ pub fn handle_generate_recipe(
         // Per-bundle outer envelope keyed by the recipe name.
         let outer_identifier = format!("{domain}.{}", r.recipe.name);
         // Removal_disallowed at the bundle level: set if any inner asked for it.
-        let any_removal_locked = combined_buffer.iter().any(|(_, _, _, _, rd)| *rd);
+        let any_removal_locked = combined_buffer.iter().any(|e| e.removal_disallowed);
         let bytes = build_combined_profile_bytes(
             &domain,
             &outer_identifier,
@@ -2002,6 +2023,97 @@ fn build_payload_from_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn combined_entry(payload_type: &str, stem: &str, display_name: &str) -> CombinedEntry {
+        CombinedEntry {
+            payload_type: payload_type.to_string(),
+            content: Dictionary::new(),
+            display_name: display_name.to_string(),
+            description: String::new(),
+            removal_disallowed: false,
+            file_stem: stem.to_string(),
+        }
+    }
+
+    fn inner_identities(bytes: &[u8]) -> Vec<(String, String)> {
+        let profile: plist::Value = plist::from_bytes(bytes).unwrap();
+        let dict = profile.as_dictionary().unwrap();
+        dict.get("PayloadContent")
+            .and_then(plist::Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|p| {
+                let d = p.as_dictionary().unwrap();
+                (
+                    d.get("PayloadIdentifier")
+                        .and_then(plist::Value::as_string)
+                        .unwrap()
+                        .to_string(),
+                    d.get("PayloadUUID")
+                        .and_then(plist::Value::as_string)
+                        .unwrap()
+                        .to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// Two same-type payloads in one combined recipe (root + intermediate CA
+    /// is the canonical case) must get distinct identities. Deriving the
+    /// discriminator from the payload-type tail collapsed them into one
+    /// payload — macOS silently keeps only the last.
+    #[test]
+    fn combined_same_type_payloads_get_distinct_identities() {
+        let entries = [
+            combined_entry("com.apple.security.root", "root-ca", "Root CA"),
+            combined_entry(
+                "com.apple.security.root",
+                "intermediate-ca",
+                "Intermediate CA",
+            ),
+        ];
+
+        let bytes = build_combined_profile_bytes(
+            "com.acme",
+            "com.acme.corp-wifi",
+            "corp-wifi",
+            "",
+            false,
+            &entries,
+        )
+        .unwrap();
+
+        let ids = inner_identities(&bytes);
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0].0, ids[1].0, "PayloadIdentifiers must be distinct");
+        assert_ne!(ids[0].1, ids[1].1, "PayloadUUIDs must be distinct");
+        assert_eq!(ids[0].0, "com.acme.corp-wifi.root-ca.payload");
+        assert_eq!(ids[1].0, "com.acme.corp-wifi.intermediate-ca.payload");
+    }
+
+    /// If two `[[profile]]` blocks share a filename stem the identities would
+    /// still collide — that must be a loud error, never a silent overwrite.
+    #[test]
+    fn combined_duplicate_stems_are_rejected() {
+        let entries = [
+            combined_entry("com.apple.security.root", "ca", "Root CA"),
+            combined_entry("com.apple.security.pem", "ca", "Intermediate CA"),
+        ];
+
+        let err = build_combined_profile_bytes(
+            "com.acme",
+            "com.acme.corp-wifi",
+            "corp-wifi",
+            "",
+            false,
+            &entries,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("ca"),
+            "error should name the colliding identity, got: {err}"
+        );
+    }
 
     #[test]
     fn test_toml_to_plist_string() {
