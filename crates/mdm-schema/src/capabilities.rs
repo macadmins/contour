@@ -154,6 +154,12 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         let manifest_sources = batch
             .column_by_name("manifest_source")
             .map(|c| c.as_string::<i32>());
+        // key_rangelist (JSON string array) is absent in parquets generated
+        // before posture-ingest added it (40-column layout); those keys read
+        // as range_list: None.
+        let key_rangelists = batch
+            .column_by_name("key_rangelist")
+            .map(|c| c.as_string::<i32>());
 
         for row in 0..num_rows {
             let pt = payload_types.value(row);
@@ -354,9 +360,14 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                 default_value: if key_defaults.is_null(row) {
                     None
                 } else {
-                    Some(serde_json::Value::String(
-                        key_defaults.value(row).to_string(),
-                    ))
+                    // The column stores scalar defaults JSON-encoded ("Allowed"
+                    // arrives as the text `"Allowed"`, booleans as `true`).
+                    // Decode; anything that isn't valid JSON is a plain string.
+                    let raw = key_defaults.value(row);
+                    Some(
+                        serde_json::from_str(raw)
+                            .unwrap_or_else(|_| serde_json::Value::String(raw.to_string())),
+                    )
                 },
                 range_min: if range_mins.is_null(row) {
                     None
@@ -368,7 +379,13 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                 } else {
                     Some(range_maxs.value(row))
                 },
-                range_list: None,
+                range_list: key_rangelists.and_then(|arr| {
+                    if arr.is_null(row) {
+                        None
+                    } else {
+                        serde_json::from_str(arr.value(row)).ok()
+                    }
+                }),
                 introduced: introduced_map,
                 deprecated: deprecated_map,
                 supervised: supervised_map,

@@ -155,6 +155,133 @@ mod tests {
     }
 
     #[test]
+    fn string_defaults_are_decoded_not_json_encoded() {
+        // The parquet stores scalar defaults JSON-encoded in a text column
+        // ("Allowed" arrives as the 9-char text `"Allowed"`). The reader must
+        // decode that, or every consumer renders defaults with embedded quotes.
+        let caps = capabilities::read(embedded_capabilities())
+            .expect("Failed to read embedded capabilities");
+        let swu = caps
+            .iter()
+            .find(|c| c.payload_type == "com.apple.configuration.softwareupdate.settings")
+            .expect("softwareupdate.settings capability");
+        let download = swu
+            .keys
+            .iter()
+            .find(|k| k.name == "Download")
+            .expect("AutomaticActions.Download key");
+        assert_eq!(
+            download.default_value,
+            Some(serde_json::Value::String("Allowed".to_string())),
+            "string default must not carry embedded JSON quotes"
+        );
+
+        // Boolean-ish defaults come through as real JSON booleans now.
+        let notifications = swu
+            .keys
+            .iter()
+            .find(|k| k.name == "Notifications")
+            .expect("Notifications key");
+        assert_eq!(
+            notifications.default_value,
+            Some(serde_json::Value::Bool(true))
+        );
+    }
+
+    /// Build a one-row capabilities parquet in memory. With
+    /// `with_rangelist`, the `key_rangelist` column (posture-ingest ≥ 41
+    /// cols) is appended, carrying `["Allowed","AlwaysOn"]`.
+    fn one_row_capabilities_parquet(with_rangelist: bool) -> Vec<u8> {
+        use arrow::array::{ArrayRef, StringArray, UInt32Array, new_null_array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        let mut fields: Vec<Field> = capabilities::schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        if with_rangelist {
+            fields.push(Field::new("key_rangelist", DataType::Utf8, true));
+        }
+        let schema = Arc::new(Schema::new(fields));
+
+        let arrays: Vec<ArrayRef> = schema
+            .fields()
+            .iter()
+            .map(|f| match f.name().as_str() {
+                "payload_type" => {
+                    Arc::new(StringArray::from(vec!["com.test.configuration.enum"])) as ArrayRef
+                }
+                "kind" => Arc::new(StringArray::from(vec!["DdmDeclaration"])),
+                "title" => Arc::new(StringArray::from(vec!["Enum Test"])),
+                "platform" => Arc::new(StringArray::from(vec!["macOS"])),
+                "key_name" => Arc::new(StringArray::from(vec!["Download"])),
+                "key_data_type" => Arc::new(StringArray::from(vec!["string"])),
+                "depth" => Arc::new(UInt32Array::from(vec![0u32])),
+                "key_rangelist" => Arc::new(StringArray::from(vec![r#"["Allowed","AlwaysOn"]"#])),
+                _ => new_null_array(f.data_type(), 1),
+            })
+            .collect();
+
+        let batch = arrow::record_batch::RecordBatch::try_new(schema.clone(), arrays).unwrap();
+        let mut buf = Vec::new();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        buf
+    }
+
+    /// A parquet carrying the `key_rangelist` column must surface it as
+    /// `PayloadKey::range_list` (JSON-encoded string array, nullable).
+    #[test]
+    fn range_list_column_is_read_when_present() {
+        let buf = one_row_capabilities_parquet(true);
+        let caps = capabilities::read(&buf).expect("read parquet with key_rangelist");
+        let key = &caps[0].keys[0];
+        assert_eq!(key.name, "Download");
+        assert_eq!(
+            key.range_list,
+            Some(vec!["Allowed".to_string(), "AlwaysOn".to_string()])
+        );
+    }
+
+    /// A 40-column parquet (pre-key_rangelist) must keep reading, with
+    /// `range_list: None` on every key.
+    #[test]
+    fn read_tolerates_missing_range_list_column() {
+        let buf = one_row_capabilities_parquet(false);
+        let caps = capabilities::read(&buf).expect("read 40-col parquet");
+        assert_eq!(caps[0].keys[0].range_list, None);
+    }
+
+    /// The shipped stable parquet (posture-ingest 41 cols) carries Apple's
+    /// rangelists — the data behind offline enum validation. Pin the
+    /// canonical example end-to-end.
+    #[test]
+    fn embedded_capabilities_carry_rangelists() {
+        let caps = capabilities::read(embedded_capabilities())
+            .expect("Failed to read embedded capabilities");
+        let swu = caps
+            .iter()
+            .find(|c| c.payload_type == "com.apple.configuration.softwareupdate.settings")
+            .expect("softwareupdate.settings capability");
+        let download = swu
+            .keys
+            .iter()
+            .find(|k| k.name == "Download")
+            .expect("AutomaticActions.Download key");
+        assert_eq!(
+            download.range_list,
+            Some(vec![
+                "Allowed".to_string(),
+                "AlwaysOn".to_string(),
+                "AlwaysOff".to_string(),
+            ])
+        );
+    }
+
+    #[test]
     fn test_beta_examples_contain_app_settings() {
         let ex = examples::read(embedded_examples_beta()).expect("read beta examples");
         assert!(

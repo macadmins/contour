@@ -393,17 +393,19 @@ fn parse_supported_os_from_value(
 }
 
 /// Categorize DDM declaration type
+/// Category for a DDM declaration type, `ddm-` prefixed to match the parquet
+/// loader — `ddm list`/`info`/`generate` and docs all key off that prefix.
 fn categorize_ddm_type(decl_type: &str) -> String {
     if decl_type.contains(".activation") {
-        "activation".to_string()
+        "ddm-activation".to_string()
     } else if decl_type.contains(".asset") {
-        "asset".to_string()
+        "ddm-asset".to_string()
     } else if decl_type.contains(".configuration") {
-        "configuration".to_string()
+        "ddm-configuration".to_string()
     } else if decl_type.contains(".management") {
-        "management".to_string()
+        "ddm-management".to_string()
     } else {
-        "ddm".to_string()
+        "ddm-configuration".to_string()
     }
 }
 
@@ -548,13 +550,41 @@ fn parse_content_fields(
 
     if let Some(content_fields) = content {
         for field in content_fields {
-            let def = parse_apple_field(field, 0);
-            field_order.push(def.name.clone());
-            fields.insert(def.name.clone(), def);
+            add_field_recursive(field, 0, None, &mut fields, &mut field_order);
         }
     }
 
     Ok((fields, field_order))
+}
+
+/// Flatten a field and its `subkeys` into the manifest's flat field map.
+///
+/// Matches the parquet loader's conventions so both schema sources behave
+/// identically downstream: `parent_key` is the dotted ancestor path
+/// (`"Beta.OfferPrograms"`), and duplicate names keep the first definition.
+fn add_field_recursive(
+    field: &AppleField,
+    depth: usize,
+    parent_path: Option<&str>,
+    fields: &mut HashMap<String, FieldDefinition>,
+    field_order: &mut Vec<String>,
+) {
+    let mut def = parse_apple_field(field, depth);
+    def.parent_key = parent_path.map(ToString::to_string);
+    if !fields.contains_key(&def.name) {
+        field_order.push(def.name.clone());
+        fields.insert(def.name.clone(), def);
+    }
+
+    if let Some(subkeys) = &field.subkeys {
+        let child_parent = match parent_path {
+            Some(p) => format!("{p}.{}", field.key),
+            None => field.key.clone(),
+        };
+        for subkey in subkeys {
+            add_field_recursive(subkey, depth + 1, Some(&child_parent), fields, field_order);
+        }
+    }
 }
 
 /// Parse a single Apple field into FieldDefinition
@@ -850,6 +880,62 @@ payload:
         let manifest = parse_yaml_manifest(yaml).expect("Failed to parse YAML");
         let field = manifest.fields.get("SecurityType").unwrap();
         assert_eq!(field.allowed_values, vec!["None", "WEP", "WPA", "WPA2"]);
+    }
+
+    /// Every consumer keys DDM manifests off the `ddm-` category prefix
+    /// (`ddm list`, `ddm info`, `ddm generate`, docs). A bare `configuration`
+    /// category makes a YAML-sourced declaration invisible to all of them.
+    #[test]
+    fn test_yaml_ddm_declaration_gets_ddm_prefixed_category() {
+        let yaml = r"
+title: Category Test
+payload:
+    declarationtype: com.apple.configuration.categorytest
+payloadkeys: []
+";
+        let manifest = parse_yaml_manifest(yaml).expect("Failed to parse YAML");
+        assert_eq!(manifest.category, "ddm-configuration");
+    }
+
+    /// Apple's DDM YAML nests keys via `subkeys` (e.g.
+    /// `AutomaticActions.Download` in softwareupdate.settings). Dropping them
+    /// makes nested rangelists invisible to validation — exactly the shape
+    /// that let a JSON-quoted `"Allowed"` ship in a generated declaration.
+    #[test]
+    fn test_parse_yaml_flattens_subkeys_with_parent_and_rangelist() {
+        let yaml = r"
+title: Nested Test
+payload:
+    declarationtype: com.apple.configuration.nestedtest
+payloadkeys:
+    - key: AutomaticActions
+      type: <dictionary>
+      subkeys:
+        - key: Download
+          type: <string>
+          rangelist:
+            - Allowed
+            - AlwaysOn
+            - AlwaysOff
+          subkeys: []
+";
+
+        let manifest = parse_yaml_manifest(yaml).expect("Failed to parse YAML");
+
+        let download = manifest
+            .fields
+            .get("Download")
+            .expect("nested subkey Download must be flattened into fields");
+        assert_eq!(download.parent_key.as_deref(), Some("AutomaticActions"));
+        assert_eq!(download.depth, 1);
+        assert_eq!(
+            download.allowed_values,
+            vec!["Allowed", "AlwaysOn", "AlwaysOff"]
+        );
+        assert!(
+            manifest.field_order.contains(&"Download".to_string()),
+            "flattened subkeys must appear in field_order"
+        );
     }
 
     #[test]

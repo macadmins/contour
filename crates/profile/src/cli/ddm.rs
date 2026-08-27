@@ -341,6 +341,46 @@ pub fn declaration_errors(
                 warnings.push(format!("Unknown field: {key}"));
             }
         }
+
+        // Check enum membership for fields that declare a rangelist.
+        // Only fields with allowed_values are checked — no data, no opinion.
+        // (The embedded parquet doesn't carry rangelists yet; --schema-path
+        // against Apple's device-management repo does.)
+        for field_name in &manifest.field_order {
+            let Some(field) = manifest.fields.get(field_name) else {
+                continue;
+            };
+            if field.allowed_values.is_empty() {
+                continue;
+            }
+            let value = if field.parent_key.is_none() {
+                decl.payload.get(&field.name)
+            } else {
+                let ancestors = resolve_ancestor_path(&field.name, manifest);
+                walk_payload_path(&decl.payload.0, &ancestors).and_then(|obj| obj.get(&field.name))
+            };
+            let Some(value) = value else { continue };
+            // A rangelist on an Array field constrains its elements.
+            let candidates: Vec<&serde_json::Value> = match value {
+                serde_json::Value::Array(items) => items.iter().collect(),
+                other => vec![other],
+            };
+            for candidate in candidates {
+                let text = match candidate {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    // Rangelists only ever constrain strings and numbers.
+                    _ => continue,
+                };
+                if !field.allowed_values.contains(&text) {
+                    errors.push(format!(
+                        "Invalid value for {}: \"{text}\" (allowed: {})",
+                        field.name,
+                        field.allowed_values.join(", ")
+                    ));
+                }
+            }
+        }
     } else {
         // An unknown declaration type is a hard error, not a warning: the active
         // schema can't validate it at all. Mirrors `library validate`'s
@@ -1093,6 +1133,20 @@ fn generate_field_value(
                 .and_then(serde_json::Number::from_f64)
                 .map_or(serde_json::Value::Null, serde_json::Value::Number),
             _ => serde_json::Value::String(default.clone()),
+        };
+    }
+
+    // Defaultless enum fields scaffold as their first allowed value — the
+    // fail-closed gate rejects anything outside the rangelist, `""` included.
+    if !field.allowed_values.is_empty()
+        && matches!(field.field_type, FieldType::String | FieldType::Integer)
+    {
+        let first = &field.allowed_values[0];
+        return match field.field_type {
+            FieldType::Integer => first
+                .parse::<i64>()
+                .map_or_else(|_| serde_json::Value::String(first.clone()), |n| n.into()),
+            _ => serde_json::Value::String(first.clone()),
         };
     }
 
@@ -2172,6 +2226,211 @@ mod tests {
         assert_eq!(
             reference.get("DataURL").and_then(Value::as_str),
             Some("https://cdn.example.com/z.zip")
+        );
+    }
+}
+
+#[cfg(test)]
+mod enum_validation_tests {
+    use super::{Declaration, DeclarationPayload, declaration_errors};
+    use crate::schema::types::{FieldFlags, Platforms};
+    use crate::schema::{FieldDefinition, FieldType, PayloadManifest, SchemaRegistry};
+    use std::collections::HashMap;
+
+    /// Registry with one DDM type shaped like the real
+    /// `softwareupdate.settings`: a top-level enum string plus a nested one
+    /// under a Dictionary parent, both with a rangelist.
+    fn test_registry() -> SchemaRegistry {
+        let field = |name: &str,
+                     field_type: FieldType,
+                     allowed: &[&str],
+                     depth: u8,
+                     parent: Option<&str>| {
+            FieldDefinition {
+                name: name.to_string(),
+                field_type,
+                flags: FieldFlags::default(),
+                title: name.to_string(),
+                description: String::new(),
+                default: None,
+                allowed_values: allowed.iter().map(ToString::to_string).collect(),
+                depth,
+                parent_key: parent.map(ToString::to_string),
+                platforms: Vec::new(),
+                min_version: None,
+                deprecated_in: None,
+                introduced_by_platform: HashMap::new(),
+                deprecated_by_platform: HashMap::new(),
+                combinetype: None,
+            }
+        };
+
+        let defs = [
+            field("Cadence", FieldType::String, &["High", "Low"], 0, None),
+            field("AutomaticActions", FieldType::Dictionary, &[], 0, None),
+            field(
+                "Download",
+                FieldType::String,
+                &["Allowed", "AlwaysOn", "AlwaysOff"],
+                1,
+                Some("AutomaticActions"),
+            ),
+        ];
+
+        let mut fields = HashMap::new();
+        let mut field_order = Vec::new();
+        for d in defs {
+            field_order.push(d.name.clone());
+            fields.insert(d.name.clone(), d);
+        }
+
+        SchemaRegistry::from_manifests_for_test(vec![PayloadManifest {
+            payload_type: "com.test.configuration.enumcheck".to_string(),
+            title: "Enum Check".to_string(),
+            description: String::new(),
+            platforms: Platforms::default(),
+            min_versions: HashMap::new(),
+            os_support: HashMap::new(),
+            apply_mode: None,
+            category: "ddm-configuration".to_string(),
+            fields,
+            field_order,
+            segments: vec![],
+        }])
+    }
+
+    fn declaration(payload: DeclarationPayload) -> Declaration {
+        Declaration {
+            declaration_type: "com.test.configuration.enumcheck".to_string(),
+            identifier: "com.test.enumcheck".to_string(),
+            server_token: None,
+            authentication: None,
+            payload,
+        }
+    }
+
+    #[test]
+    fn enum_value_outside_rangelist_is_an_error() {
+        let registry = test_registry();
+        let mut payload = DeclarationPayload::new();
+        payload.insert("Cadence".to_string(), serde_json::json!("Bogus"));
+
+        let (errors, _) = declaration_errors(&declaration(payload), &registry);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Cadence") && e.contains("High")),
+            "expected an enum-membership error naming the field and allowed \
+             values, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn enum_value_inside_rangelist_passes() {
+        let registry = test_registry();
+        let mut payload = DeclarationPayload::new();
+        payload.insert("Cadence".to_string(), serde_json::json!("High"));
+
+        let (errors, _) = declaration_errors(&declaration(payload), &registry);
+        assert!(errors.is_empty(), "valid enum value flagged: {errors:?}");
+    }
+
+    /// The shipped-bug shape: a JSON-quoted enum (`"\"Allowed\""`) nested under
+    /// a Dictionary parent must be rejected, not written to disk.
+    #[test]
+    fn nested_quoted_enum_value_is_an_error() {
+        let registry = test_registry();
+        let mut payload = DeclarationPayload::new();
+        payload.insert(
+            "AutomaticActions".to_string(),
+            serde_json::json!({"Download": "\"Allowed\""}),
+        );
+
+        let (errors, _) = declaration_errors(&declaration(payload), &registry);
+        assert!(
+            errors.iter().any(|e| e.contains("Download")),
+            "expected an enum-membership error for nested Download, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn absent_enum_field_is_not_an_error() {
+        let registry = test_registry();
+        let (errors, _) = declaration_errors(&declaration(DeclarationPayload::new()), &registry);
+        assert!(
+            errors.is_empty(),
+            "absent optional field flagged: {errors:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scaffold_value_tests {
+    use super::generate_field_value;
+
+    /// A defaultless enum field must scaffold as a member of its rangelist,
+    /// not as `""` — generate's fail-closed gate rejects non-members.
+    #[test]
+    fn defaultless_enum_field_scaffolds_first_allowed_value() {
+        use crate::schema::types::FieldFlags;
+        use std::collections::HashMap;
+
+        let field = crate::schema::FieldDefinition {
+            name: "Cadence".to_string(),
+            field_type: crate::schema::FieldType::String,
+            flags: FieldFlags::default(),
+            title: "Cadence".to_string(),
+            description: String::new(),
+            default: None,
+            allowed_values: vec!["All".to_string(), "Oldest".to_string()],
+            depth: 0,
+            parent_key: None,
+            platforms: Vec::new(),
+            min_version: None,
+            deprecated_in: None,
+            introduced_by_platform: HashMap::new(),
+            deprecated_by_platform: HashMap::new(),
+            combinetype: None,
+        };
+        let manifest = crate::schema::PayloadManifest {
+            payload_type: "com.test.configuration.scaffold".to_string(),
+            title: "Scaffold".to_string(),
+            description: String::new(),
+            platforms: crate::schema::types::Platforms::default(),
+            min_versions: HashMap::new(),
+            os_support: HashMap::new(),
+            apply_mode: None,
+            category: "ddm-configuration".to_string(),
+            fields: HashMap::from([("Cadence".to_string(), field.clone())]),
+            field_order: vec!["Cadence".to_string()],
+            segments: vec![],
+        };
+
+        let value = generate_field_value("Cadence", &field, &manifest, true);
+        assert_eq!(value, serde_json::json!("All"));
+    }
+
+    /// `--full` scaffolds must emit deployable enum values. The parquet stores
+    /// string defaults JSON-encoded; if the decode is lost anywhere between
+    /// mdm-schema and here, `Download` scaffolds as `"\"Allowed\""` — a value
+    /// Apple's DDM engine rejects on device.
+    #[test]
+    fn full_scaffold_string_defaults_carry_no_embedded_quotes() {
+        let registry = crate::schema::SchemaRegistry::embedded().unwrap();
+        let manifest = registry
+            .get("com.apple.configuration.softwareupdate.settings")
+            .unwrap();
+
+        let field = manifest.fields.get("AutomaticActions").unwrap();
+        let value = generate_field_value("AutomaticActions", field, manifest, true);
+
+        let download = value
+            .get("Download")
+            .and_then(serde_json::Value::as_str)
+            .expect("AutomaticActions.Download should scaffold as a string");
+        assert_eq!(
+            download, "Allowed",
+            "scaffolded enum default must not carry embedded JSON quotes"
         );
     }
 }
