@@ -107,6 +107,30 @@ fn toml_to_plist(val: &toml::Value) -> Value {
     }
 }
 
+/// Resolve the org domain for profile generation.
+///
+/// Precedence: CLI `--org` → `profile.toml` → the shared resolver
+/// (`CONTOUR_ORG` env var, then `.contour/config.toml` walked up from
+/// CWD). We refuse to default to "com.example" because the resulting
+/// PayloadIdentifier is not deployable.
+fn resolve_generate_org(
+    org: Option<&str>,
+    config: Option<&crate::config::ProfileConfig>,
+) -> Result<String> {
+    org.map(ToString::to_string)
+        .or_else(|| config.map(|c| c.organization.domain.clone()))
+        .map(Ok)
+        .unwrap_or_else(|| {
+            contour_core::config::resolve_org_with_anchor(None, None).map_err(|_e| {
+                anyhow::anyhow!(
+                    "--org is required (e.g., --org com.yourorg)\n\
+                     Alternatively, set CONTOUR_ORG, or organization.domain in \
+                     profile.toml or .contour/config.toml"
+                )
+            })
+        })
+}
+
 /// One inner payload of a combined (multi-payload) recipe render.
 struct CombinedEntry {
     payload_type: String,
@@ -777,21 +801,7 @@ pub fn handle_generate(
         (buf, "plist")
     } else {
         // Full mobileconfig envelope.
-        // Resolve org domain: CLI --org → profile.toml → .contour/config.toml → error.
-        // We refuse to default to "com.example" because the resulting PayloadIdentifier
-        // is not deployable and silently produces invalid output (caught only at validation).
-        let domain = org
-            .map(ToString::to_string)
-            .or_else(|| config.map(|c| c.organization.domain.clone()))
-            .or_else(|| {
-                contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "--org is required (e.g., --org com.yourorg)\n\
-                     Alternatively, set organization.domain in profile.toml or .contour/config.toml"
-                )
-            })?;
+        let domain = resolve_generate_org(org, config)?;
 
         let short = manifest
             .payload_type
@@ -2113,6 +2123,39 @@ mod tests {
             err.to_string().contains("ca"),
             "error should name the colliding identity, got: {err}"
         );
+    }
+
+    /// Env vars are process-global; serialize the tests that touch them.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The single-payload generate path must resolve the org through the
+    /// shared resolver — CONTOUR_ORG included. It previously used an inline
+    /// chain that skipped the env var, so CI pipelines relying on CONTOUR_ORG
+    /// worked for `ddm generate` but failed for `profile generate`.
+    #[test]
+    fn generate_org_resolution_honors_contour_org_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Set/remove kept tight to minimize cross-test exposure of the
+        // process-global env.
+        // SAFETY: env mutation is process-global; ENV_LOCK serializes every
+        // test touching these vars, and nothing else in the test process reads them.
+        unsafe { std::env::set_var("CONTOUR_ORG", "com.envtest") };
+        let resolved = resolve_generate_org(None, None);
+        // SAFETY: as above — still under ENV_LOCK.
+        unsafe { std::env::remove_var("CONTOUR_ORG") };
+        assert_eq!(resolved.unwrap(), "com.envtest");
+    }
+
+    #[test]
+    fn generate_org_resolution_flag_beats_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env mutation is process-global; ENV_LOCK serializes every
+        // test touching these vars, and nothing else in the test process reads them.
+        unsafe { std::env::set_var("CONTOUR_ORG", "com.envtest") };
+        let resolved = resolve_generate_org(Some("com.flag"), None);
+        // SAFETY: as above — still under ENV_LOCK.
+        unsafe { std::env::remove_var("CONTOUR_ORG") };
+        assert_eq!(resolved.unwrap(), "com.flag");
     }
 
     #[test]

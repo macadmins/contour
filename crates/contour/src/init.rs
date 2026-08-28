@@ -163,14 +163,7 @@ fn run_noninteractive(
     mdm_flavour: Option<MdmFlavour>,
     json: bool,
 ) -> Result<()> {
-    // For non-interactive, name and domain must come from flags or existing config
-    let org_name = name
-        .or_else(|| existing.as_ref().map(|c| c.organization.name.clone()))
-        .unwrap_or_else(|| "My Organization".to_string());
-
-    let org_domain = domain
-        .or_else(|| existing.as_ref().map(|c| c.organization.domain.clone()))
-        .unwrap_or_else(|| derive_domain_from_name(&org_name));
+    let (org_name, org_domain) = resolve_init_identity(name, domain, existing.as_ref());
 
     let org_server_url = server_url.or_else(|| {
         existing
@@ -433,6 +426,32 @@ fn run_interactive(
     Ok(())
 }
 
+/// Resolve org name + domain for non-interactive init.
+///
+/// Precedence per field: CLI flag → existing config → env var
+/// (`CONTOUR_NAME` / `CONTOUR_ORG`, the CI contract `--sop ci`
+/// documents) → placeholder ("My Organization" / a domain derived
+/// from the name).
+fn resolve_init_identity(
+    name: Option<String>,
+    domain: Option<String>,
+    existing: Option<&ContourConfig>,
+) -> (String, String) {
+    let env_nonempty = |var: &str| std::env::var(var).ok().filter(|v| !v.is_empty());
+
+    let org_name = name
+        .or_else(|| existing.map(|c| c.organization.name.clone()))
+        .or_else(|| env_nonempty("CONTOUR_NAME"))
+        .unwrap_or_else(|| "My Organization".to_string());
+
+    let org_domain = domain
+        .or_else(|| existing.map(|c| c.organization.domain.clone()))
+        .or_else(|| env_nonempty("CONTOUR_ORG"))
+        .unwrap_or_else(|| derive_domain_from_name(&org_name));
+
+    (org_name, org_domain)
+}
+
 fn print_summary(root: &Path, config: &ContourConfig, wrote_agent_md: bool, json: bool) {
     if json {
         let result = serde_json::json!({
@@ -524,4 +543,61 @@ live in the project root or subdirectories.
 
     fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Env vars are process-global; serialize the tests that touch them.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// `init -y` in CI must honor the documented env vars — CONTOUR_ORG for
+    /// the domain, CONTOUR_NAME for the org name — before falling back to
+    /// the "My Organization"/derived-domain placeholders.
+    #[test]
+    fn noninteractive_identity_honors_env_vars() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env mutation is process-global; ENV_LOCK serializes every
+        // test touching these vars, and nothing else in the test process reads them.
+        unsafe {
+            std::env::set_var("CONTOUR_ORG", "com.envinit");
+            std::env::set_var("CONTOUR_NAME", "Env Init Co")
+        };
+        let (name, domain) = resolve_init_identity(None, None, None);
+        // SAFETY: as above — still under ENV_LOCK.
+        unsafe {
+            std::env::remove_var("CONTOUR_ORG");
+            std::env::remove_var("CONTOUR_NAME")
+        };
+        assert_eq!(name, "Env Init Co");
+        assert_eq!(domain, "com.envinit");
+    }
+
+    #[test]
+    fn noninteractive_identity_flags_beat_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env mutation is process-global; ENV_LOCK serializes every
+        // test touching these vars, and nothing else in the test process reads them.
+        unsafe { std::env::set_var("CONTOUR_ORG", "com.envinit") };
+        let (_, domain) =
+            resolve_init_identity(Some("Flag Co".into()), Some("com.flag".into()), None);
+        // SAFETY: as above — still under ENV_LOCK.
+        unsafe { std::env::remove_var("CONTOUR_ORG") };
+        assert_eq!(domain, "com.flag");
+    }
+
+    #[test]
+    fn noninteractive_identity_placeholder_without_env_or_flags() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: env mutation is process-global; ENV_LOCK serializes every
+        // test touching these vars, and nothing else in the test process reads them.
+        unsafe {
+            std::env::remove_var("CONTOUR_ORG");
+            std::env::remove_var("CONTOUR_NAME")
+        };
+        let (name, domain) = resolve_init_identity(None, None, None);
+        assert_eq!(name, "My Organization");
+        assert_eq!(domain, derive_domain_from_name("My Organization"));
+    }
 }
