@@ -324,6 +324,12 @@ pub enum Commands {
         /// Non-interactive: skip prompts, write all files org-agnostic
         #[arg(long, short = 'y')]
         yes: bool,
+
+        /// Replace a contour section from an older install (pre-marker) in
+        /// CLAUDE.md/AGENTS.md — replaces from the section start to end of
+        /// file. Marker-wrapped sections refresh without this flag.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Output CLI schema as JSON for tooling integration

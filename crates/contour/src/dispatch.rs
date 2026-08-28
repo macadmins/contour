@@ -119,7 +119,7 @@ pub fn run(cli: Cli) -> Result<()> {
             cli.json,
         ),
         Commands::Osquery { action } => crate::osquery::handle(action, cli.json),
-        Commands::SetupAgent { org, yes } => {
+        Commands::SetupAgent { org, yes, force } => {
             use contour_core::help_agents::{SkillInstallOptions, install_skill_with};
             use std::io::IsTerminal;
 
@@ -156,6 +156,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 org: org.as_deref(),
                 write_claude_md,
                 write_agents_md,
+                force,
             };
             install_skill_with(env!("CARGO_PKG_VERSION"), &opts)?;
             Ok(())
