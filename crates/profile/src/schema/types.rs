@@ -308,6 +308,9 @@ impl Platforms {
         if self.visionos {
             result.push("visionOS");
         }
+        if self.windows {
+            result.push("Windows");
+        }
         result
     }
 }
