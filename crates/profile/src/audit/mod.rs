@@ -247,17 +247,25 @@ pub fn classify_payload(
     }
 
     // 5. high_entropy_literal — last resort on values nothing else claimed.
-    for (field, value) in &strings {
-        if flagged_fields.contains(field) {
-            continue;
-        }
-        if entropy::looks_like_secret(value) {
-            secrets.push(SecretFinding {
-                field: field.clone(),
-                kind: SecretKind::HighEntropyLiteral,
-                token: None,
-                entropy: Some(entropy::shannon_entropy(value)),
-            });
+    // Skipped for public-certificate payload types: their content IS long
+    // opaque base64 by design (already surfaced via the cert/binary
+    // classification above), and flagging it as a secret buries real
+    // findings in noise. PKCS#12 is NOT exempt — it carries a private key
+    // and is claimed by check 3.
+    let is_public_cert_payload = matches!(ptype, PT_ROOT | PT_PEM | PT_PKCS1);
+    if !is_public_cert_payload {
+        for (field, value) in &strings {
+            if flagged_fields.contains(field) {
+                continue;
+            }
+            if entropy::looks_like_secret(value) {
+                secrets.push(SecretFinding {
+                    field: field.clone(),
+                    kind: SecretKind::HighEntropyLiteral,
+                    token: None,
+                    entropy: Some(entropy::shannon_entropy(value)),
+                });
+            }
         }
     }
 
@@ -394,6 +402,65 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), v.clone()))
             .collect()
+    }
+
+    /// Public-certificate payloads carry base64 cert material by design —
+    /// flagging it as a high-entropy secret is noise that buries real
+    /// findings. (Real-estate feedback: "110 secrets", mostly this.) The
+    /// material is already surfaced via the cert/binary classification.
+    #[test]
+    fn public_cert_payload_content_is_not_a_high_entropy_secret() {
+        // Base64-ish cert body as a string (some profiles store <string>,
+        // not <data>): long, high-entropy, would trip looks_like_secret.
+        let cert_b64 = "MIIDdzCCAl+gAwIBAgIEbXf4qzANBgkqhkiG9w0BAQsFADBsMQswCQYDVQQGEwJVUzEQMA4GA1UECBMHQXJpem9uYQ==";
+        for ptype in [
+            "com.apple.security.root",
+            "com.apple.security.pem",
+            "com.apple.security.pkcs1",
+        ] {
+            let p = payload(
+                ptype,
+                map(&[("PayloadContent", plist::Value::String(cert_b64.into()))]),
+            );
+            let a = classify_payload(0, &p, &registry());
+            assert!(
+                !a.secrets
+                    .iter()
+                    .any(|s| s.kind == SecretKind::HighEntropyLiteral),
+                "{ptype}: expected no high-entropy finding on cert material"
+            );
+        }
+    }
+
+    /// PKCS#12 still reports its private key — that finding is real.
+    #[test]
+    fn pkcs12_private_key_finding_is_kept() {
+        let p = payload(
+            "com.apple.security.pkcs12",
+            map(&[("PayloadContent", plist::Value::Data(vec![1u8; 64]))]),
+        );
+        let a = classify_payload(0, &p, &registry());
+        assert!(a.secrets.iter().any(|s| s.kind == SecretKind::PrivateKey));
+    }
+
+    /// A genuinely suspicious literal in a NON-certificate payload is still
+    /// flagged — the cert exemption must not widen.
+    #[test]
+    fn high_entropy_literal_still_flagged_outside_cert_payloads() {
+        let p = payload(
+            "com.apple.wifi.managed",
+            map(&[(
+                "OpaqueSetting",
+                plist::Value::String("a3F9b2C1d8E7460aF1029384756bcDeF01928374aa".into()),
+            )]),
+        );
+        let a = classify_payload(0, &p, &registry());
+        assert!(
+            a.secrets
+                .iter()
+                .any(|s| s.kind == SecretKind::HighEntropyLiteral),
+            "non-cert payloads keep entropy detection"
+        );
     }
 
     #[test]
