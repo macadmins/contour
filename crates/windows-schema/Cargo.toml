@@ -1,0 +1,22 @@
+[package]
+name = "windows-schema"
+version = "0.4.1-beta.1"
+description = "Windows STIG compliance schemas (rules, registry checks, Fleet CSP enforcement)"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+arrow = { workspace = true }
+parquet = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# windows_rules / windows_baseline_edges share the mSCP column layout;
+# their readers and types are reused rather than duplicated.
+mscp-schema = { path = "../mscp-schema" }

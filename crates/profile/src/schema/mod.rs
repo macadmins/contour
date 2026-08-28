@@ -593,11 +593,18 @@ mod tests {
 
         let bitlocker = registry.get("BitLocker").expect("BitLocker CSP");
         assert_eq!(bitlocker.category, "windows-csp");
-        assert!(bitlocker.platforms.windows, "platform flag must be Windows");
-        assert!(
-            !bitlocker.platforms.macos,
-            "a CSP must not claim macOS support"
-        );
+
+        // Every manifest in the Windows registry is Windows-only. An early
+        // producer build stamped 83% of rows `platform: macOS`; this pins
+        // the fixed labeling so a regression cannot ship silently.
+        for m in registry.all() {
+            assert!(
+                m.platforms.windows && !m.platforms.macos && !m.platforms.ios,
+                "'{}' must be Windows-only, got {:?}",
+                m.payload_type,
+                m.platforms
+            );
+        }
 
         assert!(
             registry

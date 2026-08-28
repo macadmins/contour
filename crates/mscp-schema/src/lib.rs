@@ -151,6 +151,19 @@ mod tests {
         );
     }
 
+    /// Hard platform separation: the mSCP corpus is Apple-only. Windows
+    /// STIG rules live in the windows-schema crate — a Windows row here
+    /// means the pipelines re-merged and the separation regressed.
+    #[test]
+    fn rules_versioned_is_apple_only() {
+        let rules =
+            rules_versioned::read(embedded_rules_versioned()).expect("read stable rules_versioned");
+        assert!(
+            rules.iter().all(|r| r.platform != "Windows"),
+            "rules_versioned must not carry Windows rows (hard platform separation)"
+        );
+    }
+
     #[test]
     fn test_read_embedded_baseline_meta() {
         let metas = baseline_meta::read(embedded_baseline_meta())

@@ -56,6 +56,7 @@ crates/mdm-schema/data/*.toml
 crates/mscp-schema/data/*.parquet
 crates/osquery-schema/data/*.parquet
 crates/app-policy-schema/data/*.parquet
+crates/windows-schema/data/*.parquet
 # Beta seed channel — (downloaded at build time)
 crates/mdm-schema/data/beta/*.parquet
 crates/mscp-schema/data/beta/*.parquet
