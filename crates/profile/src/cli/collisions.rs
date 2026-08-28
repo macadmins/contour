@@ -104,23 +104,89 @@ pub(crate) fn parse_file(path: &Path, flat: bool) -> Vec<PayloadRecord> {
             .profile
             .payload_content
             .iter()
-            .map(|payload| PayloadRecord {
-                scope: scope.clone(),
-                domain: payload.payload_type.clone(),
-                source_file: file.clone(),
-                format: Format::Mobileconfig,
-                // Exclude only the standard envelope metadata keys; keep real config
-                // keys — incl. `PayloadContent` for com.apple.ManagedClient.preferences.
-                keys: payload
-                    .content
-                    .iter()
-                    .filter(|(k, _)| !crate::collisions::is_envelope_key(k))
-                    .map(|(k, v)| (k.clone(), canonical_plist(v)))
-                    .collect(),
+            .flat_map(|payload| {
+                // MCX containers are transport, not a domain: two profiles
+                // nesting DIFFERENT preference domains inside
+                // com.apple.ManagedClient.preferences are not colliding.
+                // Unwrap to one record per nested preference domain so
+                // comparisons happen at the level operators reason about.
+                if payload.payload_type == "com.apple.ManagedClient.preferences" {
+                    let nested = mcx_domain_records(payload, &scope, &file);
+                    if !nested.is_empty() {
+                        return nested;
+                    }
+                    // Unexpected shape — fall through to the container-level
+                    // record rather than dropping the payload silently.
+                }
+                vec![PayloadRecord {
+                    scope: scope.clone(),
+                    domain: payload.payload_type.clone(),
+                    source_file: file.clone(),
+                    format: Format::Mobileconfig,
+                    // Exclude only the standard envelope metadata keys; keep real
+                    // config keys.
+                    keys: payload
+                        .content
+                        .iter()
+                        .filter(|(k, _)| !crate::collisions::is_envelope_key(k))
+                        .map(|(k, v)| (k.clone(), canonical_plist(v)))
+                        .collect(),
+                }]
             })
             .collect(),
         Err(_) => vec![],
     }
+}
+
+/// Unwrap an MCX container payload into one record per nested preference
+/// domain. The MCX shape is `PayloadContent → {domain → {Forced|Set →
+/// [{mcx_preference_settings → {key: value}}]}}`; the record's keys are the
+/// union of the `mcx_preference_settings` entries. Returns an empty vec when
+/// the shape doesn't match (caller falls back to the container record).
+fn mcx_domain_records(
+    payload: &crate::profile::PayloadContent,
+    scope: &str,
+    file: &str,
+) -> Vec<PayloadRecord> {
+    let Some(plist::Value::Dictionary(domains)) = payload.content.get("PayloadContent") else {
+        return vec![];
+    };
+
+    let mut out = Vec::new();
+    for (domain, body) in domains {
+        let plist::Value::Dictionary(body) = body else {
+            continue;
+        };
+        let mut keys: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for mode in ["Forced", "Set"] {
+            let Some(plist::Value::Array(entries)) = body.get(mode) else {
+                continue;
+            };
+            for entry in entries {
+                let Some(settings) = entry
+                    .as_dictionary()
+                    .and_then(|d| d.get("mcx_preference_settings"))
+                    .and_then(plist::Value::as_dictionary)
+                else {
+                    continue;
+                };
+                for (k, v) in settings {
+                    keys.insert(k.clone(), canonical_plist(v));
+                }
+            }
+        }
+        if !keys.is_empty() {
+            out.push(PayloadRecord {
+                scope: scope.to_string(),
+                domain: domain.clone(),
+                source_file: file.to_string(),
+                format: Format::Mobileconfig,
+                keys,
+            });
+        }
+    }
+    out
 }
 
 /// Handle `profile collisions`.
@@ -294,4 +360,105 @@ fn render_markdown(report: &CollisionReport) -> String {
         writeln!(md).unwrap();
     }
     md
+}
+
+#[cfg(test)]
+mod mcx_tests {
+    use super::*;
+
+    /// Minimal mobileconfig with one ManagedClient.preferences payload
+    /// nesting `domain` with the given key/value.
+    fn mcx_profile(id: &str, domain: &str, key: &str, value: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadIdentifier</key><string>{id}</string>
+  <key>PayloadUUID</key><string>11111111-2222-3333-4444-555555555555</string>
+  <key>PayloadDisplayName</key><string>t</string>
+  <key>PayloadContent</key><array><dict>
+    <key>PayloadType</key><string>com.apple.ManagedClient.preferences</string>
+    <key>PayloadVersion</key><integer>1</integer>
+    <key>PayloadIdentifier</key><string>{id}.mcx</string>
+    <key>PayloadUUID</key><string>66666666-7777-8888-9999-000000000000</string>
+    <key>PayloadContent</key><dict>
+      <key>{domain}</key><dict>
+        <key>Forced</key><array><dict>
+          <key>mcx_preference_settings</key><dict>
+            <key>{key}</key><string>{value}</string>
+          </dict>
+        </dict></array>
+      </dict>
+    </dict>
+  </dict></array>
+</dict></plist>"#
+        )
+    }
+
+    fn write(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    /// Two MCX containers nesting DIFFERENT preference domains must not be
+    /// reported as colliding — the container is transport, not a domain.
+    /// (Real-estate feedback: 64 "colliding domains" were almost all this.)
+    #[test]
+    fn mcx_containers_with_different_nested_domains_do_not_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            dir.path(),
+            "a.mobileconfig",
+            &mcx_profile("com.acme.a", "com.acme.appone", "Greeting", "hi"),
+        );
+        let b = write(
+            dir.path(),
+            "b.mobileconfig",
+            &mcx_profile("com.acme.b", "com.acme.apptwo", "Greeting", "hi"),
+        );
+
+        let mut records = parse_file(&a, true);
+        records.extend(parse_file(&b, true));
+        assert!(!records.is_empty(), "fixtures must parse into records");
+        let collisions = crate::collisions::index_collisions(&records);
+        assert!(
+            collisions.is_empty(),
+            "different nested domains must not collide, got: {:?}",
+            collisions
+                .iter()
+                .map(|c| c.domain.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// The SAME nested domain managed by two files with different values is
+    /// a real conflict — and it is reported under the preference domain,
+    /// not the container type.
+    #[test]
+    fn mcx_same_nested_domain_conflicts_under_domain_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            dir.path(),
+            "a.mobileconfig",
+            &mcx_profile("com.acme.a", "com.acme.appone", "Greeting", "hi"),
+        );
+        let b = write(
+            dir.path(),
+            "b.mobileconfig",
+            &mcx_profile("com.acme.b", "com.acme.appone", "Greeting", "bye"),
+        );
+
+        let mut records = parse_file(&a, true);
+        records.extend(parse_file(&b, true));
+        let collisions = crate::collisions::index_collisions(&records);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(
+            collisions[0].domain, "com.acme.appone",
+            "collision must be keyed on the nested preference domain"
+        );
+        assert!(collisions[0].has_conflict(), "different values = conflict");
+    }
 }
