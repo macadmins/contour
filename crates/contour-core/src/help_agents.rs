@@ -461,7 +461,8 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
          - `--sop ci` — GitHub Actions setup, env vars (CONTOUR_ORG, CONTOUR_NAME), workflow config\n\
          - `--sop precommit` — wire contour validators into a Git pre-commit hook (uvx pre-commit)\n\
          - `--sop windows` — Windows CSP schema exploration (--windows on profile search/info)\n\
-         - `--sop app-policy` — AI-tool managed configuration (Claude Code, Codex, Cursor)"
+         - `--sop app-policy` — AI-tool managed configuration (Claude Code, Codex, Cursor)\n\
+         - `--sop beta-enrollment` — AppleSeed for IT beta declarations (offer/always-on/require/block)"
     )?;
     // schema-data is intentionally NOT advertised — it's a contour-developer
     // SOP about refreshing embedded parquet data from the upstream `posture`
@@ -510,10 +511,13 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "maintain" | "maintenance" | "hygiene" | "collisions" | "collision" | "consolidate"
         | "audit" => SOP_MAINTAIN,
         "windows" | "windows-csp" | "csp" | "ddf" | "admx" | "syncml" => SOP_WINDOWS_CSP,
+        "beta-enrollment" | "appleseed" | "seeding" | "beta-program" | "beta-programs" => {
+            SOP_BETA_ENROLLMENT
+        }
         "app-policy" | "app-policies" | "ai-tools" | "claude-code" | "claudecode" | "codex"
         | "cursor" => SOP_APP_POLICY,
         _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, maintain, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes, windows, app-policy"
+            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, maintain, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes, windows, app-policy, beta-enrollment"
         ),
     };
     writer.write_all(sop.as_bytes())?;
@@ -548,6 +552,12 @@ const SOP_DDM: &str = include_str!("../skills/contour/references/sop-ddm.md");
 /// isolation, the short-name resolver gotcha, provenance, and safety.
 /// Also carries the mSCP OS-preview section (`mscp schema … --beta`).
 const SOP_BETA: &str = include_str!("../skills/contour/references/sop-beta.md");
+
+/// SOP_BETA_ENROLLMENT — AppleSeed for IT beta declarations. Carries the
+/// manual Apple Business Manager gate (.p7m -> DEP API -> seeding tokens)
+/// as an explicit, agent-drivable handoff, plus the four outcome modes.
+const SOP_BETA_ENROLLMENT: &str =
+    include_str!("../skills/contour/references/sop-beta-enrollment.md");
 
 /// SOP_WINDOWS_CSP — exploration of the embedded Windows CSP dataset
 /// (`--windows` on `profile search`/`info`). Recipe/cookbook format;

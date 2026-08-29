@@ -57,6 +57,7 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 | DDM declarations | `contour help-ai --sop ddm` |
 | Rename display names, friendly naming, name.toml, reidentify | `contour help-ai --sop profile-naming` |
 | Windows CSP, ADMX, DDF node lookup | `contour help-ai --sop windows` |
+| Beta enrollment, AppleSeed for IT, seeding tokens | `contour help-ai --sop beta-enrollment` |
 | Claude Code / Codex / Cursor managed settings | `contour help-ai --sop app-policy` |
 | OS-preview compliance rules (Apple Intelligence, Siri AI) | `contour help-ai --sop beta` |
 
