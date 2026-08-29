@@ -306,11 +306,91 @@ fn walk_payload_path<'a>(
 /// Schema-validation errors + warnings for an in-memory declaration. Reused by
 /// the `validate` command and as the fail-closed gate before `generate`/`compose`
 /// write a declaration.
+/// Resolve a declaration's `Identifier`.
+///
+/// An explicit `--identifier` is used verbatim and needs no `--org` — the org
+/// domain exists only to *derive* an identifier (`<domain>.<short name>`).
+/// Callers that name declarations themselves (a GUI, a pipeline stage) would
+/// otherwise have to rewrite contour's output.
+///
+/// # Errors
+/// When no identifier is given and no org domain can be resolved.
+pub(crate) fn resolve_declaration_identifier(
+    identifier: Option<&str>,
+    org: Option<&str>,
+    config: Option<&ProfileConfig>,
+    short_name: &str,
+) -> Result<String> {
+    if let Some(id) = identifier.map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(id.to_string());
+    }
+    // Refuse silent "com.example" defaulting — DDM declarations are deployable
+    // and an example-domain identifier collides across orgs.
+    let domain = resolve_ddm_org_domain(org, config).ok_or_else(|| {
+        anyhow::anyhow!(
+            "organization domain is required for DDM generation\n\
+             Set it via:\n  \
+             • --identifier com.yourcompany.something (name it directly)\n  \
+             • organization.domain in profile.toml\n  \
+             • CONTOUR_ORG=com.yourcompany (env var, ideal for CI)\n  \
+             • organization.domain in .contour/config.toml"
+        )
+    })?;
+    Ok(format!("{domain}.{short_name}"))
+}
+
+/// Cross-key constraints Apple documents in prose but does not encode
+/// machine-readably in its schema — so neither the type checks nor the
+/// rangelist check can see them.
+///
+/// These are hand-encoded per declaration type from Apple's own key
+/// descriptions. Violations install cleanly and then misbehave on device,
+/// which is exactly the failure class contour exists to catch. A type with
+/// no rules here returns no errors.
+fn cross_key_errors(decl: &Declaration) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    if decl.declaration_type == "com.apple.configuration.softwareupdate.settings" {
+        let Some(beta) = decl.payload.get("Beta").and_then(|v| v.as_object()) else {
+            return errors;
+        };
+        // Absent ProgramEnrollment is implicitly `Allowed` (Apple says so
+        // for unsupervised devices), so only an explicit value constrains.
+        let enrollment = beta.get("ProgramEnrollment").and_then(|v| v.as_str());
+        let has_offer = beta.contains_key("OfferPrograms");
+        let has_require = beta.contains_key("RequireProgram");
+
+        if has_offer && has_require {
+            errors.push(
+                "Beta.OfferPrograms and Beta.RequireProgram are mutually exclusive — \
+                 Apple: \"The OfferPrograms key must not be present if this key is present\""
+                    .to_string(),
+            );
+        }
+        if has_offer && enrollment == Some("AlwaysOff") {
+            errors.push(
+                "Beta.OfferPrograms requires Beta.ProgramEnrollment to be \
+                 Allowed or AlwaysOn (found AlwaysOff)"
+                    .to_string(),
+            );
+        }
+        if has_require && enrollment != Some("AlwaysOn") {
+            let found = enrollment.unwrap_or("absent (implicitly Allowed)");
+            errors.push(format!(
+                "Beta.RequireProgram requires Beta.ProgramEnrollment to be \
+                 AlwaysOn (found {found})"
+            ));
+        }
+    }
+
+    errors
+}
+
 pub fn declaration_errors(
     decl: &Declaration,
     registry: &SchemaRegistry,
 ) -> (Vec<String>, Vec<String>) {
-    let mut errors = Vec::new();
+    let mut errors = cross_key_errors(decl);
     let mut warnings = Vec::new();
 
     // Check if schema exists for this declaration type
@@ -1107,6 +1187,19 @@ pub fn handle_ddm_coverage(channel: crate::schema::Channel, output_mode: OutputM
     Ok(())
 }
 
+/// Sibling keys that cannot coexist under the same parent, per Apple's prose
+/// cross-key rules (see `cross_key_errors`). The `--full` scaffold emits only
+/// the first member it reaches, so contour never produces a document its own
+/// validator rejects.
+fn exclusive_siblings(payload_type: &str, parent: &str) -> &'static [&'static str] {
+    match (payload_type, parent) {
+        ("com.apple.configuration.softwareupdate.settings", "Beta") => {
+            &["OfferPrograms", "RequireProgram"]
+        }
+        _ => &[],
+    }
+}
+
 /// Generate a default JSON value for a field, recursively populating Dictionary children.
 ///
 /// Required children are always emitted so that optional parents remain valid when
@@ -1158,6 +1251,8 @@ fn generate_field_value(
         FieldType::Array => serde_json::Value::Array(vec![]),
         FieldType::Dictionary => {
             // Walk field_order (not fields map) to preserve declaration order.
+            let exclusive = exclusive_siblings(&manifest.payload_type, field_name);
+            let mut emitted_exclusive = false;
             let mut obj = serde_json::Map::new();
             for child_name in &manifest.field_order {
                 let Some(child) = manifest.fields.get(child_name) else {
@@ -1168,6 +1263,13 @@ fn generate_field_value(
                 }
                 if !child.flags.required && !full {
                     continue;
+                }
+                // Mutually exclusive siblings: take the first, skip the rest.
+                if exclusive.contains(&child_name.as_str()) {
+                    if emitted_exclusive {
+                        continue;
+                    }
+                    emitted_exclusive = true;
                 }
                 obj.insert(
                     child_name.clone(),
@@ -1187,6 +1289,7 @@ pub fn handle_ddm_generate(
     output: Option<&str>,
     full: bool,
     org: Option<&str>,
+    identifier: Option<&str>,
     schema_path: Option<&str>,
     payload_file: Option<&str>,
     beta: bool,
@@ -1268,16 +1371,7 @@ pub fn handle_ddm_generate(
         .split('.')
         .next_back()
         .unwrap_or("declaration");
-    let domain = resolve_ddm_org_domain(org, config).ok_or_else(|| {
-        anyhow::anyhow!(
-            "organization domain is required for DDM generation\n\
-             Set it via:\n  \
-             • organization.domain in profile.toml\n  \
-             • CONTOUR_ORG=com.yourcompany (env var, ideal for CI)\n  \
-             • organization.domain in .contour/config.toml"
-        )
-    })?;
-    let identifier = format!("{domain}.{short_name}");
+    let identifier = resolve_declaration_identifier(identifier, org, config, short_name)?;
 
     let decl = Declaration {
         declaration_type: manifest.payload_type.clone(),
@@ -2076,7 +2170,18 @@ mod tests {
         for type_name in &ddm_types {
             for full in [false, true] {
                 let payload = build_payload(type_name, full);
-                let errors = validate_payload(type_name, &payload);
+                let mut errors = validate_payload(type_name, &payload);
+                // Scaffolds must also satisfy Apple's cross-key rules —
+                // contour must never emit a document its own validator rejects.
+                let manifest = registry.get_by_name(type_name).unwrap();
+                let decl = Declaration {
+                    declaration_type: manifest.payload_type.clone(),
+                    identifier: "com.acme.test".to_string(),
+                    server_token: None,
+                    authentication: None,
+                    payload: payload.clone(),
+                };
+                errors.extend(cross_key_errors(&decl));
                 if !errors.is_empty() {
                     failures.push(format!("{type_name} (full={full}): {}", errors.join(", ")));
                 }
@@ -2231,6 +2336,171 @@ mod tests {
 }
 
 #[cfg(test)]
+mod identifier_tests {
+    use super::resolve_declaration_identifier;
+
+    /// An explicit `--identifier` is used verbatim, and makes `--org`
+    /// unnecessary — the org was only ever needed to derive one. Wedge (and
+    /// any GUI/pipeline that names declarations itself) previously had to
+    /// regex-patch contour's output to achieve this.
+    #[test]
+    fn explicit_identifier_wins_and_needs_no_org() {
+        let got =
+            resolve_declaration_identifier(Some("com.acme.beta.pilot"), None, None, "settings")
+                .unwrap();
+        assert_eq!(got, "com.acme.beta.pilot");
+    }
+
+    #[test]
+    fn falls_back_to_org_derived_identifier() {
+        let got = resolve_declaration_identifier(None, Some("com.acme"), None, "settings").unwrap();
+        assert_eq!(got, "com.acme.settings");
+    }
+
+    #[test]
+    fn without_identifier_or_org_it_errors() {
+        // No org anywhere (env/config are not set in the test process).
+        let err = resolve_declaration_identifier(None, None, None, "settings");
+        assert!(err.is_err(), "expected an error when neither is available");
+    }
+
+    #[test]
+    fn blank_identifier_is_ignored_in_favour_of_org() {
+        let got =
+            resolve_declaration_identifier(Some("  "), Some("com.acme"), None, "settings").unwrap();
+        assert_eq!(got, "com.acme.settings");
+    }
+}
+
+#[cfg(test)]
+mod cross_key_tests {
+    use super::{Declaration, DeclarationPayload, cross_key_errors};
+
+    const SWU: &str = "com.apple.configuration.softwareupdate.settings";
+
+    fn decl_with_beta(beta: serde_json::Value) -> Declaration {
+        let mut payload = DeclarationPayload::new();
+        payload.insert("Beta".to_string(), beta);
+        Declaration {
+            declaration_type: SWU.to_string(),
+            identifier: "com.acme.settings".to_string(),
+            server_token: None,
+            authentication: None,
+            payload,
+        }
+    }
+
+    fn programs() -> serde_json::Value {
+        serde_json::json!([{ "Program": { "Description": "Pilot", "Token": "T" } }])
+    }
+
+    fn program() -> serde_json::Value {
+        serde_json::json!({ "Description": "Pilot", "Token": "T" })
+    }
+
+    /// Apple: OfferPrograms "must only be present if ProgramEnrollment is
+    /// set to Allowed or AlwaysOn".
+    #[test]
+    fn offer_programs_with_always_off_is_an_error() {
+        let d = decl_with_beta(serde_json::json!({
+            "ProgramEnrollment": "AlwaysOff",
+            "OfferPrograms": programs(),
+        }));
+        let errors = cross_key_errors(&d);
+        assert!(
+            errors.iter().any(|e| e.contains("OfferPrograms")),
+            "expected an OfferPrograms/AlwaysOff error, got: {errors:?}"
+        );
+    }
+
+    /// Apple: RequireProgram "must only be present if ProgramEnrollment is
+    /// set to AlwaysOn".
+    #[test]
+    fn require_program_without_always_on_is_an_error() {
+        let d = decl_with_beta(serde_json::json!({
+            "ProgramEnrollment": "Allowed",
+            "RequireProgram": program(),
+        }));
+        let errors = cross_key_errors(&d);
+        assert!(
+            errors.iter().any(|e| e.contains("RequireProgram")),
+            "expected a RequireProgram/AlwaysOn error, got: {errors:?}"
+        );
+    }
+
+    /// Apple: "The OfferPrograms key must not be present if this
+    /// [RequireProgram] key is present."
+    #[test]
+    fn offer_and_require_together_is_an_error() {
+        let d = decl_with_beta(serde_json::json!({
+            "ProgramEnrollment": "AlwaysOn",
+            "OfferPrograms": programs(),
+            "RequireProgram": program(),
+        }));
+        let errors = cross_key_errors(&d);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("OfferPrograms") && e.contains("RequireProgram")),
+            "expected a mutual-exclusion error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn legal_beta_combinations_pass() {
+        // offer
+        let offer = decl_with_beta(serde_json::json!({
+            "ProgramEnrollment": "Allowed", "OfferPrograms": programs(),
+        }));
+        // always-on with a menu
+        let always_on = decl_with_beta(serde_json::json!({
+            "ProgramEnrollment": "AlwaysOn", "OfferPrograms": programs(),
+        }));
+        // require
+        let require = decl_with_beta(serde_json::json!({
+            "ProgramEnrollment": "AlwaysOn", "RequireProgram": program(),
+        }));
+        // block
+        let block = decl_with_beta(serde_json::json!({ "ProgramEnrollment": "AlwaysOff" }));
+        for (name, d) in [
+            ("offer", offer),
+            ("always_on", always_on),
+            ("require", require),
+            ("block", block),
+        ] {
+            assert!(
+                cross_key_errors(&d).is_empty(),
+                "{name} must be legal, got: {:?}",
+                cross_key_errors(&d)
+            );
+        }
+    }
+
+    /// Apple explicitly allows OfferPrograms with no ProgramEnrollment on
+    /// unsupervised devices, where it is implicitly `Allowed`.
+    #[test]
+    fn offer_programs_without_program_enrollment_is_legal() {
+        let d = decl_with_beta(serde_json::json!({ "OfferPrograms": programs() }));
+        assert!(cross_key_errors(&d).is_empty());
+    }
+
+    /// Declaration types with no encoded cross-key rules are unaffected.
+    #[test]
+    fn unknown_declaration_type_has_no_cross_key_rules() {
+        let mut payload = DeclarationPayload::new();
+        payload.insert("Anything".to_string(), serde_json::json!(true));
+        let d = Declaration {
+            declaration_type: "com.apple.configuration.passcode.settings".to_string(),
+            identifier: "com.acme.p".to_string(),
+            server_token: None,
+            authentication: None,
+            payload,
+        };
+        assert!(cross_key_errors(&d).is_empty());
+    }
+}
+
+#[cfg(test)]
 mod enum_validation_tests {
     use super::{Declaration, DeclarationPayload, declaration_errors};
     use crate::schema::types::{FieldFlags, Platforms};
@@ -2367,6 +2637,31 @@ mod enum_validation_tests {
 #[cfg(test)]
 mod scaffold_value_tests {
     use super::generate_field_value;
+
+    /// `--full` scaffolds every optional key — but mutually exclusive
+    /// siblings must not both appear, or contour emits a document its own
+    /// validator rejects. (softwareupdate.settings carries the canonical
+    /// pair: Beta.OfferPrograms vs Beta.RequireProgram.)
+    #[test]
+    fn full_scaffold_omits_mutually_exclusive_siblings() {
+        let registry = crate::schema::SchemaRegistry::embedded().unwrap();
+        let manifest = registry
+            .get("com.apple.configuration.softwareupdate.settings")
+            .unwrap();
+        let field = manifest.fields.get("Beta").unwrap();
+        let beta = generate_field_value("Beta", field, manifest, true);
+
+        let has_offer = beta.get("OfferPrograms").is_some();
+        let has_require = beta.get("RequireProgram").is_some();
+        assert!(
+            !(has_offer && has_require),
+            "scaffold emitted both mutually exclusive keys: {beta}"
+        );
+        assert!(
+            has_offer || has_require,
+            "scaffold should still illustrate one of them"
+        );
+    }
 
     /// A defaultless enum field must scaffold as a member of its rangelist,
     /// not as `""` — generate's fail-closed gate rejects non-members.
