@@ -9,6 +9,7 @@ pub mod classify;
 pub mod collisions;
 pub mod command;
 pub mod ddm;
+pub mod ddm_beta;
 pub mod diff;
 pub mod docs;
 pub mod duplicate;
@@ -1495,6 +1496,67 @@ pub enum DdmAction {
     },
 
     #[command(about = "Generate a DDM declaration JSON from schema")]
+    #[command(
+        about = "Build a beta-enrollment declaration (AppleSeed for IT) in one step",
+        long_about = "Emit a com.apple.configuration.softwareupdate.settings declaration whose \
+                      Beta object matches the outcome you want:\n  \
+                      offer      — users may self-enroll; your programs are also offered\n  \
+                      always-on  — only your programs; users cannot self-enroll\n  \
+                      require    — device auto-enrolls into exactly one program\n  \
+                      block      — no beta enrollment; removes the device from any program\n\
+                      \n\
+                      Seeding tokens come from Apple (ABM MDM-server token -> DEP API \
+                      /os-beta-enrollment/tokens). Run without --tokens to print those \
+                      manual steps."
+    )]
+    Beta {
+        #[arg(long, value_enum, help = "Desired outcome on the device")]
+        mode: crate::cli::ddm_beta::BetaMode,
+
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "Seeding tokens: Apple's /os-beta-enrollment/tokens response, or a bare JSON array"
+        )]
+        tokens: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "PROGRAM",
+            help = "Limit to these programs (by title or token); repeatable. Required for --mode require when the file has several"
+        )]
+        select: Vec<String>,
+
+        #[arg(
+            long,
+            help = "Emit one declaration per platform into -o <DIR> (a device only enrols with a token for its own OS)"
+        )]
+        split_by_os: bool,
+
+        #[arg(
+            long,
+            conflicts_with = "select",
+            help = "Pick programs interactively from the tokens file (not available in CI)"
+        )]
+        interactive: bool,
+
+        #[arg(
+            short,
+            long,
+            help = "Output file path, or directory with --split-by-os"
+        )]
+        output: Option<String>,
+
+        #[arg(long, help = "Organization reverse domain (derives the Identifier)")]
+        org: Option<String>,
+
+        #[arg(
+            long,
+            help = "Set the declaration Identifier verbatim (no --org needed)"
+        )]
+        identifier: Option<String>,
+    },
+
     Generate {
         #[arg(help = "Declaration type name (e.g., passcode.settings)")]
         name: String,
@@ -1510,6 +1572,12 @@ pub enum DdmAction {
             help = "Organization reverse domain (e.g., com.acme). Overrides profile.toml / .contour/config.toml / CONTOUR_ORG"
         )]
         org: Option<String>,
+
+        #[arg(
+            long,
+            help = "Set the declaration Identifier verbatim (skips org-derived naming; no --org needed)"
+        )]
+        identifier: Option<String>,
 
         #[arg(
             short = 'p',

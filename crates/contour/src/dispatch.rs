@@ -1109,6 +1109,29 @@ fn dispatch_profile(
             }
         },
         Commands::Ddm { action } => match action {
+            DdmAction::Beta {
+                mode,
+                tokens,
+                select,
+                split_by_os,
+                interactive,
+                output,
+                org,
+                identifier,
+            } => {
+                profile::cli::ddm_beta::handle_ddm_beta(
+                    mode,
+                    tokens.as_deref(),
+                    &select,
+                    split_by_os,
+                    interactive,
+                    org.as_deref(),
+                    identifier.as_deref(),
+                    output.as_deref(),
+                    config.as_ref(),
+                    output_mode,
+                )?;
+            }
             DdmAction::Parse {
                 paths,
                 recursive,
@@ -1196,6 +1219,7 @@ fn dispatch_profile(
                 output,
                 full,
                 org,
+                identifier,
                 schema_path,
                 payload,
                 beta,
@@ -1206,6 +1230,7 @@ fn dispatch_profile(
                     output.as_deref(),
                     full,
                     org.as_deref(),
+                    identifier.as_deref(),
                     schema_path.as_deref(),
                     payload.as_deref(),
                     beta,

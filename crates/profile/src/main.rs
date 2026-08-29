@@ -992,11 +992,35 @@ fn run(cli: Cli) -> Result<()> {
             DdmAction::Coverage { beta } => {
                 cli::ddm::handle_ddm_coverage(channel.or_beta(beta), output_mode)?;
             }
+            DdmAction::Beta {
+                mode,
+                tokens,
+                select,
+                split_by_os,
+                interactive,
+                output,
+                org,
+                identifier,
+            } => {
+                cli::ddm_beta::handle_ddm_beta(
+                    mode,
+                    tokens.as_deref(),
+                    &select,
+                    split_by_os,
+                    interactive,
+                    org.as_deref(),
+                    identifier.as_deref(),
+                    output.as_deref(),
+                    config.as_ref(),
+                    output_mode,
+                )?;
+            }
             DdmAction::Generate {
                 name,
                 output,
                 full,
                 org,
+                identifier,
                 schema_path,
                 payload,
                 beta,
@@ -1007,6 +1031,7 @@ fn run(cli: Cli) -> Result<()> {
                     output.as_deref(),
                     full,
                     org.as_deref(),
+                    identifier.as_deref(),
                     schema_path.as_deref(),
                     payload.as_deref(),
                     beta,
