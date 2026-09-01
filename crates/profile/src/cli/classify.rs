@@ -96,7 +96,7 @@ pub fn handle_classify(
         let changed = is_classified && final_name != c.old_name;
 
         let sync = if sync_identity {
-            org.map(|o| (o, scheme))
+            org.map(|o| (o, scheme.clone()))
         } else {
             None
         };

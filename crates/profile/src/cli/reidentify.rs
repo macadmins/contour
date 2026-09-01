@@ -25,7 +25,7 @@ struct ReidentifyResult {
 pub fn handle_reidentify(
     paths: &[String],
     org: &str,
-    scheme: Scheme,
+    scheme: &Scheme,
     recursive: bool,
     max_depth: Option<usize>,
     parallel: bool,
@@ -41,6 +41,54 @@ pub fn handle_reidentify(
         }
         vec![p.to_path_buf()]
     };
+
+    // Regenerating UUIDs rewrites references only WITHIN each profile. If a
+    // reference crosses files (a Wi-Fi profile naming a certificate that lives
+    // in another file), a per-file remap would leave the referrer pointing at
+    // a UUID nothing owns — installs clean, never authenticates. Refuse, and
+    // name the tool that does handle cross-file references.
+    if matches!(
+        scheme,
+        Scheme::Pattern {
+            regenerate_uuid: true,
+            ..
+        }
+    ) && files.len() > 1
+    {
+        let parsed: Vec<(PathBuf, crate::profile::ConfigurationProfile)> = files
+            .iter()
+            .filter_map(|f| {
+                parse_profile_auto_unsign(&f.to_string_lossy())
+                    .ok()
+                    .map(|p| (f.clone(), p))
+            })
+            .collect();
+        let analysis = crate::link::analyze::analyze_links(&parsed);
+        let cross_file: Vec<&crate::link::analyze::ResolvedLink> = analysis
+            .links
+            .iter()
+            .filter(|l| l.to_file.as_ref().is_some_and(|to| *to != l.from_file))
+            .collect();
+        if !cross_file.is_empty() {
+            anyhow::bail!(
+                "--regenerate-uuid would break {} cross-file reference(s): {}\n\
+                 Per-file UUID remapping cannot follow a reference into another file. \
+                 Either drop --regenerate-uuid (identifiers still get rewritten, UUIDs \
+                 kept), or use `contour profile link` which synchronises UUIDs across \
+                 the whole set.",
+                cross_file.len(),
+                cross_file
+                    .iter()
+                    .map(|l| format!(
+                        "{} → {}",
+                        l.from_file,
+                        l.to_file.clone().unwrap_or_default()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
 
     let run = |path: &PathBuf| -> Result<ReidentifyResult, (String, String)> {
         reidentify_one(path, org, scheme, write)
@@ -67,7 +115,12 @@ pub fn handle_reidentify(
     Ok(())
 }
 
-fn reidentify_one(path: &Path, org: &str, scheme: Scheme, write: bool) -> Result<ReidentifyResult> {
+fn reidentify_one(
+    path: &Path,
+    org: &str,
+    scheme: &Scheme,
+    write: bool,
+) -> Result<ReidentifyResult> {
     if signing::is_signed_profile(path).unwrap_or(false) {
         anyhow::bail!("signed — skipping (reidentify would break the signature)");
     }
@@ -75,7 +128,7 @@ fn reidentify_one(path: &Path, org: &str, scheme: Scheme, write: bool) -> Result
         .with_context(|| format!("parse {}", path.display()))?;
     let config = ReidentifyConfig {
         org_domain: org.to_string(),
-        scheme,
+        scheme: scheme.clone(),
     };
     let report = reidentify_profile(&mut profile, &config)?;
 
@@ -135,6 +188,28 @@ fn print_json(results: &[ReidentifyResult], write: bool) {
         "profiles": results,
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+}
+
+/// Resolve the scheme from CLI flags: `--from-prefix/--to-prefix` selects the
+/// pattern scheme (UUIDs preserved unless `regenerate_uuid`); otherwise the
+/// `--scheme` name applies.
+///
+/// # Errors
+/// Returns an error for an unknown scheme name.
+pub fn resolve_scheme(
+    scheme: &str,
+    from_prefix: Option<&str>,
+    to_prefix: Option<&str>,
+    regenerate_uuid: bool,
+) -> Result<Scheme> {
+    match (from_prefix, to_prefix) {
+        (Some(from), Some(to)) => Ok(Scheme::Pattern {
+            from: from.to_string(),
+            to: to.to_string(),
+            regenerate_uuid,
+        }),
+        _ => parse_scheme(scheme),
+    }
 }
 
 /// Parse the `--scheme` value.

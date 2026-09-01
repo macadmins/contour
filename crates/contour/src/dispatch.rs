@@ -530,17 +530,31 @@ fn dispatch_profile(
             paths,
             org,
             scheme,
+            from_prefix,
+            to_prefix,
+            regenerate_uuid,
             recursive,
             max_depth,
             no_parallel,
             write,
         } => {
-            let org = contour_core::resolve_org(org)?;
-            let scheme = profile::cli::reidentify::parse_scheme(&scheme)?;
+            // Pattern mode names the new prefix outright, so no org is needed;
+            // the uuid/name schemes derive identifiers from it and do.
+            let org = if from_prefix.is_some() {
+                org.unwrap_or_default()
+            } else {
+                contour_core::resolve_org(org)?
+            };
+            let scheme = profile::cli::reidentify::resolve_scheme(
+                &scheme,
+                from_prefix.as_deref(),
+                to_prefix.as_deref(),
+                regenerate_uuid,
+            )?;
             profile::cli::reidentify::handle_reidentify(
                 &paths,
                 &org,
-                scheme,
+                &scheme,
                 recursive,
                 max_depth,
                 !no_parallel,

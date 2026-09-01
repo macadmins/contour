@@ -413,9 +413,25 @@ pub enum Commands {
             long,
             value_name = "SCHEME",
             default_value = "uuid",
-            help = "Identifier scheme: uuid (sync to PayloadUUID) or name (slug from display name)"
+            help = "Identifier scheme: uuid (sync to PayloadUUID) or name (slug from display name). Ignored when --from-prefix is given"
         )]
         scheme: String,
+
+        #[arg(
+            long,
+            requires = "to_prefix",
+            help = "Batch mode: rewrite this identifier prefix across the envelope and every payload (matches on dot boundaries)"
+        )]
+        from_prefix: Option<String>,
+
+        #[arg(long, requires = "from_prefix", help = "Replacement prefix")]
+        to_prefix: Option<String>,
+
+        #[arg(
+            long,
+            help = "Also regenerate PayloadUUIDs (and remap cross-references). Off by default: MDM keys installed payloads by UUID, so keeping them makes this an update rather than a remove-and-reinstall"
+        )]
+        regenerate_uuid: bool,
 
         #[arg(short, long, help = "Process directories recursively")]
         recursive: bool,
