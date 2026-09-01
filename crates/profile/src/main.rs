@@ -992,6 +992,26 @@ fn run(cli: Cli) -> Result<()> {
             DdmAction::Coverage { beta } => {
                 cli::ddm::handle_ddm_coverage(channel.or_beta(beta), output_mode)?;
             }
+            DdmAction::Reidentify {
+                paths,
+                from,
+                to,
+                from_prefix,
+                to_prefix,
+                recursive,
+                write,
+            } => {
+                cli::ddm_reidentify::handle_ddm_reidentify(
+                    &paths,
+                    from.as_deref(),
+                    to.as_deref(),
+                    from_prefix.as_deref(),
+                    to_prefix.as_deref(),
+                    recursive,
+                    write,
+                    output_mode,
+                )?;
+            }
             DdmAction::Beta {
                 mode,
                 tokens,

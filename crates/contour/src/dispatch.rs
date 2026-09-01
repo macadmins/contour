@@ -1109,6 +1109,26 @@ fn dispatch_profile(
             }
         },
         Commands::Ddm { action } => match action {
+            DdmAction::Reidentify {
+                paths,
+                from,
+                to,
+                from_prefix,
+                to_prefix,
+                recursive,
+                write,
+            } => {
+                profile::cli::ddm_reidentify::handle_ddm_reidentify(
+                    &paths,
+                    from.as_deref(),
+                    to.as_deref(),
+                    from_prefix.as_deref(),
+                    to_prefix.as_deref(),
+                    recursive,
+                    write,
+                    output_mode,
+                )?;
+            }
             DdmAction::Beta {
                 mode,
                 tokens,

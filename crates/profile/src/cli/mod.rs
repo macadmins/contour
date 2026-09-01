@@ -10,6 +10,7 @@ pub mod collisions;
 pub mod command;
 pub mod ddm;
 pub mod ddm_beta;
+pub mod ddm_reidentify;
 pub mod diff;
 pub mod docs;
 pub mod duplicate;
@@ -1496,6 +1497,54 @@ pub enum DdmAction {
     },
 
     #[command(about = "Generate a DDM declaration JSON from schema")]
+    #[command(
+        about = "Rewrite declaration Identifiers in place, keeping cross-references consistent",
+        long_about = "Replace one exact Identifier, or rewrite a whole prefix across a \
+                      directory so every declaration reads `com.acme.*`. Activation \
+                      references (StandardConfigurations, asset references) follow the \
+                      rename, so a bundle never dangles.\n\
+                      \n\
+                      Defaults to a dry-run preview; pass --write to apply.\n\
+                      \n\
+                      Examples:\n  \
+                      contour profile ddm reidentify decl.json \\\n    \
+                        --from com.fleetdm.settings \\\n    \
+                        --to com.acme.config.softwareupdate.settings.beta --write\n  \
+                      contour profile ddm reidentify ./decls -r \\\n    \
+                        --from-prefix com.fleetdm --to-prefix com.acme --write"
+    )]
+    Reidentify {
+        #[arg(help = "Declaration file(s) or directory", required = true, num_args = 1..)]
+        paths: Vec<String>,
+
+        #[arg(
+            long,
+            requires = "to",
+            conflicts_with = "from_prefix",
+            help = "Exact Identifier to replace"
+        )]
+        from: Option<String>,
+
+        #[arg(long, requires = "from", help = "Replacement Identifier")]
+        to: Option<String>,
+
+        #[arg(
+            long,
+            requires = "to_prefix",
+            help = "Identifier prefix to replace (matches on dot boundaries)"
+        )]
+        from_prefix: Option<String>,
+
+        #[arg(long, requires = "from_prefix", help = "Replacement prefix")]
+        to_prefix: Option<String>,
+
+        #[arg(short, long, help = "Process directories recursively")]
+        recursive: bool,
+
+        #[arg(long, help = "Write changes in place (default is a dry-run preview)")]
+        write: bool,
+    },
+
     #[command(
         about = "Build a beta-enrollment declaration (AppleSeed for IT) in one step",
         long_about = "Emit a com.apple.configuration.softwareupdate.settings declaration whose \

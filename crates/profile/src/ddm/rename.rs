@@ -150,6 +150,149 @@ fn write_declaration(path: &Path, value: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// How to rewrite declaration identifiers in a batch.
+#[derive(Debug, Clone, Copy)]
+pub enum IdentifierRewrite<'a> {
+    /// Replace one exact identifier with another.
+    Exact { from: &'a str, to: &'a str },
+    /// Replace a leading prefix on every identifier that carries it, so a
+    /// mixed directory can be made to read `com.acme.*` in one pass. Matches
+    /// only on a dot boundary (or the whole identifier), so `com.acmecorp`
+    /// is never rewritten by a `com.acme` prefix.
+    Prefix { from: &'a str, to: &'a str },
+}
+
+impl IdentifierRewrite<'_> {
+    /// The rewritten identifier, or `None` when this rule does not apply.
+    fn apply(&self, identifier: &str) -> Option<String> {
+        match *self {
+            IdentifierRewrite::Exact { from, to } => (identifier == from).then(|| to.to_string()),
+            IdentifierRewrite::Prefix { from, to } => {
+                let rest = identifier.strip_prefix(from)?;
+                // Whole-identifier match, or the next char starts a new
+                // component — never a partial component like `com.acmecorp`.
+                if rest.is_empty() || rest.starts_with('.') {
+                    Some(format!("{to}{rest}"))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl DdmBundleRename {
+    /// How many declarations had their own `Identifier` rewritten. Zero after
+    /// a rewrite the operator expected to match means the pattern was wrong —
+    /// callers should surface that rather than report success.
+    pub fn matched(&self) -> usize {
+        self.files.iter().filter(|f| f.identifier.is_some()).count()
+    }
+}
+
+/// Rewrite declaration identifiers across a set of DDM `.json` files, keeping
+/// cross-references consistent.
+///
+/// Two passes, mirroring [`rename_ddm_bundle`]: build the old→new identifier
+/// map from every file the rule matches, then rewrite each declaration's own
+/// `Identifier` and any reference to a renamed identifier (an activation's
+/// `StandardConfigurations`, an asset reference, …). With `dry_run` nothing is
+/// written but the plan is still reported.
+///
+/// Non-DDM `.json`, parse errors, and I/O errors are recorded rather than
+/// aborting the batch.
+pub fn set_ddm_identifier(
+    files: &[PathBuf],
+    rewrite: &IdentifierRewrite<'_>,
+    output_dir: Option<&str>,
+    suffix: &str,
+    dry_run: bool,
+) -> DdmBundleRename {
+    let mut result = DdmBundleRename::default();
+    let mut parsed: Vec<(PathBuf, Value)> = Vec::new();
+    let mut map: HashMap<String, String> = HashMap::new();
+
+    // Pass 1 — parse, filter to DDM declarations, build the rename map.
+    for path in files {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) => {
+                result
+                    .failures
+                    .push((path.clone(), format!("read failed: {e}")));
+                continue;
+            }
+        };
+        let value: Value = match serde_json::from_str(&text) {
+            Ok(value) => value,
+            Err(e) => {
+                result
+                    .failures
+                    .push((path.clone(), format!("invalid JSON: {e}")));
+                continue;
+            }
+        };
+        if !is_ddm_declaration(&value) {
+            result.files.push(DdmFileRename {
+                input: path.clone(),
+                output: path.clone(),
+                identifier: None,
+                reference_updates: 0,
+                skipped_non_ddm: true,
+            });
+            continue;
+        }
+        if let Some(old) = value.get("Identifier").and_then(Value::as_str)
+            && let Some(new) = rewrite.apply(old)
+        {
+            map.insert(old.to_string(), new);
+        }
+        parsed.push((path.clone(), value));
+    }
+
+    // Pass 2 — rewrite identifiers + cross-references, then write.
+    for (path, mut value) in parsed {
+        let old_id = value
+            .get("Identifier")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let new_id = map.get(&old_id).cloned();
+
+        let mut count = 0usize;
+        rewrite_references(&mut value, &map, &mut count);
+        // The declaration's own Identifier is inside `value`, so it was
+        // counted by the walk; the rest are genuine cross-references.
+        let reference_updates = count.saturating_sub(usize::from(new_id.is_some()));
+
+        let output = ddm_output_path(&path, output_dir, suffix);
+        if !dry_run && (new_id.is_some() || reference_updates > 0) {
+            match serde_json::to_string_pretty(&value)
+                .map_err(|e| e.to_string())
+                .and_then(|body| std::fs::write(&output, body + "\n").map_err(|e| e.to_string()))
+            {
+                Ok(()) => {}
+                Err(e) => {
+                    result
+                        .failures
+                        .push((path.clone(), format!("write failed: {e}")));
+                    continue;
+                }
+            }
+        }
+
+        result.files.push(DdmFileRename {
+            input: path,
+            output,
+            identifier: new_id.map(|new| (old_id, new)),
+            reference_updates,
+            skipped_non_ddm: false,
+        });
+    }
+
+    result
+}
+
 /// Rename the org prefix across a set of DDM `.json` files (bundle-aware).
 ///
 /// Two passes: (1) parse every file, keep the DDM declarations, and build the
@@ -504,5 +647,218 @@ mod tests {
         assert!(result.files[0].skipped_non_ddm);
         // Nothing written for a skipped file.
         assert!(!dir.path().join("package-normalized.json").exists());
+    }
+
+    // ── Arbitrary identifier replacement (`ddm reidentify`) ──────────────
+
+    fn write_json(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    /// The headline case: swap one declaration's Identifier for an unrelated
+    /// one, in place. An org-prefix rename cannot express this.
+    #[test]
+    fn set_identifier_replaces_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = write_json(
+            dir.path(),
+            "swu.json",
+            r#"{"Type":"com.apple.configuration.softwareupdate.settings",
+                "Identifier":"com.fleetdm.settings","Payload":{"Notifications":true}}"#,
+        );
+
+        let result = set_ddm_identifier(
+            std::slice::from_ref(&f),
+            &IdentifierRewrite::Exact {
+                from: "com.fleetdm.settings",
+                to: "com.acme.config.softwareupdate.settings.beta",
+            },
+            None,
+            "",
+            false,
+        );
+
+        assert!(result.failures.is_empty(), "{:?}", result.failures);
+        let body: Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
+        assert_eq!(
+            body["Identifier"],
+            "com.acme.config.softwareupdate.settings.beta"
+        );
+        // The payload is untouched.
+        assert_eq!(body["Payload"]["Notifications"], true);
+    }
+
+    /// An activation references its configuration by Identifier. Renaming the
+    /// configuration must rewrite the referrer, or the bundle dangles.
+    #[test]
+    fn set_identifier_rewrites_activation_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = write_json(
+            dir.path(),
+            "configuration.json",
+            r#"{"Type":"com.apple.configuration.softwareupdate.settings",
+                "Identifier":"com.fleetdm.settings","Payload":{}}"#,
+        );
+        let activation = write_json(
+            dir.path(),
+            "activation.json",
+            r#"{"Type":"com.apple.activation.simple","Identifier":"com.fleetdm.activation",
+                "Payload":{"StandardConfigurations":["com.fleetdm.settings"]}}"#,
+        );
+
+        let result = set_ddm_identifier(
+            &[config, activation.clone()],
+            &IdentifierRewrite::Exact {
+                from: "com.fleetdm.settings",
+                to: "com.acme.config.softwareupdate.settings.beta",
+            },
+            None,
+            "",
+            false,
+        );
+        assert!(result.failures.is_empty(), "{:?}", result.failures);
+
+        let act: Value =
+            serde_json::from_str(&std::fs::read_to_string(&activation).unwrap()).unwrap();
+        assert_eq!(
+            act["Payload"]["StandardConfigurations"][0],
+            "com.acme.config.softwareupdate.settings.beta",
+            "activation must follow the rename"
+        );
+        // The activation keeps its own identity.
+        assert_eq!(act["Identifier"], "com.fleetdm.activation");
+        assert!(
+            result.files.iter().any(|f| f.reference_updates > 0),
+            "the reference rewrite must be reported"
+        );
+    }
+
+    /// A `--from` that matches nothing is an operator error — silently
+    /// writing unchanged files would look like success.
+    #[test]
+    fn set_identifier_reports_when_nothing_matched() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = write_json(
+            dir.path(),
+            "swu.json",
+            r#"{"Type":"com.apple.configuration.softwareupdate.settings",
+                "Identifier":"com.other.settings","Payload":{}}"#,
+        );
+        let result = set_ddm_identifier(
+            &[f],
+            &IdentifierRewrite::Exact {
+                from: "com.fleetdm.settings",
+                to: "com.acme.x",
+            },
+            None,
+            "",
+            false,
+        );
+        assert!(
+            result.files.iter().all(|f| f.identifier.is_none()),
+            "nothing should be renamed"
+        );
+        assert_eq!(result.matched(), 0, "matched() reports the miss");
+    }
+
+    #[test]
+    fn set_identifier_dry_run_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = write_json(
+            dir.path(),
+            "swu.json",
+            r#"{"Type":"com.apple.configuration.softwareupdate.settings",
+                "Identifier":"com.fleetdm.settings","Payload":{}}"#,
+        );
+        let before = std::fs::read_to_string(&f).unwrap();
+        let result = set_ddm_identifier(
+            std::slice::from_ref(&f),
+            &IdentifierRewrite::Exact {
+                from: "com.fleetdm.settings",
+                to: "com.acme.x",
+            },
+            None,
+            "",
+            true,
+        );
+        assert_eq!(result.matched(), 1, "dry run still reports the plan");
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            before,
+            "file untouched"
+        );
+    }
+
+    /// Batch by pattern: every identifier starting with the old prefix is
+    /// rewritten, so a mixed directory can be made to read `com.acme.*` in
+    /// one pass — including the cross-references between them.
+    #[test]
+    fn prefix_rewrite_batches_a_whole_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = write_json(
+            dir.path(),
+            "configuration.json",
+            r#"{"Type":"com.apple.configuration.softwareupdate.settings",
+                "Identifier":"com.fleetdm.config.swu","Payload":{}}"#,
+        );
+        let activation = write_json(
+            dir.path(),
+            "activation.json",
+            r#"{"Type":"com.apple.activation.simple","Identifier":"com.fleetdm.activation.swu",
+                "Payload":{"StandardConfigurations":["com.fleetdm.config.swu"]}}"#,
+        );
+
+        let result = set_ddm_identifier(
+            &[config.clone(), activation.clone()],
+            &IdentifierRewrite::Prefix {
+                from: "com.fleetdm",
+                to: "com.acme",
+            },
+            None,
+            "",
+            false,
+        );
+        assert!(result.failures.is_empty(), "{:?}", result.failures);
+        assert_eq!(result.matched(), 2, "both declarations rewritten");
+
+        let cfg: Value = serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        let act: Value =
+            serde_json::from_str(&std::fs::read_to_string(&activation).unwrap()).unwrap();
+        assert_eq!(cfg["Identifier"], "com.acme.config.swu");
+        assert_eq!(act["Identifier"], "com.acme.activation.swu");
+        assert_eq!(
+            act["Payload"]["StandardConfigurations"][0], "com.acme.config.swu",
+            "cross-reference follows the prefix rewrite"
+        );
+    }
+
+    /// A prefix must match on a dot boundary — `com.acmecorp` is not
+    /// `com.acme`, and rewriting it would corrupt an unrelated org.
+    #[test]
+    fn prefix_rewrite_respects_dot_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = write_json(
+            dir.path(),
+            "other.json",
+            r#"{"Type":"com.apple.configuration.softwareupdate.settings",
+                "Identifier":"com.fleetdmother.settings","Payload":{}}"#,
+        );
+        let result = set_ddm_identifier(
+            &[f],
+            &IdentifierRewrite::Prefix {
+                from: "com.fleetdm",
+                to: "com.acme",
+            },
+            None,
+            "",
+            false,
+        );
+        assert_eq!(
+            result.matched(),
+            0,
+            "com.fleetdmother must not match com.fleetdm"
+        );
     }
 }
