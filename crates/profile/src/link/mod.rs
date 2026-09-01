@@ -24,6 +24,7 @@
 //! let result = link_profiles(profiles, &config)?;
 //! ```
 
+pub mod analyze;
 pub mod extractor;
 pub mod linker;
 pub mod types;

@@ -34,6 +34,7 @@ pub fn handle_audit(
     certs_only: bool,
     secrets_only: bool,
     with_deprecations: bool,
+    no_links: bool,
     fail_on_secrets: bool,
     route_into: Option<&str>,
     dry_run: bool,
@@ -69,14 +70,35 @@ pub fn handle_audit(
 
     let entries = audit_files(&files, with_deprecations, parallel);
 
+    // Cross-reference graph across the scanned set — both directions, so a
+    // certificate shows who depends on it, not just what it is.
+    let link_analysis = (!no_links).then(|| {
+        let parsed: Vec<(PathBuf, crate::profile::ConfigurationProfile)> = files
+            .iter()
+            .filter_map(|f| {
+                crate::profile::parser::parse_profile_auto_unsign(&f.to_string_lossy())
+                    .ok()
+                    .map(|p| (f.clone(), p))
+            })
+            .collect();
+        crate::link::analyze::analyze_links(&parsed)
+    });
+
     // Output.
     if let Some(md_path) = md_report {
         std::fs::write(md_path, render_markdown(&entries))
             .with_context(|| format!("Failed to write Markdown report to {md_path}"))?;
     }
     match output_mode {
-        OutputMode::Json => print_json(&entries, with_deprecations),
-        OutputMode::Human => print_human(&entries, with_deprecations),
+        OutputMode::Json => {
+            print_json_with_links(&entries, with_deprecations, link_analysis.as_ref())
+        }
+        OutputMode::Human => {
+            print_human(&entries, with_deprecations);
+            if let Some(analysis) = &link_analysis {
+                print_link_analysis(analysis);
+            }
+        }
     }
 
     // Triage routing.
@@ -215,6 +237,15 @@ fn route_entries(
 
 /// Render the JSON document for `--json`.
 fn print_json(entries: &[AuditEntry], with_deprecations: bool) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json_value(entries, with_deprecations)).unwrap_or_default()
+    );
+}
+
+/// The audit JSON envelope as a value, so callers can merge extra sections
+/// (e.g. the cross-reference graph) before printing.
+fn json_value(entries: &[AuditEntry], with_deprecations: bool) -> serde_json::Value {
     let (mut bin, mut certs, mut secrets) = (0usize, 0usize, 0usize);
     let (mut root, mut intermediate, mut leaf, mut identity) = (0usize, 0usize, 0usize, 0usize);
     let mut dep_total = 0usize;
@@ -268,12 +299,11 @@ fn print_json(entries: &[AuditEntry], with_deprecations: bool) {
         })
         .collect();
 
-    let out = serde_json::json!({
+    serde_json::json!({
         "total": entries.len(),
         "summary": summary,
         "profiles": profiles,
-    });
-    println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+    })
 }
 
 /// Render human-readable output.
@@ -392,4 +422,104 @@ fn secret_kind_label(kind: SecretKind) -> &'static str {
         SecretKind::DeployVar => "deployvar",
         SecretKind::HighEntropyLiteral => "entropy",
     }
+}
+
+/// Print the bidirectional cross-reference graph.
+///
+/// The incoming direction is the point: a certificate payload's own content
+/// says nothing about who depends on it, so removing or re-identifying it
+/// silently breaks the referrer.
+fn print_link_analysis(analysis: &crate::link::analyze::LinkAnalysis) {
+    if analysis.is_empty() && analysis.incoming.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("{}", "Cross-references".bold());
+
+    if analysis.links.is_empty() {
+        println!("  {}", "no payload references anything".dimmed());
+    }
+    for link in &analysis.links {
+        let target = match (&link.to_payload_type, &link.to_file) {
+            (Some(t), Some(f)) => format!("{t}  [{f}]"),
+            _ => format!("{} (no payload in scope owns this UUID)", "DANGLING".red()),
+        };
+        println!(
+            "  {} {} → {}",
+            "→".cyan(),
+            format!("{}.{}", short_uuid(&link.from_payload_uuid), link.field).dimmed(),
+            target
+        );
+    }
+
+    for inc in &analysis.incoming {
+        if inc.referenced_by.is_empty() {
+            // Surfaced deliberately: a certificate nothing points at is often
+            // a leftover, or a sign the referrer is outside the scanned set.
+            println!(
+                "  {} {} {} — {}",
+                "←".yellow(),
+                short_uuid(&inc.payload_uuid),
+                inc.payload_type,
+                "referenced by nothing in scope".yellow()
+            );
+        } else {
+            println!(
+                "  {} {} {} ← referenced by {}",
+                "←".green(),
+                short_uuid(&inc.payload_uuid),
+                inc.payload_type,
+                inc.referenced_by
+                    .iter()
+                    .map(|(uuid, field)| format!("{}.{field}", short_uuid(uuid)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
+    let unreferenced = analysis.unreferenced().len();
+    if unreferenced > 0 {
+        println!(
+            "  {} {unreferenced} referenceable payload(s) nothing points at",
+            "·".dimmed()
+        );
+    }
+
+    let dangling = analysis.dangling().len();
+    if dangling > 0 {
+        println!(
+            "  {} {dangling} dangling reference(s) — these install and then fail silently",
+            "!".red()
+        );
+    }
+}
+
+/// First 8 chars of a UUID, enough to correlate in a report.
+fn short_uuid(uuid: &str) -> String {
+    uuid.chars().take(8).collect()
+}
+
+/// JSON output with the link graph attached (when computed).
+fn print_json_with_links(
+    entries: &[AuditEntry],
+    with_deprecations: bool,
+    analysis: Option<&crate::link::analyze::LinkAnalysis>,
+) {
+    let Some(analysis) = analysis else {
+        print_json(entries, with_deprecations);
+        return;
+    };
+    let mut value = json_value(entries, with_deprecations);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "cross_references".to_string(),
+            serde_json::to_value(analysis).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&value).unwrap_or_default()
+    );
 }

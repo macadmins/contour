@@ -515,6 +515,12 @@ pub enum Commands {
 
         #[arg(
             long,
+            help = "Skip the cross-reference graph (which payload references which certificate, and what references each certificate)"
+        )]
+        no_links: bool,
+
+        #[arg(
+            long,
             help = "Maximum directory depth for recursive search (requires --recursive)"
         )]
         max_depth: Option<usize>,

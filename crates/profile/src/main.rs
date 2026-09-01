@@ -370,6 +370,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Audit {
             paths,
             recursive,
+            no_links,
             max_depth,
             no_parallel,
             certs_only,
@@ -388,6 +389,7 @@ fn run(cli: Cli) -> Result<()> {
                 certs_only,
                 secrets_only,
                 with_deprecations,
+                no_links,
                 fail_on_secrets,
                 route_into.as_deref(),
                 dry_run,
