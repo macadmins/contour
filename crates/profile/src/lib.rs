@@ -13,6 +13,7 @@ pub mod cli;
 pub mod collisions;
 pub mod config;
 pub mod ddm;
+pub mod detect;
 pub mod diff;
 pub mod docs;
 pub mod example;

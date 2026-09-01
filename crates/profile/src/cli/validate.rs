@@ -3,6 +3,7 @@
 //! Schema validation is enabled by default - validates payload fields against
 //! 261 embedded Apple payload schemas.
 
+use crate::cli::ddm::handle_ddm_validate;
 use crate::cli::glob_utils::{
     collect_profile_files_multi_with_depth, print_batch_summary, process_parallel_with_warnings,
     process_sequential_with_warnings, should_batch_process_multi,
@@ -653,6 +654,36 @@ fn handle_validate_single(
     output_mode: OutputMode,
     allow_placeholders: bool,
 ) -> Result<()> {
+    // Route on content, not extension. A caller with a mixed list (an MDM
+    // returns profiles, declarations, Windows and Android configs together)
+    // should not have to sniff formats itself — and an Android config is
+    // `.json` just like a DDM declaration, so the extension cannot decide.
+    let _ = output_mode;
+    match crate::detect::detect_file(Path::new(file)) {
+        Ok(crate::detect::ConfigFormat::DdmDeclaration) => {
+            // A profile is a profile: validate it rather than refusing.
+            return handle_ddm_validate(
+                &[file.to_string()],
+                schema_path,
+                false,
+                None,
+                false,
+                false,
+                output_mode,
+            );
+        }
+        Ok(format) if !format.is_supported() => {
+            let refusal = format
+                .refusal()
+                .unwrap_or_else(|| format.describe().to_string());
+            // The top-level handler renders the JSON envelope (on stdout,
+            // classified as UNSUPPORTED_FORMAT); printing here too would emit
+            // two documents and break a strict decoder.
+            anyhow::bail!("{file}: {refusal}");
+        }
+        _ => {}
+    }
+
     let (profile, placeholder_warnings) = match parser::parse_profile_auto_unsign(file) {
         Ok(p) => (p, vec![]),
         Err(e) if allow_placeholders => {

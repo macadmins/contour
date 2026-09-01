@@ -9,6 +9,7 @@ mod cli;
 mod collisions;
 mod config;
 mod ddm;
+mod detect;
 mod diff;
 mod docs;
 mod example;

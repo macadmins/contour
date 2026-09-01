@@ -74,9 +74,12 @@ fn trap_26_pppc_generate_missing_file_emits_json_error() {
 
     assert!(!output.status.success(), "missing input must exit non-zero");
 
+    // Stream contract: results on stdout, failure envelope on stderr — a
+    // command that emits results then fails must not put two JSON documents
+    // on one stream. Integrators read both streams.
     let stderr = String::from_utf8_lossy(&output.stderr);
     let parsed: Value =
-        serde_json::from_str(stderr.trim()).expect("post-B3: stderr is JSON object on failure");
+        serde_json::from_str(stderr.trim()).expect("--json failures emit the envelope on stderr");
     assert_eq!(parsed["success"], false);
     assert_eq!(
         parsed["error_code"], "IO_ERROR",

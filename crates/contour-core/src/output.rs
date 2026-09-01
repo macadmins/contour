@@ -224,16 +224,37 @@ pub fn print_error(msg: &str) {
 /// **Stability:** the JSON shape is part of the agent contract documented in
 /// the procedural SOP format spec. Don't rename fields without updating the spec.
 pub fn print_error_json(msg: &str, error_code: Option<&str>) {
+    let mut err = std::io::stderr();
+    let _ = write_error_json(&mut err, msg, error_code);
+}
+
+/// Render the error envelope to `writer`.
+///
+/// **Stream contract:** the envelope goes to **stderr**, deliberately.
+/// `stdout` carries the result document, and a command that emits JSON
+/// results before failing would otherwise produce two documents on one
+/// stream — unparseable (contour's own `verify --json` trap pins this).
+/// Integrators must read *both* streams: stdout for results, stderr for the
+/// failure envelope. The exit code tells you which to expect.
+///
+/// # Errors
+/// Propagates writer failures.
+pub fn write_error_json(
+    writer: &mut impl std::io::Write,
+    msg: &str,
+    error_code: Option<&str>,
+) -> std::io::Result<()> {
     let json = serde_json::json!({
         "success": false,
         "error": msg,
         "error_code": error_code.unwrap_or("UNKNOWN"),
     });
     // Pretty-printed for human-debuggable CI logs; agents parse either way.
-    eprintln!(
+    writeln!(
+        writer,
         "{}",
         serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string())
-    );
+    )
 }
 
 /// Classify a freeform error message into one of the typed codes used by
@@ -244,6 +265,15 @@ pub fn print_error_json(msg: &str, error_code: Option<&str>) {
 /// `contour-core` is upstream of `profile` in the dependency graph.
 #[must_use]
 pub fn classify_error(error: &str) -> &'static str {
+    // Format refusals are classified before the parser-error patterns below:
+    // contour names the format it detected, and that answer must survive to
+    // the caller rather than being flattened into a generic parse failure.
+    if error.contains("contour cannot validate")
+        || error.contains("not a DDM declaration")
+        || error.contains("does not parse or validate SyncML")
+    {
+        return "UNSUPPORTED_FORMAT";
+    }
     if error.contains("contains spaces") || error.contains("invalid identifier") {
         return "INVALID_IDENTIFIER";
     }
@@ -441,5 +471,67 @@ mod tests {
         let output = std::path::Path::new("/tmp/out/profile.mobileconfig");
         let result = resolve_output_dir(Some(output), input).unwrap();
         assert_eq!(result, std::path::PathBuf::from("/tmp/out"));
+    }
+}
+
+#[cfg(test)]
+mod error_json_tests {
+    use super::*;
+
+    /// The envelope must be self-describing and parseable — the contract an
+    /// integrator relies on when a command refuses. (It is written to stderr;
+    /// this exercises the renderer directly.)
+    #[test]
+    fn error_envelope_is_parseable_json_with_code() {
+        let mut buf = Vec::new();
+        write_error_json(
+            &mut buf,
+            "app.json: JSON, but not a DDM declaration",
+            Some("UNSUPPORTED_FORMAT"),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&buf).expect("valid JSON");
+        assert_eq!(value["success"], false);
+        assert_eq!(value["error_code"], "UNSUPPORTED_FORMAT");
+        assert!(
+            value["error"].as_str().unwrap().contains("DDM declaration"),
+            "the message must carry contour's own sentence verbatim"
+        );
+    }
+
+    #[test]
+    fn missing_code_defaults_to_unknown() {
+        let mut buf = Vec::new();
+        write_error_json(&mut buf, "boom", None).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(value["error_code"], "UNKNOWN");
+    }
+}
+
+#[cfg(test)]
+mod classify_format_tests {
+    use super::classify_error;
+
+    /// A named format refusal must classify as UNSUPPORTED_FORMAT, not as a
+    /// generic parse failure — the distinction tells an integrator whether to
+    /// fix the file or route it elsewhere.
+    #[test]
+    fn format_refusals_classify_as_unsupported_format() {
+        for msg in [
+            "android.json: JSON, but not a DDM declaration — a DDM declaration needs Type, Identifier and Payload",
+            "windows.xml: Windows CSP document (SyncML XML) — contour reads the Windows CSP schema but does not parse or validate SyncML documents",
+            "x.bin: unrecognised format — contour cannot validate this file",
+        ] {
+            assert_eq!(classify_error(msg), "UNSUPPORTED_FORMAT", "for: {msg}");
+        }
+    }
+
+    /// Genuine parse failures keep their own code.
+    #[test]
+    fn parse_failures_still_classify_as_invalid_format() {
+        assert_eq!(
+            classify_error("Failed to parse plist: UnexpectedEof"),
+            "INVALID_FORMAT"
+        );
     }
 }

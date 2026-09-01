@@ -111,9 +111,10 @@ fn trap_21_osquery_table_unknown_emits_json_error() {
 
     assert!(!output.status.success(), "unknown table must exit non-zero");
 
+    // Stream contract: failure envelope on stderr (see write_error_json).
     let stderr = String::from_utf8_lossy(&output.stderr);
     let parsed: Value = serde_json::from_str(stderr.trim())
-        .expect("post-B3: stderr must be a parseable JSON object on failure");
+        .expect("--json failures emit a parseable JSON object on stderr");
 
     assert_eq!(parsed["success"], false);
     assert!(parsed["error_code"].is_string(), "error_code is present");
