@@ -836,6 +836,189 @@ contour profile link <PATHS>... [flags]
 contour profile link cert.mobileconfig wifi.mobileconfig --merge -o corp-wifi.mobileconfig
 ```
 
+#### How linking works
+
+##### The problem it solves
+
+Most payloads are independent. A few are not: an 802.1X Wi-Fi payload names the
+SCEP or PKCS#12 payload that issues its client identity, and it does so **by
+`PayloadUUID`** — not by identifier, not by name. A VPN payload does the same
+through `IKEv2.LocalIdentifier`; a FileVault escrow payload through
+`EncryptCertPayloadUUID`.
+
+That creates a bootstrapping problem. The UUID only exists once the profile is
+built, so any workflow that regenerates UUIDs — renaming an org, importing a
+vendor profile, merging two files — breaks the binding. The profile still
+installs. It just never authenticates. `profile link` exists to make that class
+of failure impossible to ship.
+
+##### What counts as a reference
+
+Linking is driven by a fixed table of known reference fields
+(`REFERENCE_FIELDS`), not by guesswork. Each entry declares the field name,
+whether the value is a single UUID or an array, which payload types are legal
+targets, and the dictionary path to reach it:
+
+| Field | Shape | Nested under | Legal targets |
+|-------|-------|--------------|---------------|
+| `PayloadCertificateUUID` | single | — | `pkcs12`, `scep`, `acme` |
+| `PayloadCertificateUUID` | single | `EAPClientConfiguration` | `pkcs12`, `scep`, `acme` |
+| `PayloadCertificateAnchorUUID` | array | — | `root`, `pem` |
+| `TLSTrustedCertificates` | array | `EAPClientConfiguration` | `root`, `pem` |
+| `LocalIdentifier` | single | `IKEv2` | `pkcs12`, `scep`, `acme` |
+| `LeaderPayloadCertificateAnchorUUID` | array | — | `root`, `pem` |
+| `MemberPayloadCertificateAnchorUUID` | array | — | `root`, `pem` |
+| `ResourcePayloadCertificateUUID` | single | — | `pkcs12`, `scep` |
+| `EncryptCertPayloadUUID` | single | — | `pkcs12`, `pem` |
+
+(Target types are `com.apple.security.*`, abbreviated above.)
+
+A payload is **referenceable** — a legal target — when its type is one of
+`com.apple.security.{root, pem, pkcs1, pkcs12, scep, acme}`.
+
+##### The four stages
+
+`link` runs the same pipeline whether or not you pass `--merge`:
+
+1. **Extract.** Walk every payload in every input profile. Record each one that
+   is referenceable, and each reference field that is present — following
+   `nested_path` into sub-dictionaries and expanding arrays element by element.
+2. **Validate.** Every referenced UUID must appear in the referenceable set. Any
+   that doesn't is an **orphan**, and the command fails with a non-zero exit
+   before writing anything. `--no-validate` skips this; don't.
+3. **Map.** Build an `old UUID → new UUID` table covering every profile envelope
+   and every payload. The new value is derived from the payload's
+   **`PayloadIdentifier`**, never from its old UUID.
+4. **Apply.** Rewrite each envelope and payload UUID, then walk
+   `REFERENCE_FIELDS` again and replace any value found in the mapping.
+
+Stage 4 is purely value-based: a UUID that isn't in the mapping is left
+untouched. That is precisely why stage 2 is not optional — skip validation and a
+stale reference passes through silently.
+
+##### How the new UUIDs are derived
+
+With `-p` / `--predictable` **and** `--org`, UUIDs are RFC 4122 v5, derived in
+two levels:
+
+```
+namespace = uuidv5(DNS,       <org domain>)
+new_uuid  = uuidv5(namespace, <PayloadIdentifier>)   # uppercased
+```
+
+Reproducible outside contour, which makes it easy to assert in CI:
+
+```bash
+python3 -c "
+import uuid
+ns = uuid.uuid5(uuid.NAMESPACE_DNS, 'com.acme')
+print(str(uuid.uuid5(ns, 'com.acme.scep.payload')).upper())
+"
+# 51F715A5-731C-535F-8B53-E52A574ADF15
+```
+
+The merged envelope is derived the same way from `<org>.merged`.
+
+> **`-p` and `--merge` require an org domain.** The predictable path needs an
+> org domain to build its namespace, and the merged profile's identifier is
+> `<org>.merged` — so `link` errors out when neither `--org`, `profile.toml`,
+> nor `.contour/config.toml` provides one. There is no `com.example` fallback.
+
+##### Why predictable UUIDs matter
+
+Apple MDM keys installed payloads by UUID. A changed `PayloadUUID` on an
+unchanged `PayloadIdentifier` is read as *remove and reinstall* on every
+enrolled device — `profile plan` classifies this as the `Replace` tier and
+blocks it by default. In a GitOps repo, re-running `link` must be idempotent, so
+`-p --org <domain>` is effectively mandatory.
+
+##### Merge semantics
+
+`--merge` folds every input into one profile:
+
+- The **first** input becomes the base envelope.
+- Its identifier is replaced with `<org>.merged` and its display name gains a
+  ` (Merged)` suffix.
+- Payloads from the remaining profiles are appended **in input order**, and are
+  **deduplicated by `PayloadIdentifier`** — a payload whose identifier already
+  exists in the merged set is dropped, not renamed. Every drop is reported: a
+  `⚠ dropped duplicate payload` warning in human output, and a
+  `dropped_payloads` array in `--json`.
+
+That dedupe rule is the one to watch. Two payloads that share a
+`PayloadIdentifier` also map to the same new UUID (stage 3 keys on the
+identifier), so they collapse into one. If you are merging a root **and** an
+intermediate CA, give them distinct `PayloadIdentifier`s before linking — the
+warning tells you which payload was discarded.
+
+##### Worked example: Wi-Fi + SCEP + Root CA
+
+```bash
+contour profile link root-ca.mobileconfig scep.mobileconfig wifi.mobileconfig \
+  --merge -p --org com.acme -o corp-wifi.mobileconfig
+```
+
+```
+Analyzing 3 profile(s) for cross-references...
+
+Cross-Reference Analysis:
+  References found:      1
+  Unique UUIDs:          1
+  Certificate payloads:  2
+
+Merged 3 profiles into: corp-wifi.mobileconfig
+  Total payloads: 3
+  UUIDs updated:  6
+```
+
+The Wi-Fi payload's `PayloadCertificateUUID` now resolves to the SCEP payload's
+new UUID inside the merged profile:
+
+```
+CB8FA142-FC35-5B43-899B-7FA561C32F57   com.apple.security.root
+51F715A5-731C-535F-8B53-E52A574ADF15   com.apple.security.scep   ◄──┐
+57F10930-FEC3-5D9C-A937-B23C98FA9662   com.apple.wifi.managed       │
+                                                                    │
+Wi-Fi PayloadCertificateUUID → 51F715A5-731C-535F-8B53-E52A574ADF15 ┘
+```
+
+Point that field at a UUID no payload owns, and stage 2 stops the build:
+
+```
+  Orphan references: 1
+    - DEADBEEF-0000-0000-0000-000000000000
+
+Validation Errors:
+Found 1 validation error(s):
+  - Missing reference: DEADBEEF-0000-0000-0000-000000000000 in field
+    'PayloadCertificateUUID' (from payload CEA153EB-…-9C91C5E36C5B)
+
+Error: Cross-reference validation failed
+```
+
+##### Don't use a `combined` recipe for cross-referenced payloads
+
+`[recipe.output] combined = true` bundles payloads into one `.mobileconfig`,
+deriving each inner payload's identity from its `[[profile]]` block's
+**filename stem**:
+
+```
+inner_payload_id = "<org>.<recipe name>.<filename stem>.payload"
+PayloadUUID      = uuidv5(DNS, inner_payload_id)
+```
+
+Filename stems are unique per block, so a root plus an intermediate CA coexist
+fine; two blocks that *do* share a stem are rejected at generate time. The
+generate-time gate also fails on any duplicate `PayloadUUID` in the assembled
+set, as defense in depth.
+
+The reason to prefer `link --merge` for cross-referenced payloads is
+different: `combined` assembles payloads but does **not** rewrite or validate
+`PayloadCertificateUUID`-style references between them. Use `combined` for
+bundles of **independent** payloads (the Okta and CrowdStrike recipes). For
+payloads that reference each other, author them separately and use
+`link --merge`, which assigns per-payload UUIDs and validates the bindings.
+
 ---
 
 ### Documentation Generation
