@@ -12,6 +12,7 @@ pub mod ddm;
 pub mod ddm_beta;
 pub mod ddm_reidentify;
 pub mod diff;
+pub mod dispatch;
 pub mod docs;
 pub mod duplicate;
 pub mod enrollment;
