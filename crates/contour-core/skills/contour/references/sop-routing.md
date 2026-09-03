@@ -76,6 +76,26 @@ Scopes: App (`App - OneDrive (Settings)`), User (`PayloadScope == User`), System
 Override the schema with `name.toml`/`.contour/naming.yaml`; keep org-internal
 app names local (gitignored), never in a committed map.
 
+## MCX Domain Rename → `--sop mcx`
+
+Use when: renaming or re-domaining a **managed-preference domain** — the
+dictionary KEY an MCX payload nests its settings under. Distinct from
+display-name renaming above: the reference-rewriting never touches keys, so
+`normalize`/`reidentify` cannot reach this.
+
+```bash
+contour profile mcx list <DIR> -r                          # survey domains first
+contour profile mcx rename <DIR> -r --interactive          # guided, dry-run
+contour profile mcx rename <DIR> -r --interactive --write  # apply
+contour profile mcx rename <DIR> -r --from-prefix de.example.legacy \
+    --to-prefix de.example.new --write                     # scripted, family rename
+contour help-ai --sop mcx
+```
+
+Dry-run by default. Parses to verify scope, then edits only the accounted-for
+`<key>` tags — the rest of the file stays byte-for-byte. Refuses rather than
+half-writing (`DomainNotPresent` / `OccurrenceMismatch` / `TargetAlreadyPresent`).
+
 ## mSCP Compliance → `--sop mscp`
 
 Use when: working with CIS, STIG, 800-53, CMMC baselines or mSCP security rules.

@@ -411,6 +411,10 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
         buf,
         "- GitHub Actions, CI, env vars, CONTOUR_ORG, workflow setup → `--sop ci`"
     )?;
+    writeln!(
+        buf,
+        "- rename/re-domain a managed-preference (MCX) domain, mcx_domain key → `--sop mcx`"
+    )?;
     writeln!(buf)?;
 
     // SOP pointer (keep index compact)
@@ -462,7 +466,8 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
          - `--sop precommit` — wire contour validators into a Git pre-commit hook (uvx pre-commit)\n\
          - `--sop windows` — Windows CSP schema exploration (--windows on profile search/info)\n\
          - `--sop app-policy` — AI-tool managed configuration (Claude Code, Codex, Cursor)\n\
-         - `--sop beta-enrollment` — AppleSeed for IT beta declarations (offer/always-on/require/block)"
+         - `--sop beta-enrollment` — AppleSeed for IT beta declarations (offer/always-on/require/block)\n\
+         - `--sop mcx` — inspect/rename managed-preference (MCX) domains, incl. guided --interactive"
     )?;
     // schema-data is intentionally NOT advertised — it's a contour-developer
     // SOP about refreshing embedded parquet data from the upstream `posture`
@@ -508,6 +513,7 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "precommit" | "pre-commit" | "hook" | "git-hook" | "githook" => SOP_PRECOMMIT,
         "profile-changes" | "plan" | "rollback" | "change-impact" | "review" => SOP_PROFILE_CHANGES,
         "profile-naming" | "naming" | "classify" | "rename" | "display-name" => SOP_PROFILE_NAMING,
+        "mcx" | "managed-preference" | "managed-preferences" | "mcx-domain" | "domain" => SOP_MCX,
         "maintain" | "maintenance" | "hygiene" | "collisions" | "collision" | "consolidate"
         | "audit" => SOP_MAINTAIN,
         "windows" | "windows-csp" | "csp" | "ddf" | "admx" | "syncml" => SOP_WINDOWS_CSP,
@@ -517,7 +523,7 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
         "app-policy" | "app-policies" | "ai-tools" | "claude-code" | "claudecode" | "codex"
         | "cursor" => SOP_APP_POLICY,
         _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, maintain, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes, windows, app-policy, beta-enrollment"
+            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, mcx, maintain, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes, windows, app-policy, beta-enrollment"
         ),
     };
     writer.write_all(sop.as_bytes())?;
@@ -536,6 +542,12 @@ const SOP_PROFILE: &str = include_str!("../skills/contour/references/sop-profile
 /// import → audit → name → re-identify → normalize → collision-check → validate,
 /// centered on the `collisions` consolidation workflow.
 const SOP_MAINTAIN: &str = include_str!("../skills/contour/references/sop-maintain.md");
+
+/// SOP_MCX — managed-preference (MCX) domain inspection and surgical rename,
+/// including the guided `--interactive` flow. Separate from profile-naming:
+/// that renames display names, this renames the domain KEY an MCX payload
+/// nests its settings under, which the reference-rewriting cannot reach.
+const SOP_MCX: &str = include_str!("../skills/contour/references/sop-mcx.md");
 
 /// SOP_MSCP — third SOP migrated to the procedural format. Same external-
 /// markdown pattern as SOP_PROFILE and SOP_DDM.
@@ -662,6 +674,7 @@ const SOPS: &[(&str, &str)] = &[
     ("support", SOP_SUPPORT),
     ("precommit", SOP_PRECOMMIT),
     ("profile-naming", SOP_PROFILE_NAMING),
+    ("mcx", SOP_MCX),
     ("fleet-migrate", SOP_FLEET_MIGRATE),
     ("enrollment", SOP_ENROLLMENT),
     ("ci", SOP_CI),
@@ -1719,6 +1732,32 @@ mod tests {
         generate_search(&cmd, "enrollment preset", false, false, None, &mut out).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("[SOP] enrollment"), "got: {text}");
+    }
+
+    /// Every SOP registered for search must also resolve through the alias
+    /// map in `generate_sop`. The two lists are hand-edited in different
+    /// places, so a SOP added to one and not the other is the drift this
+    /// catches — the symptom is a SOP that `find` surfaces but that
+    /// `--sop <name>` then rejects as unknown.
+    #[test]
+    fn every_registered_sop_resolves_by_name() {
+        for (name, _) in SOPS {
+            let mut out = Vec::new();
+            generate_sop(name, &mut out)
+                .unwrap_or_else(|e| panic!("`{name}` is in SOPS but `--sop {name}` fails: {e:#}"));
+            assert!(!out.is_empty(), "SOP `{name}` resolved to empty content");
+        }
+    }
+
+    #[test]
+    fn mcx_sop_is_reachable_and_covers_interactive_rename() {
+        let mut out = Vec::new();
+        generate_sop("mcx", &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("mcx rename"), "got: {text}");
+        assert!(text.contains("--interactive"), "got: {text}");
+        // The dry-run default is the safety property worth pinning.
+        assert!(text.contains("--write"), "got: {text}");
     }
 
     #[test]

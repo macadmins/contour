@@ -56,6 +56,7 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 | Santa rules, CEL, FAA | `contour help-ai --sop santa` |
 | DDM declarations | `contour help-ai --sop ddm` |
 | Rename display names, friendly naming, name.toml, reidentify | `contour help-ai --sop profile-naming` |
+| Rename/re-domain a managed-preference (MCX) domain | `contour help-ai --sop mcx` |
 | Windows CSP, ADMX, DDF node lookup | `contour help-ai --sop windows` |
 | Beta enrollment, AppleSeed for IT, seeding tokens | `contour help-ai --sop beta-enrollment` |
 | Claude Code / Codex / Cursor managed settings | `contour help-ai --sop app-policy` |
