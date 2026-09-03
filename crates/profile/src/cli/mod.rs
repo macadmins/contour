@@ -27,6 +27,7 @@ pub mod library;
 pub mod library_diff;
 pub mod library_validate;
 pub mod link;
+pub mod mcx;
 pub mod normalize;
 pub mod payload;
 pub mod plan;
@@ -740,6 +741,12 @@ pub enum Commands {
         )]
         windows: bool,
     },
+
+    #[command(
+        about = "Inspect or surgically rename managed-preference (MCX) domains",
+        subcommand
+    )]
+    Mcx(McxAction),
 
     #[command(about = "Manage UUIDs in configuration profile")]
     Uuid {
@@ -2148,4 +2155,62 @@ pub enum LibraryAction {
 pub enum LibraryStyle {
     Flat,
     Nested,
+}
+
+/// Subcommands for `profile mcx`.
+#[derive(Debug, Subcommand)]
+pub enum McxAction {
+    #[command(about = "List managed-preference domains and where they are in scope")]
+    List {
+        #[arg(help = "Profile file(s) or directory", required = true, num_args = 1..)]
+        paths: Vec<String>,
+
+        #[arg(short, long, help = "Process directories recursively")]
+        recursive: bool,
+    },
+
+    #[command(
+        about = "Rename a managed-preference domain in place, without reformatting the file",
+        long_about = "Renames the domain KEY inside com.apple.ManagedClient.preferences \
+                      payloads. The scope is verified by parsing before any edit, and the \
+                      edit itself touches only the <key> tags accounted for — a value that \
+                      happens to contain the same string (a support path, for example) is \
+                      left alone, and the rest of the file stays byte-for-byte.\n\
+                      \n\
+                      Dry-run by default; pass --write to apply."
+    )]
+    Rename {
+        #[arg(help = "Profile file(s) or directory", required = true, num_args = 1..)]
+        paths: Vec<String>,
+
+        #[arg(long, requires = "to", conflicts_with_all = ["from_prefix", "interactive"],
+              help = "Exact domain to rename")]
+        from: Option<String>,
+
+        #[arg(long, requires = "from", help = "Replacement domain")]
+        to: Option<String>,
+
+        #[arg(
+            long,
+            requires = "to_prefix",
+            conflicts_with = "interactive",
+            help = "Domain prefix to rename, including sibling domains (dot-boundary matched)"
+        )]
+        from_prefix: Option<String>,
+
+        #[arg(long, requires = "from_prefix", help = "Replacement prefix")]
+        to_prefix: Option<String>,
+
+        #[arg(
+            long,
+            help = "Pick the domain from those found, then enter the replacement"
+        )]
+        interactive: bool,
+
+        #[arg(short, long, help = "Process directories recursively")]
+        recursive: bool,
+
+        #[arg(long, help = "Apply the rename (default is a dry-run preview)")]
+        write: bool,
+    },
 }

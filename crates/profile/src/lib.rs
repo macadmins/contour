@@ -18,6 +18,7 @@ pub mod diff;
 pub mod docs;
 pub mod example;
 pub mod link;
+pub mod mcx;
 pub mod mdm_vars;
 pub mod migrate;
 pub mod output;

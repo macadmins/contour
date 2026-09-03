@@ -14,6 +14,7 @@ mod diff;
 mod docs;
 mod example;
 mod link;
+mod mcx;
 mod mdm_vars;
 mod migrate;
 mod output;

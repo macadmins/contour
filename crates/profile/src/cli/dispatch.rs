@@ -76,6 +76,33 @@ pub fn dispatch(
                 crate::cli::info::handle_info(config.as_ref(), output_mode)?;
             }
         }
+        Commands::Mcx(action) => match action {
+            crate::cli::McxAction::List { paths, recursive } => {
+                crate::cli::mcx::handle_list(&paths, recursive, output_mode)?;
+            }
+            crate::cli::McxAction::Rename {
+                paths,
+                from,
+                to,
+                from_prefix,
+                to_prefix,
+                interactive,
+                recursive,
+                write,
+            } => {
+                crate::cli::mcx::handle_rename(
+                    &paths,
+                    from.as_deref(),
+                    to.as_deref(),
+                    from_prefix.as_deref(),
+                    to_prefix.as_deref(),
+                    interactive,
+                    recursive,
+                    write,
+                    output_mode,
+                )?;
+            }
+        },
         Commands::Init {
             output,
             org,
