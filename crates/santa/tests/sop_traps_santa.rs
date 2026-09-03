@@ -109,9 +109,16 @@ fn trap_86_santa_recipe_narrow_and_full_bundle() {
     }
     // Northpole identities must reach the rendered TOML — these are
     // the identifiers an operator would override for a vendor fork.
+    //
+    // Pinned to the crate constant rather than a literal, and pointedly
+    // not EQHXZ8M8AV: that is Google's Team ID, and RULES_YAML above
+    // already carries it as the Chrome allowlist rule. Asserting on it
+    // here passed whether or not a single Northpole identity was
+    // emitted — the Chrome rule alone satisfied it.
     assert!(
-        full.contains("EQHXZ8M8AV"),
-        "Northpole Team ID must be present"
+        full.contains(santa::NORTHPOLE_TEAM_ID),
+        "Northpole Team ID {} must be present in the full bundle",
+        santa::NORTHPOLE_TEAM_ID
     );
     assert!(
         full.contains("com.northpolesec.santa.daemon"),

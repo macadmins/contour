@@ -41,7 +41,7 @@ description = "Grants Full Disk Access and SystemPolicySysAdminFiles to the Sant
 removal_disallowed = true
 
 [profile.extra_fields]
-"Services.SystemPolicyAllFiles" = [{Identifier = "com.northpolesec.santa.daemon", IdentifierType = "bundleID", TeamIdentifier = "ZLCNA8GP43", CodeRequirement = 'identifier "com.northpolesec.santa.daemon" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "ZLCNA8GP43"', Allowed = true, StaticCode = false}]
+"Services.SystemPolicyAllFiles" = [{Identifier = "com.northpolesec.santa.daemon", IdentifierType = "bundleID", TeamIdentifier = "ZMCG7MLDV9", CodeRequirement = 'identifier "com.northpolesec.santa.daemon" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "ZMCG7MLDV9"', Allowed = true, StaticCode = false}]
 
 [[profile]]
 filename = "santa-sysext.mobileconfig"
@@ -52,9 +52,9 @@ removal_disallowed = true
 
 [profile.extra_fields]
 AllowUserOverrides = false
-AllowedTeamIdentifiers = ["ZLCNA8GP43"]
-AllowedSystemExtensions = {ZLCNA8GP43 = ["com.northpolesec.santa.daemon"]}
-AllowedSystemExtensionTypes = {ZLCNA8GP43 = ["EndpointSecurityExtension"]}
+AllowedTeamIdentifiers = ["ZMCG7MLDV9"]
+AllowedSystemExtensions = {ZMCG7MLDV9 = ["com.northpolesec.santa.daemon"]}
+AllowedSystemExtensionTypes = {ZMCG7MLDV9 = ["EndpointSecurityExtension"]}
 
 [[profile]]
 filename = "santa-notifications.mobileconfig"

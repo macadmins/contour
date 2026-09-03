@@ -1,3 +1,4 @@
+use crate::NORTHPOLE_TEAM_ID;
 use crate::generator::{Format, GeneratorOptions, build_santa_payload, write_to_file_format};
 use crate::models::RuleSet;
 use crate::output::{
@@ -18,19 +19,20 @@ use plist::{Dictionary, Value};
 use serde::Serialize;
 use std::path::Path;
 
-/// Northpole's published Team ID for the Santa daemon — used by the
-/// `--full-bundle` recipe path to author TCC + system-extension and
-/// notification entries that match Santa's signed binaries. Vendor
-/// forks would override these by editing the rendered recipe TOML
-/// directly.
-const NORTHPOLE_TEAM_ID: &str = "EQHXZ8M8AV";
+// `NORTHPOLE_TEAM_ID` (imported above) is Northpole's published Team ID
+// for the Santa daemon — used by the `--full-bundle` recipe path to
+// author TCC + system-extension and notification entries that match
+// Santa's signed binaries. Vendor forks would override these by editing
+// the rendered recipe TOML directly.
 const SANTA_DAEMON_BUNDLE: &str = "com.northpolesec.santa.daemon";
 const SANTA_GUI_BUNDLE: &str = "com.northpolesec.santa";
 /// Designated Code Requirement for Northpole-signed Santa binaries.
+/// The trailing `subject.OU` must stay equal to [`NORTHPOLE_TEAM_ID`];
+/// `code_requirement_pins_the_same_team_id` enforces that.
 const NORTHPOLE_CODE_REQ: &str = "anchor apple generic and certificate \
     1[field.1.2.840.113635.100.6.2.6] /* exists */ and \
     certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and \
-    certificate leaf[subject.OU] = EQHXZ8M8AV";
+    certificate leaf[subject.OU] = ZMCG7MLDV9";
 
 use super::OutputFormat;
 
@@ -509,4 +511,37 @@ fn run_generate_fragment(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Santa identities emitted by `--full-bundle` must all name
+    /// North Pole Security's Team ID. A wrong value here installs
+    /// cleanly and then silently fails to authorize the system
+    /// extension or grant Full Disk Access.
+    #[test]
+    fn northpole_identities_use_north_pole_security_team_id() {
+        assert_eq!(NORTHPOLE_TEAM_ID, "ZMCG7MLDV9");
+    }
+
+    /// The designated code requirement pins the same Team ID as the
+    /// system-extension allowlist — they are two halves of one claim.
+    #[test]
+    fn code_requirement_pins_the_same_team_id() {
+        assert!(
+            NORTHPOLE_CODE_REQ.ends_with(NORTHPOLE_TEAM_ID),
+            "code requirement must end with subject.OU = {NORTHPOLE_TEAM_ID}, got: {NORTHPOLE_CODE_REQ}"
+        );
+    }
+
+    /// `EQHXZ8M8AV` is Google's Team ID — it signs Chrome, and it
+    /// signed the pre-fork Google Santa. It must never appear in a
+    /// North Pole Security identity.
+    #[test]
+    fn google_team_id_is_not_used_for_northpole_identities() {
+        assert_ne!(NORTHPOLE_TEAM_ID, "EQHXZ8M8AV");
+        assert!(!NORTHPOLE_CODE_REQ.contains("EQHXZ8M8AV"));
+    }
 }

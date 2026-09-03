@@ -7,14 +7,12 @@
 //! - Notification Settings (enable Santa notifications)
 //! - Santa Configuration (basic client settings)
 
+use crate::NORTHPOLE_TEAM_ID;
 use crate::output::{OutputMode, print_info, print_kv, print_success};
 use anyhow::{Context, Result};
 use contour_profiles::ProfileBuilder;
 use plist::{Dictionary, Value};
 use std::path::Path;
-
-/// Santa's Team ID (North Pole Security)
-const SANTA_TEAM_ID: &str = "ZMCG7MLDV9";
 
 /// Santa bundle identifiers
 const SANTA_APP_BUNDLE_ID: &str = "com.northpolesec.santa";
@@ -160,7 +158,7 @@ fn build_system_extension_payload() -> Dictionary {
     // AllowedSystemExtensionTypes
     let mut allowed_types = Dictionary::new();
     allowed_types.insert(
-        SANTA_TEAM_ID.to_string(),
+        NORTHPOLE_TEAM_ID.to_string(),
         Value::Array(vec![Value::String("EndpointSecurityExtension".to_string())]),
     );
     payload.insert(
@@ -173,7 +171,7 @@ fn build_system_extension_payload() -> Dictionary {
     // NonRemovableFromUISystemExtensions (prevent user from removing)
     let mut non_removable = Dictionary::new();
     non_removable.insert(
-        SANTA_TEAM_ID.to_string(),
+        NORTHPOLE_TEAM_ID.to_string(),
         Value::Array(vec![Value::String(SANTA_DAEMON_BUNDLE_ID.to_string())]),
     );
     payload.insert(
@@ -184,7 +182,7 @@ fn build_system_extension_payload() -> Dictionary {
     // AllowedSystemExtensions
     let mut allowed_extensions = Dictionary::new();
     allowed_extensions.insert(
-        SANTA_TEAM_ID.to_string(),
+        NORTHPOLE_TEAM_ID.to_string(),
         Value::Array(vec![Value::String(SANTA_DAEMON_BUNDLE_ID.to_string())]),
     );
     payload.insert(
@@ -198,7 +196,7 @@ fn build_system_extension_payload() -> Dictionary {
 /// Build Service Management (Managed Login Items) payload.
 fn build_service_management_payload() -> Dictionary {
     let rule =
-        contour_profiles::build_service_management_rule(SANTA_TEAM_ID, SANTA_DAEMON_BUNDLE_ID);
+        contour_profiles::build_service_management_rule(NORTHPOLE_TEAM_ID, SANTA_DAEMON_BUNDLE_ID);
 
     let mut payload = Dictionary::new();
     payload.insert(
@@ -217,7 +215,7 @@ fn build_tcc_payload() -> Dictionary {
     let santa_tcc_entry = |bundle_id: &str| {
         let code_req = format!(
             r#"identifier "{}" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = {}"#,
-            bundle_id, SANTA_TEAM_ID
+            bundle_id, NORTHPOLE_TEAM_ID
         );
         contour_profiles::build_tcc_entry(bundle_id, &code_req, true)
     };
@@ -297,7 +295,7 @@ mod tests {
         let xml = String::from_utf8(content).unwrap();
 
         assert!(xml.contains("com.apple.system-extension-policy"));
-        assert!(xml.contains(SANTA_TEAM_ID));
+        assert!(xml.contains(NORTHPOLE_TEAM_ID));
         assert!(xml.contains(SANTA_DAEMON_BUNDLE_ID));
         assert!(xml.contains("com.example.santa.prep.system-extension"));
     }

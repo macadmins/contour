@@ -283,6 +283,45 @@ mod tests {
         assert!(!names.is_empty());
     }
 
+    /// North Pole Security's Team ID, duplicated here on purpose: the
+    /// `santa` crate owns the constant, but embedded recipes are data,
+    /// so only a test can pin them to it. Keep in sync with
+    /// `santa::cli::generate::NORTHPOLE_TEAM_ID`.
+    const NORTHPOLE_TEAM_ID: &str = "ZMCG7MLDV9";
+
+    /// Any embedded recipe that configures Santa must name North Pole
+    /// Security's Team ID. A stale value installs cleanly and then
+    /// silently fails to authorize the system extension or grant Full
+    /// Disk Access, so this is not something a review would catch.
+    ///
+    /// Scoped to Santa recipes deliberately — `EQHXZ8M8AV` is Google's
+    /// Team ID and is perfectly valid in a Chrome recipe.
+    #[test]
+    fn santa_recipes_pin_north_pole_security_team_id() {
+        let santa_recipes: Vec<_> = embedded_recipes()
+            .into_iter()
+            .filter(|(_, body)| body.contains("com.northpolesec.santa"))
+            .collect();
+
+        assert!(
+            !santa_recipes.is_empty(),
+            "expected at least one embedded Santa recipe"
+        );
+
+        for (name, body) in santa_recipes {
+            assert!(
+                body.contains(NORTHPOLE_TEAM_ID),
+                "recipe `{name}` configures Santa but never names Team ID {NORTHPOLE_TEAM_ID}"
+            );
+            for stale in ["EQHXZ8M8AV", "ZLCNA8GP43"] {
+                assert!(
+                    !body.contains(stale),
+                    "recipe `{name}` still carries stale Santa Team ID `{stale}`"
+                );
+            }
+        }
+    }
+
     /// Minimal but well-formed Recipe TOML matching the `[[profile]]`
     /// shape — see `crates/profile/recipes/okta.toml` for reference.
     fn override_okta_body() -> &'static str {
