@@ -19,6 +19,7 @@ pub mod fleet_layout;
 pub mod fragment;
 pub mod help_agents;
 pub mod logging;
+pub mod osquery_validate;
 pub mod output;
 pub mod scan;
 pub mod string_utils;

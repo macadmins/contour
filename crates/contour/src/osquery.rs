@@ -29,6 +29,14 @@ pub enum OsqueryAction {
     },
     /// Show embedded schema statistics
     Stats,
+    /// Validate osquery SQL in Fleet GitOps YAML against the embedded schema (offline)
+    Validate {
+        /// GitOps repo, directory, or single YAML file
+        path: PathBuf,
+        /// Recurse into directories
+        #[arg(short, long)]
+        recursive: bool,
+    },
     /// Emit osqueryi + orbit commands for generated queries (*.policies.yml / *.reports.yml)
     Verify {
         /// GitOps repo, directory, or single query file to verify
@@ -48,6 +56,9 @@ pub fn handle(action: OsqueryAction, json: bool) -> Result<()> {
         }
         OsqueryAction::Table { table_name } => handle_table(&table_name, json, &mut out),
         OsqueryAction::Stats => handle_stats(json, &mut out),
+        OsqueryAction::Validate { path, recursive } => {
+            handle_validate(&path, recursive, json, &mut out)
+        }
         OsqueryAction::Verify { path, output } => handle_verify(&path, output.as_deref(), &mut out),
     }
 }
@@ -280,4 +291,138 @@ fn handle_stats(json: bool, out: &mut impl Write) -> Result<()> {
     writeln!(out, "  windows tables:  {}", windows_tables.len())?;
 
     Ok(())
+}
+
+/// Handle `osquery validate` — static, offline table-level checking of every
+/// query found in Fleet GitOps YAML under `path`.
+///
+/// Tier 1 by design: a typo'd table is the failure that hides, because the
+/// query returns no rows and a Fleet policy reads no rows as compliant.
+fn handle_validate(path: &Path, recursive: bool, json: bool, out: &mut impl Write) -> Result<()> {
+    use contour_core::osquery_validate::{extract_fleet_queries, validate_query};
+
+    let known: std::collections::BTreeSet<String> = load_entries()?
+        .iter()
+        .map(|e| e.table_name.to_lowercase())
+        .collect();
+
+    let files = collect_yaml_files(path, recursive)?;
+    if files.is_empty() {
+        anyhow::bail!("no .yml/.yaml files found under {}", path.display());
+    }
+
+    let mut findings: Vec<serde_json::Value> = Vec::new();
+    let mut checked = 0usize;
+
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        for query in extract_fleet_queries(&text) {
+            checked += 1;
+            let Some(finding) = validate_query(&query, &known) else {
+                continue;
+            };
+            for unknown in &finding.unknown_tables {
+                findings.push(serde_json::json!({
+                    "file": file.display().to_string(),
+                    "kind": finding.kind,
+                    "index": finding.index,
+                    "name": finding.name,
+                    "unknown_table": unknown.name,
+                    "suggestions": unknown.suggestions,
+                }));
+            }
+        }
+    }
+
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "success": findings.is_empty(),
+                "files_scanned": files.len(),
+                "queries_checked": checked,
+                "findings": findings,
+            }))?
+        )?;
+    } else if findings.is_empty() {
+        writeln!(
+            out,
+            "{} {checked} query(s) across {} file(s): every table exists in the embedded schema",
+            "\u{2713}".green(),
+            files.len()
+        )?;
+    } else {
+        for f in &findings {
+            let name = f["name"].as_str().unwrap_or("(unnamed)");
+            writeln!(
+                out,
+                "{} {}:{}[{}] {name}",
+                "\u{2717}".red(),
+                f["file"].as_str().unwrap_or_default(),
+                f["kind"].as_str().unwrap_or_default(),
+                f["index"]
+            )?;
+            let suggestions = f["suggestions"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let hint = if suggestions.is_empty() {
+                String::new()
+            } else {
+                format!(" \u{2014} did you mean: {suggestions}?")
+            };
+            writeln!(
+                out,
+                "    unknown table '{}'{hint}",
+                f["unknown_table"].as_str().unwrap_or_default()
+            )?;
+        }
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{} unknown table reference(s) in {checked} query(s)",
+            findings.len()
+        )?;
+    }
+
+    if !findings.is_empty() {
+        anyhow::bail!("{} query(s) reference unknown tables", findings.len());
+    }
+    Ok(())
+}
+
+/// Collect `.yml` / `.yaml` files from a path.
+fn collect_yaml_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    if path.is_file() {
+        files.push(path.to_path_buf());
+    } else if path.is_dir() {
+        let walker = if recursive {
+            walkdir::WalkDir::new(path)
+        } else {
+            walkdir::WalkDir::new(path).max_depth(1)
+        };
+        for entry in walker.into_iter().filter_map(std::result::Result::ok) {
+            let p = entry.path();
+            if p.is_file()
+                && p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e == "yml" || e == "yaml")
+            {
+                files.push(p.to_path_buf());
+            }
+        }
+    } else {
+        anyhow::bail!("path does not exist: {}", path.display());
+    }
+    files.sort();
+    Ok(files)
 }
