@@ -14,8 +14,18 @@ env:
 
 jobs:
   build:
-    name: Build x86_64-unknown-linux-gnu
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            machine: x86-64
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            machine: ARM aarch64
 
     steps:
       - uses: actions/checkout@v6
@@ -26,39 +36,51 @@ jobs:
       - name: Extract version from tag
         id: meta
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Set SOURCE_DATE_EPOCH
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
         run: |
-          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct ${{ github.ref_name }})" >> $GITHUB_ENV
+          release_epoch="$(git log -1 --format=%ct "$RELEASE_REF")"
+          echo "SOURCE_DATE_EPOCH=$release_epoch" >> "$GITHUB_ENV"
 
       - name: Build release binary
-        run: cargo build --release --target x86_64-unknown-linux-gnu -p contour
+        run: cargo build --release --target ${{ matrix.target }} -p contour
 
       - name: Strip binary
-        run: strip target/x86_64-unknown-linux-gnu/release/contour
+        run: strip target/${{ matrix.target }}/release/contour
+
+      - name: Verify release binary
+        env:
+          BINARY_PATH: target/${{ matrix.target }}/release/contour
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          file "$BINARY_PATH" | tee binary-type.txt
+          grep -Fq "$EXPECTED_MACHINE" binary-type.txt
+          "$BINARY_PATH" --version
 
       - name: Package binary
         run: |
           mkdir -p dist
-          cp target/x86_64-unknown-linux-gnu/release/contour dist/
+          cp target/${{ matrix.target }}/release/contour dist/
           cd dist
-          ARCHIVE="contour-${{ steps.meta.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz"
+          ARCHIVE="contour-${{ steps.meta.outputs.version }}-${{ matrix.target }}.tar.gz"
           tar -czf "$ARCHIVE" contour
-          sha256sum "$ARCHIVE" > checksums.txt
+          sha256sum "$ARCHIVE" > "checksums-${{ matrix.target }}.txt"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: contour-x86_64-unknown-linux-gnu
+          name: contour-${{ matrix.target }}
           path: dist/*.tar.gz
 
       - name: Upload checksums
         uses: actions/upload-artifact@v7
         with:
-          name: checksums-x86_64-unknown-linux-gnu
-          path: dist/checksums.txt
+          name: checksums-${{ matrix.target }}
+          path: dist/checksums-${{ matrix.target }}.txt
 
   release:
     name: Create Release
@@ -74,11 +96,17 @@ jobs:
         with:
           path: artifacts
 
+      - name: Combine checksums
+        run: |
+          sort artifacts/checksums-*/checksums-*.txt > checksums.txt
+          test "$(wc -l < checksums.txt)" -eq 2
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
           name: Contour ${{ github.ref_name }}
           files: |
             artifacts/**/*.tar.gz
-            artifacts/**/checksums.txt
+            artifacts/checksums-*/checksums-*.txt
+            checksums.txt
           generate_release_notes: true
