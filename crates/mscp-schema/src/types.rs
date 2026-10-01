@@ -129,3 +129,44 @@ pub struct EnvelopeMetaKey {
     pub default_value: Option<String>,
     pub description: String,
 }
+
+/// One row of `rule_capability_links.parquet`: an mSCP rule's claim on a
+/// payload key, with how sure the match is and which mechanism ships it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleCapabilityLink {
+    pub rule_id: String,
+    pub platform: Option<String>,
+    pub os_version: Option<String>,
+    /// Payload or declaration type.
+    pub capability_ref: String,
+    /// Top-level key within it.
+    pub capability_key: Option<String>,
+    /// `MdmProfile` / `DdmDeclaration`.
+    pub capability_kind: Option<String>,
+    /// `Exact`, `Strong`, `Heuristic`, `Manual`.
+    pub confidence: String,
+    pub evidence: Option<String>,
+    /// `ProfileCapable` / `DeclarativeReady`.
+    pub enforcement_preference: Option<String>,
+}
+
+/// One row of `rule_control_edges.parquet`: an mSCP rule satisfying one
+/// control of one framework. The layer above baselines — "satisfies AC-2"
+/// rather than "CIS wants this".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleControlEdge {
+    pub rule_id: String,
+    /// `800-53r5`, `cis`, `nist.cce.macos_27`, …
+    pub framework: String,
+    pub control_id: String,
+}
+
+/// One row of `supported_payloads.parquet`: a payload or declaration type
+/// the rule corpus enforces through, and how many rules use it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupportedPayload {
+    pub payload_type: String,
+    /// `MdmProfile` or `DdmDeclaration`.
+    pub kind: String,
+    pub rule_count: u32,
+}

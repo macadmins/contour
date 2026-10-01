@@ -3,7 +3,7 @@
 //! One dataset: `app_policies` — the managed-configuration surface of AI
 //! coding tools (Claude Code, Codex, Cursor, Gemini Enterprise mobile), one
 //! row per (tool, key), with delivery channels, enum vocabularies, and
-//! NIST 800-53 control mappings. Produced by the posture pipeline;
+//! NIST 800-53 control mappings. Produced by the dataset pipeline;
 //! deliberately its own crate because the grain is tool × key, not an
 //! Apple payload type.
 

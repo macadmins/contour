@@ -17,17 +17,18 @@ fn col<'a>(
         .ok_or_else(|| anyhow::anyhow!("missing column '{name}' in Parquet schema"))
 }
 
-/// Read a per-key `supportedOS` string column. The producer writes the
-/// `n/a` sentinel when a key is unsupported on a platform; treat that —
-/// and SQL NULL — alike as "absent" so the key gets no map entry there.
+/// Read a per-key `supportedOS` string column.
+///
+/// `n/a` is kept verbatim: it is Apple's statement that the key does not
+/// exist on that platform, and the dataset carries it only where Apple wrote
+/// it (an unlisted platform inherits the payload and arrives as NULL).
+/// Dropping it would make "not on macOS" indistinguishable from "nothing
+/// stated", so no consumer could say a key was unavailable anywhere. See [`PayloadKey::unavailable_on`].
 fn key_os_value(arr: &arrow::array::StringArray, row: usize) -> Option<String> {
     if arr.is_null(row) {
         return None;
     }
-    match arr.value(row) {
-        "n/a" => None,
-        v => Some(v.to_string()),
-    }
+    Some(arr.value(row).to_string())
 }
 
 /// Arrow schema for `capabilities.parquet`.
@@ -80,6 +81,7 @@ pub fn schema() -> Schema {
         // the key is unsupported on a platform.
         Field::new("key_introduced", DataType::Utf8, true),
         Field::new("key_deprecated", DataType::Utf8, true),
+        Field::new("key_removed", DataType::Utf8, true),
         Field::new("key_supervised", DataType::Boolean, true),
         // Windows CSP / manifest provenance
         Field::new("csp_name", DataType::Utf8, true),
@@ -98,7 +100,8 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         .context("Failed to build capabilities Parquet reader")?;
 
     // Use (payload_type) as grouping key. Accumulate OS support and keys.
-    let mut cap_map: indexmap::IndexMap<String, Capability> = indexmap::IndexMap::new();
+    let mut cap_map: indexmap::IndexMap<(String, Option<String>), Capability> =
+        indexmap::IndexMap::new();
     // Track which (payload_type, platform) combos we've already added OsSupport for
     let mut seen_os: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
 
@@ -146,72 +149,119 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         // Per-key supportedOS columns — the key's own metadata.
         let key_introduced_col = col(&batch, "key_introduced")?.as_string::<i32>();
         let key_deprecated_col = col(&batch, "key_deprecated")?.as_string::<i32>();
+        // A later column (44 -> 45). Absent in older parquet; those keys read
+        // with an empty `removed` map.
+        let key_removed_col = batch
+            .column_by_name("key_removed")
+            .map(|c| c.as_string::<i32>());
         let key_supervised_col = col(&batch, "key_supervised")?.as_boolean();
         // csp_name / manifest_source may be absent in older data
         let csp_names = batch
             .column_by_name("csp_name")
             .map(|c| c.as_string::<i32>());
+        // Tolerated as absent so a build against older published data still
+        // reads.
+        let key_allowed_scopes = batch
+            .column_by_name("key_allowed_scopes")
+            .map(|c| c.as_string::<i32>());
         let manifest_sources = batch
             .column_by_name("manifest_source")
             .map(|c| c.as_string::<i32>());
-        // key_rangelist (JSON string array) is absent in parquets generated
-        // before posture-ingest added it (40-column layout); those keys read
-        // as range_list: None.
+        // key_rangelist (JSON string array) is absent in older parquet
+        // (40-column layout); those keys read as range_list: None.
         let key_rangelists = batch
             .column_by_name("key_rangelist")
+            .map(|c| c.as_string::<i32>());
+        // Later columns (42 -> 44). Absent in older parquet, so both read as
+        // None rather than failing the load.
+        //
+        // `variant` is the discriminator Apple puts in a FILENAME when one
+        // payload type covers several surfaces — com.apple.MCX(WiFi).yaml and
+        // five siblings. `key_path` is the key's address with dots inside a
+        // segment escaped, which `parent_key` cannot express because Apple
+        // ships key names that contain dots.
+        let variants = batch
+            .column_by_name("variant")
+            .map(|c| c.as_string::<i32>());
+        let key_paths = batch
+            .column_by_name("key_path")
             .map(|c| c.as_string::<i32>());
 
         for row in 0..num_rows {
             let pt = payload_types.value(row);
             let platform_str = platforms_col.value(row);
 
-            let cap = cap_map.entry(pt.to_string()).or_insert_with(|| {
-                let kind = match kinds.value(row) {
-                    "MdmProfile" => PayloadKind::MdmProfile,
-                    "DdmDeclaration" => PayloadKind::DdmDeclaration,
-                    "MdmCommand" => PayloadKind::MdmCommand,
-                    "MdmCheckin" => PayloadKind::MdmCheckin,
-                    "CspSetting" => PayloadKind::CspSetting,
-                    "AdmxPolicy" => PayloadKind::AdmxPolicy,
-                    _ => PayloadKind::MdmProfile,
-                };
-                Capability {
-                    payload_type: pt.to_string(),
-                    kind,
-                    title: titles_col.value(row).to_string(),
-                    description: if descs.is_null(row) {
-                        String::new()
-                    } else {
-                        descs.value(row).to_string()
-                    },
-                    supported_os: Vec::new(),
-                    keys: Vec::new(),
-                    apply_mode: if apply_modes.is_null(row) {
-                        None
-                    } else {
-                        ApplyMode::parse(apply_modes.value(row))
-                    },
-                    ddm_category: if ddm_cats.is_null(row) {
-                        None
-                    } else {
-                        match ddm_cats.value(row) {
-                            "configuration" => Some(DdmCategory::Configuration),
-                            "asset" => Some(DdmCategory::Asset),
-                            "activation" => Some(DdmCategory::Activation),
-                            "management" => Some(DdmCategory::Management),
+            let variant =
+                variants.and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
+            // Identity is (payload_type, variant). Apple describes six surfaces
+            // through com.apple.MCX alone; merging them on payload_type gives
+            // one capability wearing six titles. Where the column is absent the
+            // key is (pt, None), which is exactly the previous behaviour.
+            let cap = cap_map
+                .entry((pt.to_string(), variant.clone()))
+                .or_insert_with(|| {
+                    // `PayloadKind::parse` is the one vocabulary. This used
+                    // to be a second copy of it, and it was missing
+                    // SharedStructure — so every shared structure Apple
+                    // publishes in `other/` was read as an MdmProfile, which
+                    // is the one thing it must not be: MdmProfile is
+                    // authorable and SharedStructure is refused by kind.
+                    //
+                    // It went unnoticed because profilecreator.parquet
+                    // carried the same payload types through a reader that
+                    // DID know the variant, and that manifest won. When that
+                    // table was removed the refusal silently stopped working.
+                    //
+                    // An unrecognised kind falls back to SharedStructure, not
+                    // MdmProfile: refusing something authorable is a visible
+                    // error someone reports, while authoring something that
+                    // should have been refused is a profile that ships.
+                    let raw = kinds.value(row);
+                    let kind = PayloadKind::parse(raw).unwrap_or_else(|| {
+                        eprintln!(
+                            "warning: capabilities.parquet has kind {raw:?}, which this build \
+                             does not know; treating as non-authorable"
+                        );
+                        PayloadKind::SharedStructure
+                    });
+                    Capability {
+                        payload_type: pt.to_string(),
+                        variant: variant.clone(),
+                        kind,
+                        title: titles_col.value(row).to_string(),
+                        description: if descs.is_null(row) {
+                            String::new()
+                        } else {
+                            descs.value(row).to_string()
+                        },
+                        supported_os: Vec::new(),
+                        keys: Vec::new(),
+                        apply_mode: if apply_modes.is_null(row) {
+                            None
+                        } else {
+                            ApplyMode::parse(apply_modes.value(row))
+                        },
+                        ddm_category: if ddm_cats.is_null(row) {
+                            None
+                        } else {
+                            match ddm_cats.value(row) {
+                                "configuration" => Some(DdmCategory::Configuration),
+                                "asset" => Some(DdmCategory::Asset),
+                                "activation" => Some(DdmCategory::Activation),
+                                "management" => Some(DdmCategory::Management),
+                                _ => None,
+                            }
+                        },
+                        csp_name: match csp_names {
+                            Some(col) if !col.is_null(row) => Some(col.value(row).to_string()),
                             _ => None,
-                        }
-                    },
-                    csp_name: match csp_names {
-                        Some(col) if !col.is_null(row) => Some(col.value(row).to_string()),
-                        _ => None,
-                    },
-                    manifest_source: match manifest_sources {
-                        Some(col) if !col.is_null(row) => Some(col.value(row).to_string()),
-                        _ => None,
-                    },
-                }
-            });
+                        },
+                        manifest_source: match manifest_sources {
+                            Some(col) if !col.is_null(row) => Some(col.value(row).to_string()),
+                            _ => None,
+                        },
+                    }
+                });
 
             // Add OsSupport if not already seen for this (payload_type, platform)
             let os_key = (pt.to_string(), platform_str.to_string());
@@ -305,6 +355,30 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
             // per-platform maps so callers can answer "when did this key
             // land on iOS vs macOS?".
             let key_name = key_names.value(row).to_string();
+
+            // Editor artifacts are not payload keys. Some scraped upstream
+            // manifests carry ProfileCreator widget state (`PFC_*`) and
+            // manifest metadata (`pfm_*`) in the same shape as real keys —
+            // and several arrive marked `presence: "required"`, which reads
+            // to a caller as a key it must set. The generate path already
+            // filtered these; the read path did not, so every consumer that
+            // inspects a schema (profile info, and the MCP schema tools) saw
+            // them as Apple keys. Drop them here so there is one answer.
+            if crate::types::is_editor_metadata_key(&key_name) {
+                continue;
+            }
+
+            // A payload type with no keys still occupies a row, because the
+            // table's grain is the key and the capability has to come from
+            // somewhere. The dataset writes that placeholder with an empty
+            // `key_name`. Read literally it becomes a key with no name: 22 of
+            // them, one per keyless command or check-in — `DeviceLocation`,
+            // `AvailableOSUpdates`, `ActivationLockBypassCode` and the rest.
+            // A nameless key is not a key.
+            if key_name.is_empty() {
+                continue;
+            }
+
             let row_platform = match platform_str {
                 "macOS" => Platform::MacOS,
                 "iOS" => Platform::IOS,
@@ -321,21 +395,51 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
             // unsupported gets no map entry at all.
             let row_introduced = key_os_value(key_introduced_col, row);
             let row_deprecated = key_os_value(key_deprecated_col, row);
+            let row_removed = key_removed_col.and_then(|c| key_os_value(c, row));
             let row_supervised = if key_supervised_col.is_null(row) {
                 None
             } else {
                 Some(key_supervised_col.value(row))
             };
 
-            if let Some(existing) = cap.keys.iter_mut().find(|k| k.name == key_name) {
+            // Identity is (name, parent_key), not name alone. Apple key names
+            // are unique within a payload, so this is a no-op there — but a
+            // Windows CSP repeats a name under each parent: `Firewall` carries
+            // three `EnableFirewall` keys, under MdmStore.DomainProfile,
+            // .PrivateProfile and .PublicProfile. Merging on name collapsed
+            // them to whichever arrived first, losing two thirds of the
+            // addressable nodes.
+            let row_key_scopes: Option<Vec<String>> = key_allowed_scopes
+                .and_then(|arr| {
+                    (!arr.is_null(row)).then(|| serde_json::from_str(arr.value(row)).ok())
+                })
+                .flatten();
+
+            let row_parent = if parent_keys.is_null(row) {
+                None
+            } else {
+                Some(parent_keys.value(row).to_string())
+            };
+
+            if let Some(existing) = cap
+                .keys
+                .iter_mut()
+                .find(|k| k.name == key_name && k.parent_key == row_parent)
+            {
                 if let Some(v) = row_introduced {
                     existing.introduced.entry(row_platform).or_insert(v);
                 }
                 if let Some(v) = row_deprecated {
                     existing.deprecated.entry(row_platform).or_insert(v);
                 }
+                if let Some(v) = row_removed {
+                    existing.removed.entry(row_platform).or_insert(v);
+                }
                 if let Some(s) = row_supervised {
                     existing.supervised.entry(row_platform).or_insert(s);
+                }
+                if let Some(v) = row_key_scopes {
+                    existing.allowed_scopes.entry(row_platform).or_insert(v);
                 }
                 continue;
             }
@@ -348,12 +452,24 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
             if let Some(v) = row_deprecated {
                 deprecated_map.insert(row_platform, v);
             }
+            let mut removed_map = std::collections::HashMap::new();
+            if let Some(v) = row_removed {
+                removed_map.insert(row_platform, v);
+            }
             let mut supervised_map = std::collections::HashMap::new();
             if let Some(s) = row_supervised {
                 supervised_map.insert(row_platform, s);
             }
+            let mut allowed_scopes_map: std::collections::HashMap<Platform, Vec<String>> =
+                std::collections::HashMap::new();
+            if let Some(v) = row_key_scopes.clone() {
+                allowed_scopes_map.insert(row_platform, v);
+            }
 
+            let row_key_path =
+                key_paths.and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()));
             cap.keys.push(PayloadKey {
+                key_path: row_key_path,
                 name: key_name,
                 data_type: key_types.value(row).to_string(),
                 presence: if key_presences.is_null(row) {
@@ -392,12 +508,24 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                 }),
                 introduced: introduced_map,
                 deprecated: deprecated_map,
+                removed: removed_map,
                 supervised: supervised_map,
-                parent_key: if parent_keys.is_null(row) {
+                csp_name: csp_names
+                    .and_then(|arr| (!arr.is_null(row)).then(|| arr.value(row).to_string())),
+                // NULL means the key inherits its payload's scope, not that
+                // it is unrestricted — see PayloadKey::allowed_scopes.
+                allowed_scopes: allowed_scopes_map,
+                device_channel: if device_ch.is_null(row) {
                     None
                 } else {
-                    Some(parent_keys.value(row).to_string())
+                    Some(device_ch.value(row))
                 },
+                user_channel: if user_ch.is_null(row) {
+                    None
+                } else {
+                    Some(user_ch.value(row))
+                },
+                parent_key: row_parent,
                 depth: depths.value(row),
                 combinetype: if combinetypes.is_null(row) {
                     None

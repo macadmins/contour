@@ -1,7 +1,8 @@
 //! Embedded osquery table/column schema from osquery 5.22.1.
 //!
-//! 283 tables, 2,581 columns across darwin, linux, and windows.
+//! 286 tables, 2,624 columns across darwin, linux, and windows.
 
+pub mod fleet;
 pub mod osquery;
 pub mod types;
 
@@ -10,6 +11,14 @@ pub use types::*;
 /// Embedded osquery schema Parquet data.
 pub fn embedded() -> &'static [u8] {
     include_bytes!("../data/osquery_schema.parquet")
+}
+
+/// Fleet's osquery schema: the same tables plus what an author actually
+/// wants — worked `examples`, `notes`, a documentation `url`, per-column
+/// platforms — and 91 tables upstream osquery does not list. Zero bytes on
+/// a dataset that predates it.
+pub fn embedded_fleet() -> &'static [u8] {
+    include_bytes!("../data/fleet_osquery_schema.parquet")
 }
 
 #[cfg(test)]
