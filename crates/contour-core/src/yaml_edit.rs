@@ -53,19 +53,15 @@ pub fn find_section_insert_point(lines: &[&str], section_key: &str) -> Option<In
         let indent = line.len() - line.trim_start().len();
         let expected_indent = item_indent.expect("invariant: set in preceding loop iteration");
 
-        // A line at or less than the section header indent = new section
-        if indent <= (section_start_indent(lines, section_start))
-            && !trimmed.is_empty()
-            && !trimmed.starts_with('#')
-        {
-            break;
-        }
-
-        // A list item at the expected indent
+        // An item at the list's own indent, or a deeper continuation line;
+        // anything else — a sibling key, a dedent — ends the section.
+        //
+        // Not "anything at or above the header's indent": contour writes list
+        // items LEVEL with their key (`policies:` / `- path:`, both at column
+        // 0), and that rule would end the section at the second item.
         if trimmed.starts_with("- ") && indent == expected_indent {
             last_item_end = i;
         } else if indent > expected_indent {
-            // Continuation of a multi-line entry
             last_item_end = i;
         } else {
             break;
@@ -133,7 +129,12 @@ pub fn find_nested_section_insert_point(
         let indent = line.len() - line.trim_start().len();
 
         if item_indent.is_none() {
-            if trimmed.starts_with("- ") && indent > parent_indent {
+            // `>=`, not `>`: contour writes items level with their key
+            // (`    custom_settings:` / `    - path:`, both at 4). Requiring
+            // them deeper found no items in any file contour generates, so
+            // the insert point fell straight after the header and new
+            // entries went to the top of the list, not the end.
+            if trimmed.starts_with("- ") && indent >= parent_indent {
                 item_indent = Some(indent);
                 last_item_end = i;
                 continue;
@@ -143,10 +144,10 @@ pub fn find_nested_section_insert_point(
 
         let expected = item_indent.expect("invariant: set in preceding loop iteration");
 
-        if indent <= parent_indent && !trimmed.is_empty() {
-            break;
-        }
-
+        // An item at the list's own indent, or a deeper continuation line;
+        // anything else ends the section. No separate `indent <= parent`
+        // check: when items sit level with the key, that is the items' own
+        // indent, and it would end the list at its second entry.
         if (trimmed.starts_with("- ") && indent == expected) || indent > expected {
             last_item_end = i;
         } else {
@@ -394,13 +395,6 @@ pub struct InsertPoint {
     pub section_exists: bool,
 }
 
-/// Get the indentation of a section header line.
-fn section_start_indent(lines: &[&str], line_idx: usize) -> usize {
-    lines
-        .get(line_idx)
-        .map_or(0, |l| l.len() - l.trim_start().len())
-}
-
 /// Append entries to a top-level section, handling all three cases:
 /// 1. Section has items → append after last item
 /// 2. Section exists but is empty → inject entries inline
@@ -456,93 +450,6 @@ pub fn append_section(content: &str, section_name: &str, entries: &[String]) -> 
         result.push('\n');
     }
 
-    result
-}
-
-/// Append profile entries to the `controls.macos_settings.custom_settings` section,
-/// creating the nested structure if it doesn't exist.
-pub fn append_custom_settings(content: &str, entries: &[Vec<String>]) -> String {
-    if entries.is_empty() {
-        return content.to_string();
-    }
-
-    let lines: Vec<&str> = content.lines().collect();
-
-    // Try to find existing controls.macos_settings.custom_settings section
-    if let Some(insert) =
-        find_nested_section_insert_point(&lines, &["controls", "macos_settings", "custom_settings"])
-    {
-        let flat: Vec<String> = entries.iter().flatten().cloned().collect();
-        return insert_lines_at(content, &insert, &flat);
-    }
-
-    // Check if controls: exists but macos_settings doesn't
-    let controls_exists = lines
-        .iter()
-        .any(|l| l.trim() == "controls:" || l.trim().starts_with("controls: "));
-
-    let mut result = content.to_string();
-    if !result.ends_with('\n') {
-        result.push('\n');
-    }
-
-    if controls_exists {
-        // controls: exists — find it and insert macos_settings underneath
-        let mut output_lines: Vec<String> = content.lines().map(String::from).collect();
-        let controls_idx = output_lines
-            .iter()
-            .position(|l| l.trim() == "controls:" || l.trim().starts_with("controls: "))
-            .expect("invariant: verified by preceding controls_exists check");
-
-        // Find where the controls section's children end
-        let controls_indent =
-            output_lines[controls_idx].len() - output_lines[controls_idx].trim_start().len();
-        let mut insert_at = controls_idx + 1;
-        for (i, line) in output_lines.iter().enumerate().skip(controls_idx + 1) {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                insert_at = i + 1;
-                continue;
-            }
-            let indent = line.len() - line.trim_start().len();
-            if indent <= controls_indent {
-                break;
-            }
-            insert_at = i + 1;
-        }
-
-        // Insert macos_settings.custom_settings block
-        let pad = " ".repeat(controls_indent + 2);
-        let sub_pad = " ".repeat(controls_indent + 4);
-        let mut new_lines = vec![
-            format!("{pad}macos_settings:"),
-            format!("{sub_pad}custom_settings:"),
-        ];
-        for entry_lines in entries {
-            for line in entry_lines {
-                new_lines.push(line.clone());
-            }
-        }
-
-        for (offset, line) in new_lines.into_iter().enumerate() {
-            output_lines.insert(insert_at + offset, line);
-        }
-
-        let mut out = output_lines.join("\n");
-        if content.ends_with('\n') {
-            out.push('\n');
-        }
-        return out;
-    }
-
-    // controls: doesn't exist at all — append the entire block
-    result.push_str("\ncontrols:\n  macos_settings:\n    custom_settings:\n");
-    for entry_lines in entries {
-        for line in entry_lines {
-            result.push_str(line);
-            result.push('\n');
-        }
-    }
     result
 }
 
@@ -672,7 +579,8 @@ fn format_profile_list_entries(
 }
 
 /// Append profile entries into `controls.apple_settings.configuration_profiles`
-/// (current Fleet GitOps schema), creating any missing intermediate keys.
+/// (current Fleet GitOps schema), creating any missing intermediate keys — or
+/// into `macos_settings` / `custom_settings` when the file already uses those.
 ///
 /// Comment- and formatting-preserving: existing content is never reflowed,
 /// only new lines are inserted. `controls:` is assumed to be a top-level key
@@ -701,29 +609,30 @@ pub fn append_apple_configuration_profiles(
 
     // A seeded `configuration_profiles: []` must become bare before we splice
     // block entries under it (otherwise the result is invalid YAML).
-    let content = normalize_empty_flow_list(
-        content,
-        &["controls", "apple_settings", "configuration_profiles"],
-    );
+    // Keep the file's own spelling: adding `apple_settings` beside an existing
+    // `macos_settings` (or `configuration_profiles` beside `custom_settings`)
+    // writes the file Fleet rejects as conflicting field names.
+    let (settings, list) = {
+        let lines: Vec<&str> = content.lines().collect();
+        crate::fleet_keys::spelling_in(&lines)
+    };
+    let content = normalize_empty_flow_list(content, &["controls", settings, list]);
     let content = content.as_str();
 
     let lines: Vec<&str> = content.lines().collect();
 
     // Shapes A & B — the configuration_profiles section already exists, with
     // items or empty. `find_nested_section_insert_point` covers both.
-    if let Some(insert) = find_nested_section_insert_point(
-        &lines,
-        &["controls", "apple_settings", "configuration_profiles"],
-    ) {
+    if let Some(insert) = find_nested_section_insert_point(&lines, &["controls", settings, list]) {
         let flat = format_profile_list_entries(entries, insert.indent, marker);
         return insert_lines_at(content, &insert, &flat);
     }
 
     // Shape C — apple_settings exists but has no configuration_profiles child.
-    if let Some((as_idx, as_indent)) = find_nested_key(&lines, &["controls", "apple_settings"]) {
+    if let Some((as_idx, as_indent)) = find_nested_key(&lines, &["controls", settings]) {
         let cp_indent = as_indent + 2;
         let item_indent = cp_indent + 2;
-        let mut new_lines = vec![format!("{}configuration_profiles:", " ".repeat(cp_indent))];
+        let mut new_lines = vec![format!("{}{list}:", " ".repeat(cp_indent))];
         new_lines.extend(format_profile_list_entries(entries, item_indent, marker));
         let insert = InsertPoint {
             line: as_idx + 1,
@@ -750,8 +659,8 @@ pub fn append_apple_configuration_profiles(
         }
         let item_indent = c_indent + 6;
         let mut new_lines = vec![
-            format!("{}apple_settings:", " ".repeat(c_indent + 2)),
-            format!("{}configuration_profiles:", " ".repeat(c_indent + 4)),
+            format!("{}{settings}:", " ".repeat(c_indent + 2)),
+            format!("{}{list}:", " ".repeat(c_indent + 4)),
         ];
         new_lines.extend(format_profile_list_entries(entries, item_indent, marker));
         let insert = InsertPoint {
@@ -767,7 +676,7 @@ pub fn append_apple_configuration_profiles(
     if !result.is_empty() && !result.ends_with('\n') {
         result.push('\n');
     }
-    result.push_str("controls:\n  apple_settings:\n    configuration_profiles:\n");
+    result.push_str(&format!("controls:\n  {settings}:\n    {list}:\n"));
     for line in format_profile_list_entries(entries, 6, marker) {
         result.push_str(&line);
         result.push('\n');
@@ -1515,22 +1424,6 @@ mod tests {
     }
 
     #[test]
-    fn test_append_custom_settings_empty_controls() {
-        let content = "name: Test\ncontrols:\nreports:\n  - path: ./lib/q.yml\n";
-        let entries = vec![vec![
-            "      - path: ../lib/macos/foo.mobileconfig".to_string(),
-        ]];
-        let result = append_custom_settings(content, &entries);
-        assert!(result.contains("macos_settings:"));
-        assert!(result.contains("custom_settings:"));
-        assert!(result.contains("- path: ../lib/macos/foo.mobileconfig"));
-        // reports should still be intact
-        assert!(result.contains("reports:\n  - path: ./lib/q.yml"));
-    }
-
-    // ── remove_path_entries tests ──
-
-    #[test]
     fn test_remove_single_line_entry() {
         let content = "\
 reports:
@@ -1824,6 +1717,72 @@ controls:
         }
     }
 
+    /// One list after the edit, under the spelling the file already used —
+    /// never `apple_settings` beside `macos_settings`, which Fleet rejects as
+    /// conflicting field names.
+    fn lists_after(result: &str) -> Vec<(String, String, usize)> {
+        let d: yaml_serde::Value = yaml_serde::from_str(result).expect("valid YAML");
+        let mut out = Vec::new();
+        for (k, v) in d["controls"].as_mapping().unwrap() {
+            for (ck, cv) in v.as_mapping().into_iter().flatten() {
+                if let Some(seq) = cv.as_sequence() {
+                    out.push((
+                        k.as_str().unwrap().into(),
+                        ck.as_str().unwrap().into(),
+                        seq.len(),
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_file_with_the_old_spelling_keeps_it() {
+        let content = "name: ws\ncontrols:\n  macos_settings:\n    custom_settings:\n      - path: ../a.mobileconfig\n";
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
+        assert!(!result.contains("apple_settings"), "{result}");
+        assert_eq!(
+            lists_after(&result),
+            vec![("macos_settings".into(), "custom_settings".into(), 2)]
+        );
+    }
+
+    #[test]
+    fn an_old_settings_key_without_a_list_gets_the_new_list_name_under_it() {
+        let content = "name: ws\ncontrols:\n  macos_settings:\n    enable_disk_encryption: true\n";
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
+        assert!(!result.contains("apple_settings"), "{result}");
+        assert_eq!(
+            lists_after(&result),
+            vec![("macos_settings".into(), "configuration_profiles".into(), 1)]
+        );
+    }
+
+    #[test]
+    fn a_mixed_file_keeps_both_of_its_choices() {
+        let content =
+            "controls:\n  apple_settings:\n    custom_settings:\n      - path: ../a.mobileconfig\n";
+        let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
+        assert!(!result.contains("configuration_profiles"), "{result}");
+        assert_eq!(
+            lists_after(&result),
+            vec![("apple_settings".into(), "custom_settings".into(), 2)]
+        );
+    }
+
+    #[test]
+    fn a_file_without_one_gets_the_current_spelling() {
+        for content in ["name: ws\ncontrols:\n  scripts: []\n", "name: ws\n"] {
+            let result = append_apple_configuration_profiles(content, &[glob_entry()], None);
+            assert_eq!(
+                lists_after(&result),
+                vec![("apple_settings".into(), "configuration_profiles".into(), 1)],
+                "{result}"
+            );
+        }
+    }
+
     /// A `Some(baseline)` marker leads the inserted block with a signpost
     /// comment, at the same indent as the entries.
     #[test]
@@ -1979,5 +1938,71 @@ controls:
             append_apple_configuration_profiles(content, &[], None),
             content
         );
+    }
+
+    /// Items written level with their key — how contour itself writes files.
+    ///
+    /// Both finders assumed items sit deeper than their key. The nested one
+    /// then found no items at all and inserted straight after the header, at
+    /// the TOP of the list; the top-level one stopped at the second item and
+    /// inserted after the FIRST. Valid YAML either way, and the wrong place:
+    /// every inserter built on them — `mscp generate --fleets`, migrate, the
+    /// fragment tools — put new entries somewhere other than the end.
+    #[test]
+    fn insert_points_land_after_the_last_item_when_items_are_level_with_their_key() {
+        let nested = "\
+controls:
+  macos_settings:
+    custom_settings:
+    # an operator's note
+    - path: a.mobileconfig
+    - path: b.mobileconfig
+      labels_include_all:
+      - x
+  scripts:
+  - path: s.sh
+";
+        let lines: Vec<&str> = nested.lines().collect();
+        let p = find_nested_section_insert_point(
+            &lines,
+            &["controls", "macos_settings", "custom_settings"],
+        )
+        .expect("section exists");
+        assert_eq!(
+            p.line, 8,
+            "after b's last continuation line, before `scripts:`"
+        );
+        assert_eq!(p.indent, 4, "items sit at the key's own column");
+
+        let s =
+            find_nested_section_insert_point(&lines, &["controls", "scripts"]).expect("scripts");
+        assert_eq!(s.line, 10, "after the one script");
+
+        let top = "\
+policies:
+- path: p1.yml
+- path: p2.yml
+- path: p3.yml
+reports: []
+";
+        let lines: Vec<&str> = top.lines().collect();
+        let p = find_section_insert_point(&lines, "policies").expect("policies");
+        assert_eq!(p.line, 4, "after the THIRD item, not the first");
+        assert_eq!(p.indent, 0);
+    }
+
+    /// Items indented deeper than their key still work as before.
+    #[test]
+    fn insert_points_still_work_when_items_are_indented_past_their_key() {
+        let nested = "controls:\n  scripts:\n    - path: a.sh\n    - path: b.sh\n  other: 1\n";
+        let lines: Vec<&str> = nested.lines().collect();
+        let p =
+            find_nested_section_insert_point(&lines, &["controls", "scripts"]).expect("scripts");
+        assert_eq!((p.line, p.indent), (4, 4));
+
+        let top = "labels:\n  - path: a.yml\n  - path: b.yml\nreports: []\n";
+        let lines: Vec<&str> = top.lines().collect();
+        let p = find_section_insert_point(&lines, "labels").expect("labels");
+        assert_eq!((p.line, p.indent), (3, 2));
     }
 }

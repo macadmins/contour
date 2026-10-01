@@ -1,4 +1,27 @@
-// Fleet conflict filtering - public API methods
+//! Fleet conflict filter — what Fleet already manages natively, so an mSCP
+//! baseline does not fight it.
+//!
+//! # Where the constraints come from — read this before touching `new()`
+//!
+//! The constraints are DATA, and they live in ONE place:
+//! `crates/mscp/fleet-constraints.yml`. That file is compiled into this binary with
+//! `include_str!`, so it is always present and always the version that
+//! shipped with this build. There is no fallback list in code, and there
+//! must not be one.
+//!
+//! A code-side fallback list would drift from the YAML, and would make "file
+//! not found" indistinguishable from "constraints loaded" — absence dressed
+//! as data.
+//!
+//! Resolution order, in full:
+//!
+//!   1. `from_file(Some(path))` — an operator override. It must exist and
+//!      parse. A missing or malformed override is an ERROR, never a silent
+//!      substitution of anything else.
+//!   2. `from_file(None)`, `new()`, `Default` — the embedded YAML. Always.
+//!
+//! To change a constraint, edit the YAML. The tests at the bottom load the
+//! embedded copy and assert entries only the YAML carries.
 #![allow(dead_code, reason = "module under development")]
 
 use anyhow::{Context, Result};
@@ -55,54 +78,50 @@ struct PayloadKeyExclusionInternal {
 }
 
 impl FleetConflictFilter {
-    /// Create a new Fleet conflict filter
+    /// The embedded constraints. See the module docs for why there is no
+    /// other default.
     pub fn new() -> Self {
-        Self::from_file(None).unwrap_or_else(|_| Self::with_defaults())
+        Self::embedded()
     }
 
-    /// Create from a specific constraints file
+    /// The constraints compiled into this binary: `crates/mscp/fleet-constraints.yml`.
+    pub const EMBEDDED_CONSTRAINTS: &str = include_str!("../../fleet-constraints.yml");
+
+    /// The embedded constraints. Infallible for a shipped build: the YAML is
+    /// part of the crate, and `embedded_constraints_parse` fails the build's
+    /// test run before a malformed file can reach a user.
+    fn embedded() -> Self {
+        Self::parse(Self::EMBEDDED_CONSTRAINTS, "embedded fleet-constraints.yml")
+            .expect("embedded fleet-constraints.yml is malformed — the crate cannot ship like this")
+    }
+
+    /// Load constraints. `None` is the embedded YAML; `Some(path)` is an
+    /// operator override that must exist and parse — it never falls back.
     pub fn from_file(path: Option<&Path>) -> Result<Self> {
-        let constraints_path = if let Some(p) = path {
-            p.to_path_buf()
-        } else {
-            // Default to fleet-constraints.yml in current directory
-            let default_path = PathBuf::from("fleet-constraints.yml");
-            if default_path.exists() {
-                default_path
-            } else {
-                // Fallback to hardcoded defaults if file doesn't exist
-                return Ok(Self::with_defaults());
-            }
+        let Some(p) = path else {
+            return Ok(Self::embedded());
         };
-
-        // Load constraints from YAML
-        let content = std::fs::read_to_string(&constraints_path).with_context(|| {
+        let content = std::fs::read_to_string(p).with_context(|| {
             format!(
-                "Failed to read Fleet constraints: {}",
-                constraints_path.display()
+                "Fleet constraints override not readable: {} — an override must exist; \
+                 there is no fallback, and the embedded constraints are used only when no \
+                 override is given",
+                p.display()
             )
         })?;
+        let filter = Self::parse(&content, &p.display().to_string())?;
+        tracing::info!("Loaded Fleet constraints override from: {}", p.display());
+        Ok(filter)
+    }
 
-        let constraints: FleetConstraints = yaml_serde::from_str(&content).with_context(|| {
-            format!(
-                "Failed to parse Fleet constraints: {}",
-                constraints_path.display()
-            )
-        })?;
-
-        tracing::info!(
-            "Loaded Fleet constraints from: {}",
-            constraints_path.display()
-        );
+    fn parse(content: &str, source: &str) -> Result<Self> {
+        let constraints: FleetConstraints = yaml_serde::from_str(content)
+            .with_context(|| format!("Failed to parse Fleet constraints: {source}"))?;
         tracing::debug!(
-            "  Excluded profiles: {}",
-            constraints.excluded_profiles.len()
-        );
-        tracing::debug!(
-            "  Payload key exclusions: {}",
+            "Fleet constraints ({source}): {} excluded profiles, {} key exclusions",
+            constraints.excluded_profiles.len(),
             constraints.payload_key_exclusions.len()
         );
-
         Ok(Self::from_constraints(constraints))
     }
 
@@ -128,65 +147,6 @@ impl FleetConflictFilter {
             payload_key_exclusions,
             constraints,
         }
-    }
-
-    /// Create with hardcoded defaults (fallback)
-    fn with_defaults() -> Self {
-        let mut filter = Self {
-            excluded_profiles: HashSet::new(),
-            payload_key_exclusions: Vec::new(),
-            constraints: FleetConstraints {
-                excluded_profiles: Vec::new(),
-                payload_key_exclusions: Vec::new(),
-            },
-        };
-
-        filter.add_default_exclusions();
-        filter
-    }
-
-    /// Add default Fleet conflict exclusions (fallback when no YAML file)
-    fn add_default_exclusions(&mut self) {
-        // 1. FileVault profiles (conflicts with enable_disk_encryption)
-        self.excluded_profiles
-            .insert("com.apple.MCX.FileVault2.mobileconfig".to_string());
-
-        // 2. Software Update profiles (conflicts with macos_updates/ipados_updates)
-        self.excluded_profiles
-            .insert("com.apple.SoftwareUpdate.mobileconfig".to_string());
-
-        // 3. macOS Setup profiles (conflicts with macos_setup)
-        self.excluded_profiles
-            .insert("com.apple.SetupAssistant.managed.mobileconfig".to_string());
-
-        // 4. FileVault-related keys in MCX profiles
-        self.payload_key_exclusions
-            .push(PayloadKeyExclusionInternal {
-                payload_type: "com.apple.MCX".to_string(),
-                keys_to_remove: vec![
-                    "dontAllowFDEDisable".to_string(),
-                    "DestroyFVKeyOnStandby".to_string(),
-                    "dontAllowFDEEnable".to_string(),
-                ],
-                reason: "FileVault settings conflict with Fleet's enable_disk_encryption"
-                    .to_string(),
-            });
-
-        // 5. Software Update keys in any profile
-        self.payload_key_exclusions
-            .push(PayloadKeyExclusionInternal {
-                payload_type: "com.apple.SoftwareUpdate".to_string(),
-                keys_to_remove: vec![
-                    "AutomaticCheckEnabled".to_string(),
-                    "AutomaticDownload".to_string(),
-                    "AutomaticallyInstallMacOSUpdates".to_string(),
-                    "ConfigDataInstall".to_string(),
-                    "CriticalUpdateInstall".to_string(),
-                ],
-                reason:
-                    "Software Update settings conflict with Fleet's macos_updates/ipados_updates"
-                        .to_string(),
-            });
     }
 
     /// Check if a profile should be excluded
@@ -356,13 +316,38 @@ impl Default for FleetConflictFilter {
 mod tests {
     use super::*;
 
+    /// The shipped YAML parses. This is what lets `embedded()` be
+    /// infallible: a malformed file fails here, in CI, not in a user's
+    /// `--fleet-mode` run.
     #[test]
-    fn test_excluded_profiles() {
-        let filter = FleetConflictFilter::new();
+    fn embedded_constraints_parse() {
+        FleetConflictFilter::parse(FleetConflictFilter::EMBEDDED_CONSTRAINTS, "test")
+            .expect("crates/mscp/fleet-constraints.yml must parse");
+    }
 
+    /// `new()` is the YAML, not a code list. Smartcard is the witness: the
+    /// YAML excludes it, so `--fleet-mode` must not ship it.
+    #[test]
+    fn new_loads_the_yaml_not_a_code_list() {
+        let filter = FleetConflictFilter::new();
         assert!(filter.should_exclude_profile("com.apple.MCX.FileVault2.mobileconfig"));
         assert!(filter.should_exclude_profile("com.apple.SoftwareUpdate.mobileconfig"));
+        assert!(
+            filter.should_exclude_profile("com.apple.security.smartcard.mobileconfig"),
+            "smartcard is excluded in fleet-constraints.yml; if this fails, new() is not \
+             reading the YAML"
+        );
         assert!(!filter.should_exclude_profile("com.apple.security.firewall.mobileconfig"));
+    }
+
+    /// An override that is not there is an error, not a quiet substitution.
+    #[test]
+    fn a_missing_override_is_an_error_not_a_fallback() {
+        let err =
+            FleetConflictFilter::from_file(Some(Path::new("/nonexistent/fleet-constraints.yml")))
+                .err()
+                .expect("a missing override must not load anything");
+        assert!(err.to_string().contains("no fallback"), "{err}");
     }
 
     #[test]
