@@ -295,6 +295,20 @@ pub fn classify_error(error: &str) -> &'static str {
     if error.contains("Validation failed") || error.contains("schema validation") {
         return "SCHEMA_VIOLATION";
     }
+    // Service-configuration-files refusals. Each is a declaration that would
+    // deploy cleanly and manage nothing, so an agent must be able to switch on
+    // them rather than substring-match the prose.
+    if error.contains("must contain")
+        && (error.contains("archive for") || error.contains("mirrors the filesystem"))
+    {
+        return "ARCHIVE_LAYOUT";
+    }
+    if error.contains("is not a service Apple documents") || error.contains("must be reverse-DNS") {
+        return "UNKNOWN_SERVICE_TYPE";
+    }
+    if error.contains("Re-hosting moves a URL") || error.contains("refusing to re-point") {
+        return "CONTENT_MOVED";
+    }
     if error.contains("No such file")
         || error.contains("Permission denied")
         || error.contains("Failed to read")
@@ -505,6 +519,36 @@ mod error_json_tests {
         write_error_json(&mut buf, "boom", None).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(value["error_code"], "UNKNOWN");
+    }
+
+    #[test]
+    fn service_config_refusals_get_stable_codes() {
+        // These three are the whole point of the service-config guard rails:
+        // each names a declaration that deploys cleanly and manages nothing.
+        // An agent switches on the code, so a reworded message must not
+        // silently demote them to UNKNOWN.
+        assert_eq!(
+            classify_error(
+                "archive for `com.apple.sshd` must contain etc/ssh — the archive mirrors \
+                 the filesystem starting at `/`"
+            ),
+            "ARCHIVE_LAYOUT"
+        );
+        assert_eq!(
+            classify_error("`com.apple.sshdd` is not a service Apple documents"),
+            "UNKNOWN_SERVICE_TYPE"
+        );
+        assert_eq!(
+            classify_error("ServiceType `sshd` must be reverse-DNS"),
+            "UNKNOWN_SERVICE_TYPE"
+        );
+        assert_eq!(
+            classify_error(
+                "`com.acme.asset.sshd`: the archive's hash is ab, but the index recorded cd. \
+                 Re-hosting moves a URL, it does not republish content"
+            ),
+            "CONTENT_MOVED"
+        );
     }
 }
 
