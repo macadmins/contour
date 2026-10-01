@@ -83,6 +83,9 @@ indexmap = { version = "2", features = ["serde"] }
 # Diff
 similar = "3"
 
+# wasm face of contour-form
+wasm-bindgen = "0.2"
+
 # Directories
 dirs = "6.0"
 
@@ -90,11 +93,16 @@ dirs = "6.0"
 mimalloc = "0.1"
 
 # Internal crates
-contour-core = { path = "crates/contour-core", version = "0.4.1-beta.1" }
-contour-profiles = { path = "crates/contour-profiles", version = "0.4.1-beta.1" }
-mdm-schema = { path = "crates/mdm-schema", version = "0.4.1-beta.1" }
-mscp-schema = { path = "crates/mscp-schema", version = "0.4.1-beta.1" }
-osquery-schema = { path = "crates/osquery-schema", version = "0.4.1-beta.1" }
+contour-core = { path = "crates/contour-core", version = "0.5.0-beta.1" }
+contour-profiles = { path = "crates/contour-profiles", version = "0.5.0-beta.1" }
+contour-form = { path = "crates/contour-form", version = "0.5.0-beta.1" }
+contour-form-wasm = { path = "crates/contour-form-wasm", version = "0.5.0-beta.1" }
+app-manifest = { path = "crates/app-manifest", version = "0.5.0-beta.1" }
+mdm-schema = { path = "crates/mdm-schema", version = "0.5.0-beta.1" }
+mscp-schema = { path = "crates/mscp-schema", version = "0.5.0-beta.1" }
+osquery-schema = { path = "crates/osquery-schema", version = "0.5.0-beta.1" }
+windows-schema = { path = "crates/windows-schema", version = "0.5.0-beta.1" }
+app-policy-schema = { path = "crates/app-policy-schema", version = "0.5.0-beta.1" }
 
 [workspace.dependencies.tempfile]
 version = "3.24"

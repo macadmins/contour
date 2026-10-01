@@ -1,6 +1,6 @@
 [package]
 name = "app-manifest"
-version = "0.4.1-beta.1"
+version = "0.5.0-beta.1"
 description = "App code identities as a first-class artifact, for tools that cannot run codesign"
 edition.workspace = true
 authors.workspace = true
