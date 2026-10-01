@@ -42,6 +42,15 @@ pub mod types;
 
 pub use types::*;
 
+/// The dataset this crate was built from, as the build stamped it:
+/// `release <pin> sha256 <hex>` for a pinned archive, `url <url>` or
+/// `local <path>` for an override, `unstamped` when the build found no
+/// stamp. Generated SyncML carries it so a reader can tell what the file
+/// was checked against.
+pub fn dataset_pin() -> &'static str {
+    env!("CONTOUR_WINDOWS_DATASET_PIN")
+}
+
 /// Embedded Windows STIG rules Parquet data.
 ///
 /// Same column layout as mSCP's `rules_versioned` — read with

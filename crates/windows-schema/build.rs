@@ -10,6 +10,14 @@ fn main() {
     // Whatever the dataset carries, a table it predates becomes a
     // zero-length placeholder; see the function.
     ensure_optional_placeholders(Path::new("data"));
+
+    // The dataset stamp (`release <pin> sha256 <hex>`, or `local <path>`),
+    // for generated SyncML to name the data it was checked against.
+    // `resolve_dataset` already declares the file as a rerun input.
+    let pin = std::fs::read_to_string("data/.dataset-pin")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unstamped".to_string());
+    println!("cargo:rustc-env=CONTOUR_WINDOWS_DATASET_PIN={pin}");
 }
 
 /// Parquet files this crate embeds, in the order the dataset release lists
