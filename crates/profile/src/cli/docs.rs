@@ -107,6 +107,8 @@ pub fn handle_docs_list(
                     "payload_type": m.payload_type,
                     "title": m.title,
                     "category": m.category,
+                    "kind": m.kind.map(|k| k.as_str()),
+                    "authorable": m.is_authorable(),
                     "fields_count": m.fields.len(),
                 })
             })

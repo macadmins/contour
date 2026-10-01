@@ -1,6 +1,6 @@
 [recipe]
 name = "santa"
-description = "Santa endpoint security — configuration, PPPC (Full Disk Access), and system extension approval"
+description = "Santa endpoint security — configuration, PPPC (Full Disk Access for all three signed components), system extension approval, service management, and notifications"
 vendor = "North Pole Security"
 variables = []
 
@@ -41,7 +41,11 @@ description = "Grants Full Disk Access and SystemPolicySysAdminFiles to the Sant
 removal_disallowed = true
 
 [profile.extra_fields]
-"Services.SystemPolicyAllFiles" = [{Identifier = "com.northpolesec.santa.daemon", IdentifierType = "bundleID", TeamIdentifier = "ZMCG7MLDV9", CodeRequirement = 'identifier "com.northpolesec.santa.daemon" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "ZMCG7MLDV9"', Allowed = true, StaticCode = false}]
+"Services.SystemPolicyAllFiles" = [
+    {Identifier = "com.northpolesec.santa.daemon", IdentifierType = "bundleID", CodeRequirement = 'identifier "com.northpolesec.santa.daemon" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "ZMCG7MLDV9"', Authorization = "Allow", StaticCode = false},
+    {Identifier = "com.northpolesec.santa.bundleservice", IdentifierType = "bundleID", CodeRequirement = 'identifier "com.northpolesec.santa.bundleservice" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "ZMCG7MLDV9"', Authorization = "Allow", StaticCode = false},
+    {Identifier = "com.northpolesec.santa", IdentifierType = "bundleID", CodeRequirement = 'identifier "com.northpolesec.santa" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "ZMCG7MLDV9"', Authorization = "Allow", StaticCode = false}
+]
 
 [[profile]]
 filename = "santa-sysext.mobileconfig"
@@ -51,10 +55,18 @@ description = "Approves the Santa endpoint security system extension"
 removal_disallowed = true
 
 [profile.extra_fields]
+# Apple: "If false, restricts users from approving additional system extensions
+# that configuration profiles don't explicitly allow." Kept strict; note that
+# `santa prep` currently emits true.
 AllowUserOverrides = false
 AllowedTeamIdentifiers = ["ZMCG7MLDV9"]
 AllowedSystemExtensions = {ZMCG7MLDV9 = ["com.northpolesec.santa.daemon"]}
 AllowedSystemExtensionTypes = {ZMCG7MLDV9 = ["EndpointSecurityExtension"]}
+# macOS 15+. The SIP-backed key: Apple documents this as "can't be disabled
+# or uninstalled when SIP is enabled", where NonRemovableFromUISystemExtensions
+# only blocks System Settings and Finder. For an endpoint security agent the
+# stronger guarantee is the right one.
+NonRemovableSystemExtensions = {ZMCG7MLDV9 = ["com.northpolesec.santa.daemon"]}
 
 [[profile]]
 filename = "santa-notifications.mobileconfig"
@@ -64,3 +76,13 @@ description = "Configures notification settings for Santa alerts"
 
 [profile.extra_fields]
 NotificationSettings = [{BundleIdentifier = "com.northpolesec.santa", NotificationsEnabled = true, AlertType = 1, ShowInNotificationCenter = true, ShowInLockScreen = false, CriticalAlertEnabled = true}]
+
+[[profile]]
+filename = "santa-service-management.mobileconfig"
+payload_type = "com.apple.servicemanagement"
+display_name = "Santa Service Management"
+description = "Pre-approves Santa's managed login items so the daemon starts without a user prompt"
+removal_disallowed = true
+
+[profile.extra_fields]
+Rules = [{RuleType = "TeamIdentifier", RuleValue = "ZMCG7MLDV9", Comment = "com.northpolesec.santa.daemon"}]

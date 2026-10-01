@@ -9,13 +9,20 @@ pub mod classify;
 pub mod collisions;
 pub mod command;
 pub mod ddm;
+pub mod ddm_app_control;
+pub mod ddm_app_privacy;
 pub mod ddm_beta;
+pub mod ddm_legacy;
 pub mod ddm_reidentify;
+pub mod ddm_service_config;
+pub mod ddm_status;
 pub mod diff;
 pub mod dispatch;
 pub mod docs;
 pub mod duplicate;
 pub mod enrollment;
+pub mod form;
+pub mod fragment;
 pub mod generate;
 pub mod glob_utils;
 pub mod import;
@@ -23,6 +30,7 @@ pub mod import_recipe;
 pub mod info;
 pub mod init;
 pub mod jamf_import;
+pub mod jamf_preset;
 pub mod library;
 pub mod library_diff;
 pub mod library_validate;
@@ -44,6 +52,9 @@ pub mod unsign;
 pub mod uuid;
 pub mod validate;
 pub mod variables;
+pub mod windows_apps;
+pub mod windows_generate;
+pub mod windows_stig;
 
 use clap::{Parser, Subcommand};
 
@@ -87,7 +98,7 @@ pub struct Cli {
         global = true,
         value_enum,
         default_value_t = crate::schema::Channel::Stable,
-        help = "Schema channel: stable (released) or beta (pre-release OS seed)"
+        help = "Schema channel: stable (released), or beta (pre-release OS seed — currently disabled)"
     )]
     pub channel: crate::schema::Channel,
 }
@@ -137,7 +148,10 @@ pub enum Commands {
         )]
         os: Option<String>,
 
-        #[arg(long, help = "Use the beta seed schema (shorthand for --channel beta)")]
+        #[arg(
+            long,
+            help = "Use the beta seed schema (shorthand for --channel beta) — currently disabled"
+        )]
         beta: bool,
 
         #[arg(
@@ -161,6 +175,30 @@ pub enum Commands {
 
         #[arg(short, long, help = "Overwrite existing config")]
         force: bool,
+    },
+
+    #[command(
+        about = "Draft a recipe preset from a Jamf Application & Custom Settings manifest",
+        long_about = "Read a Jamf manifest (JSON) and write a recipe you own and edit.\n\n                      The manifest is NOT imported into contour's schema. A Jamf manifest                       states no OS availability and carries no version, so nothing built from                       one can say which release of the app it describes — contour will not                       assert it. Every setting in the output is commented out.\n\n                      Dotted keys are reported separately and not resolved: a dot may be part                       of a key's name or a path into a nested dictionary, the manifest cannot                       say which, and the wrong choice writes a profile the app never reads."
+    )]
+    Preset {
+        #[arg(help = "Jamf manifest JSON file")]
+        manifest: String,
+
+        #[arg(short, long, help = "Write here instead of stdout")]
+        output: Option<String>,
+
+        #[arg(
+            long,
+            help = "Provenance line(s) for the header, e.g. the repository and commit"
+        )]
+        source_note: Option<String>,
+
+        #[arg(
+            long,
+            help = "The preference domain, when the filename and the manifest title disagree"
+        )]
+        domain: Option<String>,
     },
 
     #[command(about = "Import profiles from a directory with interactive selection")]
@@ -730,7 +768,7 @@ pub enum Commands {
 
         #[arg(
             long,
-            help = "Search the beta seed schema (shorthand for --channel beta)"
+            help = "Search the beta seed schema (shorthand for --channel beta) — currently disabled"
         )]
         beta: bool,
 
@@ -740,6 +778,15 @@ pub enum Commands {
             help = "Search the Windows CSP dataset (DDF v2) instead of the Apple schema"
         )]
         windows: bool,
+
+        #[arg(
+            long,
+            value_name = "KIND",
+            help = "Only this kind: profile, declaration, command, checkin, preference, csp, \
+                    admx. Without it, commands and check-in messages are hidden — they \
+                    have schemas but cannot be authored as profiles"
+        )]
+        kind: Option<String>,
     },
 
     #[command(
@@ -782,7 +829,19 @@ pub enum Commands {
         dry_run: bool,
     },
 
-    #[command(about = "Compare two configuration profiles")]
+    #[command(
+        about = "Compare two configuration profiles",
+        long_about = "Compare two configuration profiles.\n\n\
+                      By default this is a line diff of the serialised XML — right for \
+                      a review, wrong for a script, because every PayloadUUID and \
+                      PayloadIdentifier line differs between two generated profiles by \
+                      construction.\n\n\
+                      --structural (implied by --json) pairs payloads by PayloadType \
+                      and PayloadDisplayName instead, walks each pair to its leaves, and \
+                      reports added / removed / changed / unchanged per dotted path. \
+                      Bookkeeping keys are marked rather than hidden; --settings-only \
+                      drops them."
+    )]
     Diff {
         #[arg(help = "First configuration profile file")]
         file1: String,
@@ -799,6 +858,20 @@ pub enum Commands {
             help = "Also write a markdown report to PATH"
         )]
         md_report: Option<String>,
+
+        #[arg(
+            long,
+            help = "Payload-by-payload, key-by-key comparison instead of a text diff"
+        )]
+        structural: bool,
+
+        #[arg(
+            long,
+            requires = "structural",
+            help = "Drop the Payload* bookkeeping keys (UUID, identifier, version, …) \
+                    from a structural diff"
+        )]
+        settings_only: bool,
     },
 
     #[command(
@@ -1106,6 +1179,10 @@ pub enum Commands {
         )]
         vars: Vec<String>,
 
+        /// Exit 0 even when a recipe's `{{KEY}}` placeholders are left unfilled, to fill them by hand
+        #[arg(long)]
+        allow_placeholders: bool,
+
         #[arg(
             long,
             help = "Create a recipe TOML from payload types (e.g., --create-recipe m365 com.microsoft.Edge com.microsoft.Outlook)"
@@ -1145,12 +1222,52 @@ pub enum Commands {
 
         #[arg(
             long,
-            help = "Generate against the beta seed schema (shorthand for --channel beta)"
+            help = "Generate against the beta seed schema (shorthand for --channel beta) — currently disabled"
         )]
         beta: bool,
+
+        /// Write a Fleet GitOps fragment: the profiles and declarations in
+        /// Fleet's layout, a fleet file listing them under
+        /// apple_settings.configuration_profiles, and fragment.toml. Refuses
+        /// what Fleet would refuse at upload.
+        #[arg(long)]
+        fragment: bool,
     },
 
     #[command(about = "Work with Declarative Device Management (DDM) declarations")]
+    #[command(
+        about = "Generate Windows CSP profiles (SyncML) from the embedded schema",
+        long_about = "contour embeds 4,347 Windows settings across 311 CSPs plus the ADMX \
+                      element schema. This turns a settings TOML into the SyncML an MDM \
+                      delivers.\n\
+                      \n\
+                      Its own subcommand rather than a flag on `profile generate`: that \
+                      command's 19 flags are shaped for Apple payloads and --org has no \
+                      Windows meaning.\n\
+                      \n\
+                      Paths are built by the rule verified against every LocURI \
+                      in Microsoft's DDF drop, and the output is checked against the 648 \
+                      working fragments in fleet_stigs.",
+        subcommand
+    )]
+    Windows(WindowsAction),
+
+    #[command(
+        subcommand,
+        about = "The FormSpec contract: render-ready schema out, documents back in",
+        long_about = "What a form-driven authoring tool — web, native or CI — needs from \
+                      contour without re-deriving Apple's rules.\n\n\
+                      `spec` projects a payload type (or every authorable type) onto the \
+                      FormSpec v1 contract: every key by dotted path with its control, \
+                      label, options, range, availability and scope, per platform and \
+                      never unioned. `emit` takes values for a type and produces the \
+                      deployable document — a JSON declaration or a .mobileconfig — \
+                      choosing format and nesting from the schema, and splitting a \
+                      declaration into `.user` and `.system` when its keys span both \
+                      delivery channels."
+    )]
+    Form(FormAction),
+
     Ddm {
         #[command(subcommand)]
         action: DdmAction,
@@ -1375,6 +1492,29 @@ pub enum PayloadAction {
 
 #[derive(Debug, Subcommand)]
 pub enum DdmAction {
+    #[command(
+        about = "List the status items a device can report (the other half of DDM)",
+        long_about = "A declaration says what a device should be; a status item is what \
+                      the device reports back — software update state, installed apps, \
+                      disk usage, management state. Apple defines the item types and an \
+                      MDM subscribes to them, so this is read-only: it says what exists, \
+                      with each item's value type, scopes and enrollments."
+    )]
+    Status {
+        #[arg(help = "Substring of the item type, title or description")]
+        query: Option<String>,
+
+        #[arg(long, value_name = "NAME", help = "Restrict to one platform")]
+        platform: Option<String>,
+
+        #[arg(
+            long,
+            help = "List the MDM error codes Apple documents instead — the failure side \
+                    of the same channel"
+        )]
+        errors: bool,
+    },
+
     #[command(about = "Parse and display DDM declaration(s)")]
     Parse {
         #[arg(help = "DDM JSON file(s) or directory", required = true, num_args = 1..)]
@@ -1419,9 +1559,16 @@ pub enum DdmAction {
 
         #[arg(
             long,
-            help = "Validate against the beta seed schema (pre-release OS keys, e.g. app.settings)"
+            help = "Validate against the pre-release OS seed schema, when one is open (between seeds it is the released schema)"
         )]
         beta: bool,
+
+        #[arg(
+            long = "platform",
+            value_name = "OS",
+            help = "Warn about keys Apple does not offer on this platform (repeatable: macOS, iOS, tvOS, watchOS, visionOS)"
+        )]
+        platforms: Vec<String>,
     },
 
     #[command(
@@ -1440,7 +1587,7 @@ pub enum DdmAction {
 
         #[arg(
             long,
-            help = "Include the beta seed schema (pre-release OS types, e.g. app.settings)"
+            help = "Include the pre-release OS seed schema, when one is open (between seeds it is the released schema)"
         )]
         beta: bool,
     },
@@ -1463,7 +1610,7 @@ pub enum DdmAction {
 
         #[arg(
             long,
-            help = "Include the beta seed schema (pre-release OS types, e.g. app.settings)"
+            help = "Include the pre-release OS seed schema, when one is open (between seeds it is the released schema)"
         )]
         beta: bool,
     },
@@ -1482,7 +1629,7 @@ pub enum DdmAction {
 
         #[arg(
             long,
-            help = "Use the beta seed schema (pre-release OS types, e.g. app.settings)"
+            help = "Use the pre-release OS seed schema, when one is open (between seeds it is the released schema)"
         )]
         beta: bool,
 
@@ -1521,7 +1668,7 @@ pub enum DdmAction {
     Coverage {
         #[arg(
             long,
-            help = "Count seed declaration types (shorthand for --channel beta)"
+            help = "Count seed declaration types (shorthand for --channel beta) — currently disabled"
         )]
         beta: bool,
     },
@@ -1674,7 +1821,7 @@ pub enum DdmAction {
 
         #[arg(
             long,
-            help = "Use the beta seed schema (pre-release OS keys, e.g. app.settings, package UninstallBehavior)"
+            help = "Use the pre-release OS seed schema, when one is open (between seeds it is the released schema)"
         )]
         beta: bool,
     },
@@ -1787,6 +1934,13 @@ pub enum DdmAction {
         org: Option<String>,
 
         #[arg(
+            long = "platform",
+            value_name = "OS",
+            help = "Refuse keys Apple does not offer on this platform (repeatable; overrides the bundle's `platforms`)"
+        )]
+        platforms: Vec<String>,
+
+        #[arg(
             long,
             value_name = "NAME",
             conflicts_with_all = ["bundle", "list_presets"],
@@ -1857,6 +2011,603 @@ pub enum DdmAction {
         )]
         strict: bool,
     },
+
+    #[command(
+        about = "Wrap classic .mobileconfig profiles in com.apple.configuration.legacy declarations",
+        long_about = "DDM activations gate declarations, not profiles, so a mobileconfig that \
+                      needs gating must be wrapped in com.apple.configuration.legacy pointing \
+                      at it by URL.\n\
+                      \n\
+                      A device re-downloads ProfileURL only when the declaration's ServerToken \
+                      changes, and editing the profile does not touch the declaration — so an \
+                      edited profile silently keeps serving the old copy while the declaration \
+                      still reports Verified. contour records each profile's SHA-256 in a \
+                      sidecar index so `ddm legacy refresh` can re-point exactly the \
+                      declarations whose profiles actually changed.\n\
+                      \n\
+                      Dry-run by default; pass --write to apply.",
+        subcommand
+    )]
+    Legacy(LegacyAction),
+
+    #[command(
+        name = "service-config",
+        about = "Build and re-host the zip a service-configuration-files declaration points at",
+        long_about = "com.apple.configuration.services.configuration-files replaces a service's \
+                      on-disk configuration with a zip the device expands into a SIP-protected \
+                      location (macOS 14+, supervised). The declaration is two keys; the work is \
+                      the archive.\n\
+                      \n\
+                      Two things change independently. CONTENT changes when a config file is \
+                      edited: re-run `build`, which re-packs, re-hashes and re-points. LOCATION \
+                      changes when the artifact moves host — Azure Blob today, Cloudflare \
+                      tomorrow: run `rehost`, which rewrites DataURL and leaves every \
+                      Hash-SHA-256 exactly as it was, because the bytes did not move, only their \
+                      address did.\n\
+                      \n\
+                      Archives pack reproducibly (sorted entries, fixed timestamps), so an \
+                      untouched tree keeps its hash and devices do not re-download identical \
+                      bytes.\n\
+                      \n\
+                      Dry-run by default; pass --write to apply.",
+        subcommand
+    )]
+    ServiceConfig(ServiceConfigAction),
+
+    #[command(
+        name = "app-privacy",
+        about = "Pre-answer app privacy prompts (com.apple.configuration.app.settings)",
+        long_about = "macOS 26+ lets an MDM answer an app's privacy prompts up front \
+                      instead of the user meeting them one at a time. The declaration is a \
+                      Privacy.PermissionDefaults map keyed by bundle id PLUS the app's \
+                      designated requirement.\n\
+                      \n\
+                      That key is the whole difficulty: it is a long codesign expression, \
+                      and a wrong one produces a declaration that validates, deploys, \
+                      reports Verified and manages nothing. `scan` reads it from the app \
+                      with codesign and refuses any app it cannot read, rather than \
+                      emitting a placeholder somebody ships by accident.\n\
+                      \n\
+                      Note Apple has no \"Deny\": values are Allow or None, and None means \
+                      UNMANAGED — the user is still prompted. Omitting a permission does \
+                      the same. contour refuses \"Deny\" by name rather than dropping it.",
+        subcommand
+    )]
+    AppPrivacy(AppPrivacyAction),
+
+    #[command(
+        name = "app-control",
+        about = "Allow or deny which binaries run on macOS (com.apple.configuration.app.settings)",
+        long_about = "Scans installed apps' code signatures with codesign — no Santa \
+                      needed — into app-control.toml, then composes the declaration \
+                      and its activation. macOS 27+, supervised.\n\
+                      \n\
+                      An allow list is exclusive: only matching binaries run, apart \
+                      from system-critical processes. The file adds Apple's software \
+                      (TeamID *APPLE*) by default, and a scanned allow entry is the \
+                      vendor's TeamID, because an app's helpers run under other \
+                      signing IDs of the same team.",
+        subcommand
+    )]
+    AppControl(AppControlAction),
+}
+
+/// Subcommands for `profile windows`.
+#[derive(Debug, Subcommand)]
+pub enum WindowsAction {
+    #[command(
+        about = "DISA STIG compliance policies and registry checks",
+        long_about = "contour embeds 836 Fleet STIG policies across 8 DISA profiles and 122 \
+                      registry checks. A policy pairs the OMA-URI and SyncML that ENFORCE a \
+                      rule with the query that VERIFIES it; this surfaces both together.\n\
+                      \n\
+                      contour does not run queries or talk to Fleet — it hands you policies \
+                      to deploy elsewhere. And the claim is narrower than compliance: a \
+                      query reads what the CSP or registry REPORTS, not the behaviour the \
+                      rule is about.\n\
+                      \n\
+                      The corpus is community-generated from DISA content and Microsoft's \
+                      DDF, pinned and held against the DDF contour embeds by a test. Output \
+                      carries that provenance."
+    )]
+    Stig {
+        #[command(subcommand)]
+        action: StigAction,
+    },
+
+    #[command(
+        about = "Third-party app templates (Chrome, Edge, Firefox, Office, Zoom, …) and their policies",
+        long_about = "The vendors' own Administrative Templates, embedded with both LocURIs, \
+                      the element schema, and Windows' verdict on whether MDM may ingest each \
+                      policy. `show` ends with the [[setting]] entry `windows generate` takes."
+    )]
+    Apps {
+        #[command(subcommand)]
+        action: AppsAction,
+    },
+
+    #[command(
+        about = "Generate SyncML from a windows.toml",
+        long_about = "Every setting is resolved and validated before anything is emitted, \
+                      and all refusals are reported together — a settings file is edited \
+                      as a whole, so failing on the first of thirty turns one review into \
+                      thirty.\n\
+                      \n\
+                      Refused: a path the capability data does not know, a value outside \
+                      its enum or range, a channel the setting does not offer, an unfilled \
+                      instance placeholder, and action-only nodes. Deprecated settings \
+                      warn and still generate — they apply on builds before their removal."
+    )]
+    Generate {
+        #[arg(default_value = crate::cli::windows_generate::DEFAULT_POLICY_FILE,
+              help = "Settings file")]
+        input: String,
+
+        #[arg(
+            short,
+            long,
+            help = "Write to this file (implies --write). Without -o or --write, prints to stdout"
+        )]
+        output: Option<String>,
+
+        #[arg(
+            long,
+            help = "Wrap the commands in a <SyncML> envelope for a DM session. \
+                    Omitted emits bare fragments, which is what Fleet and GitOps want"
+        )]
+        envelope: bool,
+
+        #[arg(
+            long,
+            help = "Write to a file instead of stdout (windows-profile.xml unless -o)"
+        )]
+        write: bool,
+
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Directory holding vendor .admx files (chrome.admx, msedge.admx, …) for \
+                    `app = …` settings. Each template is sent once as an ADMXInstall step \
+                    ahead of its policies; contour does not ship the XML"
+        )]
+        admx_dir: Option<String>,
+    },
+}
+
+/// Subcommands for `profile windows apps`.
+#[derive(Debug, Subcommand)]
+pub enum AppsAction {
+    #[command(about = "Every template, and how many of its policies MDM can deliver")]
+    List,
+
+    #[command(about = "Search policy names, titles, categories and registry paths")]
+    Search {
+        #[arg(help = "Term to match")]
+        term: String,
+
+        #[arg(long, help = "Restrict to one template, e.g. chrome")]
+        app: Option<String>,
+    },
+
+    #[command(about = "One policy in full, with the windows.toml entry that deploys it")]
+    Show {
+        #[arg(help = "Template (`chrome`) or app name (`Chrome`)")]
+        app: String,
+
+        #[arg(help = "Policy name, as `apps search` prints it")]
+        policy: String,
+    },
+}
+
+/// Subcommands for `profile windows stig`.
+#[derive(Debug, Subcommand)]
+pub enum StigAction {
+    #[command(
+        about = "The STIG profiles, and how much of each contour can enforce",
+        long_about = "Printed before anything else because the gap is the point: a profile \
+                      with 167 of 198 rules enforceable is not the STIG, and an operator \
+                      exporting it should know that before they deploy."
+    )]
+    List,
+
+    #[command(about = "Search policies and registry checks")]
+    Search {
+        #[arg(
+            help = "Term to match against policy name, OMA-URI, CSP area, tags, or a registry path"
+        )]
+        term: String,
+
+        #[arg(long, help = "Restrict to one STIG profile")]
+        profile: Option<String>,
+    },
+
+    #[command(about = "Show one policy or check: how to enforce it, and how to verify it")]
+    Show {
+        #[arg(help = "An OMA-URI, a policy name, or a registry rule id such as V-253444")]
+        target: String,
+    },
+
+    #[command(
+        about = "Export a STIG profile as Fleet policies",
+        long_about = "Only rules with both an enforcement and a compliance query — a policy \
+                      Fleet cannot check is not a policy. The count is written against the \
+                      profile's total so the gap is visible rather than implied."
+    )]
+    Export {
+        #[arg(long, help = "STIG profile name, as `stig list` prints it")]
+        profile: String,
+
+        #[arg(short, long, help = "Write here instead of stdout")]
+        output: Option<String>,
+    },
+}
+
+/// Subcommands for `profile ddm app-control`.
+#[derive(Debug, Subcommand)]
+pub enum AppControlAction {
+    #[command(
+        about = "Read installed apps' code signatures into app-control.toml",
+        long_about = "Apps under the given paths (bundles or directories; default \
+                      /Applications and /Applications/Utilities) become [[allow]] \
+                      entries, or [[deny]] with --deny. Unsigned and team-less apps \
+                      are listed as skipped: there is nothing a rule can match."
+    )]
+    Scan {
+        #[arg(help = "App bundles or directories to scan")]
+        paths: Vec<String>,
+
+        #[arg(
+            short = 'I',
+            long,
+            help = "Pick which apps to allow and which to deny, and whether to include \
+                    Apple's software, from the scanned list"
+        )]
+        interactive: bool,
+
+        #[arg(
+            long,
+            help = "Write [[deny]] entries (DeniedBinaries) instead of [[allow]]"
+        )]
+        deny: bool,
+
+        #[arg(
+            long,
+            help = "Set allow_apple = false: leave Apple's software out of the allow list \
+                    (it is exclusive — unlisted Apple apps will not launch)"
+        )]
+        no_apple: bool,
+
+        #[arg(
+            long,
+            value_enum,
+            default_value = "auto",
+            help = "auto: vendor TeamID for allow, the app's SigningID for deny"
+        )]
+        rule_type: santa::cli::ScanRuleType,
+
+        #[arg(
+            long,
+            help = "Set always_allow_managed: MDM-installed apps join the allow list"
+        )]
+        always_allow_managed: bool,
+
+        #[arg(short, long, help = "Output file (default: app-control.toml)")]
+        output: Option<String>,
+    },
+
+    #[command(
+        about = "Compose the declaration and its activation from app-control.toml",
+        long_about = "Validates every entry against Apple's rules for app.settings \
+                      binaries and reports all problems at once, then hands the \
+                      result to `ddm compose`.\n\nDry-run by default; pass --write."
+    )]
+    Generate {
+        #[arg(default_value = crate::cli::ddm_app_control::DEFAULT_POLICY_FILE,
+              help = "Policy file")]
+        input: String,
+
+        #[arg(long, help = "Organization domain for computed identifiers")]
+        org: Option<String>,
+
+        #[arg(short, long, help = "Output directory (default: .)")]
+        output: Option<String>,
+
+        #[arg(long, help = "Write the files instead of listing them")]
+        write: bool,
+    },
+}
+
+/// Subcommands for `profile ddm app-privacy`.
+#[derive(Debug, Subcommand)]
+pub enum AppPrivacyAction {
+    #[command(
+        about = "Read installed apps into app-privacy.toml",
+        long_about = "Extracts each app's bundle id and designated requirement with \
+                      codesign. An app whose requirement cannot be read is an error \
+                      naming it, never a placeholder: a declaration keyed on a bad \
+                      requirement manages nothing while reporting success.\n\
+                      \n\
+                      --skip-unreadable relaxes the batch, not that rule: the broken \
+                      apps are omitted and listed, never guessed at, and a run where \
+                      nothing could be read is still an error."
+    )]
+    Scan {
+        #[arg(
+            help = "App bundles, e.g. /Applications/zoom.us.app. With --interactive, \
+                    directories to search instead (default: /Applications)"
+        )]
+        apps: Vec<String>,
+
+        #[arg(
+            short = 'I',
+            long,
+            help = "Choose apps and permissions interactively, as `pppc scan -I` does"
+        )]
+        interactive: bool,
+
+        #[arg(
+            long,
+            help = "Keep going when an app cannot be read, and name each one that was \
+                    skipped. Without this, one unreadable bundle discards the whole batch"
+        )]
+        skip_unreadable: bool,
+
+        #[arg(short, long, help = "Output policy file (default: app-privacy.toml)")]
+        output: Option<String>,
+    },
+
+    #[command(
+        about = "Compose the declaration bundle from app-privacy.toml",
+        long_about = "Validates every permission value against Apple's allowed set, then \
+                      hands a synthesized bundle to `ddm compose` so identifiers and the \
+                      activation are wired on the same code path as every other \
+                      declaration.\n\
+                      \n\
+                      Dry-run by default; pass --write to apply."
+    )]
+    Generate {
+        #[arg(default_value = crate::cli::ddm_app_privacy::DEFAULT_POLICY_FILE,
+              help = "Policy file")]
+        input: String,
+
+        #[arg(long, help = "Organization domain for computed identifiers")]
+        org: Option<String>,
+
+        #[arg(short, long, help = "Output directory")]
+        output: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "SCOPE",
+            help = "Add a top-level PayloadScope (system|user). FLEET-SPECIFIC — not \
+                    part of Apple's DDM spec; other MDMs ignore it. Privacy is macOS \
+                    user-only, so Fleet needs `user` here or the declaration is \
+                    delivered on the device channel and ignored"
+        )]
+        payload_scope: Option<String>,
+
+        #[arg(long, help = "Write the declarations (default: dry run)")]
+        write: bool,
+    },
+
+    #[command(
+        name = "import-pppc",
+        about = "Seed app-privacy.toml from an existing pppc.toml",
+        long_about = "Carries across the five permissions the two surfaces share (camera, \
+                      microphone, accessibility, bluetooth, speech-recognition → \
+                      Dictation). Every other PPPC grant — fda, apple-events, \
+                      screen-capture, the folder policies — has no app.settings \
+                      equivalent and is listed as unmapped, never dropped in silence: \
+                      those apps still need the PPPC profile deployed."
+    )]
+    ImportPppc {
+        #[arg(default_value = "pppc.toml", help = "Existing PPPC policy file")]
+        input: String,
+
+        #[arg(short, long, help = "Output policy file (default: app-privacy.toml)")]
+        output: Option<String>,
+    },
+}
+
+/// Subcommands for `profile ddm service-config`.
+#[derive(Debug, Subcommand)]
+pub enum ServiceConfigAction {
+    #[command(
+        about = "Pack a staged tree into the asset a service-config declaration references",
+        long_about = "The staged directory mirrors the filesystem from `/`: to manage \
+                      /etc/ssh, stage <dir>/etc/ssh/... An archive rooted one level too deep \
+                      expands into a directory the service never reads while the declaration \
+                      still reports Verified, so the layout is checked against the service \
+                      before anything is written."
+    )]
+    Build {
+        #[arg(help = "Staged directory, mirroring the filesystem from /")]
+        source: String,
+
+        #[arg(
+            long,
+            help = "ServiceType, e.g. com.apple.sshd. A com.apple.* type Apple does not \
+                    document is refused; any other reverse-DNS type is allowed (files are \
+                    delivered, but only read if the service opts in)"
+        )]
+        service: String,
+
+        #[arg(
+            long,
+            value_name = "BASE",
+            help = "Hosting base, host and container without scheme, e.g. \
+                    acct.blob.core.windows.net/ddm. Omitted leaves a placeholder to fill \
+                    with `rehost` after uploading"
+        )]
+        base_url: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "TEMPLATE",
+            default_value = crate::cli::ddm_service_config::DEFAULT_URL_TEMPLATE,
+            help = "URL template. Placeholders: {base} {sha256} {name} {service}. Keeping \
+                    {sha256} in the path makes the URL content-addressed, so a provider \
+                    migration substitutes {base} alone"
+        )]
+        url_template: String,
+
+        #[arg(
+            long,
+            help = "Short name for the intent and archive (default: derived from --service)"
+        )]
+        intent: Option<String>,
+
+        #[arg(
+            long,
+            help = "Activation predicate; omit for an always-on configuration"
+        )]
+        predicate: Option<String>,
+
+        #[arg(
+            long,
+            help = "Do not emit a status-subscriptions declaration for @status keys in the \
+                    predicate"
+        )]
+        no_subscriptions: bool,
+
+        #[arg(long, help = "Organization reverse domain (e.g., com.yourorg)")]
+        org: Option<String>,
+
+        #[arg(
+            short,
+            long,
+            help = "Output directory for the archive and declarations"
+        )]
+        output: Option<String>,
+
+        #[arg(long, help = "Apply (default is a dry-run preview)")]
+        write: bool,
+    },
+
+    #[command(
+        about = "Re-point tracked assets at a new hosting base, without rebuilding them",
+        long_about = "For a provider migration: the artifact is not recreated, only the asset \
+                      that says where it lives. DataURL is rewritten from the recorded template \
+                      with the new base; Hash-SHA-256 is asserted unchanged and never written, \
+                      so this cannot become a silent republish.\n\
+                      \n\
+                      Upload the same archives to the new host first — the URLs are \
+                      content-addressed, so the path after the base stays identical."
+    )]
+    Rehost {
+        #[arg(help = "Directory holding the declarations and their index")]
+        declarations: String,
+
+        #[arg(
+            long,
+            value_name = "BASE",
+            help = "New hosting base, e.g. cdn.example.org/ddm"
+        )]
+        base_url: String,
+
+        #[arg(
+            long,
+            help = "Re-pack each staged source and refuse if its hash moved — catches a \
+                    content change riding along with the move. Requires the sources to be present"
+        )]
+        verify: bool,
+
+        #[arg(long, help = "Apply (default is a dry-run preview)")]
+        write: bool,
+    },
+}
+
+/// Subcommands for `profile ddm legacy`.
+#[derive(Debug, Subcommand)]
+pub enum LegacyAction {
+    #[command(
+        about = "Convert .mobileconfig profiles into legacy declarations",
+        long_about = "Emits one com.apple.configuration.legacy declaration per profile, plus an \
+                      activation when --predicate is given, and writes a .contour-legacy.toml \
+                      index recording each profile's hash.\n\
+                      \n\
+                      The URL is pinned to an immutable commit SHA on purpose: a URL tracking a \
+                      branch would always resolve and could never be verified stale."
+    )]
+    Convert {
+        #[arg(help = "Profile file(s) or directory", required = true, num_args = 1..)]
+        paths: Vec<String>,
+
+        #[arg(
+            long,
+            value_name = "TEMPLATE",
+            help = "URL template. Placeholders: {sha} {name} {stem} {path}. Must yield an https:// URL"
+        )]
+        url_template: String,
+
+        #[arg(
+            long,
+            help = "Commit SHA to pin the URL to. Omitted leaves a REPLACE-WITH-COMMIT-SHA placeholder"
+        )]
+        sha: Option<String>,
+
+        #[arg(
+            long,
+            help = "Activation predicate, e.g. \"@status(softwareupdate.install-state) == 'prepared'\""
+        )]
+        predicate: Option<String>,
+
+        #[arg(
+            long,
+            help = "Do not emit a status-subscriptions declaration for @status keys in the predicate. \
+                    Matches Fleet's current shape, which ships no subscriptions declaration — but \
+                    contour's compose documents Error.UnableToEvaluatePredicate on device for an \
+                    unsubscribed key, so this is opt-in rather than the default"
+        )]
+        no_subscriptions: bool,
+
+        #[arg(long, help = "Organization reverse domain (e.g., com.yourorg)")]
+        org: Option<String>,
+
+        #[arg(short, long, help = "Output directory for the declarations")]
+        output: Option<String>,
+
+        #[arg(short, long, help = "Recurse into subdirectories")]
+        recursive: bool,
+
+        #[arg(
+            long,
+            value_name = "MODE",
+            default_value = "contour",
+            help = "Output file naming: contour (<stem>.configuration.json) or fleet (\"<Name> settings.json\", matching Fleet's declaration-profiles convention)"
+        )]
+        naming: String,
+
+        #[arg(
+            long,
+            help = "Also print the Fleet GitOps entry for each profile — the path:/activation: pair to paste into configuration_profiles"
+        )]
+        gitops: bool,
+
+        #[arg(long, help = "Apply (default is a dry-run preview)")]
+        write: bool,
+    },
+
+    #[command(
+        about = "Re-point legacy declarations whose profiles changed",
+        long_about = "Compares each indexed profile's current hash against the hash recorded when \
+                      its URL was written. Declarations whose profiles are byte-identical are left \
+                      alone — bumping their SHA would mint new ServerTokens and make every device \
+                      re-download profiles that did not change."
+    )]
+    Refresh {
+        #[arg(help = "Directory containing the declarations and their index")]
+        declarations: String,
+
+        #[arg(long, help = "Directory the wrapped profiles live in")]
+        against: String,
+
+        #[arg(long, help = "New commit SHA to pin re-pointed URLs to")]
+        sha: String,
+
+        #[arg(long, help = "Apply (default is a dry-run preview)")]
+        write: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1909,7 +2660,7 @@ pub enum EnrollmentAction {
         /// Filter by OS version (only show keys available for this version)
         #[arg(long)]
         os_version: Option<String>,
-        /// Include the beta seed skip keys (pre-release OS, e.g. AccessibilityAppearance, LiquidGlass)
+        /// Include the beta seed skip keys (pre-release OS only; keys that have since shipped, such as LiquidGlass in 27.0, are already in the stable set)
         #[arg(long)]
         beta: bool,
         /// Show only keys Apple has deprecated or removed (with the version)
@@ -1924,10 +2675,10 @@ pub enum EnrollmentAction {
         /// OS version to target
         #[arg(long)]
         os_version: Option<String>,
-        /// Include the beta seed skip keys (pre-release OS, e.g. AccessibilityAppearance, LiquidGlass)
+        /// Include the beta seed skip keys (pre-release OS only; keys that have since shipped, such as LiquidGlass in 27.0, are already in the stable set)
         #[arg(long)]
         beta: bool,
-        /// Skip ALL available setup items
+        /// Skip every setup item that may be skipped (FileVault and SoftwareUpdate never are)
         #[arg(long, conflicts_with_all = ["skip_list", "interactive"])]
         skip_all: bool,
         /// Skip specific items (comma-separated); unions with --skip-list when both are given
@@ -2212,5 +2963,130 @@ pub enum McxAction {
 
         #[arg(long, help = "Apply the rename (default is a dry-run preview)")]
         write: bool,
+    },
+}
+
+/// Subcommands for `profile form`.
+#[derive(Debug, Subcommand)]
+pub enum FormAction {
+    #[command(about = "Emit the FormSpec for one payload type, or for every authorable type")]
+    Spec {
+        #[arg(help = "Payload or declaration type (omit for every authorable type)")]
+        name: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "NAME",
+            help = "Target platform; resolves scope_class and verdicts"
+        )]
+        os: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "VERSION",
+            requires = "os",
+            help = "Target OS version, e.g. 26.0"
+        )]
+        os_version: Option<String>,
+
+        #[arg(
+            long,
+            help = "Attach what mSCP's baselines say about each top-level key (rule, \
+                    confidence, mechanism, baselines) as node.annotations[]"
+        )]
+        annotate: bool,
+
+        #[arg(long, help = "External schema directory")]
+        schema_path: Option<String>,
+
+        #[arg(long, help = "Use the beta seed schema")]
+        beta: bool,
+
+        #[arg(short, long, help = "Write the document to a file instead of stdout")]
+        output: Option<String>,
+    },
+
+    #[command(
+        about = "Read an existing declaration or .mobileconfig back into values a form can populate"
+    )]
+    Parse {
+        #[arg(help = "A JSON declaration or a .mobileconfig (XML or binary)")]
+        file: String,
+
+        #[arg(
+            long,
+            value_name = "NAME",
+            help = "Target platform for the accompanying FormSpec"
+        )]
+        os: Option<String>,
+
+        #[arg(long, help = "External schema directory")]
+        schema_path: Option<String>,
+
+        #[arg(long, help = "Use the beta seed schema")]
+        beta: bool,
+    },
+
+    #[command(about = "Turn values for a type into its deployable document(s)")]
+    Emit {
+        #[arg(help = "Payload or declaration type")]
+        name: String,
+
+        #[arg(
+            long,
+            value_name = "FILE",
+            help = "JSON object of values keyed by top-level key"
+        )]
+        values: String,
+
+        #[arg(
+            long,
+            help = "Organization reverse domain (or CONTOUR_ORG / profile.toml)"
+        )]
+        org: Option<String>,
+
+        #[arg(long, help = "Intent segment of the identifier, e.g. `wifi-corp`")]
+        intent: String,
+
+        #[arg(
+            long,
+            value_name = "NAME",
+            help = "Platform whose scope rules decide the channel split"
+        )]
+        os: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "VERSION",
+            requires = "os",
+            help = "OS version to target; a key Apple removed by this version is refused"
+        )]
+        os_version: Option<String>,
+
+        #[arg(
+            long,
+            conflicts_with = "direct",
+            help = "Force the MCX envelope for a .mobileconfig"
+        )]
+        mcx: bool,
+
+        #[arg(
+            long,
+            conflicts_with = "mcx",
+            help = "Force keys directly in the inner payload"
+        )]
+        direct: bool,
+
+        #[arg(short, long, help = "Output directory")]
+        output: Option<String>,
+
+        #[arg(long, help = "Write the files (default: dry run)")]
+        write: bool,
+
+        #[arg(long, help = "External schema directory")]
+        schema_path: Option<String>,
+
+        #[arg(long, help = "Use the beta seed schema")]
+        beta: bool,
     },
 }

@@ -80,6 +80,9 @@ pub fn handle_scan(
     // The beta channel surfaces seed removals (`os_support[macOS].removed`).
     let registries = if deprecations {
         let migration = MigrationRegistry::new();
+        if channel.is_beta() {
+            crate::cli::ddm::note_if_beta_is_retired();
+        }
         let schema = SchemaRegistry::embedded_channel(channel)
             .context("Failed to load embedded schema for deprecation scan")?;
         Some((migration, schema))

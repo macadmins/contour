@@ -12,7 +12,7 @@ A **library** is a versioned directory of recipes and presets your team owns.
 
 - **One TOML, many environments.** The same recipe renders for staging, production, every fleet, every MDM you support.
 - **Reproducible by design.** Re-run the recipe and the artifact is byte-identical. Secrets resolve from your vault at generate time and never enter the repo.
-- **Composable.** Mix vendor presets (Okta, CrowdStrike, Entra, Santa) with your in-house ones, layer ODV overrides, ship a library to teammates.
+- **Composable.** Mix vendor presets (Okta, CrowdStrike, Microsoft Defender, Entra, Santa) with your in-house ones, layer ODV overrides, ship a library to teammates.
 
 ## Quick Start
 
@@ -212,8 +212,8 @@ contour mscp recipe -r <MSCP_REPO> -k <KEYWORD> -o <OUT.toml> [--org <VENDOR>] [
   rule default. Auto-detected as `odv_<keyword>.yaml` in the working directory
   when omitted — so you don't have to hand-edit `[odv]` if you already tuned
   the override file.
-- `--mscp-version`, `--os`, `--os-version` mirror `mscp generate` for 2.0
-  layouts (see [contour-mscp.md](contour-mscp.md)).
+- `--os`, `--os-version` mirror `mscp generate` (see
+  [contour-mscp.md](contour-mscp.md)).
 - Baseline selection is `--keyword` / `-k` (the older `--baseline` / `-b` still
   works as an alias).
 
@@ -276,16 +276,26 @@ contour profile generate --recipe okta --recipe-path ./contour-presets/recipes \
 
 ## DDM presets — `ddm compose`
 
-Presets are standalone declarative-management bundles. Six ship built-in:
+Presets are standalone declarative-management bundles. Eleven ship built-in:
 
 | Preset | Effect |
 |--------|--------|
 | `disable-apple-intelligence-macos` | Disable Apple Intelligence on macOS |
 | `disable-apple-intelligence-ios` | Disable Apple Intelligence on iOS / iPadOS |
+| `diskmanagement-settings` | Mount external and network volumes read-only |
 | `external-intelligence-settings` | Disable/scope third-party external intelligence |
 | `keyboard-settings` | Managed keyboard settings (typing aids, dictation) |
-| `siri-settings` | Managed Siri settings (restrict or disable) |
 | `managed-migration-assistant` | Run Migration Assistant under managed control |
+| `passcode-settings` | Baseline passcode policy (required, 8+ chars, inactivity lock) |
+| `safari-settings` | Hardened Safari (fraud warning locked on, no private browsing) |
+| `siri-settings` | Managed Siri settings (restrict or disable) |
+| `softwareupdate-enforcement` | Enforce a specific OS version by a deadline — **edit before composing** |
+| `softwareupdate-settings` | Security updates forced on, beta enrolment blocked |
+
+`softwareupdate-enforcement` is the one preset that is not deploy-as-is:
+`TargetOSVersion` and `TargetLocalDateTime` are schema-required and
+site-specific, and a deadline in the past enforces immediately. Edit both
+before composing.
 
 ```
 contour profile ddm compose --preset <NAME> --org <DOMAIN> -o <DIR>

@@ -209,7 +209,7 @@ fn navigate_nested_mut<'a>(
     // PayloadCertificateAnchorUUID at the top level) hit the `None`
     // path; nested EAPClientConfiguration / IKEv2 references stay
     // within the plist::Dictionary world and need the dictionary-walk
-    // variant — TODO if a user ships nested cross-refs in scope.
+    // variant, not implemented while no nested cross-ref is in scope.
     if path.is_empty() {
         return Some(content);
     }

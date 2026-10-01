@@ -669,6 +669,7 @@ fn handle_validate_single(
                 None,
                 false,
                 false,
+                &[],
                 output_mode,
             );
         }
@@ -781,10 +782,15 @@ fn handle_validate_single(
     all_errors.extend(lint_errors);
     let valid_after_lint = all_errors.is_empty();
 
+    // One verdict, used for the field and for the exit code alike, as the
+    // multi-file path does: a consumer reading `"valid"` must never see true
+    // for a profile that exits 1.
+    let valid = valid_after_lint && schema_result.as_ref().is_none_or(|s| s.is_valid());
+
     if output_mode == OutputMode::Json {
         let mut json_result = serde_json::json!({
             "file": file,
-            "valid": valid_after_lint,
+            "valid": valid,
             "errors": all_errors,
             "warnings": all_warnings,
             "profile": {
@@ -823,7 +829,7 @@ fn handle_validate_single(
 
         println!("{}", serde_json::to_string_pretty(&json_result)?);
 
-        if !valid_after_lint || schema_result.as_ref().is_some_and(|s| !s.is_valid()) {
+        if !valid {
             anyhow::bail!("Validation failed");
         }
         return Ok(());

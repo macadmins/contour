@@ -6,7 +6,7 @@
 use crate::config::ProfileConfig;
 use crate::output::OutputMode;
 use crate::recipe;
-use crate::schema::{Channel, FieldDefinition, FieldType, SchemaRegistry};
+use crate::schema::{Channel, FieldDefinition, FieldPath, FieldType, SchemaRegistry};
 use anyhow::{Context, Result};
 use base64::Engine;
 use colored::Colorize;
@@ -55,6 +55,9 @@ pub fn load_registry_channel(
     schema_path: Option<&str>,
     channel: Channel,
 ) -> Result<SchemaRegistry> {
+    if channel.is_beta() {
+        crate::cli::ddm::note_if_beta_is_retired();
+    }
     let mut registry = SchemaRegistry::embedded_channel(channel)?;
     if let Some(p) = schema_path {
         let external = SchemaRegistry::from_auto_detect(Path::new(p))?;
@@ -291,30 +294,6 @@ fn wrap_mcx_payload(domain: &str, flat: Dictionary) -> Dictionary {
         Value::Dictionary(payload_content),
     );
     wrapper
-}
-
-/// Apply a dot-notation key into a nested dictionary structure.
-///
-/// For example, `"PlatformSSO.AuthenticationMethod"` with value
-/// `"UserSecureEnclaveKey"` creates
-/// `{"PlatformSSO": {"AuthenticationMethod": "UserSecureEnclaveKey"}}`.
-fn apply_nested_field(dict: &mut Dictionary, dotted_key: &str, value: Value) {
-    let parts: Vec<&str> = dotted_key.splitn(2, '.').collect();
-    if parts.len() == 1 {
-        dict.insert(dotted_key.to_string(), value);
-    } else {
-        let parent = parts[0];
-        let rest = parts[1];
-
-        // Get or create the parent dictionary
-        if !dict.contains_key(parent) {
-            dict.insert(parent.to_string(), Value::Dictionary(Dictionary::new()));
-        }
-
-        if let Some(Value::Dictionary(inner)) = dict.get_mut(parent) {
-            apply_nested_field(inner, rest, value);
-        }
-    }
 }
 
 /// Result of resolving a value reference.
@@ -768,6 +747,7 @@ pub fn handle_generate(
     output_mode: OutputMode,
     format: &str,
     channel: Channel,
+    report: bool,
 ) -> Result<()> {
     let registry = load_registry_channel(schema_path, channel)?;
 
@@ -786,11 +766,49 @@ pub fn handle_generate(
         );
     }
 
+    // A command has a schema, so it is in the registry and worth describing —
+    // but a profile whose PayloadType is `DeviceLock` installs nothing.
+    if !manifest.is_authorable() {
+        anyhow::bail!(
+            "'{payload_type}' is {}. A profile carrying it deploys and configures \
+             nothing.\nUse 'contour profile command' for MDM commands.",
+            manifest
+                .kind
+                .and_then(mdm_schema::PayloadKind::not_authorable_reason)
+                .unwrap_or("not a document an operator authors")
+        );
+    }
+
     // Build payload content from schema fields. Bare generate scaffolds
     // required fields (backfill=true) so the operator gets a usable starting
     // point.
     let payload_content =
         build_payload_from_schema(manifest, &std::collections::BTreeMap::new(), full, true);
+    if full {
+        let left_out: Vec<(&str, &str)> = manifest
+            .field_order
+            .iter()
+            .filter_map(|k| manifest.fields.get(k))
+            .filter(|f| !f.is_placeholder() && !is_profilemanifests_metadata_key(&f.name))
+            // The envelope writes these itself (PayloadScope as System), so
+            // the operator has nothing to set.
+            .filter(|f| !(f.depth == 0 && ENVELOPE_KEYS.contains(&f.name.as_str())))
+            // An array is written empty, so the shape of its items is never
+            // emitted and there is nothing under it to leave out.
+            .filter(|f| !under_an_array(manifest, &f.path))
+            .filter_map(|f| no_value_to_write(f).map(|why| (f.path.as_str(), why)))
+            .collect();
+        if !left_out.is_empty() {
+            eprintln!(
+                "{} --full left out {} key(s) it has no value to write for — set them yourself:",
+                "note:".yellow(),
+                left_out.len()
+            );
+            for (path, why) in left_out {
+                eprintln!("  {path}: {why}");
+            }
+        }
+    }
 
     let is_plist = format == "plist";
 
@@ -862,6 +880,12 @@ pub fn handle_generate(
         emit_beta_badge();
     }
 
+    // `report = false` is for a caller that reports the file itself — the
+    // fragment writer, which moves it into Fleet's layout and would otherwise
+    // be preceded by a report of where it no longer is.
+    if !report {
+        return Ok(());
+    }
     if output_mode == OutputMode::Json {
         let result = serde_json::json!({
             "success": true,
@@ -911,6 +935,19 @@ pub fn handle_generate(
     Ok(())
 }
 
+/// What one recipe render left for the caller to judge.
+///
+/// Returned rather than judged here because `--recipe a --recipe b` renders
+/// several recipes under one set of `--set` values: a key is misspelled only
+/// if NO recipe in the run has its placeholder.
+#[derive(Debug, Default)]
+pub struct RecipeRender {
+    /// Every `{{KEY}}` the recipe's output carried before substitution.
+    pub offered: Vec<String>,
+    /// Those still in the written files after it.
+    pub unfilled: Vec<String>,
+}
+
 /// Generate profiles from a recipe.
 pub fn handle_generate_recipe(
     recipe_name: &str,
@@ -925,7 +962,8 @@ pub fn handle_generate_recipe(
     output_mode: OutputMode,
     format: &str,
     cli_combined: Option<bool>,
-) -> Result<()> {
+    report: bool,
+) -> Result<RecipeRender> {
     set_sanitize(sanitize);
     if sanitize && output_mode == OutputMode::Human {
         println!(
@@ -1059,6 +1097,7 @@ pub fn handle_generate_recipe(
 
     let mut generated = Vec::new();
     let mut all_placeholders = Vec::new();
+    let mut offered: Vec<String> = Vec::new();
     // Combined-mode buffer: holds each inner payload's content +
     // metadata until the end of the loop, then we emit one .mobileconfig.
     let mut combined_buffer: Vec<CombinedEntry> = Vec::new();
@@ -1074,7 +1113,11 @@ pub fn handle_generate_recipe(
             let mut content = build_payload_from_schema(m, &spec.fields, full, false);
             // Apply extra fields with dot-notation nesting
             for (key, val) in &spec.extra_fields {
-                apply_nested_field(&mut content, key, toml_to_plist_resolved(val));
+                FieldPath::parse(key)
+                    .insert_plist(&mut content, toml_to_plist_resolved(val))
+                    .map_err(|e| {
+                        anyhow::anyhow!("recipe '{}': extra field `{key}`: {e}", spec.payload_type)
+                    })?;
             }
             content
         } else {
@@ -1093,7 +1136,11 @@ pub fn handle_generate_recipe(
             }
             // `extra_fields` use dot-notation to nest.
             for (key, val) in &spec.extra_fields {
-                apply_nested_field(&mut content, key, toml_to_plist_resolved(val));
+                FieldPath::parse(key)
+                    .insert_plist(&mut content, toml_to_plist_resolved(val))
+                    .map_err(|e| {
+                        anyhow::anyhow!("recipe '{}': extra field `{key}`: {e}", spec.payload_type)
+                    })?;
             }
             content
         };
@@ -1157,6 +1204,11 @@ pub fn handle_generate_recipe(
         };
         let output_path = Path::new(out_dir).join(&filename).display().to_string();
 
+        for p in find_placeholders(&String::from_utf8_lossy(&profile_bytes)) {
+            if !offered.contains(&p) {
+                offered.push(p);
+            }
+        }
         // Apply --set variable substitution before writing
         let final_bytes = substitute_placeholders(&profile_bytes, &var_map);
         std::fs::write(&output_path, &final_bytes)?;
@@ -1211,6 +1263,11 @@ pub fn handle_generate_recipe(
             &combined_buffer,
         )?;
 
+        for p in find_placeholders(&String::from_utf8_lossy(&bytes)) {
+            if !offered.contains(&p) {
+                offered.push(p);
+            }
+        }
         let final_bytes = substitute_placeholders(&bytes, &var_map);
         std::fs::write(&output_path, &final_bytes)?;
         // Combined recipe output — same mSCP-faithful leniency as above.
@@ -1283,7 +1340,9 @@ pub fn handle_generate_recipe(
         }
     }
 
-    if output_mode == OutputMode::Json {
+    if !report {
+        // The caller reports, with the paths it moved these files to.
+    } else if output_mode == OutputMode::Json {
         let result = serde_json::json!({
             "success": true,
             "recipe": r.recipe.name,
@@ -1333,6 +1392,67 @@ pub fn handle_generate_recipe(
         }
     }
 
+    let bare = |p: &String| {
+        p.trim_start_matches("{{")
+            .trim_end_matches("}}")
+            .to_string()
+    };
+    Ok(RecipeRender {
+        offered: offered.iter().map(bare).collect(),
+        unfilled: all_placeholders.iter().map(bare).collect(),
+    })
+}
+
+/// Judge a run of recipe renders against the `--set` keys given for it.
+///
+/// A `--set` key no recipe offers is an error: it is almost always a typo,
+/// and a typo left the real placeholder unfilled while the run exited 0. A
+/// placeholder still unfilled is an error too, unless `allow_placeholders`
+/// — the files are written either way, so editing them by hand still works,
+/// but `generate && deploy` no longer ships a literal `{{OKTA_DOMAIN}}`.
+pub fn judge_recipe_renders(
+    renders: &[RecipeRender],
+    vars: &[String],
+    allow_placeholders: bool,
+) -> Result<()> {
+    let offered: Vec<&str> = renders
+        .iter()
+        .flat_map(|r| r.offered.iter().map(String::as_str))
+        .collect();
+    let unknown: Vec<String> = parse_vars(vars)?
+        .into_iter()
+        .map(|(k, _)| k)
+        .filter(|k| !offered.contains(&k.as_str()))
+        .collect();
+    if !unknown.is_empty() {
+        let mut have: Vec<&str> = offered.clone();
+        have.sort_unstable();
+        have.dedup();
+        anyhow::bail!(
+            "--set {} matches no placeholder in the recipe(s) rendered. They have: {}",
+            unknown.join(", "),
+            if have.is_empty() {
+                "none".to_string()
+            } else {
+                have.join(", ")
+            }
+        );
+    }
+    let mut unfilled: Vec<&str> = renders
+        .iter()
+        .flat_map(|r| r.unfilled.iter().map(String::as_str))
+        .collect();
+    unfilled.sort_unstable();
+    unfilled.dedup();
+    if !unfilled.is_empty() && !allow_placeholders {
+        anyhow::bail!(
+            "{} placeholder(s) left unfilled: {}. The files are written, but they are not \
+             deployable. Set each with --set KEY=VALUE, or pass --allow-placeholders to \
+             fill them in by hand.",
+            unfilled.len(),
+            unfilled.join(", ")
+        );
+    }
     Ok(())
 }
 
@@ -1609,6 +1729,19 @@ pub fn handle_generate_interactive(
         );
     }
 
+    // A command has a schema, so it is in the registry and worth describing —
+    // but a profile whose PayloadType is `DeviceLock` installs nothing.
+    if !manifest.is_authorable() {
+        anyhow::bail!(
+            "'{payload_type}' is {}. A profile carrying it deploys and configures \
+             nothing.\nUse 'contour profile command' for MDM commands.",
+            manifest
+                .kind
+                .and_then(mdm_schema::PayloadKind::not_authorable_reason)
+                .unwrap_or("not a document an operator authors")
+        );
+    }
+
     println!(
         "\n{} {} — {} ({} fields)",
         "▶".cyan(),
@@ -1854,14 +1987,89 @@ fn build_interactive_recipe(
     toml
 }
 
+/// Why a field has no value the scaffold can write, if it has none.
+///
+/// `--full` writes every key, and for most types a zero value is a harmless
+/// placeholder. For these it is not:
+///
+/// - **A date with no stated default.** An empty string is the wrong type,
+///   and generate would refuse its own output. Inventing a date is worse: `PayloadExpirationDate`, `RemovalDate` and
+///   `com.apple.systempolicy.rule`'s `Expiration` make the device drop the
+///   profile or rule, so any date written here is one that removes it.
+/// - **An optional enumerated string with no stated default.** `''` is not
+///   one of the allowed values, and picking one is a decision — `PayloadScope`
+///   System or User is a deployment choice, not a scaffold.
+///
+/// Such a key is left out and named, for the operator to set.
+fn no_value_to_write(field: &FieldDefinition) -> Option<&'static str> {
+    let default = field.default.as_deref().filter(|d| !d.is_empty());
+    match field.field_type {
+        FieldType::Date if default.and_then(parse_plist_date).is_none() => {
+            Some("a date with no default — any date written would be a real one")
+        }
+        // A REQUIRED one keeps its `''` placeholder: leaving it out fails
+        // the required check, and validation already warns that `''` is not
+        // an allowed value, which is the prompt to choose. That is how bare
+        // generate scaffolds VPNType or EmailAccountType.
+        FieldType::String
+            if !field.flags.required
+                && !field.allowed_values.is_empty()
+                && !default.is_some_and(|d| field.allowed_values.iter().any(|v| v == d)) =>
+        {
+            Some("one of a fixed set of values, with no default to choose")
+        }
+        _ => None,
+    }
+}
+
+fn under_an_array(manifest: &crate::schema::PayloadManifest, path: &str) -> bool {
+    // Walked as segments: `com\.apple\.EnergySaver\.desktop\.Schedule` is
+    // one key, and splitting the string at every `.` looked up fragments of it.
+    let mut prefix = FieldPath::parse(path).parent();
+    while let Some(p) = prefix {
+        if p.is_empty() {
+            break;
+        }
+        if manifest
+            .field_by_path(&p.to_string())
+            .is_some_and(|f| f.field_type == FieldType::Array)
+        {
+            return true;
+        }
+        prefix = p.parent();
+    }
+    false
+}
+
+/// Keys the mobileconfig envelope writes whatever the schema says.
+const ENVELOPE_KEYS: &[&str] = &[
+    "PayloadType",
+    "PayloadVersion",
+    "PayloadIdentifier",
+    "PayloadUUID",
+    "PayloadDisplayName",
+    "PayloadDescription",
+    "PayloadOrganization",
+    "PayloadEnabled",
+    "PayloadScope",
+];
+
+fn parse_plist_date(s: &str) -> Option<plist::Date> {
+    plist::Date::from_xml_format(s).ok()
+}
+
 /// Build a plist Dictionary from a schema manifest, applying any field overrides.
 /// ProfileManifests / ProfileCreator metadata keys — `PFC_*`
 /// (ProfileCreator widget state, e.g. `PFC_SegmentedControl_0`) and
 /// `pfm_*` (manifest metadata). Some scraped schemas carry these as if
 /// they were payload keys; they are editor artifacts, never real Apple
 /// payload keys, and must not be emitted into generated profiles.
+///
+/// Delegates to [`mdm_schema::types::is_editor_metadata_key`], which is also
+/// applied when the schema is read. Two copies of this rule is how the read
+/// path came to disagree with the generate path in the first place.
 fn is_profilemanifests_metadata_key(name: &str) -> bool {
-    name.starts_with("PFC_") || name.starts_with("pfm_")
+    mdm_schema::types::is_editor_metadata_key(name)
 }
 
 /// Build a payload dict from a schema manifest and the recipe's
@@ -1924,21 +2132,34 @@ fn build_payload_from_schema(
             if !child_indices.is_empty() {
                 let mut inner = Dictionary::new();
                 for ci in child_indices {
-                    let child_name = &manifest.field_order[ci];
-                    let child_field = &manifest.fields[child_name];
+                    let child_field = &manifest.fields[&manifest.field_order[ci]];
+                    // field_order holds PATHS; the emitted plist key and the
+                    // recipe override are both the LEAF name. A child written
+                    // as `PayloadContent.Challenge` is not the key Apple's
+                    // schema describes, and no recipe would match it.
+                    let child_name = &child_field.name;
 
                     if is_profilemanifests_metadata_key(child_name) {
                         continue;
                     }
+                    // `ANY` / `{{key}}` / `{{value}}` describe the operator's
+                    // keys; they are not keys, and emitted they would appear as
+                    // `<key>{{key}}</key>` in a profile. The dictionary is left
+                    // for the operator to fill.
+                    if child_field.is_placeholder() {
+                        continue;
+                    }
 
-                    // Check override
-                    if let Some(ov) = overrides.get(child_name) {
+                    // Recipes address a nested field by its dotted PATH
+                    // (`PayloadContent.Challenge`), which is the identity;
+                    // the emitted key stays the leaf.
+                    if let Some(ov) = overrides.get(&child_field.path) {
                         inner.insert(child_name.clone(), toml_to_plist_resolved(ov));
                         continue;
                     }
 
                     let keep_child = full || (child_field.flags.required && backfill);
-                    if !keep_child {
+                    if !keep_child || no_value_to_write(child_field).is_some() {
                         continue;
                     }
 
@@ -1979,6 +2200,13 @@ fn build_payload_from_schema(
             FieldType::Array => Value::Array(vec![]),
             FieldType::Dictionary => Value::Dictionary(Dictionary::new()),
             FieldType::Data => Value::Data(vec![]),
+            // Reached only with a parseable default: `no_value_to_write`
+            // keeps a date without one out of the payload.
+            FieldType::Date => field
+                .default
+                .as_deref()
+                .and_then(parse_plist_date)
+                .map_or_else(|| Value::String(String::new()), Value::Date),
             _ => Value::String(field.default.clone().unwrap_or_default()),
         }
     }
@@ -1990,6 +2218,12 @@ fn build_payload_from_schema(
         };
 
         if field.depth > 0 {
+            continue;
+        }
+
+        // Apple writes `ANY` at the root of the three managed-ethernet
+        // payloads: the whole payload is keyed by the operator. Not a key.
+        if field.is_placeholder() {
             continue;
         }
 
@@ -2011,7 +2245,7 @@ fn build_payload_from_schema(
         // (everything) or it's required and backfill is enabled. The recipe
         // path passes backfill=false, so it emits only its listed fields.
         let keep = full || (field.flags.required && backfill);
-        if !keep {
+        if !keep || no_value_to_write(field).is_some() {
             continue;
         }
 
@@ -2019,11 +2253,35 @@ fn build_payload_from_schema(
         dict.insert(field_name.clone(), value);
     }
 
-    // Recipe fields not present in the schema are still literal keys
-    // (e.g. MCX domain keys like `com.apple.login.mcx.…`). Insert verbatim.
+    // Remaining recipe overrides.
+    //
+    // A dotted key that names a real nested field is applied at its path:
+    // `PayloadContent.Challenge` becomes `{PayloadContent: {Challenge: …}}`,
+    // never a literal `<key>PayloadContent.Challenge</key>` — a profile no
+    // device reads. Keying the fields map by path is what makes the
+    // distinction available here.
+    //
+    // A key the schema does not know is still a literal payload key (MCX
+    // domains like `com.apple.login.mcx.…`), and is inserted as written.
     for (key, val) in overrides {
-        if !manifest.fields.contains_key(key) {
-            dict.insert(key.clone(), toml_to_plist_resolved(val));
+        match manifest.field_by_path(key) {
+            Some(field) if field.depth > 0 => {
+                // `build_payload_from_schema` returns a Dictionary, so a conflict
+                // cannot propagate from here. It is reported, never dropped: the
+                // old helper silently discarded the value when the parent was
+                // already a scalar, and a recipe that sets `PayloadContent` as a
+                // string and `PayloadContent.Challenge` beneath it deserves to
+                // hear about it.
+                if let Err(e) =
+                    FieldPath::parse(key).insert_plist(&mut dict, toml_to_plist_resolved(val))
+                {
+                    eprintln!("  {} {e}", "!".yellow());
+                }
+            }
+            Some(_) => {} // top level: already emitted above
+            None => {
+                dict.insert(key.clone(), toml_to_plist_resolved(val));
+            }
         }
     }
 
@@ -2172,13 +2430,141 @@ mod tests {
         assert!(!is_profilemanifests_metadata_key("allowAirDrop"));
     }
 
+    /// A leaf for the `--full` tests below.
+    fn full_field(
+        name: &str,
+        field_type: FieldType,
+        required: bool,
+        default: Option<&str>,
+        allowed: &[&str],
+    ) -> FieldDefinition {
+        FieldDefinition {
+            allowed_scopes: std::collections::HashMap::new(),
+            name: name.to_string(),
+            range_min: None,
+            range_max: None,
+            subtype: None,
+            format: None,
+            asset_types: Vec::new(),
+            path: name.to_string(),
+            field_type,
+            flags: crate::schema::types::FieldFlags {
+                required,
+                ..Default::default()
+            },
+            title: String::new(),
+            description: String::new(),
+            default: default.map(str::to_string),
+            allowed_values: allowed.iter().map(|v| v.to_string()).collect(),
+            depth: 0,
+            parent_key: None,
+            platforms: vec![],
+            min_version: None,
+            deprecated_in: None,
+            introduced_by_platform: std::collections::HashMap::new(),
+            deprecated_by_platform: std::collections::HashMap::new(),
+            removed_by_platform: Default::default(),
+            combinetype: None,
+        }
+    }
+
+    fn full_manifest(fields: Vec<FieldDefinition>) -> crate::schema::PayloadManifest {
+        crate::schema::PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
+            payload_type: "com.example.full".to_string(),
+            kind: None,
+            title: "Full".to_string(),
+            description: String::new(),
+            platforms: crate::schema::types::Platforms::parse("m"),
+            min_versions: std::collections::HashMap::new(),
+            os_support: std::collections::HashMap::new(),
+            apply_mode: None,
+            category: "apple".to_string(),
+            field_order: fields.iter().map(|f| f.path.clone()).collect(),
+            fields: fields.into_iter().map(|f| (f.path.clone(), f)).collect(),
+            segments: vec![],
+        }
+    }
+
+    /// `--full` wrote a date as `<string></string>`, and generate refused its
+    /// own output. A date with no default is left out — any date written
+    /// would be a real expiry — and one with a default is a real `<date>`.
+    #[test]
+    fn full_writes_dates_as_dates_and_invents_none() {
+        let m = full_manifest(vec![
+            full_field("RemovalDate", FieldType::Date, false, None, &[]),
+            full_field(
+                "NotBefore",
+                FieldType::Date,
+                false,
+                Some("2030-01-01T00:00:00Z"),
+                &[],
+            ),
+        ]);
+        let dict = build_payload_from_schema(&m, &Default::default(), true, true);
+        assert!(!dict.contains_key("RemovalDate"), "no date is invented");
+        assert!(
+            matches!(dict.get("NotBefore"), Some(Value::Date(_))),
+            "a stated default is written as a <date>, got {:?}",
+            dict.get("NotBefore")
+        );
+    }
+
+    /// `''` is not an allowed value. An optional enumerated key with no
+    /// default is left out; a required one keeps the placeholder, because
+    /// leaving it out fails the required check; a stated default is used.
+    #[test]
+    fn full_does_not_choose_an_enumerated_value() {
+        let m = full_manifest(vec![
+            full_field("Scope", FieldType::String, false, None, &["System", "User"]),
+            full_field("VPNType", FieldType::String, true, None, &["IKEv2", "VPN"]),
+            full_field(
+                "Mode",
+                FieldType::String,
+                false,
+                Some("Auto"),
+                &["Auto", "Manual"],
+            ),
+            full_field("Name", FieldType::String, false, None, &[]),
+        ]);
+        let dict = build_payload_from_schema(&m, &Default::default(), true, true);
+        assert!(!dict.contains_key("Scope"), "no allowed value is picked");
+        assert_eq!(dict.get("VPNType"), Some(&Value::String(String::new())));
+        assert_eq!(dict.get("Mode"), Some(&Value::String("Auto".into())));
+        assert_eq!(dict.get("Name"), Some(&Value::String(String::new())));
+    }
+
+    /// The two types the demo sweep could not produce with `--full`.
+    #[test]
+    fn full_scaffolds_of_toplevel_and_systempolicy_rule_carry_no_date() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+        for (ty, dates) in [
+            ("TopLevel", &["RemovalDate", "PayloadExpirationDate"][..]),
+            ("com.apple.systempolicy.rule", &["Expiration"][..]),
+        ] {
+            let m = registry.get(ty).expect("type is described");
+            let dict = build_payload_from_schema(m, &Default::default(), true, true);
+            for d in dates {
+                assert!(!dict.contains_key(*d), "{ty}: {d} must not be scaffolded");
+            }
+        }
+    }
+
     #[test]
     fn test_build_payload_skips_profilemanifests_metadata() {
         use crate::schema::PayloadManifest;
         use crate::schema::types::{FieldFlags, Platforms};
 
         let field = |name: &str| FieldDefinition {
+            allowed_scopes: std::collections::HashMap::new(),
             name: name.to_string(),
+            range_min: None,
+            range_max: None,
+            subtype: None,
+            format: None,
+            asset_types: Vec::new(),
+            path: name.to_string(),
             field_type: FieldType::Boolean,
             // Required on purpose — a scraped schema can wrongly mark the
             // ProfileCreator artifact required; the generator must still
@@ -2198,6 +2584,7 @@ mod tests {
             deprecated_in: None,
             introduced_by_platform: std::collections::HashMap::new(),
             deprecated_by_platform: std::collections::HashMap::new(),
+            removed_by_platform: Default::default(),
             combinetype: None,
         };
 
@@ -2208,7 +2595,10 @@ mod tests {
             field("PFC_SegmentedControl_0"),
         );
         let manifest = PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: "com.apple.applicationaccess".to_string(),
+            kind: None,
             title: "Restrictions".to_string(),
             description: String::new(),
             platforms: Platforms::parse("m"),
@@ -2247,7 +2637,10 @@ mod tests {
         // must be inserted as ONE literal key, not exploded into nested
         // dicts. Nesting is `extra_fields`' job, applied by the caller.
         let manifest = PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: "com.apple.loginwindow".to_string(),
+            kind: None,
             title: "Login Window".to_string(),
             description: String::new(),
             platforms: Platforms::parse("m"),
@@ -2345,20 +2738,20 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_nested_field_simple() {
+    fn nested_field_simple() {
         let mut dict = Dictionary::new();
-        apply_nested_field(&mut dict, "Key", Value::String("val".into()));
+        FieldPath::parse("Key")
+            .insert_plist(&mut dict, Value::String("val".into()))
+            .unwrap();
         assert_eq!(dict.get("Key"), Some(&Value::String("val".into())));
     }
 
     #[test]
-    fn test_apply_nested_field_dotted() {
+    fn nested_field_dotted() {
         let mut dict = Dictionary::new();
-        apply_nested_field(
-            &mut dict,
-            "PlatformSSO.AuthenticationMethod",
-            Value::String("UserSecureEnclaveKey".into()),
-        );
+        FieldPath::parse("PlatformSSO.AuthenticationMethod")
+            .insert_plist(&mut dict, Value::String("UserSecureEnclaveKey".into()))
+            .unwrap();
         let psso = dict.get("PlatformSSO").unwrap();
         if let Value::Dictionary(inner) = psso {
             assert_eq!(
@@ -2371,18 +2764,14 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_nested_field_deep() {
+    fn nested_field_deep() {
         let mut dict = Dictionary::new();
-        apply_nested_field(
-            &mut dict,
-            "PayloadContent.URL",
-            Value::String("https://example.com".into()),
-        );
-        apply_nested_field(
-            &mut dict,
-            "PayloadContent.Name",
-            Value::String("Test CA".into()),
-        );
+        FieldPath::parse("PayloadContent.URL")
+            .insert_plist(&mut dict, Value::String("https://example.com".into()))
+            .unwrap();
+        FieldPath::parse("PayloadContent.Name")
+            .insert_plist(&mut dict, Value::String("Test CA".into()))
+            .unwrap();
         let pc = dict.get("PayloadContent").unwrap();
         if let Value::Dictionary(inner) = pc {
             assert_eq!(inner.len(), 2);
@@ -2550,6 +2939,7 @@ mod tests {
             OutputMode::Json,
             "mobileconfig",
             Channel::Stable,
+            true,
         );
 
         assert!(result.is_err(), "expected error when --org is missing");
@@ -2557,6 +2947,66 @@ mod tests {
         assert!(
             err.contains("--org is required"),
             "error should mention --org requirement, got: {err}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod placeholder_key_tests {
+    use super::*;
+    use crate::schema::SchemaRegistry;
+
+    fn placeholder_keys(v: &Value, path: &str, out: &mut Vec<String>) {
+        match v {
+            Value::Dictionary(d) => {
+                for (k, child) in d {
+                    if crate::schema::FieldDefinition::is_placeholder_name(k) {
+                        out.push(format!("{path}.{k}"));
+                    }
+                    placeholder_keys(child, &format!("{path}.{k}"), out);
+                }
+            }
+            Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    placeholder_keys(item, &format!("{path}[{i}]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Both sources spell "the operator names this key" with a marker, which
+    /// must never reach a profile as `<key>{{key}}</key>`. This walks every profile schema contour ships and
+    /// asserts no emitted document carries one — and that the gate is not
+    /// vacuous, by requiring at least one schema to have had a marker to
+    /// suppress.
+    #[test]
+    fn no_full_profile_emits_a_placeholder_key() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+        let mut offenders = Vec::new();
+        let mut dynamic = 0usize;
+        for m in registry.all() {
+            if m.category.starts_with("ddm-") || !m.is_authorable() {
+                continue;
+            }
+            if m.fields
+                .values()
+                .any(|f| m.dynamic_value_shape(f).is_some())
+            {
+                dynamic += 1;
+            }
+            let dict =
+                build_payload_from_schema(m, &std::collections::BTreeMap::new(), true, false);
+            placeholder_keys(&Value::Dictionary(dict), &m.payload_type, &mut offenders);
+        }
+        assert!(
+            offenders.is_empty(),
+            "placeholder keys emitted:\n{}",
+            offenders.join("\n")
+        );
+        assert!(
+            dynamic >= 5,
+            "expected several dynamic-key schemas, saw {dynamic}"
         );
     }
 }

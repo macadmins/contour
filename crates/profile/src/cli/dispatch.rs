@@ -117,6 +117,19 @@ pub fn dispatch(
                 output_mode,
             )?;
         }
+        Commands::Preset {
+            manifest,
+            output,
+            source_note,
+            domain,
+        } => {
+            crate::cli::jamf_preset::handle(
+                std::path::Path::new(&manifest),
+                output.as_deref().map(std::path::Path::new),
+                source_note.as_deref(),
+                domain.as_deref(),
+            )?;
+        }
         Commands::Import {
             source,
             output,
@@ -435,6 +448,7 @@ pub fn dispatch(
             schema_path,
             beta,
             windows,
+            kind,
         } => {
             crate::cli::search::handle_search(
                 query.as_deref(),
@@ -443,6 +457,7 @@ pub fn dispatch(
                 schema_path.as_deref(),
                 channel.or_beta(beta),
                 windows,
+                kind.as_deref(),
                 output_mode,
             )?;
         }
@@ -475,8 +490,20 @@ pub fn dispatch(
             file2,
             output,
             md_report,
+            structural,
+            settings_only,
         } => {
-            crate::cli::diff::handle_diff(&file1, &file2, output.as_deref(), md_report.as_deref())?;
+            crate::cli::diff::handle_diff(
+                &file1,
+                &file2,
+                output.as_deref(),
+                md_report.as_deref(),
+                crate::cli::diff::DiffMode {
+                    structural,
+                    settings_only,
+                    json: matches!(output_mode, OutputMode::Json),
+                },
+            )?;
         }
         Commands::Unsign {
             paths,
@@ -571,6 +598,7 @@ pub fn dispatch(
             recipe_path,
             list_recipes,
             vars,
+            allow_placeholders,
             create_recipe,
             interactive,
             format,
@@ -578,6 +606,7 @@ pub fn dispatch(
             no_combined,
             sanitize,
             beta,
+            fragment,
         } => {
             let gen_channel = channel.or_beta(beta);
             // Tristate: --combined wins true, --no-combined wins false,
@@ -590,7 +619,39 @@ pub fn dispatch(
             } else {
                 None
             };
-            if let Some(recipe_name) = create_recipe {
+            if fragment {
+                if create_recipe.is_some() || list_recipes || interactive {
+                    anyhow::bail!(
+                        "--fragment renders a payload type or --recipe; it does not combine \
+                         with --create-recipe, --list-recipes or --interactive"
+                    );
+                }
+                let source = if !recipe.is_empty() {
+                    crate::cli::fragment::Source::Recipes(&recipe)
+                } else if let Some(pt) = payload_type.first() {
+                    crate::cli::fragment::Source::Payload(pt)
+                } else {
+                    anyhow::bail!("--fragment needs a payload type or --recipe");
+                };
+                crate::cli::fragment::handle_generate_fragment(
+                    source,
+                    output.as_deref(),
+                    &crate::cli::fragment::Generate {
+                        org: org.as_deref(),
+                        full,
+                        sanitize,
+                        schema_path: schema_path.as_deref(),
+                        recipe_path: recipe_path.as_deref(),
+                        config: config.as_ref(),
+                        vars: &vars,
+                        format: &format,
+                        combined: combined_override,
+                        channel: gen_channel,
+                        allow_placeholders,
+                    },
+                    output_mode,
+                )?;
+            } else if let Some(recipe_name) = create_recipe {
                 crate::cli::generate::handle_create_recipe(
                     &recipe_name,
                     &payload_type,
@@ -601,8 +662,9 @@ pub fn dispatch(
             } else if list_recipes {
                 crate::cli::generate::handle_list_recipes(recipe_path.as_deref(), output_mode)?;
             } else if !recipe.is_empty() {
+                let mut renders = Vec::new();
                 for selector in &recipe {
-                    crate::cli::generate::handle_generate_recipe(
+                    let render = crate::cli::generate::handle_generate_recipe(
                         selector,
                         recipe_path.as_deref(),
                         output.as_deref(),
@@ -615,8 +677,16 @@ pub fn dispatch(
                         output_mode,
                         &format,
                         combined_override,
+                        true,
                     )?;
+                    renders.push(render);
                 }
+                // A sanitized render leaves references unresolved on purpose.
+                crate::cli::generate::judge_recipe_renders(
+                    &renders,
+                    &vars,
+                    allow_placeholders || sanitize,
+                )?;
             } else if interactive {
                 if let Some(pt) = payload_type.first() {
                     crate::cli::generate::handle_generate_interactive(
@@ -641,6 +711,7 @@ pub fn dispatch(
                     output_mode,
                     &format,
                     gen_channel,
+                    true,
                 )?;
             } else {
                 anyhow::bail!(
@@ -865,7 +936,296 @@ pub fn dispatch(
                 )?;
             }
         },
+        Commands::Form(action) => match action {
+            crate::cli::FormAction::Spec {
+                name,
+                os,
+                os_version,
+                annotate,
+                schema_path,
+                beta,
+                output,
+            } => {
+                crate::cli::form::handle_spec(
+                    name.as_deref(),
+                    os.as_deref(),
+                    os_version.as_deref(),
+                    annotate,
+                    schema_path.as_deref(),
+                    channel.or_beta(beta),
+                    output.as_deref(),
+                    output_mode,
+                )?;
+            }
+            crate::cli::FormAction::Parse {
+                file,
+                os,
+                schema_path,
+                beta,
+            } => {
+                crate::cli::form::handle_parse(
+                    &file,
+                    os.as_deref(),
+                    schema_path.as_deref(),
+                    channel.or_beta(beta),
+                    output_mode,
+                )?;
+            }
+            crate::cli::FormAction::Emit {
+                name,
+                values,
+                org,
+                intent,
+                os,
+                os_version,
+                mcx,
+                direct,
+                output,
+                write,
+                schema_path,
+                beta,
+            } => {
+                crate::cli::form::handle_emit(
+                    &name,
+                    &values,
+                    org.as_deref(),
+                    &intent,
+                    os.as_deref(),
+                    os_version.as_deref(),
+                    mcx,
+                    direct,
+                    output.as_deref(),
+                    write,
+                    config.as_ref(),
+                    schema_path.as_deref(),
+                    channel.or_beta(beta),
+                    output_mode,
+                )?;
+            }
+        },
+        Commands::Windows { 0: action } => match action {
+            crate::cli::WindowsAction::Stig { action } => {
+                let json = matches!(output_mode, OutputMode::Json);
+                match action {
+                    crate::cli::StigAction::List => crate::cli::windows_stig::handle_list(json)?,
+                    crate::cli::StigAction::Search { term, profile } => {
+                        crate::cli::windows_stig::handle_search(&term, profile.as_deref(), json)?
+                    }
+                    crate::cli::StigAction::Show { target } => {
+                        crate::cli::windows_stig::handle_show(&target, json)?
+                    }
+                    crate::cli::StigAction::Export { profile, output } => {
+                        crate::cli::windows_stig::handle_export(
+                            &profile,
+                            output.as_deref().map(std::path::Path::new),
+                            json,
+                        )?
+                    }
+                }
+            }
+            crate::cli::WindowsAction::Apps { action } => {
+                let json = matches!(output_mode, OutputMode::Json);
+                match action {
+                    crate::cli::AppsAction::List => crate::cli::windows_apps::handle_list(json)?,
+                    crate::cli::AppsAction::Search { term, app } => {
+                        crate::cli::windows_apps::handle_search(&term, app.as_deref(), json)?
+                    }
+                    crate::cli::AppsAction::Show { app, policy } => {
+                        crate::cli::windows_apps::handle_show(&app, &policy, json)?
+                    }
+                }
+            }
+            crate::cli::WindowsAction::Generate {
+                input,
+                output,
+                envelope,
+                write,
+                admx_dir,
+            } => {
+                crate::cli::windows_generate::handle_generate(
+                    &input,
+                    output.as_deref(),
+                    envelope,
+                    write,
+                    admx_dir.as_deref(),
+                    matches!(output_mode, OutputMode::Json),
+                )?;
+            }
+        },
         Commands::Ddm { action } => match action {
+            DdmAction::Legacy(action) => match action {
+                crate::cli::LegacyAction::Convert {
+                    paths,
+                    url_template,
+                    sha,
+                    predicate,
+                    no_subscriptions,
+                    org,
+                    output,
+                    recursive,
+                    naming,
+                    gitops,
+                    write,
+                } => {
+                    crate::cli::ddm_legacy::handle_legacy_convert(
+                        &paths,
+                        &url_template,
+                        sha.as_deref(),
+                        predicate.as_deref(),
+                        no_subscriptions,
+                        org.as_deref(),
+                        output.as_deref(),
+                        recursive,
+                        &naming,
+                        gitops,
+                        write,
+                        config.as_ref(),
+                        output_mode,
+                    )?;
+                }
+                crate::cli::LegacyAction::Refresh {
+                    declarations,
+                    against,
+                    sha,
+                    write,
+                } => {
+                    crate::cli::ddm_legacy::handle_legacy_refresh(
+                        &declarations,
+                        &against,
+                        &sha,
+                        write,
+                        output_mode,
+                    )?;
+                }
+            },
+            DdmAction::Status {
+                query,
+                platform,
+                errors,
+            } => {
+                crate::cli::ddm_status::handle_status(
+                    query.as_deref(),
+                    platform.as_deref(),
+                    errors,
+                    output_mode,
+                )?;
+            }
+            DdmAction::AppControl(action) => match action {
+                crate::cli::AppControlAction::Scan {
+                    paths,
+                    interactive,
+                    deny,
+                    no_apple,
+                    rule_type,
+                    always_allow_managed,
+                    output,
+                } => crate::cli::ddm_app_control::handle_scan(
+                    &paths,
+                    interactive,
+                    deny,
+                    rule_type,
+                    always_allow_managed,
+                    no_apple,
+                    output.as_deref(),
+                    matches!(output_mode, OutputMode::Json),
+                )?,
+                crate::cli::AppControlAction::Generate {
+                    input,
+                    org,
+                    output,
+                    write,
+                } => crate::cli::ddm_app_control::handle_generate(
+                    &input,
+                    org.as_deref(),
+                    config.as_ref(),
+                    output.as_deref(),
+                    write,
+                    matches!(output_mode, OutputMode::Json),
+                )?,
+            },
+            DdmAction::AppPrivacy(action) => match action {
+                crate::cli::AppPrivacyAction::Scan {
+                    apps,
+                    interactive,
+                    skip_unreadable,
+                    output,
+                } => {
+                    crate::cli::ddm_app_privacy::handle_scan(
+                        &apps,
+                        interactive,
+                        skip_unreadable,
+                        output.as_deref(),
+                        matches!(output_mode, OutputMode::Json),
+                    )?;
+                }
+                crate::cli::AppPrivacyAction::Generate {
+                    input,
+                    org,
+                    output,
+                    payload_scope,
+                    write,
+                } => {
+                    crate::cli::ddm_app_privacy::handle_generate(
+                        &input,
+                        org.as_deref(),
+                        config.as_ref(),
+                        output.as_deref(),
+                        payload_scope.as_deref(),
+                        write,
+                        matches!(output_mode, OutputMode::Json),
+                    )?;
+                }
+                crate::cli::AppPrivacyAction::ImportPppc { input, output } => {
+                    crate::cli::ddm_app_privacy::handle_import_pppc(
+                        &input,
+                        output.as_deref(),
+                        matches!(output_mode, OutputMode::Json),
+                    )?;
+                }
+            },
+            DdmAction::ServiceConfig(action) => match action {
+                crate::cli::ServiceConfigAction::Build {
+                    source,
+                    service,
+                    base_url,
+                    url_template,
+                    intent,
+                    predicate,
+                    no_subscriptions,
+                    org,
+                    output,
+                    write,
+                } => {
+                    crate::cli::ddm_service_config::handle_build(
+                        &source,
+                        &service,
+                        base_url.as_deref(),
+                        &url_template,
+                        intent.as_deref(),
+                        predicate.as_deref(),
+                        no_subscriptions,
+                        org.as_deref(),
+                        output.as_deref(),
+                        write,
+                        config.as_ref(),
+                        output_mode,
+                    )?;
+                }
+                crate::cli::ServiceConfigAction::Rehost {
+                    declarations,
+                    base_url,
+                    verify,
+                    write,
+                } => {
+                    crate::cli::ddm_service_config::handle_rehost(
+                        &declarations,
+                        &base_url,
+                        verify,
+                        write,
+                        output_mode,
+                    )?;
+                }
+            },
             DdmAction::Reidentify {
                 paths,
                 from,
@@ -931,6 +1291,7 @@ pub fn dispatch(
                 max_depth,
                 no_parallel,
                 beta,
+                platforms,
             } => {
                 let beta = beta || channel.is_beta();
                 let parallel = !no_parallel;
@@ -941,6 +1302,7 @@ pub fn dispatch(
                     max_depth,
                     parallel,
                     beta,
+                    &platforms,
                     output_mode,
                 )?;
             }
@@ -1058,6 +1420,7 @@ pub fn dispatch(
                 schema_path,
                 allow_orphans,
                 org,
+                platforms,
                 preset,
                 preset_path,
                 list_presets,
@@ -1071,6 +1434,7 @@ pub fn dispatch(
                     preset.as_deref(),
                     preset_path.as_deref(),
                     list_presets,
+                    &platforms,
                     config.as_ref(),
                     output_mode,
                 )?;

@@ -329,19 +329,24 @@ fn handle_verify_single(file: &str, output_mode: OutputMode) -> Result<()> {
     // Check if signed
     let signed = is_signed(path)?;
 
+    // A verify that succeeds on a file with no signature answers a different
+    // question from the one asked. This path printed a warning and returned
+    // Ok — exit 0 — so `contour profile verify x && deploy` shipped unsigned
+    // profiles; the batch path already failed them. `valid` was `null`, which a
+    // consumer testing for `false` reads as "not a failure".
     if !signed {
         if output_mode == OutputMode::Json {
             let result = serde_json::json!({
                 "file": file,
                 "signed": false,
-                "valid": null,
+                "valid": false,
                 "error": "Profile is not signed"
             });
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
-            println!("{} Profile is not signed: {}", "!".yellow(), file);
+            println!("{} Profile is not signed: {}", "✗".red(), file);
         }
-        return Ok(());
+        anyhow::bail!("{file}: profile is not signed");
     }
 
     // Verify signature
@@ -352,12 +357,22 @@ fn handle_verify_single(file: &str, output_mode: OutputMode) -> Result<()> {
             "file": file,
             "signed": result.signed,
             "valid": result.valid,
+            "trusted": result.trusted,
             "signer": result.signer,
             "error": result.error
         });
         println!("{}", serde_json::to_string_pretty(&json_result)?);
     } else if result.valid {
-        println!("{} Signature is valid", "✓".green());
+        if result.trusted {
+            println!("{} Signature is valid", "✓".green());
+        } else {
+            // Intact, and from a signer this Mac does not trust — commonly an
+            // internal CA the managed devices trust through MDM. Said, not failed.
+            println!(
+                "{} Signature is valid — the content is intact, but this Mac does not trust the signer",
+                "✓".green()
+            );
+        }
         println!("  {} {}", "File:".bold(), file);
         if let Some(signer) = &result.signer {
             println!("  {} {}", "Signer:".bold(), signer);
@@ -370,6 +385,16 @@ fn handle_verify_single(file: &str, output_mode: OutputMode) -> Result<()> {
         }
     }
 
+    // A signature that does not verify is a failure too. This returned Ok for
+    // a tampered profile as well — the single-file path could not fail at all.
+    if !result.valid {
+        anyhow::bail!(
+            "{file}: {}",
+            result
+                .error
+                .unwrap_or_else(|| "signature verification failed".to_string())
+        );
+    }
     Ok(())
 }
 

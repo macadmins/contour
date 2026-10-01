@@ -39,8 +39,8 @@ firewall) means a brief deconfigured window AND, for SCEP, a fresh
 certificate enrollment against the CA. On a 15,000-endpoint fleet
 that's a 15k-deep CA queue inside one push window.
 
-**The silent-failure case** is what CodeRabbit flagged on a
-33-file Fleet GitOps PR:
+**The silent-failure case** — what a review of a 33-file Fleet GitOps PR
+turns up:
 
 | Pattern | Failure mode |
 |---|---|
@@ -261,7 +261,7 @@ INVARIANTS:
 
 The composed workflow an agent uses when asked to review a PR that
 touches multiple profiles. This is the procedure to reach for first
-when a CodeRabbit-style finding lands on a PR.
+when a review finding lands on a PR.
 
 ```
 INPUT:
@@ -329,7 +329,7 @@ INVARIANTS:
 
 ---
 
-## Worked example: the Fleet GitOps PR (the four CodeRabbit findings)
+## Worked example: a Fleet GitOps PR (four review findings)
 
 Reproduce the failure modes locally to keep the SOP grounded:
 
@@ -347,7 +347,8 @@ contour profile plan baseline/ proposed/ --recursive --json
 contour profile plan baseline/fleet-okta-conditional-access.mobileconfig \
                      proposed/fleet-okta-conditional-access.mobileconfig --json
 # Expected: REPLACE on the SCEP payload AND REF_BROKEN on the identity
-# preference. rollback --uuids-only --rewrite-refs fixes both.
+# preference. rollback --uuids-only fixes both: it rewrites refs by
+# default (--no-rewrite-refs opts out).
 
 # 3. The Nudge refreshSOFAFeedTime type error.
 contour profile plan baseline/nudge-configuration.mobileconfig \

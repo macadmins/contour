@@ -142,18 +142,32 @@ pub struct SigningResult {
     pub verified: bool,
 }
 
-/// Verify a signed profile's signature
+/// Verify a signed profile's signature.
+///
+/// `security cms -D` DECODES a CMS message; it exits 0 whether or not the
+/// signature matches the content, so its exit code proves only that a
+/// signature is present. The verdict is in the per-signer status it prints
+/// with `-h`: a profile with one byte changed after signing decodes fine,
+/// exits 0, and reports `signer0.status=DigestMismatch`.
+///
+/// Two questions, kept apart because the answers mean different things:
+///
+/// - **Integrity** — does the signature match the content? `GoodSignature` and
+///   `SigningCertNotTrusted` both mean yes; the latter only says this Mac does
+///   not trust the signer. Anything else — `DigestMismatch`, `BadSignature`, a
+///   revoked or expired signer, a status this code does not know, or no status
+///   at all — fails. Unknown fails; it does not pass.
+/// - **Trust** — does this Mac trust the signer? Reported, not enforced:
+///   organisations sign with internal CAs that devices trust through MDM while
+///   the admin's Mac does not, and calling those profiles invalid would be
+///   wrong in the other direction.
 pub fn verify_signature(path: &Path) -> Result<VerificationResult> {
     require_macos("Signature verification")?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("path contains invalid UTF-8: {}", path.display()))?;
     let output = Command::new("security")
-        .args([
-            "cms",
-            "-D",
-            "-i",
-            path.to_str().ok_or_else(|| {
-                anyhow::anyhow!("path contains invalid UTF-8: {}", path.display())
-            })?,
-        ])
+        .args(["cms", "-D", "-h", "0", "-i", path_str])
         .output()
         .with_context(|| "Failed to execute security cms verify")?;
 
@@ -162,58 +176,100 @@ pub fn verify_signature(path: &Path) -> Result<VerificationResult> {
         return Ok(VerificationResult {
             valid: false,
             signed: false,
+            trusted: false,
             signer: None,
             error: Some(stderr.to_string()),
         });
     }
 
-    // Profile was decoded successfully, meaning it was validly signed
-    // Try to get signer info
-    let signer_info = get_signer_info(path)?;
-
+    let info = String::from_utf8_lossy(&output.stdout);
+    let statuses = signer_statuses(&info);
+    let ids = signer_ids(&info);
+    let (valid, trusted, error) = judge_signer_statuses(&statuses);
     Ok(VerificationResult {
-        valid: true,
+        valid,
         signed: true,
-        signer: signer_info,
-        error: None,
+        trusted,
+        signer: (!ids.is_empty()).then(|| ids.join(", ")),
+        error,
     })
+}
+
+/// Every `signerN.status=<Status>` reported by `security cms -D -h 0`.
+fn signer_statuses(info: &str) -> Vec<String> {
+    signer_field(info, ".status")
+}
+
+/// Every `signerN.id="<common name>"` — who signed, as the header names them.
+///
+/// Read from the same header as the statuses. The first line containing
+/// "signer" is `nsigners=1`, not a name.
+fn signer_ids(info: &str) -> Vec<String> {
+    signer_field(info, ".id")
+        .into_iter()
+        .map(|v| v.trim_matches('"').to_string())
+        .collect()
+}
+
+fn signer_field(info: &str, suffix: &str) -> Vec<String> {
+    info.split(';')
+        .filter_map(|part| {
+            let (key, value) = part.trim().split_once('=')?;
+            (key.starts_with("signer") && key.ends_with(suffix)).then(|| value.trim().to_string())
+        })
+        .collect()
+}
+
+/// `(integrity_ok, trusted, error)` for a set of signer statuses.
+///
+/// Every signer must pass. No statuses at all is a failure: a message that
+/// reports no signer has not been shown to be signed by anyone.
+fn judge_signer_statuses(statuses: &[String]) -> (bool, bool, Option<String>) {
+    const INTACT_TRUSTED: &[&str] = &["GoodSignature"];
+    const INTACT_UNTRUSTED: &[&str] = &["SigningCertNotTrusted"];
+    if statuses.is_empty() {
+        return (
+            false,
+            false,
+            Some("no signer status reported — the signature could not be verified".into()),
+        );
+    }
+    let bad: Vec<&String> = statuses
+        .iter()
+        .filter(|s| {
+            !INTACT_TRUSTED.contains(&s.as_str()) && !INTACT_UNTRUSTED.contains(&s.as_str())
+        })
+        .collect();
+    if !bad.is_empty() {
+        let names: Vec<&str> = bad.iter().map(|s| s.as_str()).collect();
+        let what = if names.contains(&"DigestMismatch") {
+            "the content was changed after it was signed"
+        } else {
+            "the signature does not verify"
+        };
+        return (
+            false,
+            false,
+            Some(format!("{what} (signer status: {})", names.join(", "))),
+        );
+    }
+    let trusted = statuses
+        .iter()
+        .all(|s| INTACT_TRUSTED.contains(&s.as_str()));
+    (true, trusted, None)
 }
 
 /// Verification result
 #[derive(Debug)]
 pub struct VerificationResult {
+    /// The signature matches the content.
     pub valid: bool,
     pub signed: bool,
+    /// This Mac trusts the signer. Separate from `valid`: an intact signature
+    /// from a CA only the managed devices trust is valid and untrusted here.
+    pub trusted: bool,
     pub signer: Option<String>,
     pub error: Option<String>,
-}
-
-fn get_signer_info(path: &Path) -> Result<Option<String>> {
-    let output = Command::new("security")
-        .args([
-            "cms",
-            "-D",
-            "-h1",
-            "-i",
-            path.to_str().ok_or_else(|| {
-                anyhow::anyhow!("path contains invalid UTF-8: {}", path.display())
-            })?,
-        ])
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => {
-            let info = String::from_utf8_lossy(&o.stdout);
-            // Parse signer from CMS header info
-            for line in info.lines() {
-                if line.contains("signer") || line.contains("Subject:") {
-                    return Ok(Some(line.trim().to_string()));
-                }
-            }
-            Ok(None)
-        }
-        _ => Ok(None),
-    }
 }
 
 /// List available signing identities
@@ -379,5 +435,88 @@ mod tests {
         assert_eq!(config.identity, "My Identity");
         assert_eq!(config.keychain, Some("/path/to/keychain".to_string()));
         assert!(!config.timestamp);
+    }
+}
+
+#[cfg(test)]
+mod verification_tests {
+    use super::*;
+
+    /// What `security cms -D -h 0` prints for an intact, self-signed profile.
+    const INTACT: &str = "SMIME: \tlevel=0.2; type=signedData; nsigners=1; \n\t\tsigner0.id=\"contour-demo-signing\"; signer0.status=SigningCertNotTrusted; \n\tlevel=0.1; type=data; ";
+    /// …and for the same profile with one byte changed after signing. It
+    /// decodes, and `security cms -D` exits 0 on it — which is why reading
+    /// the exit code said this was validly signed.
+    const TAMPERED: &str = "SMIME: \tlevel=0.2; type=signedData; nsigners=1; \n\t\tsigner0.id=\"contour-demo-signing\"; signer0.status=DigestMismatch; \n\tlevel=0.1; type=data; ";
+
+    #[test]
+    fn signer_statuses_are_read_from_security_cms_output() {
+        assert_eq!(signer_statuses(INTACT), vec!["SigningCertNotTrusted"]);
+        assert_eq!(signer_statuses(TAMPERED), vec!["DigestMismatch"]);
+        assert_eq!(signer_ids(INTACT), vec!["contour-demo-signing"]);
+        let two = "signer0.status=GoodSignature; signer1.status=DigestMismatch;";
+        assert_eq!(
+            signer_statuses(two),
+            vec!["GoodSignature", "DigestMismatch"]
+        );
+    }
+
+    /// The defect: tampered content was reported as validly signed.
+    #[test]
+    fn a_digest_mismatch_is_invalid_and_says_the_content_changed() {
+        let (valid, trusted, err) = judge_signer_statuses(&signer_statuses(TAMPERED));
+        assert!(!valid, "content changed after signing must not verify");
+        assert!(!trusted);
+        assert!(err.unwrap().contains("changed after it was signed"));
+    }
+
+    /// Intact but untrusted is valid, and says it is untrusted.
+    #[test]
+    fn an_untrusted_signer_is_valid_but_not_trusted() {
+        let (valid, trusted, err) = judge_signer_statuses(&signer_statuses(INTACT));
+        assert!(valid, "the signature matches the content");
+        assert!(!trusted, "and this Mac does not trust who made it");
+        assert!(err.is_none());
+    }
+
+    #[test]
+    fn a_good_signature_is_valid_and_trusted() {
+        let (valid, trusted, _) = judge_signer_statuses(&["GoodSignature".to_string()]);
+        assert!(valid && trusted);
+    }
+
+    /// Unknown means fail. A status this code has not seen is not a pass.
+    #[test]
+    fn anything_unrecognised_fails_rather_than_passes() {
+        for s in [
+            "BadSignature",
+            "SigningCertRevoked",
+            "SigningCertExpired",
+            "Unverified",
+            "SomethingNew",
+        ] {
+            let (valid, _, err) = judge_signer_statuses(&[s.to_string()]);
+            assert!(!valid, "{s} must fail");
+            assert!(
+                err.unwrap().contains(s),
+                "the failure names the status: {s}"
+            );
+        }
+    }
+
+    /// Every signer must pass; one bad signer fails the file.
+    #[test]
+    fn one_bad_signer_among_good_ones_fails() {
+        let (valid, _, _) =
+            judge_signer_statuses(&["GoodSignature".into(), "DigestMismatch".into()]);
+        assert!(!valid);
+    }
+
+    /// No signer status at all has not been shown to be signed by anyone.
+    #[test]
+    fn no_signer_status_fails() {
+        let (valid, _, err) = judge_signer_statuses(&[]);
+        assert!(!valid);
+        assert!(err.is_some());
     }
 }

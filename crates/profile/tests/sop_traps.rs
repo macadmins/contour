@@ -708,7 +708,14 @@ type = "com.apple.configuration.passcode.settings"
 MinimumLength = 8
 
 [activation]
-predicate = "@status(passcode-compliance.compliant) == false"
+predicate = "@status(passcode.is-compliant) == false"
+
+# The predicate reads a status item, so the bundle must subscribe to it:
+# Apple does not auto-subscribe from predicate text, and an unsubscribed
+# key yields Error.UnableToEvaluatePredicate on device. Compose enforces
+# that; trap 36 is where the enforcement itself is pinned.
+[subscriptions]
+keys = ["passcode.is-compliant"]
 "#,
     )
     .unwrap();
@@ -1372,11 +1379,9 @@ fn lint_fixture_path(name: &str) -> std::path::PathBuf {
 /// top level of the JSON object.
 fn lint_findings_for(fixture: &str) -> Vec<Value> {
     let path = lint_fixture_path(fixture);
-    let output = Command::cargo_bin("profile")
-        .unwrap()
-        .args(["validate", path.to_str().unwrap(), "--no-schema", "--json"])
-        .output()
-        .unwrap();
+    let mut cmd = Command::cargo_bin("profile").unwrap();
+    cmd.args(["validate", path.to_str().unwrap(), "--no-schema", "--json"]);
+    let output = cmd.output().unwrap();
     // exit code may be non-zero (e.g. duplicate-uuid is an error) — that's fine.
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: Value = serde_json::from_str(stdout.trim()).expect("validate --json emits JSON");
@@ -1558,38 +1563,6 @@ fn trap_70_ddm_compose_unknown_preset_errors_with_valid_list() {
         "stderr should name the contract; got: {stderr}"
     );
     assert!(stderr.contains("disable-apple-intelligence-macos"));
-}
-
-#[test]
-fn trap_67_single_instance_payload_repeated_fires_on_real_apply_mode_single() {
-    // End-to-end: per-violation fixture has com.apple.NetworkBrowser
-    // (apply_mode=single in the embedded parquet) listed twice. The
-    // lint must fire at warning severity. If apply_mode parsing breaks
-    // upstream or the registry stops carrying single-mode payloads,
-    // this trap fails first.
-    let findings = lint_findings_for("single-instance-payload-repeated");
-    let names: Vec<&str> = findings
-        .iter()
-        .filter_map(|f| f["check"].as_str())
-        .collect();
-    assert!(
-        names.contains(&"single-instance-payload-repeated"),
-        "expected single-instance-payload-repeated; got {names:?}"
-    );
-    let sev = findings
-        .iter()
-        .find(|f| f["check"] == "single-instance-payload-repeated")
-        .and_then(|f| f["severity"].as_str());
-    assert_eq!(sev, Some("warning"), "must be warning severity");
-
-    // Clean baseline never trips the new check.
-    let clean = lint_findings_for("clean");
-    assert!(
-        !clean
-            .iter()
-            .any(|f| f["check"] == "single-instance-payload-repeated"),
-        "clean baseline must not trip single-instance-payload-repeated"
-    );
 }
 
 #[test]
@@ -2035,9 +2008,7 @@ fn trap_65_disable_apple_intelligence_bundles_compose_clean() {
             "AllowAppleIntelligenceReport",
             "AllowGenmoji",
             "AllowImagePlayground",
-            "AllowImageWand",
-            "AllowPersonalizedHandwritingResults",
-            "AllowVisualIntelligenceSummary",
+            "AllowVisualIntelligence",
             "AllowWritingTools",
         ] {
             assert_eq!(
@@ -2045,16 +2016,38 @@ fn trap_65_disable_apple_intelligence_bundles_compose_clean() {
                 "{preset}: top-level {key} must be false"
             );
         }
+        // Keys Apple's schema offers on iOS / iPadOS but not on macOS.
+        // AllowVisualIntelligenceSummary is also the only Visual
+        // Intelligence control on iOS 26.4-26.x.
+        for key in [
+            "AllowImageWand",
+            "AllowPersonalizedHandwritingResults",
+            "AllowVisualIntelligenceSummary",
+        ] {
+            if preset.ends_with("-ios") {
+                assert_eq!(payload[key], false, "{preset}: {key} must be false");
+            } else {
+                assert!(
+                    payload.get(key).is_none(),
+                    "{preset}: {key} is not a macOS key"
+                );
+            }
+        }
+        // Per-app toggles live under Apps. At the payload root Apple ignores
+        // them.
         for (sub, key) in [
             ("Mail", "AllowSmartReplies"),
             ("Mail", "AllowSummary"),
             ("Notes", "AllowTranscription"),
             ("Notes", "AllowTranscriptionSummary"),
+            ("Safari", "AllowSummary"),
+            ("Calendar", "AllowNaturalLanguageEditing"),
         ] {
             assert_eq!(
-                payload[sub][key], false,
-                "{preset}: nested {sub}.{key} must be false"
+                payload["Apps"][sub][key], false,
+                "{preset}: Apps.{sub}.{key} must be false"
             );
+            assert!(payload.get(sub).is_none(), "{preset}: {sub} at the root");
         }
 
         // ddm verify the whole directory passes.
@@ -2900,24 +2893,22 @@ fn trap_76_library_import_round_trips_real_mobileconfig() {
         meaning_body.contains("## Payloads"),
         ".meaning.md must include the schema-enriched Payloads section"
     );
-    // Title can come from either the envelope schema ("Managed
-    // Preferences") OR — preferred when we have it — the MCX preference
-    // domain match in ProfileCreator ("SAP Privileges"). Either is a
-    // valid schema match; the test just requires *some* title above
-    // the bare payload-type fallback.
+    // The MCX preference domain (`corp.sap.privileges`) is matched in the
+    // vendor app schemas, which win over the generic envelope title
+    // ("Managed Preferences"): the heading names the app.
     assert!(
-        meaning_body.contains("Managed Preferences") || meaning_body.contains("SAP Privileges"),
-        "schema title must appear in the payload heading; got: {meaning_body}"
+        meaning_body.contains("### SAP Privileges"),
+        "the app schema's title must head the payload; got: {meaning_body}"
     );
     assert!(
         meaning_body.contains("**Platforms:**"),
         "Platforms line (with per-OS introduced versions) must appear"
     );
-    // Source label is `apple schema` for the envelope path, `apps schema`
-    // for the ProfileCreator MCX-domain path. Both are valid.
+    // …and the source says so: `apps schema`, not the envelope's
+    // `apple schema`.
     assert!(
-        meaning_body.contains("apple schema") || meaning_body.contains("apps schema"),
-        "schema source label must appear ('Source: apple schema')"
+        meaning_body.contains("**Source:** apps schema"),
+        "schema source label must name the app schema; got: {meaning_body}"
     );
 
     // The imported recipe round-trips through --list-recipes.
@@ -3231,8 +3222,19 @@ fn trap_78_library_validate_flags_unknown_types_and_compose_errors() {
     );
     let parsed: Value = serde_json::from_slice(&clean.stdout).expect("clean JSON");
     assert_eq!(parsed["errors"], 0);
-    assert_eq!(parsed["warnings"], 0);
     assert_eq!(parsed["success"], true);
+    // The scaffold's own recipes for Defender, Okta and Santa name domains
+    // only the deprecated community corpus describes, so they warn until
+    // those get vendor-authoritative schemas. They must warn as
+    // `withheld-payload-type`, never `unknown-payload-type` — the recipes are
+    // correct; the source behind them is the thing being retired.
+    let findings = parsed["findings"].as_array().cloned().unwrap_or_default();
+    for f in &findings {
+        assert_eq!(
+            f["check"], "withheld-payload-type",
+            "unexpected finding in a freshly scaffolded library: {f}"
+        );
+    }
 
     // 2. Drop a deliberately broken recipe in: bogus payload_type
     //    (warning) + bogus DDM configuration type (error).
@@ -3312,7 +3314,7 @@ fn trap_79_library_import_handles_ddm_json() {
     // Synthetic DDM configuration JSON (a real-world shape).
     let cfg_json = r#"{
         "Type": "com.apple.configuration.softwareupdate.settings",
-        "Identifier": "com.acme.config.softwareupdate-settings",
+        "Identifier": "com.acme.config.imported-softwareupdate",
         "Payload": {
             "Notifications": true,
             "AllowStandardUserOSUpdates": false,
@@ -3325,6 +3327,34 @@ fn trap_79_library_import_handles_ddm_json() {
     let cfg_path = tmp.path().join("configuration.json");
     fs::write(&cfg_path, cfg_json).unwrap();
 
+    // `library new` seeds the embedded DDM presets, softwareupdate-settings
+    // among them (7692aee). Importing over a seeded preset must be refused
+    // without --force, never silently replace it — which is why the import
+    // below writes under its own name.
+    let collide = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "library",
+            "import",
+            cfg_path.to_str().unwrap(),
+            "--into",
+            lib.to_str().unwrap(),
+            "--name",
+            "softwareupdate-settings",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !collide.status.success(),
+        "importing over a seeded preset must be refused without --force"
+    );
+    assert!(
+        String::from_utf8_lossy(&collide.stderr).contains("already exists"),
+        "the refusal must say the file already exists; stderr: {}",
+        String::from_utf8_lossy(&collide.stderr)
+    );
+
     // 1. Single-file import with --name override.
     let result = Command::cargo_bin("profile")
         .unwrap()
@@ -3335,7 +3365,7 @@ fn trap_79_library_import_handles_ddm_json() {
             "--into",
             lib.to_str().unwrap(),
             "--name",
-            "softwareupdate-settings",
+            "imported-softwareupdate",
             "--json",
         ])
         .output()
@@ -3352,8 +3382,8 @@ fn trap_79_library_import_handles_ddm_json() {
         pts[0].as_str(),
         Some("com.apple.configuration.softwareupdate.settings")
     );
-    let bundle_path = lib.join("ddm/softwareupdate-settings.toml");
-    let meaning_path = lib.join("ddm/softwareupdate-settings.meaning.md");
+    let bundle_path = lib.join("ddm/imported-softwareupdate.toml");
+    let meaning_path = lib.join("ddm/imported-softwareupdate.meaning.md");
     assert!(
         bundle_path.exists(),
         "DDM bundle must land under <lib>/ddm/"
@@ -3374,7 +3404,7 @@ fn trap_79_library_import_handles_ddm_json() {
             "--preset-path",
             lib.join("ddm").to_str().unwrap(),
             "--preset",
-            "softwareupdate-settings",
+            "imported-softwareupdate",
             "--org",
             "com.acme",
             "-o",
@@ -3398,7 +3428,7 @@ fn trap_79_library_import_handles_ddm_json() {
     );
     assert_eq!(
         regen["Identifier"].as_str(),
-        Some("com.acme.config.softwareupdate-settings"),
+        Some("com.acme.config.imported-softwareupdate"),
         "with --name override, the regenerated Identifier must match the source"
     );
     assert_eq!(
@@ -4280,7 +4310,7 @@ fn trap_86_ddm_read_commands_honor_beta_channel() {
 // Trap 87: `ddm generate <short-name>` resolves at dot boundaries, never to a
 //          substring-colliding type.
 // Guards: `intelligence.settings` is a substring of `external-intelligence.settings`;
-//         the old `.contains()` resolver could silently emit the wrong Type.
+//         a `.contains()` resolver could silently emit the wrong Type.
 // ─────────────────────────────────────────────────────────────────────────────
 #[test]
 fn trap_87_ddm_generate_short_name_resolves_at_dot_boundary() {
@@ -4310,5 +4340,922 @@ fn trap_87_ddm_generate_short_name_resolves_at_dot_boundary() {
     assert_eq!(
         decl["Type"], "com.apple.configuration.intelligence.settings",
         "short name must resolve to intelligence.settings, NOT external-intelligence.settings"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 88: `ddm service-config build` refuses an archive that is not rooted at
+//          the filesystem root. Pilot procedure: deploy_service_config / STEP 1
+// Catches: an agent stages `ssh/sshd_config` instead of `etc/ssh/sshd_config`.
+//          The archive then expands into a directory sshd never reads, while
+//          the declaration deploys and reports Verified — total, silent
+//          failure. Also pins the stable error_code agents switch on.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_88_service_config_refuses_an_archive_rooted_too_deep() {
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml(dir.path(), "com.acme");
+    let staging = dir.path().join("staging/ssh");
+    fs::create_dir_all(&staging).unwrap();
+    fs::write(staging.join("sshd_config"), "PermitRootLogin no\n").unwrap();
+
+    let out = dir.path().join("out");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "--json",
+            "ddm",
+            "service-config",
+            "build",
+            dir.path().join("staging").to_str().unwrap(),
+            "--service",
+            "com.apple.sshd",
+            "--base-url",
+            "cdn.example.org/ddm",
+            "-o",
+            out.to_str().unwrap(),
+            "--write",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        !result.status.success(),
+        "a mis-rooted archive must be refused before anything is written"
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    let envelope: Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|e| {
+        panic!("stderr must carry the JSON error envelope ({e}); got: {stderr}")
+    });
+    assert_eq!(envelope["error_code"], "ARCHIVE_LAYOUT");
+    assert!(
+        envelope["error"].as_str().unwrap().contains("etc/ssh"),
+        "error must name the path the service reads: {envelope}"
+    );
+    assert!(!out.exists(), "nothing may be written for a refused layout");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 89: packing is reproducible, and a provider migration re-points the URL
+//          without touching the hash.
+//          Pilot procedures: deploy_service_config / STEP 3, rehost
+// Catches: (a) a packer that leaks mtimes or filesystem order, so an untouched
+//          tree mints a new asset and the fleet re-downloads identical bytes;
+//          (b) a re-host that recomputes or rewrites Hash-SHA-256, turning a
+//          move into a silent republish that devices would then verify against
+//          content nobody reviewed.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_89_service_config_rehost_moves_the_url_and_keeps_the_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    write_profile_toml(dir.path(), "com.acme");
+    let staging = dir.path().join("staging/etc/ssh");
+    fs::create_dir_all(&staging).unwrap();
+    fs::write(staging.join("sshd_config"), "PermitRootLogin no\n").unwrap();
+
+    let build = |out: &std::path::Path| {
+        Command::cargo_bin("profile")
+            .unwrap()
+            .current_dir(dir.path())
+            .args([
+                "ddm",
+                "service-config",
+                "build",
+                dir.path().join("staging").to_str().unwrap(),
+                "--service",
+                "com.apple.sshd",
+                "--base-url",
+                "acct.blob.core.windows.net/ddm",
+                "-o",
+                out.to_str().unwrap(),
+                "--write",
+            ])
+            .output()
+            .unwrap()
+    };
+
+    let out_a = dir.path().join("a");
+    let out_b = dir.path().join("b");
+    assert!(build(&out_a).status.success());
+    assert!(build(&out_b).status.success());
+
+    // (a) Two builds of one tree must be byte-identical, hash included.
+    let zip_a = fs::read(out_a.join("sshd.zip")).unwrap();
+    let zip_b = fs::read(out_b.join("sshd.zip")).unwrap();
+    assert_eq!(zip_a, zip_b, "packing must be reproducible");
+
+    let asset_path = out_a.join("sshd.asset.json");
+    let before: Value = serde_json::from_str(&fs::read_to_string(&asset_path).unwrap()).unwrap();
+    let hash_before = before["Payload"]["Reference"]["Hash-SHA-256"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        before["Payload"]["Reference"]["DataURL"]
+            .as_str()
+            .unwrap()
+            .contains("blob.core.windows.net"),
+        "built against the first provider"
+    );
+
+    // (b) Move providers. The artifact is not rebuilt.
+    let rehost = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "ddm",
+            "service-config",
+            "rehost",
+            out_a.to_str().unwrap(),
+            "--base-url",
+            "cdn.example.org/ddm",
+            "--write",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rehost.status.success(),
+        "rehost must succeed; stderr: {}",
+        String::from_utf8_lossy(&rehost.stderr)
+    );
+
+    let after: Value = serde_json::from_str(&fs::read_to_string(&asset_path).unwrap()).unwrap();
+    let reference = &after["Payload"]["Reference"];
+    assert_eq!(
+        reference["Hash-SHA-256"].as_str().unwrap(),
+        hash_before,
+        "a move must never change what devices verify against"
+    );
+    assert_eq!(
+        reference["DataURL"].as_str().unwrap(),
+        format!("https://cdn.example.org/ddm/{hash_before}/sshd.zip"),
+        "URL must re-point at the new base, keeping the content address"
+    );
+
+    // The archive on disk is untouched by a move.
+    assert_eq!(fs::read(out_a.join("sshd.zip")).unwrap(), zip_a);
+}
+
+#[test]
+fn trap_90_operational_ddm_presets_compose_and_keep_their_posture() {
+    // The five operational built-in presets: software update settings and
+    // enforcement, passcode policy, disk mounting, Safari hardening. Each
+    // is reachable by name with no source tree, composes to a declaration
+    // of the right type, and carries the posture its description promises.
+    //
+    // Drift signal: Apple renames or drops a key (the preset stops
+    // validating), or someone edits a bundle and silently inverts the
+    // posture — e.g. flipping InstallSecurityUpdate back to "Allowed",
+    // which would leave security updates optional while the preset still
+    // claims to force them.
+    // (preset name, expected declaration type, payload keys that must hold).
+    type PresetCase<'a> = (&'a str, &'a str, &'a [(&'a str, Value)]);
+    let cases: &[PresetCase<'_>] = &[
+        (
+            "softwareupdate-settings",
+            "com.apple.configuration.softwareupdate.settings",
+            &[
+                ("AllowStandardUserOSUpdates", Value::Bool(false)),
+                ("Notifications", Value::Bool(true)),
+            ],
+        ),
+        (
+            "softwareupdate-enforcement",
+            "com.apple.configuration.softwareupdate.enforcement.specific",
+            // Both keys are schema-required; values are placeholders the
+            // operator edits, so assert presence and type, not content.
+            &[],
+        ),
+        (
+            "passcode-settings",
+            "com.apple.configuration.passcode.settings",
+            &[
+                ("RequirePasscode", Value::Bool(true)),
+                ("MinimumLength", Value::from(8)),
+                ("MaximumInactivityInMinutes", Value::from(15)),
+                ("MaximumFailedAttempts", Value::from(10)),
+            ],
+        ),
+        (
+            "diskmanagement-settings",
+            "com.apple.configuration.diskmanagement.settings",
+            &[],
+        ),
+        (
+            "safari-settings",
+            "com.apple.configuration.safari.settings",
+            &[
+                ("AllowDisablingFraudWarning", Value::Bool(false)),
+                ("AllowPrivateBrowsing", Value::Bool(false)),
+                ("AllowPopups", Value::Bool(false)),
+            ],
+        ),
+    ];
+
+    for (preset, expected_type, expected_keys) in cases {
+        let out = tempfile::tempdir().unwrap();
+        let output = Command::cargo_bin("profile")
+            .unwrap()
+            .args([
+                "ddm",
+                "compose",
+                "--preset",
+                preset,
+                "--org",
+                "com.acme",
+                "-o",
+                out.path().to_str().unwrap(),
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "compose --preset {preset} must succeed without a source tree; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let config_path = out.path().join("configuration.json");
+        assert!(config_path.exists(), "{preset}: configuration.json missing");
+        assert!(
+            out.path().join("activation.json").exists(),
+            "{preset}: activation.json missing — a configuration alone is inert"
+        );
+
+        let config: Value =
+            serde_json::from_slice(&fs::read(&config_path).unwrap()).expect("valid JSON");
+        assert_eq!(
+            config["Type"], *expected_type,
+            "{preset}: declaration type mismatch"
+        );
+
+        let payload = &config["Payload"];
+        for (key, want) in *expected_keys {
+            assert_eq!(
+                payload[*key], *want,
+                "{preset}: {key} drifted from its documented posture"
+            );
+        }
+    }
+
+    // Nested dictionaries are the part a careless edit flattens.
+    let out = tempfile::tempdir().unwrap();
+    Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "ddm",
+            "compose",
+            "--preset",
+            "softwareupdate-settings",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let config: Value =
+        serde_json::from_slice(&fs::read(out.path().join("configuration.json")).unwrap()).unwrap();
+    assert_eq!(
+        config["Payload"]["AutomaticActions"]["InstallSecurityUpdate"], "AlwaysOn",
+        "security updates must be forced on, not merely allowed"
+    );
+    assert_eq!(
+        config["Payload"]["Beta"]["ProgramEnrollment"], "AlwaysOff",
+        "beta program enrolment must stay blocked"
+    );
+
+    let out = tempfile::tempdir().unwrap();
+    Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "ddm",
+            "compose",
+            "--preset",
+            "diskmanagement-settings",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let config: Value =
+        serde_json::from_slice(&fs::read(out.path().join("configuration.json")).unwrap()).unwrap();
+    for key in ["ExternalStorage", "NetworkStorage"] {
+        assert_eq!(
+            config["Payload"]["Restrictions"][key], "ReadOnly",
+            "{key} must mount read-only"
+        );
+    }
+
+    // The enforcement preset ships placeholders; both schema-required keys
+    // must still be present, or the declaration is rejected on the device.
+    let out = tempfile::tempdir().unwrap();
+    Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "ddm",
+            "compose",
+            "--preset",
+            "softwareupdate-enforcement",
+            "--org",
+            "com.acme",
+            "-o",
+            out.path().to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let config: Value =
+        serde_json::from_slice(&fs::read(out.path().join("configuration.json")).unwrap()).unwrap();
+    for key in ["TargetOSVersion", "TargetLocalDateTime"] {
+        assert!(
+            config["Payload"][key]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
+            "{key} is schema-required and must ship non-empty, even as a placeholder"
+        );
+    }
+}
+
+#[test]
+fn trap_91_app_privacy_key_carries_the_designated_requirement() {
+    // The defining trap of --sop app-privacy: each PermissionDefaults key is
+    // "<bundle id> {<designated requirement>}". A key missing the requirement,
+    // or carrying a placeholder, yields a declaration that validates, deploys
+    // and reports Verified while managing nothing.
+    //
+    // Drift signal: the key format changes, or `scan`/`generate` stop
+    // round-tripping the requirement verbatim (its embedded double quotes are
+    // the part a naive TOML writer mangles).
+    let dir = tempfile::tempdir().unwrap();
+    let requirement =
+        "identifier \"us.zoom.xos\" and anchor apple generic and certificate leaf[subject.OU] = X";
+    let policy = format!(
+        "intent_name = \"app-privacy\"\n\
+         \n\
+         [[app]]\n\
+         bundle_id = \"us.zoom.xos\"\n\
+         designated_requirement = '{requirement}'\n\
+         justification = \"Video conferencing\"\n\
+         camera = \"Allow\"\n\
+         microphone = \"Allow\"\n"
+    );
+    let policy_path = dir.path().join("app-privacy.toml");
+    fs::write(&policy_path, policy).unwrap();
+
+    let out = dir.path().join("decl");
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "ddm",
+            "app-privacy",
+            "generate",
+            policy_path.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "-o",
+            out.to_str().unwrap(),
+            "--write",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generate must succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config: Value =
+        serde_json::from_slice(&fs::read(out.join("configuration.json")).unwrap()).unwrap();
+    assert_eq!(config["Type"], "com.apple.configuration.app.settings");
+    assert!(
+        out.join("activation.json").exists(),
+        "a configuration alone is inert"
+    );
+
+    let defaults = config["Payload"]["Privacy"]["PermissionDefaults"]
+        .as_object()
+        .expect("PermissionDefaults must be an object");
+    assert_eq!(defaults.len(), 1);
+
+    let (key, entry) = defaults.iter().next().unwrap();
+    assert_eq!(
+        key,
+        &format!("us.zoom.xos {{{requirement}}}"),
+        "key must be '<bundle id> {{<designated requirement>}}' verbatim"
+    );
+    assert!(
+        key.contains("\"us.zoom.xos\""),
+        "the requirement's own quotes must survive: {key}"
+    );
+    assert_eq!(entry["OrganizationJustification"], "Video conferencing");
+    assert_eq!(entry["Camera"], "Allow");
+}
+
+#[test]
+fn trap_92_app_privacy_refuses_deny_and_explains_why() {
+    // Apple has no Deny. "None" means UNMANAGED — the user is still prompted —
+    // so silently dropping a requested Deny would produce the opposite of the
+    // author's intent. The refusal must name Deny, not fail generically.
+    //
+    // Drift signal: Deny becomes accepted, or the message stops explaining
+    // what None actually does.
+    let dir = tempfile::tempdir().unwrap();
+    let policy = "intent_name = \"t\"\n\
+                  \n\
+                  [[app]]\n\
+                  bundle_id = \"us.zoom.xos\"\n\
+                  designated_requirement = 'identifier \"us.zoom.xos\"'\n\
+                  justification = \"Video conferencing\"\n\
+                  camera = \"Deny\"\n";
+    let policy_path = dir.path().join("app-privacy.toml");
+    fs::write(&policy_path, policy).unwrap();
+
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "ddm",
+            "app-privacy",
+            "generate",
+            policy_path.to_str().unwrap(),
+            "--org",
+            "com.acme",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "Deny must be refused");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Deny"),
+        "refusal must name Deny; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("unmanaged") || stderr.contains("still prompted"),
+        "refusal must explain that None does not deny; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn trap_93_app_privacy_location_rejects_allow() {
+    // Location and LocationAccuracy have their own value sets. "Allow" is
+    // legal for Camera and illegal here; accepting it would emit a payload
+    // the device rejects.
+    let dir = tempfile::tempdir().unwrap();
+    for (key, bad) in [("location", "Allow"), ("location_accuracy", "Allow")] {
+        let policy = format!(
+            "intent_name = \"t\"\n\
+             \n\
+             [[app]]\n\
+             bundle_id = \"us.zoom.xos\"\n\
+             designated_requirement = 'identifier \"us.zoom.xos\"'\n\
+             justification = \"Maps\"\n\
+             {key} = \"{bad}\"\n"
+        );
+        let policy_path = dir.path().join(format!("{key}.toml"));
+        fs::write(&policy_path, policy).unwrap();
+
+        let output = Command::cargo_bin("profile")
+            .unwrap()
+            .args([
+                "ddm",
+                "app-privacy",
+                "generate",
+                policy_path.to_str().unwrap(),
+                "--org",
+                "com.acme",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "{key} must reject '{bad}' — it has its own value set"
+        );
+    }
+}
+
+#[test]
+fn trap_94_app_privacy_import_pppc_reports_what_it_cannot_carry() {
+    // PPPC is 24 services; app.settings shares five. An operator who is not
+    // told what failed to migrate will retire a PPPC profile that is still
+    // load-bearing for screen recording or full disk access.
+    //
+    // Drift signal: unmapped services stop being reported, or the overlap
+    // set changes without the SOP's migrate_from_pppc being updated.
+    let dir = tempfile::tempdir().unwrap();
+    let pppc = "[config]\n\
+                org = \"com.acme\"\n\
+                \n\
+                [[apps]]\n\
+                name = \"Zoom\"\n\
+                bundle_id = \"us.zoom.xos\"\n\
+                code_requirement = \"identifier \\\"us.zoom.xos\\\"\"\n\
+                services = [\"camera\", \"microphone\", \"fda\", \"screen-capture\"]\n";
+    let pppc_path = dir.path().join("pppc.toml");
+    fs::write(&pppc_path, pppc).unwrap();
+    let out_path = dir.path().join("app-privacy.toml");
+
+    let output = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "ddm",
+            "app-privacy",
+            "import-pppc",
+            pppc_path.to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "import must succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for lost in ["fda", "screen-capture"] {
+        assert!(
+            combined.contains(lost),
+            "unmapped PPPC service '{lost}' must be reported, never dropped silently; \
+             output: {combined}"
+        );
+    }
+
+    // The overlap did carry across, and the file re-parses.
+    let written = fs::read_to_string(&out_path).unwrap();
+    assert!(written.contains("camera = \"Allow\""), "got: {written}");
+    assert!(written.contains("microphone = \"Allow\""), "got: {written}");
+}
+
+#[test]
+fn trap_95_app_privacy_sop_documents_the_no_deny_rule() {
+    // The SOP is what an agent reads before generating. If it stops saying
+    // there is no Deny and that None means unmanaged, agents will emit
+    // Camera = "None" believing it blocks the camera.
+    //
+    // Read from the shipped file rather than through `help-ai`: that command
+    // lives on the contour binary, which a `-p profile` test run may not have
+    // built. The registration itself is checked below.
+    use std::path::PathBuf;
+    let sop_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../contour-core/skills/contour/references/sop-app-privacy.md");
+    assert!(
+        sop_path.exists(),
+        "sop-app-privacy.md missing — SOP moved or renamed?"
+    );
+    let text = fs::read_to_string(&sop_path).unwrap();
+
+    for required in [
+        "There is no `Deny`",
+        "unmanaged",
+        "designated requirement",
+        "OrganizationJustification",
+    ] {
+        assert!(text.contains(required), "SOP must document '{required}'");
+    }
+
+    // ...and it must actually be routable, or agents never reach the text.
+    let help_agents =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contour-core/src/help_agents.rs");
+    let registry = fs::read_to_string(&help_agents).unwrap();
+    assert!(
+        registry.contains("sop-app-privacy.md"),
+        "SOP exists but help_agents.rs does not include_str! it"
+    );
+    assert!(
+        registry.contains("\"app-privacy\""),
+        "SOP not reachable as --sop app-privacy"
+    );
+}
+
+#[test]
+fn trap_97_app_privacy_scan_guards_its_entry_points() {
+    // Three guards that must hold without a terminal:
+    //   * no apps and no --interactive is a pointer, not a panic or a
+    //     silently-empty policy file;
+    //   * --interactive with --json is refused, because the JSON contract is
+    //     one document on stdout and prompts would corrupt it;
+    //   * --interactive without a TTY fails cleanly rather than hanging CI.
+    //
+    // Drift signal: scan starts accepting an empty app list (which would
+    // write a file with no entries), or the json/interactive combination
+    // starts emitting prompts into stdout.
+
+    // 1. No apps, no --interactive.
+    let out = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "app-privacy", "scan"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "scan with no apps must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--interactive"),
+        "the error must point at --interactive; got: {stderr}"
+    );
+
+    // 2. --interactive --json.
+    let out = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "app-privacy", "scan", "--interactive", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "--interactive --json must be refused, not attempted"
+    );
+
+    // 3. A path that is not an app: refused by name, never a placeholder
+    //    entry. This is the invariant --sop app-privacy depends on.
+    let dir = tempfile::tempdir().unwrap();
+    let not_an_app = dir.path().join("not-an-app.txt");
+    fs::write(&not_an_app, "x").unwrap();
+    let out = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "app-privacy", "scan", not_an_app.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "a non-app path must be refused");
+    assert!(
+        !dir.path().join("app-privacy.toml").exists(),
+        "nothing may be written when scan refuses"
+    );
+}
+
+#[test]
+fn trap_99_verify_finds_asset_references_nested_in_arrays() {
+    // `ddm verify` checked asset references correctly but never saw the ones
+    // Apple nests inside arrays: services.background-tasks carries
+    // LaunchdConfigurations[].FileAssetReference, and the walk descended
+    // through objects only. A declaration naming two assets that do not
+    // exist reported "✓ Verified (0 asset(s), 1 configuration(s))" — the
+    // count itself said it had found none, and it passed anyway.
+    //
+    // Drift signal: the walk stops descending into arrays again, or the
+    // dangling-reference error stops naming the field it came from.
+    let dir = tempfile::tempdir().unwrap();
+    let decl = serde_json::json!({
+        "Type": "com.apple.configuration.services.background-tasks",
+        "Identifier": "com.acme.config.bt",
+        "Payload": {
+            "TaskType": "com.example.agent",
+            "LaunchdConfigurations": [
+                {"FileAssetReference": "com.acme.asset.launchd.one", "Context": "daemon"},
+                {"FileAssetReference": "com.acme.asset.launchd.two", "Context": "agent"}
+            ]
+        }
+    });
+    fs::write(
+        dir.path().join("configuration.json"),
+        serde_json::to_string_pretty(&decl).unwrap(),
+    )
+    .unwrap();
+
+    let out = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "verify", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        !out.status.success(),
+        "verify must fail on references to assets that are not present"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for target in ["com.acme.asset.launchd.one", "com.acme.asset.launchd.two"] {
+        assert!(
+            combined.contains(target),
+            "every dangling reference must be named; {target} missing from: {combined}"
+        );
+    }
+    assert!(
+        combined.contains("FileAssetReference"),
+        "the error must name the field carrying the reference: {combined}"
+    );
+
+    // The suffix match must also cover the two shapes that are not spelled
+    // `*AssetReference`: a PLURAL array field, and one whose suffix carries
+    // no "Asset" at all. Both are real fields in the shipped schema and both
+    // are invisible to an `ends_with("AssetReference")` test.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("watch.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "Type": "com.apple.configuration.watch.enrollment",
+            "Identifier": "com.acme.config.watch",
+            "Payload": {
+                "EnrollmentProfileURL": "https://example.org/e.mobileconfig",
+                "AnchorCertificateAssetReferences": [
+                    "com.acme.asset.anchor.one",
+                    "com.acme.asset.anchor.two"
+                ]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("cache.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "Type": "com.apple.configuration.content-cache.settings",
+            "Identifier": "com.acme.config.cache",
+            "Payload": { "ManagementStatusCertificateReference": "com.acme.asset.cert.missing" }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let out = Command::cargo_bin("profile")
+        .unwrap()
+        .args(["ddm", "verify", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for target in [
+        "com.acme.asset.anchor.one",
+        "com.acme.asset.anchor.two",
+        "com.acme.asset.cert.missing",
+    ] {
+        assert!(
+            combined.contains(target),
+            "{target} must be reported as dangling; got: {combined}"
+        );
+    }
+}
+
+/// Trap 100: compose refuses a key Apple does not define at that path.
+/// `Mail` at the intelligence payload root — Apple nests it under `Apps` —
+/// is ignored on the device, so it must not compose.
+#[test]
+fn trap_100_compose_refuses_an_unknown_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let bundle = dir.path().join("ai.toml");
+    fs::write(
+        &bundle,
+        r#"
+intent_name = "ai"
+
+[configuration]
+type = "com.apple.configuration.intelligence.settings"
+
+  [configuration.payload]
+  AllowGenmoji = false
+
+  [configuration.payload.Mail]
+  AllowSummary = false
+
+[activation]
+"#,
+    )
+    .unwrap();
+    let out = dir.path().join("out");
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .current_dir(dir.path())
+        .env("CONTOUR_ORG", "com.acme")
+        .args([
+            "--json",
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success(), "an unknown field must be refused");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("Unknown field: Mail"), "{stderr}");
+    assert!(
+        !out.join("configuration.json").exists(),
+        "nothing is written when refused"
+    );
+}
+
+/// Trap 101: verify over a directory with no declarations directly in it
+/// fails, and points at -r when they sit in subdirectories.
+#[test]
+fn trap_101_verify_refuses_to_pass_over_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("bundle-a");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(
+        nested.join("configuration.json"),
+        r#"{"Type": "com.apple.configuration.passcode.settings",
+            "Identifier": "com.acme.config.x", "Payload": {"MinimumLength": 8}}"#,
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        Command::cargo_bin("profile")
+            .unwrap()
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let top = dir.path().to_str().unwrap();
+
+    let flat = run(&["--json", "ddm", "verify", top]);
+    assert!(
+        !flat.status.success(),
+        "zero declarations verified is not a pass"
+    );
+    let stderr = String::from_utf8_lossy(&flat.stderr);
+    assert!(
+        stderr.contains("IO_ERROR") && stderr.contains("--recursive"),
+        "{stderr}"
+    );
+
+    let deep = run(&["--json", "ddm", "verify", top, "-r"]);
+    assert!(
+        deep.status.success(),
+        "{}",
+        String::from_utf8_lossy(&deep.stderr)
+    );
+}
+
+/// Trap 102: compose refuses a key Apple does not offer on the target
+/// platform — from `--platform`, or the bundle's own `platforms`.
+#[test]
+fn trap_102_compose_refuses_keys_not_offered_on_the_platform() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |name: &str, platforms: &str| {
+        let p = dir.path().join(name);
+        fs::write(
+            &p,
+            format!(
+                r#"
+intent_name = "ai"
+{platforms}
+
+[configuration]
+type = "com.apple.configuration.intelligence.settings"
+
+  [configuration.payload]
+  AllowGenmoji = false
+  AllowImageWand = false
+
+[activation]
+"#
+            ),
+        )
+        .unwrap();
+        p
+    };
+    let compose = |bundle: &std::path::Path, extra: &[&str]| {
+        let out = dir.path().join("out");
+        let _ = fs::remove_dir_all(&out);
+        let mut args = vec![
+            "ddm",
+            "compose",
+            bundle.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        Command::cargo_bin("profile")
+            .unwrap()
+            .env("CONTOUR_ORG", "com.acme")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+
+    let unscoped = write("unscoped.toml", "");
+    assert!(
+        compose(&unscoped, &[]).status.success(),
+        "no platform, no check"
+    );
+    let flagged = compose(&unscoped, &["--platform", "macOS"]);
+    assert!(!flagged.status.success());
+    assert!(
+        String::from_utf8_lossy(&flagged.stderr)
+            .contains("AllowImageWand is not available on macOS"),
+        "{}",
+        String::from_utf8_lossy(&flagged.stderr)
+    );
+    assert!(compose(&unscoped, &["--platform", "iOS"]).status.success());
+
+    let scoped = write("scoped.toml", r#"platforms = ["macOS"]"#);
+    assert!(
+        !compose(&scoped, &[]).status.success(),
+        "the bundle's own platforms are checked"
     );
 }

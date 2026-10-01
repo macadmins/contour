@@ -72,8 +72,13 @@ dirs.workspace = true
 # Memory allocator
 mimalloc.workspace = true
 
+# Schema registry and form contract
+contour-form.workspace = true
 # MDM schema data
 mdm-schema.workspace = true
+# ADMX element schema behind ADMX-backed Windows CSP nodes, shown by
+# `profile info --windows`.
+windows-schema.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

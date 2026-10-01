@@ -367,6 +367,32 @@ contour profile normalize <PATHS>... [flags]
 contour profile normalize ./profiles -r --org com.acme --name "Acme Corp"
 ```
 
+#### `profile preset`
+
+Read a Jamf manifest (JSON) and write a recipe you own and edit. The manifest
+is **not** imported into contour's schema: a Jamf manifest states no OS
+availability and carries no version, so contour does not assert which app
+release it describes, and every setting in the output is commented out.
+Dotted keys are reported separately and not resolved — a dot may be part of
+a key's name or a path into a nested dictionary, and the manifest cannot say
+which.
+
+```
+contour profile preset <MANIFEST> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<MANIFEST>` | Jamf manifest JSON file | **required** |
+| `-o, --output <PATH>` | Write here instead of stdout | stdout |
+| `--source-note <TEXT>` | Provenance line(s) for the header, e.g. the repository and commit | — |
+| `--domain <DOMAIN>` | The preference domain, when the filename and the manifest title disagree | from the manifest |
+
+```bash
+contour profile preset com.example.app.json -o recipes/com.example.app.toml \
+  --source-note "<repository> @ <commit>"
+```
+
 #### `profile duplicate`
 
 Clone a profile with a new identity -- new name, identifier, and UUIDs. Useful for creating variants (e.g., staging vs. production).
@@ -500,10 +526,13 @@ contour profile scan ./profiles -r --json
 
 ##### Deprecation scanning
 
-`--deprecations` flags two kinds of obsolescence: **deprecated payload
-types** (legacy MDM payloads with a DDM replacement — they stop working
-on macOS 26+) and **deprecated keys** (fields Apple's schema marks
-superseded). It reuses the same detection as `profile plan` and the
+`--deprecations` flags two kinds of obsolescence, both read from Apple's
+schema: **deprecated or removed payload types** — a removed type no
+longer installs on that OS and is reported as critical; a deprecated one
+still installs — each naming its DDM replacement when there is one; and
+**deprecated keys** (fields Apple's schema marks superseded). A payload
+that merely has a declaration equivalent is not deprecated and is not
+flagged; `contour profile ddm map <type>` shows whether one exists. It reuses the same detection as `profile plan` and the
 `deprecated-payload-type` / `deprecated-key` lint checks.
 
 ```bash
@@ -556,7 +585,17 @@ Tier-2 warnings are promoted to errors.
 
 #### `profile diff`
 
-Compare two configuration profiles side-by-side. Shows added, removed, and changed keys across all payloads.
+Compare two configuration profiles. Two modes:
+
+- **Text** (default) — a line diff of the serialised XML. Right for a code
+  review; wrong for a script, because every `PayloadUUID` and
+  `PayloadIdentifier` line differs between two generated profiles by
+  construction, so a one-setting change reads as a dozen.
+- **Structural** (`--structural`, implied by `--json`) — pairs payloads by
+  `PayloadType` + `PayloadDisplayName` (never by UUID), walks each pair to
+  its leaves, and reports `added` / `removed` / `changed` / `unchanged` per
+  dotted path. Bookkeeping keys are marked `metadata`, not hidden;
+  `--settings-only` drops them.
 
 ```
 contour profile diff <FILE1> <FILE2> [flags]
@@ -564,12 +603,91 @@ contour profile diff <FILE1> <FILE2> [flags]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `<FILE1>` | First configuration profile | **required** |
-| `<FILE2>` | Second configuration profile | **required** |
-| `-o, --output <PATH>` | Output diff to file | stdout |
+| `<FILE1>` | Baseline profile | **required** |
+| `<FILE2>` | Proposed profile | **required** |
+| `--structural` | Payload-by-payload, key-by-key comparison | `false` |
+| `--settings-only` | Drop `Payload*` bookkeeping leaves (requires `--structural`) | `false` |
+| `-o, --output <PATH>` | Write the diff to a file instead of stdout | stdout |
+| `--md-report <PATH>` | Also write a markdown report (text mode) | none |
+| `--json` (global) | Structural diff as one JSON document | `false` |
 
 ```bash
 contour profile diff baseline.mobileconfig updated.mobileconfig
+contour profile diff baseline.mobileconfig updated.mobileconfig --structural
+contour --json profile diff baseline.mobileconfig updated.mobileconfig --settings-only \
+  | jq '.payloads[] | select(.status != "unchanged") | .fields[] | select(.status != "unchanged")'
+```
+
+Paths escape `.`, `[`, `]` and `\` inside a key, so Apple's dotted
+managed-preference keys stay one segment:
+`com\.apple\.EnergySaver\.desktop\.ACPower`. Array elements are indexed:
+`Services.SystemPolicyAllFiles[0].Allowed`. Binary values are reported as a
+byte count and SHA-256, never the bytes.
+
+`profile plan` collapses the same walk to top-level keys for its
+`fields_changed`, so the two commands cannot disagree about whether a payload
+changed.
+
+#### `profile form`
+
+The FormSpec contract — what a form-driven authoring tool (web, native or
+CI) needs from contour without re-deriving Apple's rules — and the emitter
+that turns values back into a document. Both live in the `contour-form`
+crate, which builds for `wasm32-unknown-unknown` with default features off;
+this command is the CLI face of it.
+
+```
+contour profile form spec  [TYPE] [--os NAME [--os-version V]] [-o FILE]
+contour profile form emit  TYPE --values FILE --intent NAME [--org DOMAIN] [--os NAME] [--mcx|--direct] [-o DIR] [--write]
+contour profile form parse FILE [--os NAME]
+```
+
+**`spec`** projects one payload type — or, with no type, every authorable
+type — onto FormSpec v1. Every key
+appears by dotted **path**, with one of ten controls (`text`, `toggle`,
+`number`, `list`, `picker`, `group`, `dict-of`, `asset-ref`, `file`,
+`raw-any`), its label, options, range, hints, merge semantics and
+availability. Scope is reported **per platform** in
+`scope_class_by_platform` and never unioned for a decision; `scopes` is the
+union and is display only. With `--os`, `scope_class` and each node's
+`availability.verdict` are resolved for that target. Commands and check-in
+messages have no form. Operator-named keys (Apple's `ANY`, ProfileCreator's
+`{{key}}`/`{{value}}`) become `dict-of` with the value shape re-rooted under
+a `*` segment — no emitted path carries a marker.
+
+With `--annotate`, every top-level key carries `annotations[]` — what mSCP's
+baselines say about it: rule id and title, `confidence` (`Exact` when the rule
+names the type itself, `Heuristic` when the dataset build inferred it),
+`enforcement_preference` (`ProfileCapable` / `DeclarativeReady` — the
+mechanism the rule actually ships), and the baselines that demand it. The
+terminal tree shows it as `◆ 6 rule(s) · cisv8 disa_stig …`. A renderer can
+show these badges without knowing what mSCP is, which is what lets another
+framework arrive as data.
+
+**`emit`** chooses the format from the kind: a declaration is JSON, a
+profile is a `.mobileconfig`, and a preference domain is MCX-wrapped by
+default (`--direct` for the other valid delivery). A declaration whose keys
+span both delivery channels on the target platform emits **two** documents,
+`.user` and `.system`; unrestricted keys ride with the system one.
+Identifiers follow `{org}.{segment}.{intent}` for declarations and
+`{org}.{intent}` for profiles; UUIDs derive from the identifier, so the same
+input yields the same bytes. `com.example` is refused. Values are validated
+first — unknown key, type, enum, range, required — and a blocking
+diagnostic stops emission with the path that failed.
+
+**`parse`** is the inverse: an existing declaration or `.mobileconfig` (XML
+or binary) back into values, one entry per payload, with the MCX envelope
+unwrapped to its domain and the `Payload*` bookkeeping separated out. Values
+come back **nested**, exactly as in the document — a `dict-of` entry's key
+(`us.zoom.xos`) is data and is never split on dots.
+
+```bash
+contour profile form spec com.apple.configuration.safari.settings --os macos
+contour profile form spec com.apple.systempreferences --annotate     # baseline badges per key
+contour --json profile form spec -o formspec.json          # every authorable type
+contour profile form emit com.apple.configuration.app.settings \
+  --values app-privacy.json --org com.acme --intent app-privacy --os macos -o ./ddm --write
+contour profile form emit com.microsoft.wdav --values defender.json --org com.acme --intent defender --write
 ```
 
 #### `profile plan`
@@ -1173,6 +1291,31 @@ contour profile ddm info <NAME> [flags]
 contour profile ddm info passcode.settings
 ```
 
+#### `profile ddm examples`
+
+List the examples Apple ships for a declaration type.
+
+```
+contour profile ddm examples <NAME> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<NAME>` | Declaration type name (e.g. `app.settings`) | **required** |
+| `--beta` | Use the beta seed examples | `false` |
+| `--json` | JSON output | `false` |
+
+```bash
+contour profile ddm examples passcode.settings
+```
+
+```
+  [0] Complex
+      This configuration applies a complex passcode policy.
+  [1] Regular expression
+      This configuration applies a passcode policy using a regular expression.
+```
+
 #### `profile ddm generate`
 
 Generate a DDM declaration JSON skeleton from the schema. Useful for bootstrapping new declarations.
@@ -1254,6 +1397,68 @@ contour profile ddm verify ./declarations -r --strict
 
 ---
 
+#### `profile ddm reidentify`
+
+Replace one exact `Identifier`, or rewrite a whole prefix across a directory
+so every declaration reads `com.acme.*`. Activation references
+(`StandardConfigurations`, asset references) follow the rename, so a bundle
+never dangles. Previews by default; `--write` applies.
+
+```
+contour profile ddm reidentify <PATHS>... [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<PATHS>...` | Declaration file(s) or directory | **required** |
+| `--from <ID>` | Exact Identifier to replace | — |
+| `--to <ID>` | Replacement Identifier | — |
+| `--from-prefix <PREFIX>` | Identifier prefix to replace (matches on dot boundaries) | — |
+| `--to-prefix <PREFIX>` | Replacement prefix | — |
+| `-r, --recursive` | Process directories recursively | `false` |
+| `--write` | Write changes in place | dry-run preview |
+| `--json` | JSON output | `false` |
+
+```bash
+# One identifier
+contour profile ddm reidentify decl.json \
+  --from com.fleetdm.settings \
+  --to com.acme.config.softwareupdate.settings.beta --write
+
+# A whole prefix, across a directory
+contour profile ddm reidentify ./decls -r \
+  --from-prefix com.fleetdm --to-prefix com.acme --write
+```
+
+#### `profile ddm status`
+
+Search the DDM status items a device can report — software update state,
+installed apps, disk usage, management state. A declaration says what a
+device should be; a status item is what it reports back. Apple defines the
+item types and an MDM subscribes to them, so this is read-only: each item
+with its value type, platforms and scopes.
+
+```
+contour profile ddm status [QUERY] [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `[QUERY]` | Substring of the item type, title or description | all items |
+| `--platform <NAME>` | Restrict to one platform (e.g. `macOS`, `iOS`) | all platforms |
+| `--errors` | List Apple's documented MDM error codes instead — the failure side of the same channel | `false` |
+| `--json` | JSON output | `false` |
+
+```bash
+contour profile ddm status softwareupdate
+contour profile ddm status --errors --platform macOS
+```
+
+```
+softwareupdate.beta-enrollment  macOS  scopes=[system]
+  string The status item that reports the device's enrolled beta program.
+```
+
 ### Search & Generate
 
 #### `profile search`
@@ -1279,10 +1484,27 @@ contour profile search [QUERY] [flags]
 | `[QUERY]` | Substring search term (e.g., `passcode`, `wifi`). Required unless `--field` is given; conflicts with `--field`. | — |
 | `--field <NAME>` | Exact field-name lookup across all payloads; conflicts with `<QUERY>` and `--include-fields` | — |
 | `--include-fields` | Polymorphic mode — also walk field metadata. Requires `<QUERY>`; conflicts with `--field`. | `false` |
+| `--kind <KIND>` | Only this kind: `profile`, `declaration`, `command`, `checkin`, `preference`, `csp`, `admx` (or the column value, e.g. `MdmCommand`). Without it, commands and check-in messages are **hidden** — they have schemas but cannot be authored as profiles. | authorable kinds |
 | `--schema-path <DIR>` | External schema directory | embedded schemas |
+
+Every result carries `kind` (from the schema's own `kind` column, never
+inferred) and `authorable`. `profile info`, `profile docs list` and
+`profile ddm list` emit the same two fields; `profile generate` refuses a
+non-authorable type and `profile validate` reports one as `NOT_AUTHORABLE`.
+
+Fields carry three more facts about **operator-named keys**. Apple's schema
+writes `ANY` under a dictionary whose keys the operator supplies
+(`Privacy.PermissionDefaults` in `app.settings` is keyed by app);
+ProfileCreator writes a `{{key}}`/`{{value}}` pair for the same thing. Every
+field in `profile info --json` / `ddm info --json` reports `dynamic_keys`
+(this dictionary's keys are yours to name), `value_shape` (the type and
+child fields each value takes) and `placeholder` (this entry *is* the marker,
+not a key). `generate --full` leaves such dictionaries empty instead of
+printing the marker — it used to ship `<key>{{key}}</key>`.
 
 ```bash
 contour profile search wifi --json
+contour profile search lock --kind command --json     # DeviceLock, EraseDevice, …
 contour profile search --field safariAcceptCookies --json
 contour profile search cookie --include-fields --json
 ```
@@ -1309,6 +1531,7 @@ contour profile generate <PAYLOAD_TYPE>... [flags]
 | `--create-recipe <NAME>` | Scaffold a recipe TOML from the given payload types | none |
 | `--interactive` | Pick payload segments and set field values interactively | `false` |
 | `--format <FMT>` | Output format: `mobileconfig` (default) or `plist` (raw payload dict, for WS1) | `mobileconfig` |
+| `--fragment` | Write a Fleet GitOps fragment instead (see below); with a payload type or `--recipe` | `false` |
 
 ```bash
 # Single payload, all fields included
@@ -1325,7 +1548,50 @@ contour profile generate com.apple.mobiledevice.passwordpolicy --interactive --o
 
 # Raw payload dict for Workspace ONE
 contour profile generate com.apple.wifi.managed --format plist --full -o wifi-payload.plist
+
+# A Fleet GitOps fragment from a recipe
+contour profile generate --recipe hardening-macos-baseline --org com.acme --fragment -o hardening/
 ```
+
+##### Fleet GitOps fragment (`--fragment`)
+
+Writes the generated profiles and declarations in the layout `fleetctl new`
+creates, a fleet file that references them, and `fragment.toml`, into a new
+or empty directory (default `profile-fragment/`):
+
+```
+hardening/
+  platforms/macos/configuration-profiles/*.mobileconfig
+  platforms/macos/declaration-profiles/*.json     # DDM configuration declarations
+  platforms/macos/activations/*.json              # only activations with a predicate
+  platforms/macos/assets/*.json                   # com.apple.asset.* declarations
+  fleets/reference-fleet.yml
+  fragment.toml
+```
+
+The fleet file lists them under `controls.apple_settings.configuration_profiles`
+(and `apple_settings.assets`), the keys Fleet uses since v4.83.0; Fleet's GitOps
+schema marks `macos_settings` and `custom_settings` deprecated. Merge its entries
+into your own fleet file.
+
+contour targets **Fleet 4.92 or later**: what it writes is checked against the
+GitOps schema Fleet ships in fleet-v4.92.2, the latest release, and refused
+where that server would refuse it.
+
+- **Activations.** Fleet makes an activation for a declaration that has none. An
+  activation that only activates its configuration is left to Fleet. One with a
+  predicate is kept and linked with `activation:`; Fleet accepts a custom
+  activation only with Fleet Premium and `FLEET_MDM_ALLOW_CUSTOM_ACTIVATIONS` set
+  on the server. An activation naming more than one configuration is refused —
+  Fleet attaches an activation to exactly one declaration.
+- **What Fleet refuses, refused here first**, with nothing written: FileVault
+  payloads (Fleet manages disk encryption — use `enable_disk_encryption`), Fleet's
+  reserved payload identifiers and profile names, status-subscription and package
+  declarations, declaration types outside `com.apple.configuration.` /
+  `com.apple.management.`, and identifiers over 64 bytes. A predicate that reads
+  status items needs a status subscription, which Fleet refuses, so such a bundle
+  is refused with that reason.
+- `--format plist` is refused: Fleet uploads `.mobileconfig` files, not raw payloads.
 
 ##### Workspace ONE Custom Settings (`--format plist`)
 

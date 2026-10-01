@@ -27,6 +27,7 @@ mod schema;
 mod signing;
 mod uuid;
 mod validation;
+mod windows;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
