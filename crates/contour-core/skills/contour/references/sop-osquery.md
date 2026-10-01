@@ -307,6 +307,138 @@ software:
 
 ---
 
+## PROCEDURE resolve_app_identifier(app_name)
+
+Use when a downstream artifact is keyed by an app's **bundle identifier** or
+**Team ID** — PPPC profiles, `com.apple.configuration.app.settings` privacy
+defaults, BTM allow-rules, Santa rules.
+
+These artifacts share a failure mode that makes identifier accuracy the whole
+job: **naming an app that is not installed is not an error.** The profile or
+declaration is schema-valid, installs cleanly, and reports Verified. It simply
+grants nothing. Nothing in the chain ever signals it, so a wrong identifier
+survives indefinitely.
+
+### IDENTIFIER_TRUST_HIERARCHY
+
+Use the highest-ranked source available.
+
+| Rank | Source | Trust |
+|---|---|---|
+| 1 | `apps` + `signature` on the device | What the device actually has. Authoritative. |
+| 2 | `codesign -dr -` on an installed copy | Authoritative for that one machine. |
+| 3 | An existing profile's `Identifier` + `CodeRequirement` | Was true when written; may be stale. |
+| 4 | Vendor docs / community lists | Unversioned, often a different edition. |
+| 5 | **Installer metadata** (pkg/dmg receipt id) | **Not a bundle identifier at all.** |
+
+**Rank 5 is the common trap.** A pkg receipt or updater identifier is a
+different namespace from the app's `CFBundleIdentifier`, and they are similar
+enough to look right (`com.vendor.product.updater` vs `com.vendor.Product`).
+Take only the **Team ID** from installer metadata — that comes from the signing
+certificate and is reliable.
+
+```
+SCHEMA_TOOL: contour osquery table apps
+             contour osquery table signature
+
+PRECONDITIONS:
+  ASSERT the target table is `signature`, NOT `codesign`
+    HALT "codesign is a Fleet extension table, absent from vanilla osqueryd.
+          Use signature — it is core osquery and works in both."
+    # contour enforces this: `osquery validate` reports
+    #   unknown table 'codesign'
+
+  ASSERT the query constrains signature.path
+    # `signature.path` is a REQUIRED column (contour osquery table signature).
+    # Unconstrained, the table returns nothing. A JOIN on apps.path supplies it.
+
+STEP 1 — Enumerate installed apps with their signing identity:
+  SELECT DISTINCT
+    a.name, a.bundle_identifier, a.bundle_short_version AS version,
+    a.path, s.team_identifier, s.authority
+  FROM apps a
+  JOIN signature s ON s.path = a.path
+  WHERE a.path LIKE '/Applications/%.app'
+    AND a.path NOT LIKE '%/Contents/%'
+    AND a.bundle_identifier <> ''
+    AND s.hash_resources = 0
+    AND s.hash_executable = 0
+  ORDER BY a.name;
+
+  # Every clause earns its place:
+  #  DISTINCT               — a universal binary emits one signature row per
+  #                           architecture; without it each app appears 2-3x.
+  #  NOT LIKE '%/Contents/%'— `apps` indexes nested helper bundles. Unfiltered,
+  #                           one Electron app returns its Helper, WebView and
+  #                           ModuleHost as separate rows.
+  #  bundle_identifier <> ''— some bundles carry no CFBundleIdentifier.
+  #  hash_* = 0             — these are TABLE PARAMETERS, not predicates: the
+  #                           column docs read "Set to 1 to also hash resources,
+  #                           or 0 otherwise. Default is 1". Passing 0 skips
+  #                           expensive hashing. Omitting them hashes every
+  #                           binary on the box.
+
+STEP 2 — Validate before deploying the query:
+  contour osquery validate <gitops.yml>
+  # Catches unknown tables and columns offline, including the codesign trap.
+
+POSTCONDITIONS:
+  ASSERT the identifier came from rank 1-3, never rank 5
+  RETURN { bundle_identifier, team_identifier, path }
+```
+
+### Helper binaries are invisible to `apps`
+
+`apps` returns `.app` bundles only. Separately-signed components inside a
+bundle — daemons, XPC services, system extensions — never appear, however the
+query is filtered. This matters because **PPPC and Santa grants are made per
+signed component, not per app**, so coverage cannot be audited from `apps`
+alone.
+
+`signature` reaches them, because it accepts `LIKE` on `path`:
+
+```sql
+SELECT DISTINCT identifier, team_identifier
+FROM signature
+WHERE (   path LIKE '/Applications/<App>.app/Contents/MacOS/%'
+       OR path LIKE '/Applications/<App>.app/Contents/Library/SystemExtensions/%/Contents/MacOS/%')
+  AND signed = 1 AND hash_resources = 0 AND hash_executable = 0;
+```
+
+Both patterns are required: helpers live in `Contents/MacOS/`, system
+extensions under `Contents/Library/SystemExtensions/`. A security agent
+commonly ships 6-8 signed components behind a single `.app`.
+
+### Reading drift results without false positives
+
+Comparing profile identifiers against device inventory finds stale profiles,
+but only one pattern is real drift:
+
+> **the app is installed, under a different bundle ID than the profile names.**
+
+Two false-positive classes to exclude first:
+
+- **Not installed.** An identifier absent from one machine usually means the
+  app is not on that machine. Only a fleet-wide run distinguishes this from
+  drift.
+- **Legitimate sub-bundles.** A profile targeting `com.vendor.app.daemon`
+  while the installed app is `com.vendor.app` is normally correct — PPPC
+  targets the daemon deliberately. See the helper-binaries note above.
+- **Fuzzy name matching.** Match on bundle identifier, never on display name:
+  matching a folder named `ms-office` against "any app whose name starts
+  Microsoft" pairs it with Teams.
+
+### Scope limit
+
+This procedure yields *identity*, not *entitlement*. Which permissions an app
+needs is a separate decision — and for several the answer is that DDM cannot
+express it at all. Camera, Microphone, Accessibility, Dictation, Bluetooth,
+LocalNetwork, Location and LocationAccuracy are the entire declarative
+surface; Full Disk Access, ScreenCapture, AppleEvents, Calendar, AddressBook
+and the folder policies stay in a PPPC profile. See `--sop app-privacy`.
+
+---
+
 ## Other operations (prose)
 
 ### Statistics on the embedded osquery schema
@@ -315,7 +447,7 @@ software:
 contour osquery stats --json
 # Returns: {total_tables, total_columns, darwin_tables, linux_tables,
 #           windows_tables}
-# As of contour 0.2.x: 283 tables, 2581 columns total.
+# Live totals: contour osquery stats
 ```
 
 ### Verify generated queries against a host (osqueryi / orbit)

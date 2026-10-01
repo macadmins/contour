@@ -4,7 +4,7 @@
 
 `contour osquery` is a fast, offline reference for the osquery schema.
 
-Every osquery table and column is embedded in the binary: 283 tables, 2,581 columns. Look up a table layout, find the right column for a query, check platform support. No osquery install, no network round-trip.
+Every osquery table and column is embedded in the binary: 286 tables, 2,624 columns. Look up a table layout, find the right column for a query, check platform support. No osquery install, no network round-trip.
 
 **What you get:** the ground-truth osquery schema as a local CLI.
 
@@ -128,7 +128,7 @@ a column to consume directly, instead of relying on `--rule-type auto` to
 synthesize it row-by-row. Mind the spelling — `signing_id`, not `signning_id`;
 contour's CSV parser looks for `signing_id` / `signingid` / `signing_identifier`.
 
-The full Santa-side toolkit (rings, baselines, deny-wins merge) is documented
+The full Santa-side toolkit is documented
 in [contour-santa.md](contour-santa.md).
 
 ## For AI agents
@@ -157,7 +157,7 @@ Why this is safe to rely on:
 - **Offline and deterministic** — the schema is embedded at build time.
   No osquery install and no network access; a given contour version
   always returns the same schema.
-- **Authoritative** — it is the real osquery schema (283 tables, 2,581
+- **Authoritative** — it is the real osquery schema (286 tables, 2,624
   columns), not a paraphrase.
 
 **If a table or column does not appear in `contour osquery`, treat it as

@@ -1,7 +1,7 @@
 //! Handlers for the `contour osquery` subcommand.
 //!
 //! Provides search, table detail, and statistics against the embedded
-//! osquery schema (283 tables, 2 581 columns).
+//! osquery schema (286 tables, 2,624 columns).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -95,12 +95,111 @@ fn handle_verify(path: &Path, output: Option<&Path>, out: &mut impl Write) -> Re
     Ok(())
 }
 
+/// Which schema describes a table.
+///
+/// The two sources agree on 286 tables today and Fleet adds 91, but that is
+/// a snapshot, not a guarantee: Fleet tracks osquery's main branch and can
+/// lag it, and its own agent ships tables upstream will never have. So the
+/// two are never merged into one list — a table carries where it came from,
+/// and a reader can act on the difference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableSource {
+    /// In both schemas — the ordinary case.
+    Both,
+    /// Upstream osquery only. Either Fleet has not synced yet, or it
+    /// deliberately omits the table.
+    OsqueryOnly,
+    /// Fleet only: an agent extension (`ai_tools`, `cis_audit`,
+    /// `app_sso_platform`, …). Plain `osqueryi` cannot answer it.
+    FleetOnly,
+}
+
+impl TableSource {
+    fn label(self) -> &'static str {
+        match self {
+            TableSource::Both => "",
+            TableSource::OsqueryOnly => "osquery only — not in Fleet's schema",
+            TableSource::FleetOnly => {
+                "Fleet extension — requires Fleet's agent, not in upstream osquery"
+            }
+        }
+    }
+}
+
+/// Every table either schema knows, with its provenance.
+///
+/// Computed once per process: it decodes both embedded datasets, and callers
+/// reach it from per-row filters, where a fresh decode would take seconds.
+fn table_sources() -> &'static BTreeMap<String, TableSource> {
+    static SOURCES: std::sync::OnceLock<BTreeMap<String, TableSource>> = std::sync::OnceLock::new();
+    SOURCES.get_or_init(compute_table_sources)
+}
+
+fn compute_table_sources() -> BTreeMap<String, TableSource> {
+    let upstream: BTreeSet<String> = load_entries()
+        .map(|v| v.into_iter().map(|e| e.table_name).collect())
+        .unwrap_or_default();
+    let fleet: BTreeSet<String> = osquery_schema::fleet::read(osquery_schema::embedded_fleet())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| e.table_name)
+        .collect();
+    let mut out = BTreeMap::new();
+    for t in upstream.union(&fleet) {
+        let src = match (upstream.contains(t), fleet.contains(t)) {
+            (true, true) => TableSource::Both,
+            (true, false) => TableSource::OsqueryOnly,
+            _ => TableSource::FleetOnly,
+        };
+        out.insert(t.clone(), src);
+    }
+    out
+}
+
+/// Fleet's schema for one table: the authoring facts upstream osquery has
+/// no column for — worked examples, notes, a documentation link — and the
+/// 91 tables it does not list at all. Empty on a dataset without the file.
+fn fleet_for(table: &str) -> Vec<osquery_schema::fleet::FleetEntry> {
+    osquery_schema::fleet::read(osquery_schema::embedded_fleet())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.table_name == table)
+        .collect()
+}
+
 /// Load all entries from the embedded Parquet data.
 fn load_entries() -> Result<Vec<osquery_schema::OsqueryEntry>> {
     osquery_schema::osquery::read(osquery_schema::embedded())
 }
 
 // ── Search ───────────────────────────────────────────────────────────
+
+/// Every column row of a Fleet-only table matching `q`.
+///
+/// `handle_search` also keeps a table-deduplicated view for the human
+/// listing; the JSON array needs the column rows so its shape matches the
+/// upstream entries beside them.
+fn fleet_columns(q: &str) -> Vec<osquery_schema::fleet::FleetEntry> {
+    let sources = table_sources();
+    osquery_schema::fleet::read(osquery_schema::embedded_fleet())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| {
+            sources.get(&e.table_name) == Some(&TableSource::FleetOnly)
+                && (e.table_name.to_lowercase().contains(q)
+                    || e.column_name
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .contains(q)
+                    || e.table_description
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .contains(q))
+        })
+        .collect()
+}
 
 fn handle_search(
     query: &str,
@@ -110,6 +209,27 @@ fn handle_search(
 ) -> Result<()> {
     let entries = load_entries()?;
     let q = query.to_lowercase();
+    let sources = table_sources();
+    // Fleet-only tables are real and queryable under Fleet's agent, so a
+    // search that hides them answers the wrong question. They are listed
+    // after the upstream hits and labelled, never mixed in silently.
+    let fleet_hits: BTreeMap<String, osquery_schema::fleet::FleetEntry> =
+        osquery_schema::fleet::read(osquery_schema::embedded_fleet())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| {
+                sources.get(&e.table_name) == Some(&TableSource::FleetOnly)
+                    && (e.table_name.to_lowercase().contains(&q)
+                        || e.table_description
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase()
+                            .contains(&q))
+            })
+            .fold(BTreeMap::new(), |mut m, e| {
+                m.entry(e.table_name.clone()).or_insert(e);
+                m
+            });
 
     let matches: Vec<_> = entries
         .iter()
@@ -138,12 +258,46 @@ fn handle_search(
         .collect();
 
     if json {
-        serde_json::to_writer_pretty(&mut *out, &matches)?;
+        // The contract is a flat, column-level array — agents index it
+        // directly and `sop_traps_osquery` guards both properties. Wrapping
+        // it in an object to make room for Fleet was a breaking change
+        // dressed up as an addition.
+        //
+        // Provenance rides on each entry instead, as `source`. That is
+        // strictly better than a sibling list: a caller that ignores the
+        // field still gets every hit, and one that reads it can tell an
+        // upstream table from one that needs Fleet's agent — without
+        // knowing the envelope changed.
+        let mut arr: Vec<serde_json::Value> = Vec::with_capacity(matches.len());
+        for e in &matches {
+            let mut v = serde_json::to_value(e)?;
+            if let Some(o) = v.as_object_mut() {
+                o.insert("source".into(), serde_json::json!("osquery"));
+            }
+            arr.push(v);
+        }
+        // Fleet-only rows are column-level too, so they keep the array
+        // uniform: every entry has a table_name and a column_name.
+        for e in fleet_columns(&q) {
+            arr.push(serde_json::json!({
+                "table_name": e.table_name,
+                "table_description": e.table_description,
+                "platforms": e.platforms,
+                "evented": e.evented.unwrap_or(false),
+                "column_name": e.column_name.clone().unwrap_or_default(),
+                "column_description": e.column_description,
+                "column_type": e.column_type.clone().unwrap_or_default(),
+                "required": e.required.unwrap_or(false),
+                "hidden": e.hidden.unwrap_or(false),
+                "source": "fleet",
+            }));
+        }
+        serde_json::to_writer_pretty(&mut *out, &arr)?;
         writeln!(out)?;
         return Ok(());
     }
 
-    if matches.is_empty() {
+    if matches.is_empty() && fleet_hits.is_empty() {
         writeln!(out, "No matches for '{query}'.")?;
         return Ok(());
     }
@@ -179,6 +333,29 @@ fn handle_search(
         grouped.len()
     )?;
 
+    if !fleet_hits.is_empty() {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "  {} {}",
+            format!("{} Fleet-only table(s):", fleet_hits.len()).yellow(),
+            "require Fleet's agent — not in upstream osquery".dimmed()
+        )?;
+        for e in fleet_hits.values() {
+            writeln!(
+                out,
+                "    {:<28} {}",
+                e.table_name,
+                e.table_description
+                    .as_deref()
+                    .unwrap_or("")
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+            )?;
+        }
+    }
+
     Ok(())
 }
 
@@ -193,7 +370,17 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
         .collect();
 
     if table_entries.is_empty() {
-        anyhow::bail!("Table '{table_name}' not found in embedded osquery schema.");
+        // Not upstream — but Fleet may still describe it, and saying so is
+        // more useful than "not found" for a table that genuinely exists.
+        let fleet = fleet_for(table_name);
+        if !fleet.is_empty() {
+            return handle_fleet_only_table(table_name, &fleet, json, out);
+        }
+        anyhow::bail!(
+            "Table '{table_name}' not found: it is in neither the upstream osquery \
+             schema nor Fleet's. \
+             Try `contour osquery search {table_name}`."
+        );
     }
 
     if json {
@@ -212,6 +399,22 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
                 "hidden": e.hidden,
             })).collect::<Vec<_>>(),
         });
+        let mut obj = obj;
+        // Fleet's half: present only when the dataset carries it, so a
+        // consumer can tell "no examples documented" from "no Fleet data".
+        if let Some(f) = fleet_for(table_name).first()
+            && let Some(o) = obj.as_object_mut()
+        {
+            o.insert(
+                "fleet".into(),
+                serde_json::json!({
+                    "examples": f.examples,
+                    "notes": f.notes,
+                    "url": f.url,
+                    "cacheable": f.cacheable,
+                }),
+            );
+        }
         serde_json::to_writer_pretty(&mut *out, &obj)?;
         writeln!(out)?;
         return Ok(());
@@ -223,6 +426,22 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
     writeln!(out, "  Description: {desc}")?;
     writeln!(out, "  Platforms:   {}", first.platforms)?;
     writeln!(out, "  Evented:     {}", first.evented)?;
+    let fleet = fleet_for(table_name);
+    if let Some(f) = fleet.first() {
+        if let Some(u) = &f.url {
+            writeln!(out, "  Docs:        {u}")?;
+        }
+        if let Some(n) = &f.notes {
+            writeln!(out, "  Notes:       {}", n.lines().next().unwrap_or(n))?;
+        }
+        if let Some(ex) = &f.examples {
+            writeln!(out)?;
+            writeln!(out, "  {}", "Example:".cyan())?;
+            for line in ex.lines() {
+                writeln!(out, "    {line}")?;
+            }
+        }
+    }
     writeln!(out)?;
     writeln!(
         out,
@@ -240,6 +459,62 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
         )?;
     }
 
+    Ok(())
+}
+
+/// A table only Fleet describes. Rendered with the same shape as an
+/// upstream table, and labelled: the query will not run under plain
+/// `osqueryi`.
+fn handle_fleet_only_table(
+    table_name: &str,
+    fleet: &[osquery_schema::fleet::FleetEntry],
+    json: bool,
+    out: &mut impl Write,
+) -> Result<()> {
+    let first = &fleet[0];
+    if json {
+        let obj = serde_json::json!({
+            "table_name": table_name,
+            "table_description": first.table_description,
+            "platforms": first.platforms,
+            "source": "fleet",
+            "note": TableSource::FleetOnly.label(),
+            "columns": fleet.iter().filter(|e| e.column_name.is_some()).map(|e| serde_json::json!({
+                "column_name": e.column_name,
+                "column_description": e.column_description,
+                "column_type": e.column_type,
+                "required": e.required,
+            })).collect::<Vec<_>>(),
+            "fleet": { "examples": first.examples, "notes": first.notes, "url": first.url },
+        });
+        serde_json::to_writer_pretty(&mut *out, &obj)?;
+        writeln!(out)?;
+        return Ok(());
+    }
+
+    writeln!(out, "{}", table_name.bold())?;
+    writeln!(out, "  {}", TableSource::FleetOnly.label().yellow())?;
+    if let Some(d) = &first.table_description {
+        writeln!(out, "  Description: {d}")?;
+    }
+    if let Some(p) = &first.platforms {
+        writeln!(out, "  Platforms:   {p}")?;
+    }
+    if let Some(u) = &first.url {
+        writeln!(out, "  Docs:        {u}")?;
+    }
+    writeln!(out)?;
+    writeln!(out, "  {:<30} {:<12} Description", "Column", "Type")?;
+    writeln!(out, "  {}", "-".repeat(80))?;
+    for e in fleet.iter().filter(|e| e.column_name.is_some()) {
+        writeln!(
+            out,
+            "  {:<30} {:<12} {}",
+            e.column_name.as_deref().unwrap_or(""),
+            e.column_type.as_deref().unwrap_or(""),
+            e.column_description.as_deref().unwrap_or("")
+        )?;
+    }
     Ok(())
 }
 
@@ -269,12 +544,30 @@ fn handle_stats(json: bool, out: &mut impl Write) -> Result<()> {
     let total_columns = entries.len();
 
     if json {
+        let sources = table_sources();
+        let only = |w: TableSource| -> Vec<&str> {
+            sources
+                .iter()
+                .filter(|(_, s)| **s == w)
+                .map(|(t, _)| t.as_str())
+                .collect()
+        };
         let obj = serde_json::json!({
             "total_tables": tables.len(),
             "total_columns": total_columns,
             "darwin_tables": darwin_tables.len(),
             "linux_tables": linux_tables.len(),
             "windows_tables": windows_tables.len(),
+            // The two sources are never merged; this is the difference
+            // between them, so a drift either way is a fact you can read
+            // rather than something you discover from a failed query.
+            "sources": {
+                "osquery": tables.len(),
+                "fleet": sources.values().filter(|s| **s != TableSource::OsqueryOnly).count(),
+                "both": only(TableSource::Both).len(),
+                "fleet_only": only(TableSource::FleetOnly),
+                "osquery_only": only(TableSource::OsqueryOnly),
+            },
         });
         serde_json::to_writer_pretty(&mut *out, &obj)?;
         writeln!(out)?;
@@ -286,6 +579,41 @@ fn handle_stats(json: bool, out: &mut impl Write) -> Result<()> {
     writeln!(out, "  Total tables:    {}", tables.len())?;
     writeln!(out, "  Total columns:   {total_columns}")?;
     writeln!(out)?;
+
+    // Two sources, never merged. Fleet tracks osquery's main and can lag it;
+    // its agent also ships tables upstream will never have. Both directions
+    // are reported, because each means something different to a reader.
+    let sources = table_sources();
+    let count = |w: TableSource| sources.values().filter(|s| **s == w).count();
+    let fleet_only = count(TableSource::FleetOnly);
+    let osquery_only = count(TableSource::OsqueryOnly);
+    if fleet_only + osquery_only > 0 {
+        writeln!(out, "  {}", "Sources".bold())?;
+        writeln!(out, "    in both:            {}", count(TableSource::Both))?;
+        if fleet_only > 0 {
+            writeln!(
+                out,
+                "    Fleet only:         {fleet_only}  {}",
+                "(agent extensions — plain osqueryi cannot answer these)".dimmed()
+            )?;
+        }
+        if osquery_only > 0 {
+            writeln!(
+                out,
+                "    {} {osquery_only}  {}",
+                "osquery only:      ".yellow(),
+                "(Fleet has not synced these — its schema is behind)".dimmed()
+            )?;
+            for t in sources
+                .iter()
+                .filter(|(_, s)| **s == TableSource::OsqueryOnly)
+                .take(8)
+            {
+                writeln!(out, "      {}", t.0)?;
+            }
+        }
+        writeln!(out)?;
+    }
     writeln!(out, "  darwin tables:   {}", darwin_tables.len())?;
     writeln!(out, "  linux tables:    {}", linux_tables.len())?;
     writeln!(out, "  windows tables:  {}", windows_tables.len())?;
@@ -425,4 +753,17 @@ fn collect_yaml_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
     }
     files.sort();
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `table_sources` decodes both embedded datasets. Callers reach it from
+    /// per-row filters, so it must be computed once, not once per call.
+    #[test]
+    fn table_sources_is_computed_once() {
+        assert!(std::ptr::eq(table_sources(), table_sources()));
+        assert!(!table_sources().is_empty());
+    }
 }
