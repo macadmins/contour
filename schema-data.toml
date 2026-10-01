@@ -1,0 +1,37 @@
+# The dataset each schema crate embeds.
+#
+# crates/*/data/ is gitignored, so this file is what says which dataset a
+# build carries. Each crate's build script (build-support/schema_data.rs)
+# fetches the archive for `zip_release` from the host in the
+# CONTOUR_SCHEMA_ZIP_BASE environment variable, checks it against the
+# recorded sha256, and stamps crates/<crate>/data/.dataset-pin with the
+# release and hash. A build whose stamp differs from this file fetches again,
+# so bumping `zip_release` and the hashes together is the whole update.
+#
+# The host is not recorded here. CI supplies CONTOUR_SCHEMA_ZIP_BASE from a
+# repository secret; a developer exports it once. The archives live at
+# <CONTOUR_SCHEMA_ZIP_BASE>/<crate>.zip.
+#
+# Overrides, in order:
+#   CONTOUR_SCHEMA_SRC            a local dataset build; development only
+#   CONTOUR_SCHEMA_SKIP_DOWNLOAD  keep data/ as it is (warns if not the pin)
+#   CONTOUR_*_SCHEMA_URL          fetch one crate's archive from elsewhere,
+#                                 unverified
+
+# An optional git repository holding the dataset, pinned at `ref`. Empty
+# means the archive download below is used.
+repo = ""
+ref = ""
+
+# The release every crate's archive is fetched at. Its name and the first
+# characters of the archive's sha256 go into the request URL, so a cached
+# copy of another release cannot be served for this one.
+zip_release = "v2026.10.01-1"
+
+# The sha256 of each archive at `zip_release`. A downloaded archive that does
+# not match fails the build.
+sha256_mdm-schema = "0ac34629d19ee35dd229c05cef0e87ded48934e45bc1478b25dc0c90cb69f2cf"
+sha256_osquery-schema = "1a98b619ec682adf090ada169c717d3f157a2ce5c5682b93fbe9f8bee8a9a1f2"
+sha256_mscp-schema = "e99ce3cf3a29da83fd1b2b40441709a7d0bb898c870b3554f9679301fcf696fa"
+sha256_windows-schema = "a2a6b1ffc05b3f2ef9cb582af5b5c195a9e1dc2aea65ac4bd58db25638f8bfbb"
+sha256_app-policy-schema = "45ba1c2229f96fdea5fbbd193ac42054dbe3e22f2be2cc8e6defe45e17464da3"

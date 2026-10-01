@@ -54,11 +54,17 @@ pkg/*/build-info.toml
 crates/mdm-schema/data/*.parquet
 crates/mdm-schema/data/*.toml
 crates/mscp-schema/data/*.parquet
+crates/mscp-schema/data/*.json
 crates/osquery-schema/data/*.parquet
 crates/app-policy-schema/data/*.parquet
 crates/windows-schema/data/*.parquet
 # Beta seed channel — (downloaded at build time)
 crates/mdm-schema/data/beta/*.parquet
+# The stamp naming which dataset filled data/, and the directories a build
+# swaps through when it replaces data/ (build-support/schema_data.rs).
+crates/*-schema/data/.dataset-pin
+crates/*-schema/data.staging-*/
+crates/*-schema/data.replaced-*/
 crates/mscp-schema/data/beta/*.parquet
 crates/osquery-schema/data/beta/*.parquet
 # Top-level schema archives — orphaned build-time data, never read by build.rs
@@ -72,3 +78,12 @@ crates/osquery-schema.zip
 
 # Local preset library template (scaffold for an external repo, not part of contour)
 /contour-presets/
+
+# Cached checkout of the pinned dataset (see schema-data.toml).
+/.schema-data/
+
+# Per-developer MCP client registration (claude mcp add --scope project).
+/.mcp.json
+
+# Default output of `contour profile ddm app-control scan` — local scan results.
+/app-control.toml
