@@ -3,12 +3,11 @@
 use crate::cli::{OutputMode, print_info, print_kv, print_success, print_warning};
 use crate::config::{BtmAppEntry, BtmConfig};
 use crate::generate::{
-    BTM_DDM_CONFIGURATION_TYPE, build_btm_ddm_payload, build_combined_service_management_payload,
-    build_service_management_payload, generate_btm_declaration,
-    generate_combined_service_management_profile, generate_service_management_profile,
-    resolve_output_dir, sanitize_filename,
+    build_combined_service_management_payload, build_service_management_payload,
+    generate_btm_declaration, generate_combined_service_management_profile,
+    generate_service_management_profile, resolve_output_dir, sanitize_filename,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use contour_core::FleetLayout;
 use contour_core::fragment::{
@@ -17,6 +16,33 @@ use contour_core::fragment::{
 };
 use contour_profiles::{RecipeDdm, RecipeProfile, write_recipe_toml};
 use std::path::{Path, PathBuf};
+
+/// Why BTM has no DDM form.
+///
+/// BTM allow-rules are *permissive*: they pre-approve a vendor's existing
+/// login items so the user is never prompted. The declaration that sounds
+/// related, `com.apple.configuration.services.background-tasks`, is
+/// *productive*: it tells macOS to install and run launchd jobs the MDM
+/// supplies from an executable asset. Apple documents that it cannot manage
+/// third-party login items.
+///
+/// The two are unrelated, so emitting the declaration could never have the
+/// intended effect — and it would fail silently: it validates, and
+/// `ddm verify` reports success.
+pub const BTM_DDM_REFUSAL: &str = "\
+BTM allow-rules have no DDM equivalent, so --ddm is refused.
+
+com.apple.configuration.services.background-tasks is for launchd jobs an MDM
+delivers itself, and Apple documents that it cannot manage third-party login
+items. It is not the declarative form of com.apple.servicemanagement.
+
+To deliver BTM over the DDM channel, generate the mobileconfig and wrap it:
+
+  contour btm generate btm.toml -o ./profiles/
+  contour profile ddm legacy wrap ./profiles/ --org <ORG> -o ./declarations/
+
+That is DDM transport with a legacy payload — the honest answer until Apple
+ships a declaration for login-item approval.";
 
 /// Run the BTM generate command.
 ///
@@ -32,6 +58,10 @@ pub fn run(
     format: &str,
     output_mode: OutputMode,
 ) -> Result<()> {
+    if ddm {
+        bail!("{BTM_DDM_REFUSAL}");
+    }
+
     if fragment {
         return run_generate_fragment(input, output, dry_run, ddm, output_mode);
     }
@@ -377,18 +407,10 @@ fn run_recipe(
     // no Label rules produce a background-tasks payload with no
     // LaunchdConfigurations, which carries no deployable intent — skip
     // those so the recipe only emits actionable `[[ddm]]` blocks.
-    let ddms: Vec<RecipeDdm> = config
-        .apps
-        .iter()
-        .filter(|app| app.rules.iter().any(|r| r.rule_type == "Label"))
-        .map(|app| {
-            RecipeDdm::new(
-                format!("{}-btm", sanitize_filename(&app.name)),
-                BTM_DDM_CONFIGURATION_TYPE,
-                build_btm_ddm_payload(app, &config.settings.org),
-            )
-        })
-        .collect();
+    // No `[[ddm]]` blocks: BTM has no DDM equivalent (see BTM_DDM_REFUSAL).
+    // This previously emitted background-tasks declarations whose asset
+    // references pointed at assets contour never generated.
+    let ddms: Vec<RecipeDdm> = Vec::new();
 
     let body = write_recipe_toml(
         &recipe_name,
@@ -516,6 +538,7 @@ fn run_generate_fragment(
                         labels_include_any: None,
                         labels_include_all: None,
                         labels_exclude_any: None,
+                        activation: None,
                     });
                     profiles_written += 1;
                 }
@@ -548,6 +571,7 @@ fn run_generate_fragment(
                         labels_include_any: None,
                         labels_include_all: None,
                         labels_exclude_any: None,
+                        activation: None,
                     });
                     profiles_written += 1;
                 }
@@ -574,8 +598,8 @@ fn run_generate_fragment(
              \n\
              name: btm-reference\n\
              controls:\n\
-             \x20 macos_settings:\n\
-             \x20   custom_settings:\n",
+             \x20 apple_settings:\n\
+             \x20   configuration_profiles:\n",
         );
 
         for entry in &profile_entries {
@@ -608,6 +632,7 @@ fn run_generate_fragment(
                 reports: Vec::new(),
                 policies: Vec::new(),
                 software: Vec::new(),
+                assets: Vec::new(),
             },
             lib_files: LibFiles {
                 copy: lib_files.clone(),

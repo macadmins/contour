@@ -300,6 +300,7 @@ pub struct PppcPolicy {
 /// This is the format used for the GitOps workflow where users can
 /// scan apps to generate a .toml file, edit it, then generate profiles.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PppcConfig {
     /// Configuration metadata
     pub config: PppcConfigMeta,
@@ -310,6 +311,7 @@ pub struct PppcConfig {
 
 /// Metadata for a PPPC configuration file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PppcConfigMeta {
     /// Organization identifier (e.g., "com.example")
     pub org: String,
@@ -329,6 +331,7 @@ pub struct PppcConfigMeta {
 ///   path is what gets emitted as the plist `Identifier` value with
 ///   `IdentifierType=path`. `bundle_id` is empty/absent in this mode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PppcAppEntry {
     /// Application display name.
     pub name: String,
@@ -388,6 +391,16 @@ impl PppcAppEntry {
                 self.name
             );
         }
+        if let Some(flaw) = contour_core::requirement_flaw(&self.code_requirement)
+            && !self.code_requirement.is_empty()
+        {
+            anyhow::bail!(
+                "app '{}': code_requirement {flaw}.\n\
+                 Re-run `pppc scan` for this app, or take only the text after \
+                 `designated => ` from `codesign -d -r-`.",
+                self.name
+            );
+        }
         if self.code_requirement.is_empty() {
             anyhow::bail!("app '{}' is missing code_requirement", self.name);
         }
@@ -409,6 +422,63 @@ fn is_bundle_id(s: &str) -> bool {
     s == "bundleID"
 }
 
+/// Keys `[config]` defines; `config_keys_match_the_struct` holds this to it.
+const CONFIG_KEYS: &[&str] = &["org", "display_name"];
+/// Keys an `[[apps]]` entry defines; `app_keys_match_the_struct` holds this to it.
+const APP_KEYS: &[&str] = &[
+    "name",
+    "bundle_id",
+    "code_requirement",
+    "identifier_type",
+    "path",
+    "services",
+];
+
+/// Where a key that pppc.toml once carried, or that people expect, now lives.
+fn moved_to(key: &str) -> Option<&'static str> {
+    match key {
+        "notifications" => Some("notification profiles come from `contour notifications`"),
+        "service_management" | "team_id" => {
+            Some("service-management profiles come from `contour btm`")
+        }
+        _ => None,
+    }
+}
+
+/// Every key in a pppc.toml that its format does not define, one line each.
+///
+/// Serde rejects these too (`deny_unknown_fields`), but stops at the first and
+/// can only list the expected names. This names them all, says which app each
+/// is in, and for a retired key says where the feature went.
+fn unknown_keys(raw: &toml::Table) -> Vec<String> {
+    let mut out = Vec::new();
+    let note = |key: &str| moved_to(key).map(|m| format!(" — {m}")).unwrap_or_default();
+    for key in raw
+        .keys()
+        .filter(|k| !matches!(k.as_str(), "config" | "apps"))
+    {
+        out.push(format!("`{key}` at the top level{}", note(key)));
+    }
+    if let Some(toml::Value::Table(config)) = raw.get("config") {
+        for key in config.keys().filter(|k| !CONFIG_KEYS.contains(&k.as_str())) {
+            out.push(format!("[config] `{key}`{}", note(key)));
+        }
+    }
+    if let Some(toml::Value::Array(apps)) = raw.get("apps") {
+        for (i, app) in apps.iter().enumerate() {
+            let Some(app) = app.as_table() else { continue };
+            let label = app
+                .get("name")
+                .and_then(toml::Value::as_str)
+                .map_or_else(|| format!("apps[{i}]"), |n| format!("app '{n}'"));
+            for key in app.keys().filter(|k| !APP_KEYS.contains(&k.as_str())) {
+                out.push(format!("{label}: `{key}`{}", note(key)));
+            }
+        }
+    }
+    out
+}
+
 impl PppcConfig {
     /// Load a PPPC configuration from a TOML file.
     ///
@@ -419,6 +489,16 @@ impl PppcConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path.display(), e))?;
+        if let Ok(raw) = content.parse::<toml::Table>() {
+            let unknown = unknown_keys(&raw);
+            if !unknown.is_empty() {
+                anyhow::bail!(
+                    "{} has keys pppc.toml does not define, so they would do nothing:\n  {}",
+                    path.display(),
+                    unknown.join("\n  ")
+                );
+            }
+        }
         let mut cfg: Self = toml::from_str(&content)
             .map_err(|e| anyhow::anyhow!("Failed to parse TOML from {}: {}", path.display(), e))?;
         for app in &mut cfg.apps {
@@ -591,6 +671,109 @@ pub fn generate_pppc_profile(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    fn keys_of<T: serde::Serialize>(v: &T) -> BTreeSet<String> {
+        let t: toml::Table = toml::from_str(&toml::to_string(v).unwrap()).unwrap();
+        t.keys().cloned().collect()
+    }
+
+    /// APP_KEYS is the struct's field list, so the two cannot drift: a field
+    /// added to `PppcAppEntry` and not here would be refused on load.
+    #[test]
+    fn app_keys_match_the_struct() {
+        let every_field = PppcAppEntry {
+            name: "Tool".into(),
+            bundle_id: "com.example.tool".into(),
+            code_requirement: "identifier \"com.example.tool\" and anchor apple".into(),
+            identifier_type: "path".into(),
+            path: Some("/usr/local/bin/tool".into()),
+            services: vec![PppcService::SystemPolicyAllFiles],
+        };
+        let want: BTreeSet<String> = APP_KEYS.iter().map(|k| (*k).to_string()).collect();
+        assert_eq!(keys_of(&every_field), want);
+    }
+
+    #[test]
+    fn config_keys_match_the_struct() {
+        let every_field = PppcConfigMeta {
+            org: "com.example".into(),
+            display_name: Some("Example".into()),
+        };
+        let want: BTreeSet<String> = CONFIG_KEYS.iter().map(|k| (*k).to_string()).collect();
+        assert_eq!(keys_of(&every_field), want);
+    }
+
+    /// The keys the old PPPC guide taught are refused, every one is named
+    /// with its app, and a retired one says where its feature went.
+    #[test]
+    fn keys_pppc_toml_does_not_define_are_refused_and_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("pppc.toml");
+        std::fs::write(
+            &file,
+            r#"
+colour = "blue"
+
+[config]
+org = "com.example"
+signing = true
+
+[[apps]]
+name = "Zoom"
+bundle_id = "us.zoom.xos"
+code_requirement = 'identifier "us.zoom.xos" and anchor apple generic'
+services = ["fda"]
+notifications = true
+service_management = true
+team_id = "BJ4HAAB9B3"
+"#,
+        )
+        .unwrap();
+        let err = PppcConfig::load(&file).unwrap_err().to_string();
+        for want in [
+            "`colour` at the top level",
+            "[config] `signing`",
+            "app 'Zoom': `notifications` — notification profiles come from `contour notifications`",
+            "app 'Zoom': `service_management` — service-management profiles come from `contour btm`",
+            "app 'Zoom': `team_id` — service-management profiles come from `contour btm`",
+        ] {
+            assert!(err.contains(want), "missing {want:?} in:\n{err}");
+        }
+    }
+
+    /// What `scan` writes, and the older path-in-bundle_id form, still load.
+    #[test]
+    fn defined_keys_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("pppc.toml");
+        std::fs::write(
+            &file,
+            r#"
+[config]
+org = "com.example"
+display_name = "Example"
+
+[[apps]]
+name = "ssh"
+code_requirement = 'identifier "com.apple.ssh" and anchor apple'
+identifier_type = "path"
+path = "/usr/bin/ssh"
+services = ["fda"]
+
+[[apps]]
+name = "managedsoftwareupdate"
+bundle_id = "/usr/local/munki/managedsoftwareupdate"
+code_requirement = 'identifier managedsoftwareupdate and anchor apple generic'
+identifier_type = "path"
+services = []
+"#,
+        )
+        .unwrap();
+        let cfg = PppcConfig::load(&file).expect("defined keys load");
+        assert_eq!(cfg.apps.len(), 2);
+    }
+
     use super::*;
 
     #[test]

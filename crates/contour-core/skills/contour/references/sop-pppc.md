@@ -155,7 +155,7 @@ contour pppc init --org com.acme --output pppc.toml
 ### Scan apps to populate the policy
 
 ```
-contour pppc scan /Applications --org com.acme -o pppc.toml --json
+contour pppc scan --path /Applications --org com.acme -o pppc.toml --json
 # Walks the given paths, extracts bundle IDs / code-signing identifiers,
 # and writes [[apps]] entries. Re-runnable; merges with existing entries.
 ```
@@ -186,9 +186,9 @@ contour pppc diff base.toml updated.toml --json
 ### Batch-update services across many apps
 
 ```
-contour pppc batch pppc.toml --service ScreenCapture=Allow \
-                              --bundle-id com.example.app
-# Idempotent; safe to commit and re-run.
+contour pppc batch pppc.toml --add-services screen-capture --apps "Example"
+# --apps matches app names (case-insensitive substring), not bundle IDs.
+# Idempotent: --add-services never duplicates a service already present.
 ```
 
 ---

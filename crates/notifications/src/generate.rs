@@ -1,6 +1,6 @@
 //! Notification profile generation.
 
-use crate::config::NotificationAppEntry;
+use crate::config::{GroupingType, NotificationAppEntry, PreviewType};
 use anyhow::Result;
 use contour_profiles::ProfileBuilder;
 use plist::{Dictionary, Value};
@@ -46,6 +46,24 @@ pub fn build_notification_entry_from_config(app: &NotificationAppEntry) -> Dicti
         "CriticalAlertEnabled".to_string(),
         Value::Boolean(app.critical_alerts),
     );
+
+    // The three optional keys. Each overrides a user-visible system setting,
+    // so an unset key is omitted rather than emitted at Apple's default —
+    // a profile should not silently take over grouping or previews for an
+    // operator who never mentioned them.
+    //
+    // An out-of-range number is dropped rather than written: the schema
+    // constrains these to 0-2, and `notifications validate` reports it.
+    if let Some(value) = app.grouping_type.and_then(GroupingType::to_apple) {
+        entry.insert("GroupingType".to_string(), Value::Integer(value.into()));
+    }
+    if let Some(value) = app.preview_type.and_then(PreviewType::to_apple) {
+        entry.insert("PreviewType".to_string(), Value::Integer(value.into()));
+    }
+    if let Some(value) = app.show_in_car_play {
+        entry.insert("ShowInCarPlay".to_string(), Value::Boolean(value));
+    }
+
     entry
 }
 
@@ -110,6 +128,9 @@ mod tests {
             lock_screen: true,
             notification_center: true,
             sounds_enabled: true,
+            grouping_type: None,
+            preview_type: None,
+            show_in_car_play: None,
         };
         let result = generate_notification_profile(&app, "com.example");
         assert!(result.is_ok());

@@ -19,6 +19,68 @@ struct ValidateResult {
 /// Run the notifications validate command.
 ///
 /// Validates notification settings: bundle_id non-empty, alert_type in 0..=2, etc.
+/// Keys `[[apps]]` understands. Anything else is a typo or a key contour
+/// does not implement, and either way the value is silently discarded.
+///
+/// This list is the reason the generator's three missing keys went
+/// unnoticed: `preview_type` was documented in `--sop notifications`, a
+/// reasonable operator set it, serde dropped it, and nothing said so.
+const KNOWN_APP_KEYS: &[&str] = &[
+    "name",
+    "bundle_id",
+    "alerts_enabled",
+    "alert_type",
+    "badges_enabled",
+    "critical_alerts",
+    "lock_screen",
+    "notification_center",
+    "sounds_enabled",
+    "grouping_type",
+    "preview_type",
+    "show_in_car_play",
+];
+
+/// Report keys serde will discard.
+///
+/// Parsed from the raw TOML rather than the typed struct, because by the
+/// time the struct exists the unknown keys are gone. `deny_unknown_fields`
+/// would catch them at load time instead, but that turns a typo in one app
+/// entry into a hard failure for the whole file — including for `generate`,
+/// which should keep working on a file it can otherwise understand.
+fn unknown_key_warnings(raw: &str) -> Vec<String> {
+    // `toml::from_str`, not `str::parse` — the latter parses a bare VALUE and
+    // rejects a document ("unexpected content, expected nothing"). The first
+    // version of this function used parse and silently returned nothing,
+    // which is precisely the failure it exists to catch.
+    let Ok(doc) = toml::from_str::<toml::Value>(raw) else {
+        return Vec::new();
+    };
+    let Some(apps) = doc.get("apps").and_then(|a| a.as_array()) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for app in apps {
+        let Some(table) = app.as_table() else {
+            continue;
+        };
+        let label = table
+            .get("bundle_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| table.get("name").and_then(|v| v.as_str()))
+            .unwrap_or("<unnamed>");
+        for key in table.keys() {
+            if !KNOWN_APP_KEYS.contains(&key.as_str()) {
+                out.push(format!(
+                    "{label}: unknown key '{key}' — it will be ignored, not written \
+                     to the profile"
+                ));
+            }
+        }
+    }
+    out
+}
+
 pub fn run(input: &Path, strict: bool, output_mode: OutputMode) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -76,6 +138,12 @@ pub fn run(input: &Path, strict: bool, output_mode: OutputMode) -> Result<()> {
         }
     }
 
+    // Keys serde discarded. Read from the raw text — the typed config has
+    // already lost them.
+    if let Ok(raw) = std::fs::read_to_string(input) {
+        warnings.extend(unknown_key_warnings(&raw));
+    }
+
     // Warn on duplicate bundle_ids
     let mut seen_ids = std::collections::BTreeSet::new();
     for app in &config.apps {
@@ -123,4 +191,71 @@ pub fn run(input: &Path, strict: bool, output_mode: OutputMode) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod unknown_key_tests {
+    use super::*;
+
+    #[test]
+    fn reports_keys_serde_would_discard() {
+        // The reported case: a nonsense key passed validation in silence.
+        // A typo'd real key is the one that actually bites — `preview_typo`
+        // reads as configured and writes nothing.
+        let sample = r#"
+[settings]
+org = "com.acme"
+
+[[apps]]
+name = "Teams"
+bundle_id = "com.microsoft.teams2"
+total_nonsense_key = 42
+preview_typo = "never"
+"#;
+        let warnings = unknown_key_warnings(sample);
+        assert_eq!(
+            warnings.len(),
+            2,
+            "both unknown keys must be reported: {warnings:?}"
+        );
+        assert!(warnings.iter().any(|w| w.contains("total_nonsense_key")));
+        assert!(warnings.iter().any(|w| w.contains("preview_typo")));
+        // Named by bundle id, so a multi-app file points at the right entry.
+        assert!(warnings.iter().all(|w| w.contains("com.microsoft.teams2")));
+    }
+
+    #[test]
+    fn every_known_key_is_accepted() {
+        // Guards the list against drifting from the struct: a field added to
+        // NotificationAppEntry without being listed here would be reported
+        // as unknown on a file that legitimately sets it.
+        let sample = r#"
+[settings]
+org = "com.acme"
+
+[[apps]]
+name = "Teams"
+bundle_id = "com.microsoft.teams2"
+alerts_enabled = true
+alert_type = 1
+badges_enabled = true
+critical_alerts = true
+lock_screen = true
+notification_center = true
+sounds_enabled = false
+grouping_type = "by_app"
+preview_type = "when_unlocked"
+show_in_car_play = false
+"#;
+        assert!(
+            unknown_key_warnings(sample).is_empty(),
+            "no legitimate key may be flagged: {:?}",
+            unknown_key_warnings(sample)
+        );
+    }
+
+    #[test]
+    fn a_document_that_does_not_parse_is_not_a_crash() {
+        assert!(unknown_key_warnings("this is not toml {{{").is_empty());
+    }
 }

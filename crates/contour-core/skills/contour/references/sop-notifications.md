@@ -122,7 +122,7 @@ contour notifications init --org com.acme -o notifications.toml
 ### Scan apps
 
 ```
-contour notifications scan /Applications --org com.acme \
+contour notifications scan --path /Applications --org com.acme \
   -o notifications.toml --json
 # Walks the given paths and creates [[apps]] entries with bundle IDs
 # and sensible per-app defaults (alerts on, critical off).
@@ -153,15 +153,30 @@ contour notifications diff base.toml updated.toml --json
 
 ## Key facts
 
-- Notification settings keys (per app):
-  - `alert_type`         — `none` | `banner` | `alert`
-  - `badges_enabled`     — bool (red dot on icon)
-  - `sounds_enabled`     — bool
-  - `notifications_enabled` — bool (master switch)
-  - `show_in_lock_screen` — bool
-  - `show_in_notification_centre` — bool
-  - `critical_alert_enabled` — bool (must be entitled by Apple)
-  - `preview_type`       — `never` | `when_unlocked` | `always`
+- Notification settings keys, **exactly as `[[apps]]` spells them**. Four
+  of these were previously documented under names the TOML does not have
+  (`notifications_enabled`, `show_in_lock_screen`,
+  `show_in_notification_centre`, `critical_alert_enabled`). Those keys
+  parse, are discarded, and never reach the profile — `notifications
+  validate` now reports any key it does not recognise:
+
+  | TOML key | Type | Apple key |
+  |---|---|---|
+  | `alerts_enabled` | bool | `NotificationsEnabled` (master switch) |
+  | `alert_type` | `0` none, `1` banner, `2` alert | `AlertType` |
+  | `badges_enabled` | bool | `BadgesEnabled` |
+  | `sounds_enabled` | bool | `SoundsEnabled` |
+  | `lock_screen` | bool | `ShowInLockScreen` |
+  | `notification_center` | bool | `ShowInNotificationCenter` |
+  | `critical_alerts` | bool | `CriticalAlertEnabled` |
+  | `grouping_type` | `automatic` \| `by_app` \| `off`, or `0`-`2` | `GroupingType` |
+  | `preview_type` | `always` \| `when_unlocked` \| `never`, or `0`-`2` | `PreviewType` |
+  | `show_in_car_play` | bool | `ShowInCarPlay` |
+
+- `grouping_type`, `preview_type` and `show_in_car_play` are **omitted
+  from the profile when unset**, unlike the keys above them. Each
+  overrides a user-visible system setting, so a profile should not take
+  grouping or previews over for an operator who never mentioned them.
 - Critical alerts require an Apple-issued entitlement — most apps can't
   use them. The CLI accepts the value; deployment fails on the device
   if the entitlement is missing.
