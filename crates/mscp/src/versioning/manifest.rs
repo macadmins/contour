@@ -74,7 +74,7 @@ impl ManifestStore {
             generation_date: chrono::Utc::now().to_rfc3339(),
             profile_count: baseline.mobileconfigs.len(),
             script_count: usize::from(baseline.compliance_script.is_some()),
-            output_hash_sha256: String::new(), // TODO: Calculate overall hash
+            output_hash_sha256: String::new(), // overall hash not computed
             profiles: profile_hashes,
         };
 

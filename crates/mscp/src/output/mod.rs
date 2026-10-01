@@ -78,6 +78,17 @@ impl CommandResult {
         self.output_dir = Some(output_dir.into());
         self
     }
+
+    /// Record something the run did not do, and why.
+    ///
+    /// `warnings` was serialised into the JSON result from the start and had
+    /// no setter and no human-mode printer, so it was a channel with nothing
+    /// on either end. Both ends exist now: this writes, and `process`'s human
+    /// output reads. A warning recorded but never shown is the same silence
+    /// it was meant to break.
+    pub fn add_warning(&mut self, warning: impl Into<String>) {
+        self.warnings.push(warning.into());
+    }
 }
 
 /// Generate-all batch result
@@ -126,6 +137,10 @@ pub struct ValidationResult {
     pub fleet_files_valid: usize,
     pub fleet_files_invalid: usize,
     pub strict_mode: bool,
+    /// Which schema the team files were checked against, as `SchemaOrigin`
+    /// prints it; `None` until `validate_output` resolves one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -143,6 +158,7 @@ impl ValidationResult {
             fleet_files_valid: 0,
             fleet_files_invalid: 0,
             strict_mode: strict,
+            schema: None,
             errors: Vec::new(),
             warnings: Vec::new(),
         }

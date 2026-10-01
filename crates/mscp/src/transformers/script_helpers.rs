@@ -311,8 +311,8 @@ mod tests {
 
     /// Rules reaching this filter are already baseline-scoped by the extractor, so
     /// it must NOT re-check baseline tag membership: DISA-STIG rules carry the tag
-    /// `stig`, not `DISA-STIG`, and the old `is_in_baseline` gate silently dropped
-    /// every one of them — leaving the baseline's scripts folder empty.
+    /// `stig`, not `DISA-STIG`, and a tag gate would drop every one of them —
+    /// leaving the baseline's scripts folder empty.
     #[test]
     fn keeps_script_rule_whose_tag_differs_from_baseline_filename() {
         let mut rule = create_test_rule();

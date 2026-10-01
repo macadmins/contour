@@ -213,7 +213,34 @@ pub fn build_exclusion_plan(
         plan.resolved.push(resolved);
     }
 
-    // Now determine which profiles can be fully excluded
+    finalize_exclusion_plan(
+        &mut plan,
+        &all_baseline_rules,
+        &all_excluded_rule_ids,
+        "--exclude",
+    );
+    Ok(plan)
+}
+
+/// Work out which profiles a set of excluded rules actually removes.
+///
+/// Shared by the category and rule-ID builders so the two cannot drift: the
+/// interesting decision here is that a profile survives unless EVERY rule
+/// feeding its domain is excluded, and a partial exclusion warns instead. A
+/// second copy of that rule would eventually disagree with the first, and a
+/// profile written when it should have been dropped is not something an
+/// operator would notice.
+///
+/// `source` names what asked, and goes into the reason recorded in the
+/// constraints file — "--exclude" or "excluded_rules" — so someone reading
+/// that file later can tell a CLI flag from a config setting.
+fn finalize_exclusion_plan(
+    plan: &mut CategoryExclusionPlan,
+    all_baseline_rules: &[MscpRule],
+    all_excluded_rule_ids: &HashSet<String>,
+    source: &str,
+) {
+    // Determine which profiles can be fully excluded.
     // Group all baseline rules by their mobileconfig domain
     let domain_rules = build_domain_rule_map(&all_baseline_rules);
 
@@ -232,7 +259,7 @@ pub fn build_exclusion_plan(
                 .map(|rc| rc.name.clone())
                 .collect();
 
-            let reason = format!("Excluded by --exclude {}", reasons.join(","));
+            let reason = format!("Excluded by {source} {}", reasons.join(","));
 
             plan.excluded_profiles.push(ExcludedProfileEntry {
                 filename,
@@ -264,14 +291,90 @@ pub fn build_exclusion_plan(
     // Collect script exclusions
     for resolved in &plan.resolved {
         for script_rule_id in &resolved.affected_scripts {
-            let reason = format!("Excluded by --exclude {}", resolved.name);
+            let reason = format!("Excluded by {source} {}", resolved.name);
             plan.excluded_scripts.push(ExcludedScriptEntry {
                 rule_id: script_rule_id.clone(),
                 reason,
             });
         }
     }
+}
 
+/// Resolve explicit rule IDs to the artifacts they contribute to.
+///
+/// The rule-level sibling of [`build_exclusion_plan`]. `mscp.toml`'s
+/// `[[baselines]] excluded_rules` names rules directly; categories name
+/// groups. Both end in the same plan, so both get the same treatment
+/// downstream: a profile is dropped only when every rule feeding it is
+/// excluded, a partial match warns, and scripts go per rule.
+///
+/// Matching is EXACT, case-insensitively. `--exclude` falls back to a
+/// substring pass because a category is a loose human label; a rule ID is a
+/// precise name, and substring matching it would quietly exclude neighbours
+/// — `os_sshd_login` would take every `os_sshd_login_*` with it. An ID that
+/// matches nothing lands in `unresolved`, and the caller refuses rather than
+/// proceeding: silently excluding nothing is how this setting spent its
+/// whole life.
+pub fn build_rule_exclusion_plan(
+    rule_ids: &[String],
+    mscp_repo: &Path,
+    baseline: &str,
+) -> Result<CategoryExclusionPlan> {
+    let extractor = RuleExtractor::new(mscp_repo);
+    let all_baseline_rules = extractor
+        .extract_rules_for_baseline(baseline)
+        .with_context(|| format!("Failed to extract rules for baseline '{baseline}'"))?;
+
+    let mut plan = CategoryExclusionPlan {
+        resolved: Vec::new(),
+        unresolved: Vec::new(),
+        excluded_profiles: Vec::new(),
+        excluded_scripts: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let mut all_excluded_rule_ids: HashSet<String> = HashSet::new();
+
+    for wanted in rule_ids {
+        let Some(rule) = all_baseline_rules
+            .iter()
+            .find(|r| r.id.eq_ignore_ascii_case(wanted))
+        else {
+            plan.unresolved.push(wanted.clone());
+            continue;
+        };
+
+        let mut resolved = ResolvedCategory {
+            // The rule's own id, not what was typed: the plan is written into
+            // a constraints file and read back by people.
+            name: rule.id.clone(),
+            matched_rules: vec![rule.id.clone()],
+            affected_profiles: Vec::new(),
+            affected_scripts: Vec::new(),
+        };
+        all_excluded_rule_ids.insert(rule.id.clone());
+
+        if rule.mobileconfig
+            && let Some(ref mc_info) = rule.mobileconfig_info
+        {
+            for domain in extract_mobileconfig_domains(mc_info) {
+                let filename = format!("{domain}.mobileconfig");
+                if !resolved.affected_profiles.contains(&filename) {
+                    resolved.affected_profiles.push(filename);
+                }
+            }
+        }
+        if rule.has_executable_fix() {
+            resolved.affected_scripts.push(rule.id.clone());
+        }
+        plan.resolved.push(resolved);
+    }
+
+    finalize_exclusion_plan(
+        &mut plan,
+        &all_baseline_rules,
+        &all_excluded_rule_ids,
+        "excluded_rules",
+    );
     Ok(plan)
 }
 
@@ -439,6 +542,148 @@ mod tests {
         assert_eq!(keyword_map.get("smartcard"), Some(&3));
         assert_eq!(keyword_map.get("ssh"), Some(&2)); // ssh matches both ssh and sshd rules
         assert_eq!(keyword_map.get("sshd"), Some(&1));
+    }
+
+    /// A rule that names a domain, for the profile-exclusion arithmetic.
+    fn mobileconfig_rule(id: &str, domain: &str) -> MscpRule {
+        let mut rule = make_test_rule(id);
+        rule.mobileconfig = true;
+        let mut map = yaml_serde::Mapping::new();
+        map.insert(
+            yaml_serde::Value::String(domain.to_string()),
+            yaml_serde::Value::Null,
+        );
+        rule.mobileconfig_info = Some(yaml_serde::Value::Mapping(map));
+        rule
+    }
+
+    fn plan_for(excluded: &[&str], all: &[MscpRule], source: &str) -> CategoryExclusionPlan {
+        let mut plan = CategoryExclusionPlan {
+            resolved: Vec::new(),
+            unresolved: Vec::new(),
+            excluded_profiles: Vec::new(),
+            excluded_scripts: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let mut ids: HashSet<String> = HashSet::new();
+        for id in excluded {
+            let rule = all.iter().find(|r| r.id == *id).expect("rule exists");
+            ids.insert(rule.id.clone());
+            let mut resolved = ResolvedCategory {
+                name: rule.id.clone(),
+                matched_rules: vec![rule.id.clone()],
+                affected_profiles: Vec::new(),
+                affected_scripts: Vec::new(),
+            };
+            if let Some(ref mc) = rule.mobileconfig_info {
+                for d in extract_mobileconfig_domains(mc) {
+                    resolved.affected_profiles.push(format!("{d}.mobileconfig"));
+                }
+            }
+            plan.resolved.push(resolved);
+        }
+        finalize_exclusion_plan(&mut plan, all, &ids, source);
+        plan
+    }
+
+    /// A profile survives while any rule still needs it.
+    ///
+    /// The load-bearing rule of both exclusion paths, and the one a second
+    /// implementation would eventually get wrong. Dropping a profile because
+    /// one of its rules was excluded would silently remove settings nobody
+    /// asked to remove — and a missing profile is not something an operator
+    /// notices in a directory of generated artifacts.
+    #[test]
+    fn a_partly_excluded_profile_is_kept_and_warned_about() {
+        let all = vec![
+            mobileconfig_rule("os_a", "com.apple.example"),
+            mobileconfig_rule("os_b", "com.apple.example"),
+            mobileconfig_rule("os_c", "com.apple.example"),
+        ];
+        let plan = plan_for(&["os_a"], &all, "excluded_rules");
+        assert!(
+            plan.excluded_profiles.is_empty(),
+            "one rule of three was excluded; the profile must stay"
+        );
+        assert_eq!(plan.warnings.len(), 1, "and the operator must be told");
+        let w = &plan.warnings[0];
+        assert!(w.contains("com.apple.example.mobileconfig"), "{w}");
+        assert!(
+            w.contains("os_a"),
+            "the warning names what was excluded: {w}"
+        );
+        assert!(
+            w.contains("os_b") && w.contains("os_c"),
+            "and what is keeping the profile alive: {w}"
+        );
+    }
+
+    /// Exclude every rule feeding a domain and the profile goes.
+    #[test]
+    fn a_fully_excluded_profile_is_dropped_with_its_reason() {
+        let all = vec![
+            mobileconfig_rule("os_a", "com.apple.example"),
+            mobileconfig_rule("os_b", "com.apple.example"),
+        ];
+        let plan = plan_for(&["os_a", "os_b"], &all, "excluded_rules");
+        assert_eq!(plan.excluded_profiles.len(), 1);
+        let entry = &plan.excluded_profiles[0];
+        assert_eq!(entry.filename, "com.apple.example.mobileconfig");
+        assert!(plan.warnings.is_empty(), "nothing partial, nothing to warn");
+        // The reason is written into a constraints file that people read
+        // later, so it has to say which mechanism asked.
+        assert!(
+            entry.reason.contains("excluded_rules"),
+            "a constraints entry must name its source, not just its rules: {}",
+            entry.reason
+        );
+    }
+
+    /// The source label distinguishes a config setting from a CLI flag.
+    #[test]
+    fn the_reason_names_which_mechanism_excluded_it() {
+        let all = vec![mobileconfig_rule("os_a", "com.apple.example")];
+        let from_flag = plan_for(&["os_a"], &all, "--exclude");
+        let from_config = plan_for(&["os_a"], &all, "excluded_rules");
+        assert!(from_flag.excluded_profiles[0].reason.contains("--exclude"));
+        assert!(
+            from_config.excluded_profiles[0]
+                .reason
+                .contains("excluded_rules")
+        );
+        assert_ne!(
+            from_flag.excluded_profiles[0].reason,
+            from_config.excluded_profiles[0].reason
+        );
+    }
+
+    /// Rules with no profile still suppress their scripts.
+    ///
+    /// Most mSCP rules fix by script, not by profile. An exclusion that only
+    /// dropped profiles would leave the remediation running — the setting
+    /// would look honoured and the machine would still be changed.
+    #[test]
+    fn script_only_rules_are_excluded_even_with_no_profile_to_drop() {
+        let mut rule = make_test_rule("os_script_only");
+        rule.fix = Some("[source,bash]\n----\necho fix\n----".to_string());
+        let all = vec![rule];
+        let mut plan = CategoryExclusionPlan {
+            resolved: vec![ResolvedCategory {
+                name: "os_script_only".into(),
+                matched_rules: vec!["os_script_only".into()],
+                affected_profiles: Vec::new(),
+                affected_scripts: vec!["os_script_only".into()],
+            }],
+            unresolved: Vec::new(),
+            excluded_profiles: Vec::new(),
+            excluded_scripts: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let ids: HashSet<String> = ["os_script_only".to_string()].into_iter().collect();
+        finalize_exclusion_plan(&mut plan, &all, &ids, "excluded_rules");
+        assert!(plan.excluded_profiles.is_empty());
+        assert_eq!(plan.excluded_scripts.len(), 1);
+        assert_eq!(plan.excluded_scripts[0].rule_id, "os_script_only");
     }
 
     fn make_test_rule(id: &str) -> MscpRule {

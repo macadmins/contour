@@ -90,9 +90,17 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
 
-        /// Enable Fleet `GitOps` mode
-        #[arg(long)]
+        /// Enable Fleet `GitOps` mode — writes `[settings.fleet] enabled = true`,
+        /// the config form of `generate --fleet-gitops`.
+        #[arg(long = "fleet-gitops")]
         fleet: bool,
+
+        // Was `--fleet`. Freed so that `--fleet <NAME>` names a fleet everywhere
+        // in contour, the way `[[baselines]] fleet = "…"` already does in
+        // mscp.toml. Kept hidden so an old invocation is told what to type
+        // instead of getting clap's bare "unexpected argument".
+        #[arg(long = "fleet", hide = true)]
+        legacy_fleet: bool,
 
         /// Enable Jamf Pro mode
         #[arg(long)]
@@ -106,9 +114,9 @@ pub enum Commands {
         #[arg(long)]
         sync: bool,
 
-        /// mSCP branch to clone — `main` is the mSCP 2.0 layout
-        /// (default); `tahoe` and other macOS-version branches are
-        /// legacy 1.x. (`dev_2.0` remains as a legacy alias of `main`.)
+        /// mSCP branch to clone. `main` (default) is mSCP 2.0, the only
+        /// layout contour reads; the macOS-version branches (`tahoe`,
+        /// `sequoia`, …) are the deprecated 1.x layout and are refused.
         #[arg(long, default_value = "main")]
         branch: String,
 
@@ -188,8 +196,16 @@ pub enum Commands {
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         no_labels: bool,
 
-        /// Enable Fleet conflict filtering (excludes profiles and strips keys conflicting with Fleet native settings)
-        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        /// Fleet GitOps output: the Fleet directory layout, plus filtering of profiles and keys that conflict with Fleet's native settings.
+        ///
+        /// `--fleet-gitops` is the same switch, and the name `mscp init` uses.
+        /// Its old one-line help said only "conflict filtering"; it also
+        /// selects the Fleet layout.
+        #[arg(
+            long,
+            visible_alias = "fleet-gitops",
+            help_heading = "Experimental - not stable (Fleet Options)"
+        )]
         fleet_mode: bool,
 
         /// Enable Jamf conflict filtering (excludes profiles conflicting with Jamf Pro native capabilities)
@@ -262,6 +278,17 @@ pub enum Commands {
         fragment: bool,
 
         /// [FLEET/OSQUERY] Emit osquery detection (native-table queries + slim/full audit script)
+        ///
+        /// Two tiers: rules a native osquery table can answer become queries;
+        /// the residual gets an audit script plus a launchd job that writes a
+        /// results plist, which osquery then reads back.
+        ///
+        /// Needs the Fleet GitOps layout and an org domain, and refuses the
+        /// run rather than emitting nothing if either is missing. Only macOS
+        /// baselines produce output; a non-macOS baseline in the run is
+        /// reported as skipped, not passed over in silence. Config-driven runs
+        /// can set this as `[settings.osquery] enabled = true` instead — this
+        /// flag wins where both are given.
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         osquery: bool,
 
@@ -297,8 +324,12 @@ pub enum Commands {
         #[arg(short, long)]
         mscp_repo: PathBuf,
 
-        /// Git branch to use (e.g., sequoia, `ios_18`, sonoma)
-        /// Branch determines the platform and OS version
+        /// mSCP branch to build from: `main`, or an OS-preview branch such
+        /// as `dev_28` when one is open. The branch selects the rule SOURCE,
+        /// not the target — on mSCP 2.0 one tree covers every platform and
+        /// `--os` / `--os-version` pick what to build. The 1.x release
+        /// branches (`sequoia`, `sonoma`, …) carry a schema contour refuses.
+        /// Defaults to the checkout's current branch.
         #[arg(long)]
         branch: Option<String>,
 
@@ -320,19 +351,13 @@ pub enum Commands {
         #[arg(long)]
         preset: Option<String>,
 
-        /// mSCP repository layout: `auto` (sniff the rule schema),
-        /// `1.x` (flat `baselines/<name>.yaml`), or `2.0` (multi-OS,
-        /// `baselines/<os>/<name>_<os>_<version>.yaml`).
-        #[arg(long, default_value = "auto")]
-        mscp_version: String,
-
-        /// OS target for 2.0 layouts: `macos`, `ios`, or `visionos`.
-        /// Selects which `baselines/<os>/` file is built. Ignored for 1.x.
+        /// OS target: `macos`, `ios`, or `visionos`. Selects which
+        /// `baselines/<os>/` file is built.
         #[arg(long, value_enum, default_value_t = OsArg::Macos)]
         os: OsArg,
 
-        /// OS version for 2.0 layouts (e.g. `26.0`). Defaults to the
-        /// highest version available for the baseline. Ignored for 1.x.
+        /// OS version (e.g. `26.0`). Defaults to the highest version
+        /// available for the baseline.
         #[arg(long)]
         os_version: Option<String>,
 
@@ -400,17 +425,31 @@ pub enum Commands {
         #[arg(long, help_heading = "mSCP Generation Options")]
         generate_ddm: bool,
 
-        /// [FLEET] Enable Fleet conflict filtering (excludes profiles and strips keys conflicting with Fleet native settings)
-        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        /// [FLEET] Fleet GitOps output: the Fleet directory layout, plus filtering of profiles and keys that conflict with Fleet's native settings.
+        ///
+        /// `--fleet-gitops` is the same switch, and the name `mscp init` uses.
+        /// Its old one-line help said only "conflict filtering"; it also
+        /// selects the Fleet layout.
+        #[arg(
+            long,
+            visible_alias = "fleet-gitops",
+            help_heading = "Experimental - not stable (Fleet Options)"
+        )]
         fleet_mode: bool,
 
         /// [FLEET] Skip generating Fleet label definitions
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         no_labels: bool,
 
-        /// [FLEET] Fleets to add the baseline to (comma-separated). Updates fleet YAML files and default.yml
+        /// [FLEET] Fleets to add the baseline to. Updates fleet YAML files and default.yml.
+        ///
+        /// `--fleet <NAME>` is the same list — repeat it, or comma-separate
+        /// either spelling. Singular `--fleet <NAME>` is how every contour
+        /// command names a fleet.
         #[arg(
             long,
+            visible_alias = "fleet",
+            value_name = "NAME",
             value_delimiter = ',',
             help_heading = "Experimental - not stable (Fleet Options)"
         )]
@@ -533,6 +572,17 @@ pub enum Commands {
         interactive: bool,
 
         /// [FLEET/OSQUERY] Emit osquery detection (native-table queries + slim/full audit script)
+        ///
+        /// Two tiers: rules a native osquery table can answer become queries;
+        /// the residual gets an audit script plus a launchd job that writes a
+        /// results plist, which osquery then reads back.
+        ///
+        /// Needs the Fleet GitOps layout and an org domain, and refuses the
+        /// run rather than emitting nothing if either is missing. Only macOS
+        /// baselines produce output; a non-macOS baseline in the run is
+        /// reported as skipped, not passed over in silence. Config-driven runs
+        /// can set this as `[settings.osquery] enabled = true` instead — this
+        /// flag wins where both are given.
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         osquery: bool,
 
@@ -613,8 +663,16 @@ pub enum Commands {
         #[arg(long, help_heading = "Jamf Pro Options")]
         jamf_exclude_conflicts: bool,
 
-        /// [FLEET] Enable Fleet conflict filtering
-        #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
+        /// [FLEET] Fleet GitOps output: the Fleet directory layout, plus filtering of profiles and keys that conflict with Fleet's native settings.
+        ///
+        /// `--fleet-gitops` is the same switch, and the name `mscp init` uses.
+        /// Its old one-line help said only "conflict filtering"; it also
+        /// selects the Fleet layout.
+        #[arg(
+            long,
+            visible_alias = "fleet-gitops",
+            help_heading = "Experimental - not stable (Fleet Options)"
+        )]
         fleet_mode: bool,
 
         /// [MUNKI] Generate Munki compliance flags
@@ -672,13 +730,21 @@ pub enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Path to JSON schema directory (optional)
+        /// Directory holding Fleet's GitOps JSON Schema (`generated-schema.json`,
+        /// from fleetdm/fleet tools/gitops-auto-complete/). Without it, the pinned
+        /// schema this build embeds. Overrides `[validation] schemas_path`.
         #[arg(short, long)]
         schemas: Option<PathBuf>,
 
-        /// Strict mode (fail on warnings)
+        /// Strict mode (fail on warnings). Either this or `[validation] strict`
+        /// turns it on.
         #[arg(long)]
         strict: bool,
+
+        /// mscp.toml to read `[validation]` from — schemas_path, strict and
+        /// validate_paths. Flags given on the command line win.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
 
     /// Deduplicate profiles across baselines
@@ -793,9 +859,25 @@ pub enum Commands {
         #[arg(long)]
         to: String,
 
-        /// Fleet file to migrate
-        #[arg(short = 'f', long = "fleet")]
-        fleet: PathBuf,
+        /// Fleet to migrate, by name — resolves to `<output>/fleets/<NAME>.yml`.
+        ///
+        /// This was always meant as a name: every documented example passed one
+        /// (`-f engineering`). The code took a path and never appended `.yml`,
+        /// so those examples failed with "Fleet file not found". A name is what
+        /// `--fleet` means everywhere in contour now, and here it finally works.
+        #[arg(
+            short = 'f',
+            long = "fleet",
+            value_name = "NAME",
+            required_unless_present = "fleet_file",
+            conflicts_with = "fleet_file"
+        )]
+        fleet: Option<String>,
+
+        /// Fleet file to migrate, by path. A relative path resolves under
+        /// `<output>/fleets/`.
+        #[arg(long = "fleet-file", value_name = "PATH")]
+        fleet_file: Option<PathBuf>,
 
         /// Output directory containing Fleet `GitOps` structure
         #[arg(short, long)]
@@ -898,17 +980,11 @@ pub enum Commands {
         #[arg(long, value_enum, default_value = "variable")]
         odv_mode: crate::baseline_to_recipe::OdvMode,
 
-        /// mSCP repository layout. Defaults to `auto` — sniff the rule
-        /// YAML to detect 1.x (flat) vs 2.0 (multi-OS `platforms:` block).
-        /// Pass `1.x` or `2.0` to override.
-        #[arg(long, default_value = "auto")]
-        mscp_version: String,
-
-        /// OS target for 2.0 layouts. Ignored for 1.x.
+        /// OS target: `macos`, `ios`, or `visionos`.
         #[arg(long, value_enum, default_value_t = OsArg::Macos)]
         os: OsArg,
 
-        /// OS version for 2.0 layouts (e.g. `26.0`, `15.0`, `18.0`).
+        /// OS version (e.g. `26.0`, `15.0`, `18.0`).
         /// Defaults to the highest version present in the rule set.
         #[arg(long)]
         os_version: Option<String>,
@@ -1014,8 +1090,9 @@ pub enum ContainerAction {
         #[arg(short, long, default_value = "./macos_security")]
         mscp_repo: PathBuf,
 
-        /// Git branch to use — `main` is the mSCP 2.0 layout
-        /// (default); `tahoe` / `sequoia` / `sonoma` are legacy 1.x.
+        /// Git branch to use. `main` (default) is mSCP 2.0, the only
+        /// layout contour reads; `tahoe` / `sequoia` / `sonoma` are the
+        /// deprecated 1.x layout and are refused.
         #[arg(long, default_value = "main")]
         branch: String,
 
@@ -1313,6 +1390,225 @@ impl From<ScriptModeArg> for crate::transformers::ScriptMode {
             ScriptModeArg::Granular => crate::transformers::ScriptMode::Granular,
             ScriptModeArg::Bundled => crate::transformers::ScriptMode::Bundled,
             ScriptModeArg::Both => crate::transformers::ScriptMode::Both,
+        }
+    }
+}
+
+/// Turn `mscp migrate`'s `--fleet <NAME>` / `--fleet-file <PATH>` into the
+/// path `migrate_fleet_file` resolves.
+///
+/// A name becomes `<NAME>.yml`, which `migrate_fleet_file` joins under
+/// `<output>/fleets/`. A value that is plainly a file — it has a `/`, or ends
+/// in `.yml`/`.yaml` — is refused rather than doubled into `x.yml.yml`: that
+/// was the working spelling before `--fleet` became a name, and an old script
+/// passing it should be told to use `--fleet-file`, not sent looking for a
+/// file that cannot exist.
+pub fn resolve_migrate_fleet(
+    name: Option<String>,
+    file: Option<std::path::PathBuf>,
+) -> anyhow::Result<std::path::PathBuf> {
+    if let Some(file) = file {
+        return Ok(file);
+    }
+    let name = name.expect("clap requires --fleet or --fleet-file");
+    let looks_like_file = name.contains('/')
+        || [".yml", ".yaml"]
+            .iter()
+            .any(|ext| name.to_ascii_lowercase().ends_with(ext));
+    if looks_like_file {
+        anyhow::bail!(
+            "`--fleet` takes a fleet NAME — `{name}` looks like a file.\n\n\
+             Use `--fleet-file {name}` for a path, or `--fleet {stem}` to name the fleet \
+             (it resolves to <output>/fleets/{stem}.yml).",
+            stem = std::path::Path::new(&name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&name)
+        );
+    }
+    Ok(std::path::PathBuf::from(format!("{name}.yml")))
+}
+
+/// Refuse a retired `--fleet` spelling, naming what replaced it.
+///
+/// `--fleet` only names a fleet, matching `[[baselines]] fleet = "…"` in
+/// mscp.toml. Earlier spellings are kept as hidden arguments purely so this
+/// can run: without them an old script would get clap's bare "unexpected
+/// argument", which says nothing about what to type instead.
+///
+/// Shared by the `mscp` binary and `contour mscp`, so both say the same thing.
+pub fn refuse_retired_fleet_flag(
+    used: bool,
+    command: &str,
+    replacement: &str,
+) -> anyhow::Result<()> {
+    if used {
+        anyhow::bail!(
+            "`{command} --fleet` was renamed to `{replacement}`.\n\n\
+             `--fleet <NAME>` now names a fleet in every contour command — the same \
+             thing `fleet = \"…\"` means in mscp.toml — so it no longer doubles as a \
+             switch here."
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod fleet_flag_tests {
+    use super::*;
+    use clap::Parser;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("mscp").chain(args.iter().copied()))
+    }
+
+    fn fleets_of(args: &[&str]) -> Vec<String> {
+        let mut full = vec![
+            "generate",
+            "--mscp-repo",
+            "r",
+            "--output",
+            "o",
+            "--keyword",
+            "cis_lvl1",
+        ];
+        full.extend_from_slice(args);
+        match parse(&full).expect("parses").command {
+            Commands::Generate { fleets, .. } => fleets.unwrap_or_default(),
+            _ => unreachable!("parsed as generate"),
+        }
+    }
+
+    /// `--fleet <NAME>` is the same list as `--fleets`, however it is spelled.
+    ///
+    /// The help text shows the alias; that proves nothing about whether a
+    /// repeated flag accumulates or quietly keeps only the last value — which
+    /// would drop fleets without a word. So the parser is asked directly.
+    #[test]
+    fn every_spelling_of_the_fleet_list_yields_the_same_list() {
+        let want = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(fleets_of(&["--fleets", "a,b"]), want);
+        assert_eq!(fleets_of(&["--fleet", "a,b"]), want);
+        assert_eq!(
+            fleets_of(&["--fleet", "a", "--fleet", "b"]),
+            want,
+            "repeating --fleet must accumulate, not keep only the last name"
+        );
+        assert_eq!(fleets_of(&["--fleets", "a", "--fleet", "b"]), want);
+    }
+
+    /// The retired spellings still parse — so they can be refused by name.
+    ///
+    /// If clap rejected them first, the operator would get a bare "unexpected
+    /// argument" instead of `refuse_retired_fleet_flag`'s pointer to the new
+    /// flag. That is the only reason they are still declared.
+    #[test]
+    fn the_retired_spellings_reach_the_refusal() {
+        match parse(&["init", "--fleet"])
+            .expect("retired init --fleet parses")
+            .command
+        {
+            Commands::Init { legacy_fleet, .. } => assert!(legacy_fleet),
+            _ => unreachable!(),
+        }
+    }
+
+    /// `mscp migrate --fleet` is a NAME, and the documented form works.
+    ///
+    /// Every example in docs/contour-mscp.md passed a name (`-f engineering`),
+    /// and the flag took a path without appending `.yml`, so each one failed
+    /// with "Fleet file not found". It resolves the name now; a filename given
+    /// to `--fleet` is refused with a pointer to `--fleet-file` rather than
+    /// doubled into `x.yml.yml`.
+    #[test]
+    fn migrate_resolves_a_fleet_name_and_refuses_a_filename() {
+        use std::path::PathBuf;
+        assert_eq!(
+            resolve_migrate_fleet(Some("engineering".into()), None).unwrap(),
+            PathBuf::from("engineering.yml")
+        );
+        assert_eq!(
+            resolve_migrate_fleet(None, Some("/abs/x.yml".into())).unwrap(),
+            PathBuf::from("/abs/x.yml"),
+            "--fleet-file is taken as given"
+        );
+        for file_like in [
+            "engineering.yml",
+            "engineering.YAML",
+            "fleets/engineering",
+            "a/b",
+        ] {
+            let e = resolve_migrate_fleet(Some(file_like.into()), None).unwrap_err();
+            assert!(e.to_string().contains("--fleet-file"), "{file_like}: {e}");
+        }
+        // -f is the name form, because that is how every example used it.
+        match parse(&[
+            "migrate",
+            "--from",
+            "a",
+            "--to",
+            "b",
+            "-f",
+            "engineering",
+            "-o",
+            "o",
+        ])
+        .expect("parses")
+        .command
+        {
+            Commands::Migrate {
+                fleet, fleet_file, ..
+            } => {
+                assert_eq!(fleet.as_deref(), Some("engineering"));
+                assert!(fleet_file.is_none());
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            parse(&[
+                "migrate",
+                "--from",
+                "a",
+                "--to",
+                "b",
+                "--fleet",
+                "x",
+                "--fleet-file",
+                "y",
+                "-o",
+                "o"
+            ])
+            .is_err(),
+            "a name and a file together are ambiguous and must not parse"
+        );
+    }
+
+    #[test]
+    fn the_refusal_names_the_replacement() {
+        let e = refuse_retired_fleet_flag(true, "mscp init", "--fleet-gitops").unwrap_err();
+        assert!(e.to_string().contains("--fleet-gitops"), "{e}");
+        assert!(refuse_retired_fleet_flag(false, "mscp init", "--fleet-gitops").is_ok());
+    }
+
+    /// `--fleet-gitops` and `--fleet-mode` are one switch.
+    #[test]
+    fn fleet_gitops_is_the_same_switch_as_fleet_mode() {
+        for spelling in ["--fleet-mode", "--fleet-gitops"] {
+            let cli = parse(&[
+                "generate",
+                "--mscp-repo",
+                "r",
+                "--output",
+                "o",
+                "--keyword",
+                "cis_lvl1",
+                spelling,
+            ])
+            .expect("parses");
+            match cli.command {
+                Commands::Generate { fleet_mode, .. } => assert!(fleet_mode, "{spelling}"),
+                _ => unreachable!(),
+            }
         }
     }
 }

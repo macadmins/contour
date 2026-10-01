@@ -370,7 +370,7 @@ fn trap_18b_baseline_alias_for_keyword_round_trips() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Trap 19: `mscp recipe --baseline X --mscp-repo Y` aggregates every rule's
 // mobileconfig payload by Apple payload type into one recipe TOML. Catches:
-//   - aggregator skipping rules with `mobileconfig: false`
+//   - aggregator skipping rules with no `mobileconfig_info`
 //   - separate payload types collapsing into a single profile
 //   - field collision policy regressing (must warn + last-writer-wins)
 //   - output not honoring `-o` / falling back to a hardcoded path
@@ -378,66 +378,45 @@ fn trap_18b_baseline_alias_for_keyword_round_trips() {
 #[test]
 fn trap_19_mscp_recipe_aggregates_baseline_rules() {
     let tmp = tempfile::tempdir().unwrap();
-    let rules_dir = tmp.path().join("rules");
-    fs::create_dir_all(&rules_dir).unwrap();
 
     // Two rules targeting the firewall payload (collision on
     // EnableFirewall + extra key) plus one rule on a separate payload.
-    fs::write(
-        rules_dir.join("fw_enable.yaml"),
-        r#"id: fw_enable
-title: Enable firewall
-discussion: ""
-tags:
-  - tinybase
-mobileconfig: true
-mobileconfig_info:
-  com.apple.security.firewall:
-    EnableFirewall: false
-"#,
-    )
-    .unwrap();
-    fs::write(
-        rules_dir.join("fw_stealth.yaml"),
-        r#"id: fw_stealth
-title: Stealth mode
-discussion: ""
-tags:
-  - tinybase
-mobileconfig: true
-mobileconfig_info:
-  com.apple.security.firewall:
-    EnableFirewall: true
-    EnableStealthMode: true
-"#,
-    )
-    .unwrap();
-    fs::write(
-        rules_dir.join("ss_idle.yaml"),
-        r#"id: ss_idle
-title: Screensaver idle
-discussion: ""
-tags:
-  - tinybase
-mobileconfig: true
-mobileconfig_info:
-  com.apple.screensaver:
-    idleTime: 300
-"#,
-    )
-    .unwrap();
-    // A non-mobileconfig rule that must be skipped.
-    fs::write(
-        rules_dir.join("script_only.yaml"),
-        r#"id: script_only
-title: Script only
-discussion: ""
-tags:
-  - tinybase
-mobileconfig: false
-"#,
-    )
-    .unwrap();
+    write_v2x_rule(
+        tmp.path(),
+        "system_settings",
+        "fw_enable",
+        "  macOS:\n    '15.0':\n      benchmarks:\n        - name: tinybase\n",
+        "mobileconfig_info:\n  - PayloadType: com.apple.security.firewall\n    PayloadContent:\n      - EnableFirewall: false\n",
+    );
+    write_v2x_rule(
+        tmp.path(),
+        "system_settings",
+        "fw_stealth",
+        "  macOS:\n    '15.0':\n      benchmarks:\n        - name: tinybase\n",
+        "mobileconfig_info:\n  - PayloadType: com.apple.security.firewall\n    PayloadContent:\n      - EnableFirewall: true\n        EnableStealthMode: true\n",
+    );
+    write_v2x_rule(
+        tmp.path(),
+        "system_settings",
+        "ss_idle",
+        "  macOS:\n    '15.0':\n      benchmarks:\n        - name: tinybase\n",
+        "mobileconfig_info:\n  - PayloadType: com.apple.screensaver\n    PayloadContent:\n      - idleTime: 300\n",
+    );
+    // A rule with no mobileconfig payload that must be skipped.
+    write_v2x_rule(
+        tmp.path(),
+        "system_settings",
+        "script_only",
+        "  macOS:\n    '15.0':\n      benchmarks:\n        - name: tinybase\n",
+        "",
+    );
+    write_v2x_baseline(
+        tmp.path(),
+        "tinybase",
+        "macos",
+        "15.0",
+        &["fw_enable", "fw_stealth", "ss_idle", "script_only"],
+    );
 
     let recipe_out = tmp.path().join("tinybase.toml");
     let output = Command::cargo_bin("mscp")
@@ -490,281 +469,6 @@ mobileconfig: false
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Trap 20: `mscp recipe` emits `[[ddm]]` blocks for rules with `ddm_info`,
-// alongside the `[[profile]]` blocks for mobileconfig rules. Rules sharing
-// a `declarationtype` merge into one bundle. Catches:
-//   - aggregator dropping ddm-only rules on the floor
-//   - intent_name not stripping the Apple `com.apple.configuration.` prefix
-//   - configuration payload missing the merged ddm_key/ddm_value pairs
-//   - round-trip via `profile generate --recipe` failing on the new shape
-// ─────────────────────────────────────────────────────────────────────────────
-#[test]
-fn trap_20_mscp_recipe_emits_ddm_blocks_alongside_profiles() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules_dir = tmp.path().join("rules");
-    fs::create_dir_all(&rules_dir).unwrap();
-
-    // One mobileconfig rule (firewall) plus two DDM rules sharing
-    // a declarationtype. Aggregated output must carry one
-    // `[[profile]]` and one `[[ddm]]` block.
-    fs::write(
-        rules_dir.join("fw.yaml"),
-        r#"id: fw
-title: Enable firewall
-discussion: ""
-tags:
-  - tinybase
-mobileconfig: true
-mobileconfig_info:
-  com.apple.security.firewall:
-    EnableFirewall: true
-"#,
-    )
-    .unwrap();
-    fs::write(
-        rules_dir.join("su_download.yaml"),
-        r#"id: su_download
-title: Software update download
-discussion: ""
-tags:
-  - tinybase
-mobileconfig: false
-ddm_info:
-  declarationtype: com.apple.configuration.softwareupdate.settings
-  ddm_key: AutomaticActions
-  ddm_value:
-    Download: AlwaysOn
-"#,
-    )
-    .unwrap();
-    fs::write(
-        rules_dir.join("su_notify.yaml"),
-        r#"id: su_notify
-title: Software update notifications
-discussion: ""
-tags:
-  - tinybase
-mobileconfig: false
-ddm_info:
-  declarationtype: com.apple.configuration.softwareupdate.settings
-  ddm_key: Notifications
-  ddm_value: true
-"#,
-    )
-    .unwrap();
-
-    let recipe_out = tmp.path().join("tinybase.toml");
-    let output = Command::cargo_bin("mscp")
-        .unwrap()
-        .args([
-            "recipe",
-            "--mscp-repo",
-            tmp.path().to_str().unwrap(),
-            "--baseline",
-            "tinybase",
-            "-o",
-            recipe_out.to_str().unwrap(),
-            "--org",
-            "com.acme",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "mscp recipe must succeed; stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let body = fs::read_to_string(&recipe_out).expect("recipe TOML must exist at -o path");
-
-    // 1. Both kinds of blocks are present, exactly once.
-    assert_eq!(
-        body.matches("[[profile]]").count(),
-        1,
-        "expected one profile block; got: {body}"
-    );
-    assert_eq!(
-        body.matches("[[ddm]]").count(),
-        1,
-        "expected one ddm block; got: {body}"
-    );
-
-    // 2. The DDM block has the canonical shape — intent_name comes
-    //    from stripping `com.apple.configuration.`, configuration
-    //    type is preserved verbatim, and both ddm_keys merged.
-    assert!(body.contains(r#"intent_name = "softwareupdate-settings""#));
-    assert!(body.contains(r#"type = "com.apple.configuration.softwareupdate.settings""#));
-    assert!(body.contains("Notifications = true"));
-    assert!(body.contains("[ddm.configuration.payload.AutomaticActions]"));
-    assert!(body.contains(r#"Download = "AlwaysOn""#));
-
-    // 3. Round-trip: profile generate --recipe must accept the new
-    //    shape and emit both a mobileconfig and DDM declaration JSON
-    //    files in the intent_name subdirectory.
-    let render_out = tmp.path().join("rendered");
-    let render = Command::cargo_bin("profile")
-        .unwrap()
-        .args([
-            "generate",
-            "--recipe",
-            recipe_out.to_str().unwrap(),
-            "--org",
-            "com.acme",
-            "-o",
-            render_out.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        render.status.success(),
-        "profile generate --recipe must accept ddm-bearing recipe; stderr: {}",
-        String::from_utf8_lossy(&render.stderr)
-    );
-
-    assert!(
-        render_out.join("firewall.mobileconfig").exists(),
-        "mobileconfig must render at expected name"
-    );
-    let intent_dir = render_out.join("softwareupdate-settings");
-    assert!(
-        intent_dir.exists() && intent_dir.is_dir(),
-        "DDM intent directory must exist at {}",
-        intent_dir.display()
-    );
-    assert!(
-        intent_dir.join("configuration.json").exists(),
-        "DDM configuration declaration must be emitted"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Trap 21: `mscp recipe --odv-mode variable` keeps `"$ODV"` placeholders in
-// every field that originally carried one and emits resolved defaults under a
-// top-level `[odv]` table. Editing the [odv] entry then regenerating the
-// profile via `profile generate --recipe` propagates the new value end-to-end.
-// Catches:
-//   - aggregator failing to emit [odv] / mixing modes
-//   - profile loader not running resolve_odv before payload build (would
-//     produce a literal "$ODV" string in the rendered profile)
-//   - operator edits to [odv] not reaching the rendered mobileconfig
-// ─────────────────────────────────────────────────────────────────────────────
-#[test]
-fn trap_21_mscp_recipe_variable_mode_round_trips_through_odv_edits() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules_dir = tmp.path().join("rules");
-    fs::create_dir_all(&rules_dir).unwrap();
-
-    fs::write(
-        rules_dir.join("ts.yaml"),
-        r#"id: ts
-title: Time server
-discussion: ""
-tags:
-  - tinybase
-mobileconfig: true
-mobileconfig_info:
-  com.apple.MCX:
-    timeServer: $ODV
-odv:
-  recommended: time.nist.gov
-  tinybase: time.apple.com
-"#,
-    )
-    .unwrap();
-
-    let recipe_out = tmp.path().join("tinybase.toml");
-    let r = Command::cargo_bin("mscp")
-        .unwrap()
-        .args([
-            "recipe",
-            "--mscp-repo",
-            tmp.path().to_str().unwrap(),
-            "--baseline",
-            "tinybase",
-            "--odv-mode",
-            "variable",
-            "-o",
-            recipe_out.to_str().unwrap(),
-            "--org",
-            "com.acme",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        r.status.success(),
-        "variable mode must succeed; stderr: {}",
-        String::from_utf8_lossy(&r.stderr)
-    );
-
-    // 1. Field still carries the literal "$ODV"; defaults live under [odv].
-    let body = fs::read_to_string(&recipe_out).unwrap();
-    assert!(body.contains(r#"timeServer = "$ODV""#));
-    assert!(body.contains("[odv]"));
-    assert!(body.contains(r#"timeServer = "time.apple.com""#));
-
-    // 2. Round-trip with the default value: rendered MCX profile carries
-    //    "time.apple.com" (resolve_odv runs at load time).
-    let rt_default = tmp.path().join("rt-default");
-    let r = Command::cargo_bin("profile")
-        .unwrap()
-        .args([
-            "generate",
-            "--recipe",
-            recipe_out.to_str().unwrap(),
-            "--org",
-            "com.acme",
-            "-o",
-            rt_default.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        r.status.success(),
-        "variable-mode round-trip must succeed; stderr: {}",
-        String::from_utf8_lossy(&r.stderr)
-    );
-    let mcx = fs::read_to_string(rt_default.join("MCX.mobileconfig")).unwrap();
-    assert!(
-        mcx.contains("<string>time.apple.com</string>"),
-        "default [odv].timeServer must reach rendered profile; got: {mcx}"
-    );
-    assert!(
-        !mcx.contains("$ODV"),
-        "no literal $ODV must remain in rendered profile"
-    );
-
-    // 3. Operator-edit workflow: change [odv] to a new value, regenerate,
-    //    and confirm the new value reaches the rendered profile.
-    let edited = body.replace(
-        r#"timeServer = "time.apple.com""#,
-        r#"timeServer = "pool.ntp.org""#,
-    );
-    let edited_path = tmp.path().join("tinybase-edited.toml");
-    fs::write(&edited_path, edited).unwrap();
-
-    let rt_edited = tmp.path().join("rt-edited");
-    let r = Command::cargo_bin("profile")
-        .unwrap()
-        .args([
-            "generate",
-            "--recipe",
-            edited_path.to_str().unwrap(),
-            "--org",
-            "com.acme",
-            "-o",
-            rt_edited.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(r.status.success());
-    let mcx_edited = fs::read_to_string(rt_edited.join("MCX.mobileconfig")).unwrap();
-    assert!(
-        mcx_edited.contains("<string>pool.ntp.org</string>"),
-        "edited [odv] value must reach rendered profile; got: {mcx_edited}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Phase 6 traps — mSCP 2.0 (multi-OS) layout transition
 // ---------------------------------------------------------------------------
@@ -780,9 +484,31 @@ fn write_v2x_rule(root: &Path, category: &str, id: &str, platforms_yaml: &str, e
     fs::write(rules.join(format!("{id}.yaml")), body).unwrap();
 }
 
-/// Trap 22 — `mscp recipe` auto-detects a 2.0 tree without `--mscp-version`.
+/// Write the 2.0 baseline FILE that `MscpLayout::baseline_file` resolves:
+/// `baselines/<os>/<name>_<os>_<version>.yaml`. Its `profile[].rules[]` list is
+/// the authoritative membership source, so a fixture that writes one exercises
+/// the explicit path rather than the benchmark-tag fallback.
+fn write_v2x_baseline(root: &Path, name: &str, os: &str, version: &str, rule_ids: &[&str]) {
+    let dir = root.join("baselines").join(os);
+    fs::create_dir_all(&dir).unwrap();
+    let mut rules = String::new();
+    for id in rule_ids {
+        use std::fmt::Write;
+        writeln!(rules, "      - {id}").unwrap();
+    }
+    let body = format!(
+        "title: 'macOS {version}: Security Configuration - {name}'\n\
+         description: trap fixture baseline\n\
+         parent_values: recommended\n\
+         platform:\n  os: macOS\n  version: {version}\n\
+         profile:\n  - section: system_settings\n    rules:\n{rules}"
+    );
+    fs::write(dir.join(format!("{name}_{os}_{version}.yaml")), body).unwrap();
+}
+
+/// Trap 22 — `mscp recipe` verifies a 2.0 tree and reads it as such.
 ///
-/// Failure mode: the detector misclassifies and the V1x parser silently
+/// Failure mode: the detector misclassifies and the extractor silently
 /// returns zero rules (because 2.0 schema lacks the 1.x top-level keys).
 #[test]
 fn trap_22_mscp_recipe_auto_detects_v2x_layout() {
@@ -808,36 +534,37 @@ fn trap_22_mscp_recipe_auto_detects_v2x_layout() {
             recipe_out.to_str().unwrap(),
             "--org",
             "com.acme",
-            // No --mscp-version: auto-detect must pick V2x.
         ])
         .output()
         .unwrap();
     assert!(
         output.status.success(),
-        "auto-detect must succeed on V2x tree; stderr: {}",
+        "a 2.0 tree must verify and read; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let body = fs::read_to_string(&recipe_out).unwrap();
     assert!(
         body.contains("[[profile]]"),
-        "V2x recipe should emit at least one [[profile]] block; got: {body}"
+        "a 2.0 recipe should emit at least one [[profile]] block; got: {body}"
     );
     assert!(
         body.contains("com.apple.screensaver"),
-        "screensaver payload from V2x rule must reach the recipe; got: {body}"
+        "screensaver payload from the 2.0 rule must reach the recipe; got: {body}"
     );
 }
 
-/// Trap 23 — `--mscp-version 1.x` forces V1x parsing on a layout the
-/// detector might otherwise route differently. Lock the override path.
+/// Trap 23 — a 1.x checkout is refused, not parsed. contour reads mSCP 2.0
+/// only; the refusal must name the layout and the fix (`checkout main`), and
+/// must not write a recipe. Before this, the same tree produced a recipe from
+/// the flat schema — plausible output from a deprecated source.
 #[test]
-fn trap_23_mscp_version_flag_forces_v1x() {
+fn trap_23_mscp_recipe_refuses_a_1x_checkout_and_names_the_fix() {
     let tmp = tempfile::tempdir().unwrap();
     let rules_dir = tmp.path().join("rules");
     fs::create_dir_all(&rules_dir).unwrap();
     fs::write(
-        rules_dir.join("flag_v1.yaml"),
-        r#"id: flag_v1
+        rules_dir.join("flat_rule.yaml"),
+        r#"id: flat_rule
 title: 1.x mobileconfig rule
 discussion: ""
 tags:
@@ -863,21 +590,25 @@ mobileconfig_info:
             recipe_out.to_str().unwrap(),
             "--org",
             "com.acme",
-            "--mscp-version",
-            "1.x",
         ])
         .output()
         .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "explicit --mscp-version 1.x must work; stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        !output.status.success(),
+        "a 1.x checkout must be refused; stderr: {stderr}"
     );
-    let body = fs::read_to_string(&recipe_out).unwrap();
-    assert!(body.contains("com.apple.security.firewall"));
+    assert!(
+        stderr.contains("1.x layout") && stderr.contains("checkout main"),
+        "refusal must name the layout and the fix; got: {stderr}"
+    );
+    assert!(
+        !recipe_out.exists(),
+        "no recipe may be written from a 1.x tree"
+    );
 }
 
-/// Trap 24 — V2x with `--os ios --os-version 18.0` filters to iOS-only
+/// Trap 24 — `--os ios --os-version 18.0` filters to iOS-only
 /// benchmarks. A multi-OS rule that lists `cis_lvl1` only on macOS and
 /// `cis_lvl1_byod` only on iOS must produce different recipes per OS.
 #[test]
@@ -960,5 +691,60 @@ fn trap_24_mscp_recipe_v2x_ios_targeting_filters_correctly() {
     assert!(
         ios_body.contains("[[profile]]") && ios_body.contains("com.apple.applicationaccess"),
         "iOS target must produce the applicationaccess profile; got: {ios_body}"
+    );
+}
+
+/// Trap 25: on a 2.0 tree, a baseline name that no file and no rule on ANY
+/// platform knows must be refused, not silently answered with zero rules.
+/// Contrast trap_24: `ios_only` on a macOS target is a known name with no
+/// members for that target and stays a green, empty recipe.
+#[test]
+fn trap_25_mscp_recipe_v2x_unknown_baseline_is_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_v2x_rule(
+        tmp.path(),
+        "settings",
+        "known_rule",
+        concat!(
+            "  macOS:\n",
+            "    '15.0':\n",
+            "      benchmarks:\n",
+            "        - name: mac_only\n",
+        ),
+        "mobileconfig_info:\n  - PayloadType: com.apple.applicationaccess\n    PayloadContent:\n      - allowAirDrop: false\n",
+    );
+
+    let out = tmp.path().join("typo.toml");
+    let run = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "recipe",
+            "--mscp-repo",
+            tmp.path().to_str().unwrap(),
+            "--baseline",
+            "mac_onyl",
+            "-o",
+            out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+            "--os",
+            "macos",
+            "--os-version",
+            "15.0",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        !run.status.success(),
+        "an unknown 2.0 baseline must fail, not produce an empty recipe; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("mac_onyl") && stderr.contains("no rule on any platform"),
+        "error must name the baseline and say nothing knows it; got: {stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "no recipe may be written for an unknown baseline"
     );
 }

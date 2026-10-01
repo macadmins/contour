@@ -214,18 +214,70 @@ impl Constraints {
         Ok(())
     }
 
+    /// Every `build/` directory holding output for `baseline`.
+    ///
+    /// mSCP 1.x built into `build/<baseline>`; 2.0 builds into
+    /// `build/<baseline>_<os>_<version>`, so a lookup by bare name found
+    /// nothing on a 2.0 tree and discovery returned an empty list — which
+    /// reads as "this baseline has no profiles to exclude" rather than as a
+    /// failure. Both shapes are accepted.
+    ///
+    /// The suffix must be a real `_<os>_<version>` and not any underscore:
+    /// a live build tree carries `cis_lvl1`, `cis_lvl1_macos_26.0` AND
+    /// `cis_lvl1_enterprise`, and the last is a different baseline whose
+    /// profiles must not be offered for exclusion under this name.
+    fn build_dirs_for(mscp_repo: &Path, baseline: &str) -> Vec<PathBuf> {
+        const OS_TOKENS: [&str; 3] = ["macos", "ios", "visionos"];
+        let build = mscp_repo.join("build");
+        let mut dirs = Vec::new();
+
+        let exact = build.join(baseline);
+        if exact.is_dir() {
+            dirs.push(exact);
+        }
+        let Ok(entries) = std::fs::read_dir(&build) else {
+            return dirs;
+        };
+        for entry in entries.filter_map(std::result::Result::ok) {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(rest) = name.strip_prefix(&format!("{baseline}_")) else {
+                continue;
+            };
+            // `<os>_<version>` — the os token must match exactly, so
+            // `cis_lvl1_enterprise` does not answer for `cis_lvl1`.
+            if OS_TOKENS.iter().any(|os| {
+                rest.strip_prefix(&format!("{os}_"))
+                    .is_some_and(|v| !v.is_empty())
+            }) {
+                dirs.push(entry.path());
+            }
+        }
+        dirs.sort();
+        dirs
+    }
+
     /// Discover profiles from mSCP repository
     pub fn discover_profiles(mscp_repo: &Path, baseline: Option<&str>) -> Result<Vec<ProfileInfo>> {
         let search_paths = if let Some(b) = baseline {
-            // Search specific baseline
-            vec![
-                mscp_repo
-                    .join("build")
-                    .join(b)
-                    .join("mobileconfigs/unsigned"),
-                mscp_repo.join("build").join(b).join("mobileconfigs/signed"),
-                mscp_repo.join("build").join(b).join("mobileconfigs"),
-            ]
+            let dirs = Self::build_dirs_for(mscp_repo, b);
+            if dirs.is_empty() {
+                // Nothing built under either layout's name. Say so rather than
+                // walking every baseline, which would offer the wrong profiles.
+                return Ok(Vec::new());
+            }
+            dirs.into_iter()
+                .flat_map(|d| {
+                    [
+                        d.join("mobileconfigs/unsigned"),
+                        d.join("mobileconfigs/signed"),
+                        d.join("mobileconfigs"),
+                    ]
+                })
+                .collect()
         } else {
             // Search all baselines
             vec![mscp_repo.join("build")]
@@ -592,5 +644,91 @@ mod tests {
             script_category_from_rule_id("os_gatekeeper_enable"),
             "system"
         );
+    }
+}
+
+#[cfg(test)]
+mod build_dir_tests {
+    use super::*;
+
+    fn build(root: &Path, name: &str) {
+        std::fs::create_dir_all(root.join("build").join(name).join("mobileconfigs")).unwrap();
+    }
+
+    /// The whole point of the exclusion workflow: an operator lists a
+    /// baseline's profiles to drop the ones the MDM does better (FileVault,
+    /// say). On a 2.0 build the lookup by bare name found nothing, so the
+    /// picker showed an empty list — indistinguishable from "nothing to
+    /// exclude", and the conflicting profile shipped.
+    #[test]
+    fn a_2_0_build_directory_is_found_by_the_bare_baseline_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        build(tmp.path(), "cis_lvl1_macos_26.0");
+        let dirs = Constraints::build_dirs_for(tmp.path(), "cis_lvl1");
+        assert_eq!(dirs.len(), 1, "got {dirs:?}");
+        assert!(dirs[0].ends_with("cis_lvl1_macos_26.0"));
+    }
+
+    #[test]
+    fn a_1_x_build_directory_still_resolves() {
+        let tmp = tempfile::tempdir().unwrap();
+        build(tmp.path(), "cis_lvl1");
+        let dirs = Constraints::build_dirs_for(tmp.path(), "cis_lvl1");
+        assert_eq!(dirs.len(), 1, "got {dirs:?}");
+    }
+
+    #[test]
+    fn a_different_baseline_sharing_the_prefix_is_not_matched() {
+        // A live build tree carries all three of these side by side.
+        // `cis_lvl1_enterprise` is a DIFFERENT baseline; offering its
+        // profiles for exclusion under `cis_lvl1` would silently exclude the
+        // wrong things.
+        let tmp = tempfile::tempdir().unwrap();
+        build(tmp.path(), "cis_lvl1");
+        build(tmp.path(), "cis_lvl1_macos_26.0");
+        build(tmp.path(), "cis_lvl1_enterprise");
+        let dirs = Constraints::build_dirs_for(tmp.path(), "cis_lvl1");
+        let names: Vec<String> = dirs
+            .iter()
+            .map(|d| d.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["cis_lvl1", "cis_lvl1_macos_26.0"],
+            "got {names:?}"
+        );
+    }
+
+    #[test]
+    fn every_os_and_version_for_one_baseline_is_included() {
+        let tmp = tempfile::tempdir().unwrap();
+        build(tmp.path(), "cis_lvl1_macos_26.0");
+        build(tmp.path(), "cis_lvl1_macos_27.0");
+        build(tmp.path(), "cis_lvl1_ios_18.0");
+        build(tmp.path(), "cis_lvl1_visionos_26.0");
+        assert_eq!(Constraints::build_dirs_for(tmp.path(), "cis_lvl1").len(), 4);
+    }
+
+    #[test]
+    fn nothing_built_yields_no_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        build(tmp.path(), "disa_stig_macos_27.0");
+        assert!(Constraints::build_dirs_for(tmp.path(), "cis_lvl1").is_empty());
+    }
+
+    #[test]
+    fn discovery_returns_empty_rather_than_every_baseline_when_nothing_matches() {
+        // Falling back to the whole build/ tree would offer another
+        // baseline's profiles under this name.
+        let tmp = tempfile::tempdir().unwrap();
+        build(tmp.path(), "disa_stig_macos_27.0");
+        std::fs::write(
+            tmp.path()
+                .join("build/disa_stig_macos_27.0/mobileconfigs/com.apple.test.mobileconfig"),
+            "<plist/>",
+        )
+        .unwrap();
+        let found = Constraints::discover_profiles(tmp.path(), Some("cis_lvl1")).unwrap();
+        assert!(found.is_empty(), "got {found:?}");
     }
 }

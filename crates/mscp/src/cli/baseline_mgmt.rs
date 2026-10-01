@@ -261,22 +261,18 @@ fn fix_orphaned_references(report: &VerificationReport) -> Result<()> {
             });
         }
 
-        // Remove orphaned baseline references from team files
+        // Remove orphaned baseline references from team files — from every
+        // Apple profile list, under any spelling (contour_core::fleet_keys).
+        for settings_array in contour_core::fleet_keys::apple_profile_lists_mut(&mut yaml) {
+            settings_array.retain(|item| {
+                if let Some(path) = item.get("path").and_then(|p| p.as_str()) {
+                    !patterns.iter().any(|pattern| path.contains(pattern))
+                } else {
+                    true
+                }
+            });
+        }
         if let Some(controls) = yaml.get_mut("controls") {
-            // Remove from custom_settings
-            if let Some(macos_settings) = controls.get_mut("macos_settings")
-                && let Some(custom_settings) = macos_settings.get_mut("custom_settings")
-                && let Some(settings_array) = custom_settings.as_sequence_mut()
-            {
-                settings_array.retain(|item| {
-                    if let Some(path) = item.get("path").and_then(|p| p.as_str()) {
-                        !patterns.iter().any(|pattern| path.contains(pattern))
-                    } else {
-                        true
-                    }
-                });
-            }
-
             // Remove from scripts
             if let Some(scripts) = controls.get_mut("scripts")
                 && let Some(scripts_array) = scripts.as_sequence_mut()

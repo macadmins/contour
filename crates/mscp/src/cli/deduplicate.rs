@@ -310,13 +310,11 @@ fn update_baseline_yamls(
         // Update custom_settings paths
         let mut modified = false;
 
-        if let Some(custom_settings) = yaml
-            .get_mut("controls")
-            .and_then(|c| c.get_mut("macos_settings"))
-            .and_then(|m| m.get_mut("custom_settings"))
-            .and_then(|s| s.as_sequence_mut())
-        {
-            for entry in custom_settings {
+        // Every Apple profile list, under any spelling (contour_core::fleet_keys):
+        // the updater writes `apple_settings.configuration_profiles`, older files
+        // say `macos_settings.custom_settings`.
+        for custom_settings in contour_core::fleet_keys::apple_profile_lists_mut(&mut yaml) {
+            for entry in custom_settings.iter_mut() {
                 // First, read the path (immutable borrow)
                 let path_and_filename = entry.get("path").and_then(|p| p.as_str()).map(|path| {
                     let filename = std::path::Path::new(path)

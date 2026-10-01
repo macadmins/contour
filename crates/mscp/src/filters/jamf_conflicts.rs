@@ -1,11 +1,34 @@
-// Jamf conflict filtering - public API methods
+//! Jamf conflict filter — what Jamf already manages natively, so an mSCP
+//! baseline does not fight it.
+//!
+//! # Where the constraints come from — read this before touching `new()`
+//!
+//! The constraints are DATA, and they live in ONE place:
+//! `crates/mscp/jamf-constraints.yml`. That file is compiled into this binary with
+//! `include_str!`, so it is always present and always the version that
+//! shipped with this build. There is no fallback list in code, and there
+//! must not be one.
+//!
+//! A code-side fallback list would drift from the YAML, and would make "file
+//! not found" indistinguishable from "constraints loaded" — absence dressed
+//! as data.
+//!
+//! Resolution order, in full:
+//!
+//!   1. `from_file(Some(path))` — an operator override. It must exist and
+//!      parse. A missing or malformed override is an ERROR, never a silent
+//!      substitution of anything else.
+//!   2. `from_file(None)`, `new()`, `Default` — the embedded YAML. Always.
+//!
+//! To change a constraint, edit the YAML. The tests at the bottom load the
+//! embedded copy and assert entries only the YAML carries.
 #![allow(dead_code, reason = "module under development")]
 
 use anyhow::{Context, Result};
 use plist::Value as PlistValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Jamf constraint definition from YAML
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,78 +84,51 @@ struct PayloadKeyExclusionInternal {
 }
 
 impl JamfConflictFilter {
-    /// Create a new Jamf conflict filter with default exclusions
+    /// The embedded constraints. See the module docs for why there is no
+    /// other default.
     pub fn new() -> Result<Self> {
-        Self::from_file(None)
+        Ok(Self::embedded())
     }
 
-    /// Create from a specific constraints file
+    /// The constraints compiled into this binary: `crates/mscp/jamf-constraints.yml`.
+    pub const EMBEDDED_CONSTRAINTS: &str = include_str!("../../jamf-constraints.yml");
+
+    /// The embedded constraints. Infallible for a shipped build: the YAML is
+    /// part of the crate, and `embedded_constraints_parse` fails the build's
+    /// test run before a malformed file can reach a user.
+    fn embedded() -> Self {
+        Self::parse(Self::EMBEDDED_CONSTRAINTS, "embedded jamf-constraints.yml")
+            .expect("embedded jamf-constraints.yml is malformed — the crate cannot ship like this")
+    }
+
+    /// Load constraints. `None` is the embedded YAML; `Some(path)` is an
+    /// operator override that must exist and parse — it never falls back.
     pub fn from_file(path: Option<&Path>) -> Result<Self> {
-        let constraints_path = if let Some(p) = path {
-            p.to_path_buf()
-        } else {
-            // Default to jamf-constraints.yml in current directory or repo root
-            let default_path = PathBuf::from("jamf-constraints.yml");
-            if default_path.exists() {
-                default_path
-            } else {
-                // Fallback to embedded defaults if file doesn't exist
-                return Ok(Self::with_defaults());
-            }
+        let Some(p) = path else {
+            return Ok(Self::embedded());
         };
-
-        // Load constraints from YAML
-        let content = std::fs::read_to_string(&constraints_path).with_context(|| {
+        let content = std::fs::read_to_string(p).with_context(|| {
             format!(
-                "Failed to read Jamf constraints: {}",
-                constraints_path.display()
+                "Jamf constraints override not readable: {} — an override must exist; \
+                 there is no fallback, and the embedded constraints are used only when no \
+                 override is given",
+                p.display()
             )
         })?;
+        let filter = Self::parse(&content, &p.display().to_string())?;
+        tracing::info!("Loaded Jamf constraints override from: {}", p.display());
+        Ok(filter)
+    }
 
-        let constraints: JamfConstraints = yaml_serde::from_str(&content).with_context(|| {
-            format!(
-                "Failed to parse Jamf constraints: {}",
-                constraints_path.display()
-            )
-        })?;
-
-        tracing::info!(
-            "Loaded Jamf constraints from: {}",
-            constraints_path.display()
-        );
+    fn parse(content: &str, source: &str) -> Result<Self> {
+        let constraints: JamfConstraints = yaml_serde::from_str(content)
+            .with_context(|| format!("Failed to parse Jamf constraints: {source}"))?;
         tracing::debug!(
-            "  Excluded profiles: {}",
-            constraints.excluded_profiles.len()
-        );
-        tracing::debug!(
-            "  Payload key exclusions: {}",
+            "Jamf constraints ({source}): {} excluded profiles, {} key exclusions",
+            constraints.excluded_profiles.len(),
             constraints.payload_key_exclusions.len()
         );
-
         Ok(Self::from_constraints(constraints))
-    }
-
-    /// Create with hardcoded defaults (fallback)
-    fn with_defaults() -> Self {
-        let mut filter = Self {
-            excluded_profiles: HashSet::new(),
-            payload_key_exclusions: Vec::new(),
-            constraints: JamfConstraints {
-                excluded_profiles: Vec::new(),
-                payload_key_exclusions: Vec::new(),
-                safe_for_jamf: Vec::new(),
-            },
-        };
-
-        // Add basic defaults
-        filter
-            .excluded_profiles
-            .insert("com.apple.MCX.FileVault2.mobileconfig".to_string());
-        filter
-            .excluded_profiles
-            .insert("com.apple.security.FDERecoveryKeyEscrow.mobileconfig".to_string());
-
-        filter
     }
 
     /// Create from loaded constraints
@@ -337,7 +333,7 @@ impl JamfConflictFilter {
 
 impl Default for JamfConflictFilter {
     fn default() -> Self {
-        Self::new().unwrap_or_else(|_| Self::with_defaults())
+        Self::embedded()
     }
 }
 
@@ -346,13 +342,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_with_defaults() {
-        let filter = JamfConflictFilter::with_defaults();
+    fn embedded_constraints_parse() {
+        JamfConflictFilter::parse(JamfConflictFilter::EMBEDDED_CONSTRAINTS, "test")
+            .expect("crates/mscp/jamf-constraints.yml must parse");
+    }
 
+    /// `new()` is the YAML, not a code list. SoftwareUpdate and
+    /// SetupAssistant are the witnesses: the YAML excludes both.
+    #[test]
+    fn new_loads_the_yaml_not_a_code_list() {
+        let filter = JamfConflictFilter::new().unwrap();
         assert!(filter.should_exclude_profile("com.apple.MCX.FileVault2.mobileconfig"));
         assert!(
             filter.should_exclude_profile("com.apple.security.FDERecoveryKeyEscrow.mobileconfig")
         );
+        assert!(
+            filter.should_exclude_profile("com.apple.SoftwareUpdate.mobileconfig"),
+            "in jamf-constraints.yml, absent from the old code list"
+        );
+        assert!(
+            filter.should_exclude_profile("com.apple.SetupAssistant.managed.mobileconfig"),
+            "in jamf-constraints.yml, absent from the old code list"
+        );
+        assert!(
+            filter.get_exclusion_summary().contains("com.apple.mdm"),
+            "the com.apple.mdm key exclusions exist only in the YAML"
+        );
         assert!(!filter.should_exclude_profile("com.apple.security.firewall.mobileconfig"));
+    }
+
+    #[test]
+    fn a_missing_override_is_an_error_not_a_fallback() {
+        let err =
+            JamfConflictFilter::from_file(Some(Path::new("/nonexistent/jamf-constraints.yml")))
+                .err()
+                .expect("a missing override must not load anything");
+        assert!(err.to_string().contains("no fallback"), "{err}");
     }
 }

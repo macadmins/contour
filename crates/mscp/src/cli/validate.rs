@@ -1,5 +1,5 @@
 use crate::output::{OutputMode, ValidationResult};
-use crate::validators::SchemaValidator;
+use crate::validators::{SchemaOrigin, SchemaValidator};
 use anyhow::Result;
 use colored::Colorize;
 use std::fs;
@@ -7,10 +7,62 @@ use std::path::PathBuf;
 use walkdir::WalkDir;
 
 /// Validate command - check output structure and schemas
+/// What `[validation]` in mscp.toml resolves to for one `validate` run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationOptions {
+    pub schemas_path: Option<PathBuf>,
+    pub strict: bool,
+    pub validate_paths: bool,
+}
+
+/// Combine `mscp validate` flags with `[validation]` from an mscp.toml.
+///
+/// All three fields were parsed and never read: `validate` took no `--config`,
+/// so the section was unreachable from the one command it describes, and the
+/// generated template documented it anyway.
+///
+/// Flags win where given. `--strict` and `strict = true` each turn strict mode
+/// on — a flag cannot turn off what the config asked for, because silently
+/// relaxing a check someone wrote down is the failure this repo keeps finding.
+/// A relative `schemas_path` resolves against the config file's directory,
+/// not the shell's: a path in a config file means the same thing wherever the
+/// command is run from.
+pub fn resolve_validation_options(
+    config_path: Option<&std::path::Path>,
+    cli_schemas: Option<PathBuf>,
+    cli_strict: bool,
+) -> Result<ValidationOptions> {
+    let Some(config_path) = config_path else {
+        return Ok(ValidationOptions {
+            schemas_path: cli_schemas,
+            strict: cli_strict,
+            validate_paths: true,
+        });
+    };
+    let config = crate::config::load_config(config_path)?;
+    let v = &config.validation;
+    let from_config = v.schemas_path.as_ref().map(|p| {
+        if p.is_absolute() {
+            p.clone()
+        } else {
+            config_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join(p)
+        }
+    });
+    Ok(ValidationOptions {
+        schemas_path: cli_schemas.or(from_config),
+        strict: cli_strict || v.strict,
+        validate_paths: v.validate_paths,
+    })
+}
+
 pub fn validate_output(
     output_path: PathBuf,
     schemas_path: Option<PathBuf>,
     strict: bool,
+    validate_paths: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
     tracing::info!(
@@ -45,7 +97,32 @@ pub fn validate_output(
     if output_mode == OutputMode::Human {
         println!("\n{}", "Validating team YAML files...".cyan());
     }
-    let validator = SchemaValidator::new(schemas_path.as_ref());
+    // Resolve the schema before any file is read. Asking for schema
+    // validation and not getting it is a configuration error — the check the
+    // operator requested never ran — so a --schemas dir without one fails
+    // here, once, whatever `--strict` says. Non-strict mode softens findings;
+    // it should not soften "there was nothing to find them with".
+    //
+    // With no dir, the pinned schema this build embeds is the default. A build that
+    // embeds none is stated — a warning, visible under --json, or an error
+    // under --strict, like every other softened finding here — never a
+    // silent structural-only pass.
+    let (validator, origin) = SchemaValidator::resolve(schemas_path.as_deref())?;
+    result.schema = Some(origin.to_string());
+    if origin == SchemaOrigin::Absent {
+        let msg = "No Fleet GitOps schema: this build's mscp-schema dataset carries none, so only the structural checks ran. Pass --schemas <dir> \
+                   holding Fleet's generated-schema.json, or rebuild against a newer dataset.";
+        if strict {
+            result.add_error(msg);
+        } else {
+            result.add_warning(msg);
+        }
+        if output_mode == OutputMode::Human {
+            println!("  {} schema: {origin}", "⚠".yellow());
+        }
+    } else if output_mode == OutputMode::Human {
+        println!("  {} schema: {origin}", "✓".green());
+    }
 
     for entry in WalkDir::new(&fleets_dir)
         .max_depth(1)
@@ -103,7 +180,12 @@ pub fn validate_output(
                 }
             }
 
-            // Validate file paths exist
+            // Validate file paths exist — unless `[validation] validate_paths =
+            // false`. That setting was documented and never consulted; the
+            // check ran unconditionally.
+            if !validate_paths {
+                continue;
+            }
             match validator.validate_file_paths(path, &output_path) {
                 Ok(path_result) => {
                     if !path_result.valid {
@@ -206,4 +288,116 @@ fn find_baselines(output_path: &PathBuf) -> Result<Vec<String>> {
     }
 
     Ok(baselines)
+}
+
+#[cfg(test)]
+mod validation_options_tests {
+    use super::*;
+
+    fn config_with(body: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mscp.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "[settings]\nmscp_repo = \"./macos_security\"\noutput_dir = \"./out\"\n\n{body}"
+            ),
+        )
+        .expect("write config");
+        (dir, path)
+    }
+
+    /// No config: the flags are the whole story, and paths are checked.
+    #[test]
+    fn without_a_config_the_flags_decide() {
+        let o = resolve_validation_options(None, Some("/s".into()), true).expect("ok");
+        assert_eq!(o.schemas_path, Some(PathBuf::from("/s")));
+        assert!(o.strict);
+        assert!(o.validate_paths, "the path check is on by default");
+    }
+
+    /// `[validation]` was unreachable from the command it describes.
+    #[test]
+    fn the_config_section_reaches_validate() {
+        let (_d, cfg) = config_with(
+            "[validation]\nschemas_path = \"/abs/schemas\"\nstrict = true\nvalidate_paths = false\n",
+        );
+        let o = resolve_validation_options(Some(&cfg), None, false).expect("ok");
+        assert_eq!(o.schemas_path, Some(PathBuf::from("/abs/schemas")));
+        assert!(o.strict, "strict = true in the config must take effect");
+        assert!(
+            !o.validate_paths,
+            "validate_paths = false must take effect — it was never consulted"
+        );
+    }
+
+    /// A flag names a schema directory; the flag wins.
+    #[test]
+    fn the_schemas_flag_overrides_the_config() {
+        let (_d, cfg) = config_with("[validation]\nschemas_path = \"/from/config\"\n");
+        let o =
+            resolve_validation_options(Some(&cfg), Some("/from/flag".into()), false).expect("ok");
+        assert_eq!(o.schemas_path, Some(PathBuf::from("/from/flag")));
+    }
+
+    /// Neither side can relax what the other asked for.
+    ///
+    /// Silently loosening a check someone wrote down is the failure this repo
+    /// keeps finding, so strict is an OR, not an override.
+    #[test]
+    fn strict_is_on_if_either_side_asks() {
+        let (_d, on) = config_with("[validation]\nstrict = true\n");
+        let (_e, off) = config_with("[validation]\nstrict = false\n");
+        assert!(
+            resolve_validation_options(Some(&on), None, false)
+                .unwrap()
+                .strict
+        );
+        assert!(
+            resolve_validation_options(Some(&off), None, true)
+                .unwrap()
+                .strict
+        );
+        assert!(
+            !resolve_validation_options(Some(&off), None, false)
+                .unwrap()
+                .strict
+        );
+    }
+
+    /// A path in a config file means the same thing wherever you run from.
+    #[test]
+    fn a_relative_schemas_path_resolves_against_the_config_file() {
+        let (dir, cfg) = config_with("[validation]\nschemas_path = \"schemas\"\n");
+        let o = resolve_validation_options(Some(&cfg), None, false).expect("ok");
+        assert_eq!(
+            o.schemas_path,
+            Some(dir.path().join("schemas")),
+            "relative to the config's directory, not the shell's"
+        );
+    }
+
+    /// Asking for a schema and not getting one fails, rather than passing.
+    #[test]
+    fn a_schemas_path_with_no_schema_in_it_is_an_error() {
+        let empty = tempfile::tempdir().expect("tempdir");
+        let err = crate::validators::SchemaValidator::resolve_schema_path(empty.path())
+            .expect_err("an empty directory holds no schema");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("generated-schema.json"),
+            "names Fleet's file: {msg}"
+        );
+        assert!(msg.contains("fleetdm/fleet"), "says where to get it: {msg}");
+    }
+
+    /// Fleet's own filename is found.
+    #[test]
+    fn fleets_schema_filename_is_recognised() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("generated-schema.json"), "{}").expect("write");
+        let found = crate::validators::SchemaValidator::resolve_schema_path(dir.path())
+            .expect("Fleet's filename must be accepted");
+        assert!(found.ends_with("generated-schema.json"));
+    }
 }

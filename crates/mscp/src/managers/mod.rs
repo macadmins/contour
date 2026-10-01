@@ -4,7 +4,7 @@ pub mod constraints;
 pub mod odv;
 
 pub use baseline::{BaselineIndex, VerificationReport};
-pub use category_resolver::{build_exclusion_plan, discover_categories};
+pub use category_resolver::{build_exclusion_plan, build_rule_exclusion_plan, discover_categories};
 pub use constraints::{
     ConstraintType, Constraints, ExcludedProfile, ExcludedScript, ProfileInfo, ScriptInfo,
 };

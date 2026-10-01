@@ -535,7 +535,7 @@ pub fn handle_schema_rule(rule_id: &str, beta: bool, mode: OutputMode) -> Result
             // emits packs/policies: reconstruct the rule from its embedded payload
             // (check + mobileconfig_info) and run the full `classify()`, rather
             // than the coarse schema-only heuristic or the stored columns (which
-            // carry posture's own taxonomy, not contour's routing).
+            // carry the dataset's own taxonomy, not contour's routing).
             let rule_for_classify = crate::extractors::embedded::rule_for_classification(
                 &r.rule_id,
                 r.mobileconfig,

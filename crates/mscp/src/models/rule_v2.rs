@@ -316,11 +316,9 @@ fn flatten_references_for(refs: &Value, os: Platform, os_version: &str) -> HashM
 }
 
 fn os_short_key(os: Platform) -> &'static str {
-    match os {
-        Platform::MacOS => "macos",
-        Platform::Ios => "ios",
-        Platform::VisionOS => "visionos",
-    }
+    // Single owner of the mapping lives on Platform; a second copy here is
+    // how the tree's `macos` and Fleet's `darwin` drift apart.
+    os.mscp_dir_name()
 }
 
 /// Strip a SemVer-ish version like `"26.0"` to its major component `"26"`.

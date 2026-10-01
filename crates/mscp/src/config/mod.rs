@@ -109,6 +109,53 @@ pub struct Settings {
     /// Munki integration settings
     #[serde(default)]
     pub munki: MunkiSettings,
+
+    /// osquery detection settings.
+    ///
+    /// Config-driven generation has no CLI flags to read, so before this
+    /// existed `generate-all --config` could not emit osquery output at all,
+    /// and `generate --config --osquery` accepted the flag and dropped it —
+    /// the command succeeded, nothing was written, and nothing said so.
+    #[serde(default)]
+    pub osquery: OsquerySettings,
+}
+
+/// osquery detection settings — the config form of `--osquery`.
+///
+/// `format` and `audit` mirror `--osquery-format` and `--osquery-audit` and
+/// are parsed by the same code, so an invalid value here fails the same way
+/// an invalid flag does rather than silently selecting a default.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OsquerySettings {
+    /// Emit osquery detection (native-table queries + audit script).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Output adapter: `fleet` (default) or `pack`.
+    #[serde(default = "default_osquery_format")]
+    pub format: String,
+
+    /// Audit-script scope: `slim` (default, residual only) or `full`.
+    #[serde(default = "default_osquery_audit")]
+    pub audit: String,
+}
+
+impl Default for OsquerySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            format: default_osquery_format(),
+            audit: default_osquery_audit(),
+        }
+    }
+}
+
+fn default_osquery_format() -> String {
+    "fleet".to_string()
+}
+
+fn default_osquery_audit() -> String {
+    "slim".to_string()
 }
 
 /// Jamf Pro-specific settings
@@ -219,6 +266,7 @@ impl Default for Settings {
             jamf: JamfSettings::default(),
             fleet: FleetSettings::default(),
             munki: MunkiSettings::default(),
+            osquery: OsquerySettings::default(),
         }
     }
 }
@@ -237,9 +285,12 @@ pub struct BaselineConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Git branch to use (determines platform and OS version)
-    /// Examples: "origin/sequoia", "`origin/ios_18`", "origin/sonoma"
-    /// If not specified, uses current branch
+    /// Git branch to build this baseline from — the rule source, not the
+    /// target platform. `main` carries every platform; an OS-preview branch
+    /// such as `dev_28` carries the next release's rules early. Use
+    /// `os` / `os_version` to choose what gets built.
+    /// Examples: "main", "origin/main", "dev_28"
+    /// If not specified, uses the checkout's current branch.
     pub branch: Option<String>,
 
     /// Optional fleet name override
@@ -253,8 +304,9 @@ pub struct BaselineConfig {
     #[serde(default)]
     pub excluded_rules: Vec<String>,
 
-    /// Custom metadata
-    #[serde(default)]
+    /// Custom metadata. Read by nothing and written to no artifact, so a
+    /// non-empty table is refused at load — see `config::parser`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, String>,
 
     /// Fleet GitOps glob configuration.
@@ -357,32 +409,35 @@ pub struct OutputConfig {
     #[serde(default)]
     pub structure: OutputStructure,
 
-    /// Create subdirectories per baseline
-    #[serde(default = "default_true")]
-    pub separate_baselines: bool,
+    // The three below were parsed and read by nothing, while the generated
+    // template set them — `generate_diffs = true` and `versions_to_keep = 5`
+    // promised diffs and a version history no run produced. They stay
+    // parseable only so `config::parser` can refuse a value that asks for
+    // something contour does not do, by name, instead of serde rejecting the
+    // key with no reason. `None` is "not written", which is what the
+    // template now writes.
+    /// Per-baseline subdirectories. Always true: the layout is fixed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub separate_baselines: Option<bool>,
 
-    /// Generate diff reports
-    #[serde(default)]
-    pub generate_diffs: bool,
+    /// Diff reports during generate. Not implemented; `mscp diff` compares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate_diffs: Option<bool>,
 
-    /// Keep previous versions
-    #[serde(default = "default_versions_to_keep")]
-    pub versions_to_keep: usize,
+    /// Previous versions to keep. Not implemented; nothing is kept or pruned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versions_to_keep: Option<usize>,
 }
 
 impl Default for OutputConfig {
     fn default() -> Self {
         Self {
             structure: OutputStructure::default(),
-            separate_baselines: true,
-            generate_diffs: false,
-            versions_to_keep: default_versions_to_keep(),
+            separate_baselines: None,
+            generate_diffs: None,
+            versions_to_keep: None,
         }
     }
-}
-
-fn default_versions_to_keep() -> usize {
-    5
 }
 
 /// Validation configuration
@@ -395,9 +450,10 @@ pub struct ValidationConfig {
     #[serde(default)]
     pub strict: bool,
 
-    /// Check for conflicts across baselines
-    #[serde(default = "default_true")]
-    pub check_conflicts: bool,
+    /// Cross-baseline conflict detection. Not implemented, so `true` is
+    /// refused at load rather than defaulted on and reported as not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_conflicts: Option<bool>,
 
     /// Validate file paths exist
     #[serde(default = "default_true")]
@@ -409,7 +465,7 @@ impl Default for ValidationConfig {
         Self {
             schemas_path: None,
             strict: false,
-            check_conflicts: true,
+            check_conflicts: None,
             validate_paths: true,
         }
     }
