@@ -39,8 +39,8 @@ pub fn parse_ultra_compact(content: &str) -> Result<Vec<PayloadManifest>> {
                 let field = parse_key_line(line)
                     .with_context(|| format!("Failed to parse key at line {}", line_num + 1))?;
 
-                manifest.field_order.push(field.name.clone());
-                manifest.fields.insert(field.name.clone(), field);
+                manifest.field_order.push(field.path.clone());
+                manifest.fields.insert(field.path.clone(), field);
             }
         }
     }
@@ -86,8 +86,8 @@ pub fn parse_ddm_ultra_compact(content: &str) -> Result<Vec<PayloadManifest>> {
                 let field = parse_ddm_key_line(line)
                     .with_context(|| format!("Failed to parse key at line {}", line_num + 1))?;
 
-                manifest.field_order.push(field.name.clone());
-                manifest.fields.insert(field.name.clone(), field);
+                manifest.field_order.push(field.path.clone());
+                manifest.fields.insert(field.path.clone(), field);
             }
         }
     }
@@ -118,6 +118,10 @@ fn parse_ddm_declaration_line(line: &str) -> Result<PayloadManifest> {
     let category = format!("ddm-{}", parts[5]); // Prefix with ddm- for categorization
 
     Ok(PayloadManifest {
+        manifest_source: None,
+        // External schema: it does not state OS availability.
+        fields_recording_availability: Default::default(),
+        kind: None,
         payload_type,
         title,
         description,
@@ -170,6 +174,10 @@ fn parse_ddm_key_line(line: &str) -> Result<FieldDefinition> {
     let description = parts[4].to_string();
 
     Ok(FieldDefinition {
+        allowed_scopes: std::collections::HashMap::new(),
+        // This parser reads a flat compact format: no nesting, so the name is
+        // the path.
+        path: name.clone(),
         name,
         field_type,
         flags,
@@ -177,6 +185,11 @@ fn parse_ddm_key_line(line: &str) -> Result<FieldDefinition> {
         description,
         default: None,
         allowed_values: Vec::new(),
+        range_min: None,
+        range_max: None,
+        subtype: None,
+        format: None,
+        asset_types: Vec::new(),
         depth: 0,
         parent_key: None,
         platforms: Vec::new(),
@@ -184,6 +197,7 @@ fn parse_ddm_key_line(line: &str) -> Result<FieldDefinition> {
         deprecated_in: None,
         introduced_by_platform: HashMap::new(),
         deprecated_by_platform: HashMap::new(),
+        removed_by_platform: HashMap::new(),
         combinetype: None,
     })
 }
@@ -207,6 +221,10 @@ fn parse_manifest_line(line: &str) -> Result<PayloadManifest> {
     let category = parts[6].to_string();
 
     Ok(PayloadManifest {
+        manifest_source: None,
+        // External schema: it does not state OS availability.
+        fields_recording_availability: Default::default(),
+        kind: None,
         payload_type,
         title,
         description,
@@ -320,7 +338,16 @@ fn parse_key_line(line: &str) -> Result<FieldDefinition> {
     });
 
     Ok(FieldDefinition {
+        allowed_scopes: std::collections::HashMap::new(),
+        // This parser reads a flat compact format: no nesting, so the name is
+        // the path.
+        path: name.clone(),
         name,
+        range_min: None,
+        range_max: None,
+        subtype: None,
+        format: None,
+        asset_types: Vec::new(),
         field_type,
         flags,
         title,
@@ -334,6 +361,7 @@ fn parse_key_line(line: &str) -> Result<FieldDefinition> {
         deprecated_in: None,
         introduced_by_platform: HashMap::new(),
         deprecated_by_platform: HashMap::new(),
+        removed_by_platform: HashMap::new(),
         combinetype: None,
     })
 }

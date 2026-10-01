@@ -2,20 +2,18 @@
 //!
 
 use super::types::{FieldType, PayloadManifest, Platform};
-use chrono::Utc;
 
 /// Serialize manifests to ultra-compact format for profile manifests
-pub fn to_ultra_compact(manifests: &[PayloadManifest], category: &str) -> String {
+/// `generated` is the timestamp for the header — supplied by the caller,
+/// because this crate does not read the clock.
+pub fn to_ultra_compact(manifests: &[PayloadManifest], category: &str, generated: &str) -> String {
     let mut output = String::new();
 
     // Header
     output.push_str(&format!(
         "# ProfileManifests Ultra-Compact v1.0 - {category}\n"
     ));
-    output.push_str(&format!(
-        "# Generated: {}\n",
-        Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
-    ));
+    output.push_str(&format!("# Generated: {generated}\n"));
     output.push_str(&format!("# Category: {category}\n"));
     output.push_str(&format!("# Manifests: {}\n", manifests.len()));
     output.push_str("# Source: contour profile docs generate\n");
@@ -41,15 +39,12 @@ pub fn to_ultra_compact(manifests: &[PayloadManifest], category: &str) -> String
 }
 
 /// Serialize manifests to ultra-compact format for DDM declarations
-pub fn to_ddm_ultra_compact(manifests: &[PayloadManifest]) -> String {
+pub fn to_ddm_ultra_compact(manifests: &[PayloadManifest], generated: &str) -> String {
     let mut output = String::new();
 
     // Header
     output.push_str("# DDM Declarations Ultra-Compact v1.0\n");
-    output.push_str(&format!(
-        "# Generated: {}\n",
-        Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
-    ));
+    output.push_str(&format!("# Generated: {generated}\n"));
     output.push_str(&format!("# Declarations: {}\n", manifests.len()));
     output.push_str("# Source: github.com/apple/device-management\n");
     output.push_str("#\n");
@@ -270,7 +265,7 @@ fn truncate_description(desc: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::types::Platforms;
+    use crate::types::Platforms;
 
     #[test]
     fn test_format_platforms() {

@@ -10,8 +10,27 @@ pub struct Segment {
 /// Represents a payload manifest (schema) for a profile payload type
 #[derive(Debug, Clone)]
 pub struct PayloadManifest {
+    /// Which upstream described this payload: `device-management` (Apple),
+    /// `profile-manifests` (the ProfileCreator community manifests),
+    /// `app-schema:*` (a vendor's own document), `posture-supplemental`
+    /// (stated by the dataset itself, with a citation), or `both`.
+    ///
+    /// Carried because the trust ranks differ and a caller cannot tell them
+    /// apart from the keys alone. The community manifests are deprecated and
+    /// are not loaded unless asked for — see
+    /// [`SchemaRegistry::embedded_with_community`](crate::SchemaRegistry::embedded_with_community).
+    /// `None` for manifests built from a local directory, which state no
+    /// provenance.
+    pub manifest_source: Option<String>,
     /// The payload type identifier (e.g., "com.apple.wifi.managed")
     pub payload_type: String,
+    /// What this schema describes: a profile payload, a DDM declaration, an
+    /// MDM command, a check-in message, a Windows CSP node… `None` when the
+    /// source did not say (external YAML/plist schemas, hand-built manifests)
+    /// — never a guessed default, because "unspecified" and "profile" differ
+    /// and a command mistaken for a profile is exactly the failure this
+    /// field exists to prevent.
+    pub kind: Option<mdm_schema::PayloadKind>,
     /// Human-readable title (e.g., "WiFi")
     pub title: String,
     /// Description of what this payload configures
@@ -35,6 +54,23 @@ pub struct PayloadManifest {
     pub apply_mode: Option<String>,
     /// Category: "apple", "apps", "prefs"
     pub category: String,
+    /// Field paths whose source records OS availability.
+    ///
+    /// Not a per-payload flag, because a payload is not from one source.
+    /// `com.apple.wifi.managed` loads from ProfileCreator and then has
+    /// Apple's keys merged over it, so one manifest holds Apple fields —
+    /// which state `introduced`/`deprecated` — beside ProfileCreator-only
+    /// legacy fields, which state nothing.
+    ///
+    /// Both kinds arrive as the same nulls. Apple's silence means the key
+    /// inherits the payload's availability, so `Ok` is truthful there;
+    /// ProfileCreator's silence means nobody recorded anything, and `Ok`
+    /// would assert a check that never happened. 3,936 of 4,259
+    /// ManagedPreference rows are the second kind.
+    ///
+    /// Empty for a manifest with no such source; every field path for a
+    /// manifest wholly from Apple's schema.
+    pub fields_recording_availability: std::collections::BTreeSet<String>,
     /// Field definitions keyed by field name
     pub fields: HashMap<String, FieldDefinition>,
     /// Ordered list of field names (preserves original order)
@@ -100,14 +136,25 @@ pub struct Platforms {
 }
 
 /// Platform identifier
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Serialises as Apple's spelling (`macOS`, `iOS`, …) so it can key a JSON
+/// map; orders as Apple lists them, macOS first.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum Platform {
+    #[serde(rename = "macOS")]
     MacOS,
+    #[serde(rename = "iOS")]
     Ios,
+    #[serde(rename = "tvOS")]
     TvOS,
+    #[serde(rename = "watchOS")]
     WatchOS,
+    #[serde(rename = "visionOS")]
     VisionOS,
     /// Windows (the CSP dataset behind `--windows` only).
+    #[serde(rename = "Windows")]
     Windows,
 }
 
@@ -154,6 +201,18 @@ impl Platform {
 pub struct FieldDefinition {
     /// Field name (key)
     pub name: String,
+    /// The field's full dotted path — its identity.
+    ///
+    /// A leaf name is not unique within a payload:
+    /// `com.apple.configuration.account.mail` carries `Port` under both
+    /// `IncomingServer` and `OutgoingServer`, and 61 DDM keys across 14
+    /// declaration types collide that way. Look fields up by this, not by
+    /// [`FieldDefinition::name`].
+    ///
+    /// Sourced from the schema's own `key_path` where the dataset provides it
+    /// (dots inside a segment escaped, so it survives a key name containing
+    /// dots), otherwise composed from `parent_key` and `name`.
+    pub path: String,
     /// Field type
     pub field_type: FieldType,
     /// Field flags (required, supervised, sensitive)
@@ -166,6 +225,12 @@ pub struct FieldDefinition {
     pub default: Option<String>,
     /// Allowed values for enum-like fields
     pub allowed_values: Vec<String>,
+    /// The key's OWN `allowed-scopes`, per platform, when it declares any.
+    ///
+    /// A platform absent means the key inherits the payload's scope there —
+    /// not that it is unrestricted. Eight keys declare one on the 27.0
+    /// release branch and five contradict their payload.
+    pub allowed_scopes: std::collections::HashMap<Platform, Vec<String>>,
     /// Nesting depth (0=top-level, 1=first nested, etc.)
     pub depth: u8,
     /// Parent key name for nested fields (e.g. "CustomRegex" for a "Regex" child key)
@@ -189,6 +254,25 @@ pub struct FieldDefinition {
     pub introduced_by_platform: HashMap<Platform, String>,
     /// Per-OS `deprecated` version. Same shape as `introduced_by_platform`.
     pub deprecated_by_platform: HashMap<Platform, String>,
+    /// Per-OS `removed` version — the key's own. A key is silently ignored
+    /// on that OS and later, so this drives `Verdict::Removed`, which wins
+    /// over `Deprecated`: a key both deprecated at 14.0 and removed at 15.0,
+    /// targeted at 15.0, is removed. Empty where the source states none.
+    pub removed_by_platform: HashMap<Platform, String>,
+    /// Lower bound for numeric fields, where Apple states one (561 rows).
+    /// `None` means the schema is silent, not that the field is unbounded.
+    pub range_min: Option<f64>,
+    /// Upper bound for numeric fields (466 rows). See [`range_min`].
+    pub range_max: Option<f64>,
+    /// Value shape hint — `url`, `hostname`, `email` (498 rows). A renderer
+    /// uses it to pick a validator; emitting it is the difference between a
+    /// text box and one that rejects a non-URL.
+    pub subtype: Option<String>,
+    /// Regex the value must match, where Apple states one (396 rows).
+    pub format: Option<String>,
+    /// MIME types an asset reference accepts (310 rows). Non-empty marks the
+    /// field as an asset picker rather than free text.
+    pub asset_types: Vec<String>,
     /// DDM merge strategy when multiple declarations carry this key —
     /// e.g. `boolean-or`, `number-min`, `set-union`. Only meaningful for
     /// declaration types; `None` for plain MDM profile keys.
@@ -196,7 +280,7 @@ pub struct FieldDefinition {
 }
 
 /// Field type enumeration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum FieldType {
     String,
     Integer,
@@ -315,7 +399,92 @@ impl Platforms {
     }
 }
 
+impl FieldDefinition {
+    /// Compose a field's identity from its parent path and leaf name.
+    ///
+    /// `parent_key` already holds the full ancestor path in the escaped
+    /// spelling, so this appends `name` as ONE segment — a dot inside it is
+    /// escaped, because Apple ships key names containing dots. The schema's
+    /// own `key_path` is still preferred where the dataset carries it.
+    pub fn compose_path(parent: Option<&str>, name: &str) -> String {
+        let parent = parent.filter(|p| !p.is_empty()).map_or_else(
+            crate::path::FieldPath::default,
+            crate::path::FieldPath::parse,
+        );
+        parent.join(name).to_string()
+    }
+}
+
+impl FieldDefinition {
+    /// Both schema sources have a spelling for "the operator supplies this
+    /// key name": Apple's DDM and profile YAML write `ANY`; ProfileCreator
+    /// writes a `{{key}}` / `{{value}}` pair. Emitted literally either one
+    /// produces `<key>{{value}}</key>` in a shipped document.
+    pub fn is_placeholder_name(name: &str) -> bool {
+        matches!(name, "ANY" | "{{key}}" | "{{value}}")
+    }
+
+    /// Whether this field *is* one of those placeholders rather than a key.
+    pub fn is_placeholder(&self) -> bool {
+        Self::is_placeholder_name(&self.name)
+    }
+}
+
 impl PayloadManifest {
+    /// If `field`'s keys are operator-supplied, the field that describes
+    /// each value: Apple's `ANY` child, or ProfileCreator's `{{value}}`
+    /// (`{{key}}` is always a string and carries nothing else).
+    ///
+    /// `None` for an ordinary dictionary. Consumers building a form use
+    /// this to render "add entry" instead of a fixed key list; emitters use
+    /// it to leave the dictionary empty instead of printing the marker.
+    pub fn dynamic_value_shape(&self, field: &FieldDefinition) -> Option<&FieldDefinition> {
+        let mut any = None;
+        let mut value = None;
+        for child in self
+            .fields
+            .values()
+            .filter(|c| c.parent_key.as_deref() == Some(field.path.as_str()))
+        {
+            match child.name.as_str() {
+                "ANY" => any = Some(child),
+                "{{value}}" => value = Some(child),
+                _ => {}
+            }
+        }
+        any.or(value)
+    }
+
+    /// The value shape when the *payload itself* is keyed by the operator —
+    /// a root-level `ANY`, as in `com.apple.firstethernet.managed`.
+    pub fn root_dynamic_value_shape(&self) -> Option<&FieldDefinition> {
+        let mut any = None;
+        let mut value = None;
+        for f in self.fields.values().filter(|f| f.parent_key.is_none()) {
+            match f.name.as_str() {
+                "ANY" => any = Some(f),
+                "{{value}}" => value = Some(f),
+                _ => {}
+            }
+        }
+        any.or(value)
+    }
+
+    /// Names of the fields directly under `parent`, in declaration order.
+    pub fn child_names(&self, parent: &FieldDefinition) -> Vec<&str> {
+        self.fields_in_order()
+            .filter(|c| c.parent_key.as_deref() == Some(parent.path.as_str()))
+            .map(|c| c.name.as_str())
+            .collect()
+    }
+
+    /// `false` only for kinds that cannot be deployed as a document — MDM
+    /// commands and check-in messages. Unknown kind is authorable: refusing
+    /// on missing metadata would block every external schema.
+    pub fn is_authorable(&self) -> bool {
+        self.kind.is_none_or(mdm_schema::PayloadKind::is_authorable)
+    }
+
     /// Get fields that are required (have R flag)
     pub fn required_fields(&self) -> Vec<&FieldDefinition> {
         self.fields.values().filter(|f| f.flags.required).collect()
@@ -347,19 +516,62 @@ impl PayloadManifest {
             .collect()
     }
 
-    /// Dotted path of a field, e.g. `Allowed.AllowedApps.AppIdentifier`.
-    /// `parent_key` already holds the ancestor path, so this is just
-    /// `<parent_key>.<name>` (or `<name>` at the root).
-    pub fn field_path(&self, name: &str) -> String {
-        match self.fields.get(name).and_then(|f| f.parent_key.as_deref()) {
-            Some(parent) => format!("{parent}.{name}"),
-            None => name.to_string(),
-        }
+    /// Look a field up by its **path** — the identity.
+    ///
+    /// Correct whether `fields` is keyed by path or still by leaf name: the
+    /// direct hit answers once the map is re-keyed, and the scan answers
+    /// meanwhile. That is what lets call sites migrate ahead of the re-key
+    /// instead of in the same change.
+    pub fn field_by_path(&self, path: &str) -> Option<&FieldDefinition> {
+        self.fields
+            .get(path)
+            .or_else(|| self.fields.values().find(|f| f.path == path))
+    }
+
+    /// Look a field up by bare leaf name. **Ambiguous by construction.**
+    ///
+    /// Where a payload has same-named children under different parents this
+    /// returns whichever the map holds, which is why 61 keys were lost. Use
+    /// [`PayloadManifest::field_by_path`] wherever the caller knows the path;
+    /// this exists for callers holding a name from a document they are
+    /// validating, where the name is all there is.
+    pub fn field_by_name(&self, name: &str) -> Option<&FieldDefinition> {
+        self.fields
+            .get(name)
+            .or_else(|| self.fields.values().find(|f| f.name == name))
+    }
+
+    /// Every field in declaration order.
+    ///
+    /// Walks `field_order` and resolves each entry, skipping any that does not
+    /// resolve — `field_order` and `fields` can disagree, and a name appearing
+    /// twice in the order must not emit the same field twice.
+    pub fn fields_in_order(&self) -> impl Iterator<Item = &FieldDefinition> {
+        let mut seen = std::collections::HashSet::new();
+        self.field_order.iter().filter_map(move |k| {
+            let f = self.fields.get(k)?;
+            seen.insert(f.path.clone()).then_some(f)
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// A key name containing dots is one segment of the path, not several.
+    #[test]
+    fn compose_path_escapes_a_dotted_name() {
+        assert_eq!(FieldDefinition::compose_path(None, "Plain"), "Plain");
+        assert_eq!(
+            FieldDefinition::compose_path(Some("Privacy.PermissionDefaults"), "us.zoom.xos"),
+            r"Privacy.PermissionDefaults.us\.zoom\.xos"
+        );
+        assert_eq!(
+            FieldDefinition::compose_path(Some(r"com\.apple\.EnergySaver"), "Schedule"),
+            r"com\.apple\.EnergySaver.Schedule"
+        );
+    }
+
     use super::*;
 
     // ========== FieldType Tests ==========
@@ -576,7 +788,14 @@ mod tests {
         // matched by path (not bare name): Allowed > AllowedApps > AppIdentifier.
         fn fld(name: &str, depth: u8, parent: Option<&str>) -> FieldDefinition {
             FieldDefinition {
+                allowed_scopes: std::collections::HashMap::new(),
                 name: name.to_string(),
+                range_min: None,
+                range_max: None,
+                subtype: None,
+                format: None,
+                asset_types: Vec::new(),
+                path: name.to_string(),
                 field_type: FieldType::Dictionary,
                 flags: FieldFlags {
                     required: false,
@@ -594,6 +813,7 @@ mod tests {
                 deprecated_in: None,
                 introduced_by_platform: HashMap::new(),
                 deprecated_by_platform: HashMap::new(),
+                removed_by_platform: HashMap::new(),
                 combinetype: None,
             }
         }
@@ -608,7 +828,9 @@ mod tests {
             fld("AppIdentifier", 2, Some("Allowed.AllowedApps")),
         );
         let m = PayloadManifest {
+            manifest_source: None,
             payload_type: "x".to_string(),
+            kind: None,
             title: "x".to_string(),
             description: String::new(),
             platforms: Platforms::parse("*"),
@@ -616,6 +838,7 @@ mod tests {
             os_support: HashMap::new(),
             apply_mode: None,
             category: "ddm-configuration".to_string(),
+            fields_recording_availability: Default::default(),
             fields,
             field_order: vec![
                 "Allowed".to_string(),
@@ -625,10 +848,6 @@ mod tests {
             segments: vec![],
         };
         assert_eq!(m.top_level_fields().len(), 1);
-        assert_eq!(
-            m.field_path("AppIdentifier"),
-            "Allowed.AllowedApps.AppIdentifier"
-        );
         // Path-based: the grandchild resolves under the full parent path …
         let kids = m.children_of("Allowed.AllowedApps");
         assert_eq!(kids.len(), 1);
@@ -646,7 +865,14 @@ mod tests {
         fields.insert(
             "SSID_STR".to_string(),
             FieldDefinition {
+                allowed_scopes: std::collections::HashMap::new(),
                 name: "SSID_STR".to_string(),
+                range_min: None,
+                range_max: None,
+                subtype: None,
+                format: None,
+                asset_types: Vec::new(),
+                path: "SSID_STR".to_string(),
                 field_type: FieldType::String,
                 flags: FieldFlags {
                     required: true,
@@ -664,6 +890,7 @@ mod tests {
                 deprecated_in: None,
                 introduced_by_platform: std::collections::HashMap::new(),
                 deprecated_by_platform: std::collections::HashMap::new(),
+                removed_by_platform: std::collections::HashMap::new(),
                 combinetype: None,
             },
         );
@@ -673,7 +900,14 @@ mod tests {
         fields.insert(
             "Password".to_string(),
             FieldDefinition {
+                allowed_scopes: std::collections::HashMap::new(),
                 name: "Password".to_string(),
+                range_min: None,
+                range_max: None,
+                subtype: None,
+                format: None,
+                asset_types: Vec::new(),
+                path: "Password".to_string(),
                 field_type: FieldType::String,
                 flags: FieldFlags {
                     required: false,
@@ -691,6 +925,7 @@ mod tests {
                 deprecated_in: None,
                 introduced_by_platform: std::collections::HashMap::new(),
                 deprecated_by_platform: std::collections::HashMap::new(),
+                removed_by_platform: std::collections::HashMap::new(),
                 combinetype: None,
             },
         );
@@ -700,7 +935,14 @@ mod tests {
         fields.insert(
             "EAPConfig".to_string(),
             FieldDefinition {
+                allowed_scopes: std::collections::HashMap::new(),
                 name: "EAPConfig".to_string(),
+                range_min: None,
+                range_max: None,
+                subtype: None,
+                format: None,
+                asset_types: Vec::new(),
+                path: "EAPConfig".to_string(),
                 field_type: FieldType::Dictionary,
                 flags: FieldFlags::default(),
                 title: "EAP Configuration".to_string(),
@@ -714,12 +956,15 @@ mod tests {
                 deprecated_in: None,
                 introduced_by_platform: std::collections::HashMap::new(),
                 deprecated_by_platform: std::collections::HashMap::new(),
+                removed_by_platform: std::collections::HashMap::new(),
                 combinetype: None,
             },
         );
 
         PayloadManifest {
+            manifest_source: None,
             payload_type: "com.apple.wifi.managed".to_string(),
+            kind: None,
             title: "WiFi".to_string(),
             description: "Configure WiFi networks".to_string(),
             platforms: Platforms::parse("m,i,t"),
@@ -727,6 +972,7 @@ mod tests {
             os_support: HashMap::new(),
             apply_mode: None,
             category: "apple".to_string(),
+            fields_recording_availability: Default::default(),
             fields,
             field_order,
             segments: vec![],

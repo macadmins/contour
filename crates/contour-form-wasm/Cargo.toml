@@ -1,0 +1,24 @@
+[package]
+name = "contour-form-wasm"
+version = "0.4.1-beta.1"
+description = "wasm-bindgen face of contour-form: FormSpec out, documents back, over JSON strings"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Default features off: this is the build that must not name the filesystem.
+contour-form = { path = "../contour-form", version = "0.4.1-beta.1", default-features = false }
+serde_json.workspace = true
+wasm-bindgen.workspace = true
+
+[lints]
+workspace = true

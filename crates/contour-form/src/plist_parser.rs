@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+#[cfg(feature = "native")]
 use std::path::Path;
 
 use super::types::{FieldDefinition, FieldFlags, FieldType, PayloadManifest, Platforms, Segment};
@@ -52,6 +53,10 @@ pub fn parse_plist_manifest(content: &[u8]) -> Result<PayloadManifest> {
     let segments = parse_segments(dict);
 
     Ok(PayloadManifest {
+        manifest_source: Some("profile-manifests".into()),
+        // External schema: it does not state OS availability.
+        fields_recording_availability: Default::default(),
+        kind: None,
         payload_type,
         title,
         description,
@@ -67,6 +72,7 @@ pub fn parse_plist_manifest(content: &[u8]) -> Result<PayloadManifest> {
 }
 
 /// Parse a ProfileManifests plist file from path
+#[cfg(feature = "native")]
 pub fn parse_plist_file(path: &Path) -> Result<PayloadManifest> {
     let content =
         std::fs::read(path).with_context(|| format!("Failed to read file: {}", path.display()))?;
@@ -74,6 +80,7 @@ pub fn parse_plist_file(path: &Path) -> Result<PayloadManifest> {
 }
 
 /// Load all manifests from a ProfileManifests directory structure
+#[cfg(feature = "native")]
 pub fn load_from_profile_manifests_dir(dir: &Path) -> Result<Vec<PayloadManifest>> {
     let mut manifests = Vec::new();
 
@@ -106,6 +113,7 @@ pub fn load_from_profile_manifests_dir(dir: &Path) -> Result<Vec<PayloadManifest
 }
 
 /// Load all .plist manifests from a directory
+#[cfg(feature = "native")]
 fn load_plist_directory(dir: &Path) -> Result<Vec<PayloadManifest>> {
     let mut manifests = Vec::new();
 
@@ -242,14 +250,16 @@ fn collect_fields(
             continue;
         }
 
-        // Skip duplicate names (can happen with segmented controls)
-        if fields.contains_key(&field.name) {
+        // Skip duplicates. Keyed on the path: a leaf name is not unique
+        // within a payload, and keying on it would collapse same-named
+        // children of different parents into one.
+        if fields.contains_key(&field.path) {
             continue;
         }
 
-        let name = field.name.clone();
-        field_order.push(name.clone());
-        fields.insert(name, field);
+        let path = field.path.clone();
+        field_order.push(path.clone());
+        fields.insert(path, field);
 
         // Recurse into child subkeys
         if let Some(child_subkeys) = subkey_dict.get("pfm_subkeys").and_then(|v| v.as_array()) {
@@ -314,7 +324,15 @@ fn parse_field(dict: &plist::Dictionary, depth: usize) -> Option<FieldDefinition
         .unwrap_or_default();
 
     Some(FieldDefinition {
+        allowed_scopes: std::collections::HashMap::new(),
         name: name.to_string(),
+        range_min: None,
+        range_max: None,
+        subtype: None,
+        format: None,
+        asset_types: Vec::new(),
+        // parent_key is None here: this parser produces top-level keys only.
+        path: name.to_string(),
         field_type,
         title,
         description,
@@ -328,6 +346,7 @@ fn parse_field(dict: &plist::Dictionary, depth: usize) -> Option<FieldDefinition
         deprecated_in: None,
         introduced_by_platform: HashMap::new(),
         deprecated_by_platform: HashMap::new(),
+        removed_by_platform: HashMap::new(),
         combinetype: None,
     })
 }

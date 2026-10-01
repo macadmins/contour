@@ -1,12 +1,16 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+#[cfg(feature = "native")]
 use std::path::Path;
 
+#[cfg(feature = "native")]
 use super::parser::parse_ultra_compact;
+#[cfg(feature = "native")]
 use super::plist_parser;
 use super::types::{
     FieldDefinition, FieldFlags, FieldType, OsSupportDetail, PayloadManifest, Platform, Platforms,
 };
+#[cfg(feature = "native")]
 use super::yaml_parser;
 
 /// Schema format detection
@@ -48,169 +52,21 @@ pub fn load_embedded_windows() -> Result<Vec<PayloadManifest>> {
     Ok(capabilities.iter().map(capability_to_manifest).collect())
 }
 
-/// Shared body for [`load_embedded`] / [`load_embedded_beta`]: merges the
-/// ProfileCreator manifests with the supplied Apple capabilities Parquet bytes.
+/// Shared body for [`load_embedded`] / [`load_embedded_beta`].
 fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>> {
-    let profile_manifests = mdm_schema::profiles::read(mdm_schema::embedded_profile_manifests())
-        .context("Failed to read embedded profile manifests from Parquet")?;
+    load_from_parquet(capabilities_bytes)
+}
 
-    let mut manifests: Vec<PayloadManifest> = profile_manifests
-        .into_iter()
-        .map(|pm| {
-            let mut fields = HashMap::new();
-            let mut field_order = Vec::new();
-
-            for f in &pm.fields {
-                field_order.push(f.name.clone());
-                fields.insert(
-                    f.name.clone(),
-                    FieldDefinition {
-                        name: f.name.clone(),
-                        field_type: match f.field_type.as_str() {
-                            "String" => FieldType::String,
-                            "Integer" => FieldType::Integer,
-                            "Boolean" => FieldType::Boolean,
-                            "Array" => FieldType::Array,
-                            "Dictionary" => FieldType::Dictionary,
-                            "Data" => FieldType::Data,
-                            "Date" => FieldType::Date,
-                            "Real" => FieldType::Real,
-                            _ => FieldType::String,
-                        },
-                        flags: FieldFlags {
-                            required: f.required,
-                            supervised: f.supervised,
-                            sensitive: f.sensitive,
-                        },
-                        title: f.title.clone(),
-                        description: f.description.clone(),
-                        default: f.default_value.clone(),
-                        allowed_values: f
-                            .allowed_values
-                            .as_ref()
-                            .map(|v| {
-                                v.split(',')
-                                    .map(|s| s.trim().to_string())
-                                    .filter(|s| !s.is_empty())
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
-                        depth: f.depth,
-                        parent_key: f.parent_key.clone(),
-                        platforms: f
-                            .platforms
-                            .as_ref()
-                            .map(|s| s.chars().filter_map(Platform::from_char).collect())
-                            .unwrap_or_default(),
-                        min_version: f.min_version.clone(),
-                        deprecated_in: None,
-                        introduced_by_platform: HashMap::new(),
-                        deprecated_by_platform: HashMap::new(),
-                        combinetype: None,
-                    },
-                );
-            }
-
-            let mut min_versions = HashMap::new();
-            if let Some(v) = &pm.min_versions.macos {
-                min_versions.insert(Platform::MacOS, v.clone());
-            }
-            if let Some(v) = &pm.min_versions.ios {
-                min_versions.insert(Platform::Ios, v.clone());
-            }
-            if let Some(v) = &pm.min_versions.tvos {
-                min_versions.insert(Platform::TvOS, v.clone());
-            }
-            if let Some(v) = &pm.min_versions.watchos {
-                min_versions.insert(Platform::WatchOS, v.clone());
-            }
-            if let Some(v) = &pm.min_versions.visionos {
-                min_versions.insert(Platform::VisionOS, v.clone());
-            }
-
-            // Synthesize partial per-OS support detail from ProfileCreator's
-            // flat columns. ProfileCreator only carries platform-wide
-            // channel booleans + min_version per OS + macOS-only
-            // deprecation, so the resulting OsSupportDetail has fewer
-            // populated slots than capabilities.parquet would. The empty
-            // slots stay None; an agent that reads `requires_dep: None`
-            // can't tell whether Apple says "not required" or
-            // "ProfileCreator never knew" — the gap-honest tradeoff.
-            let mut os_support: HashMap<Platform, OsSupportDetail> = HashMap::new();
-            let backfill_for = |platform: Platform,
-                                enabled: bool,
-                                min_v: &Option<String>,
-                                dep: Option<&str>|
-             -> Option<(Platform, OsSupportDetail)> {
-                if !enabled {
-                    return None;
-                }
-                Some((
-                    platform,
-                    OsSupportDetail {
-                        introduced: min_v.clone(),
-                        deprecated: dep.map(str::to_string),
-                        device_channel: pm.device_channel,
-                        user_channel: pm.user_channel,
-                        ..Default::default()
-                    },
-                ))
-            };
-            for entry in [
-                backfill_for(
-                    Platform::MacOS,
-                    pm.platforms.macos,
-                    &pm.min_versions.macos,
-                    pm.deprecated_macos.as_deref(),
-                ),
-                backfill_for(Platform::Ios, pm.platforms.ios, &pm.min_versions.ios, None),
-                backfill_for(
-                    Platform::TvOS,
-                    pm.platforms.tvos,
-                    &pm.min_versions.tvos,
-                    None,
-                ),
-                backfill_for(
-                    Platform::WatchOS,
-                    pm.platforms.watchos,
-                    &pm.min_versions.watchos,
-                    None,
-                ),
-                backfill_for(
-                    Platform::VisionOS,
-                    pm.platforms.visionos,
-                    &pm.min_versions.visionos,
-                    None,
-                ),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                os_support.insert(entry.0, entry.1);
-            }
-
-            PayloadManifest {
-                payload_type: pm.payload_type,
-                title: pm.title,
-                description: pm.description,
-                platforms: Platforms {
-                    macos: pm.platforms.macos,
-                    ios: pm.platforms.ios,
-                    tvos: pm.platforms.tvos,
-                    watchos: pm.platforms.watchos,
-                    visionos: pm.platforms.visionos,
-                    windows: false,
-                },
-                min_versions,
-                os_support,
-                apply_mode: pm.apply_mode.clone(),
-                category: pm.category,
-                fields,
-                field_order,
-                segments: vec![],
-            }
-        })
-        .collect();
+/// Build manifests from `capabilities.parquet` as bytes — the entry point
+/// for a host that ships the dataset as a separate asset instead of baking
+/// it into the binary (the wasm module does; refreshing the schema then
+/// needs no rebuild).
+///
+/// Third-party domains are App Schema documents built from their vendors'
+/// own sources, which arrive in `capabilities.parquet` like everything
+/// else.
+pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>> {
+    let mut manifests: Vec<PayloadManifest> = Vec::new();
 
     // Append Apple's native schemas from capabilities.parquet.
     // MDM profiles override ProfileCreator where both exist (Apple is authoritative).
@@ -223,10 +79,15 @@ fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>>
         manifests.iter().map(|m| m.payload_type.clone()).collect();
 
     // MDM profiles from Apple's device-management repo (authoritative)
-    for cap in capabilities
-        .iter()
-        .filter(|c| c.kind == mdm_schema::PayloadKind::MdmProfile)
-    {
+    // Preference domains ride along with profiles here: before the
+    // ManagedPreference kind existed they were read as MdmProfile, and
+    // this is the branch that merged them.
+    for cap in capabilities.iter().filter(|c| {
+        matches!(
+            c.kind,
+            mdm_schema::PayloadKind::MdmProfile | mdm_schema::PayloadKind::ManagedPreference
+        )
+    }) {
         if existing_types.contains(&cap.payload_type) {
             // Merge Apple keys into existing ProfileCreator manifest.
             // Apple keys take precedence where both define the same key,
@@ -236,14 +97,33 @@ fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>>
                 .find(|m| m.payload_type == cap.payload_type)
             {
                 let apple = capability_to_manifest(cap);
-                // Merge fields: Apple overrides, ProfileCreator fills gaps
-                for (key, field) in apple.fields {
+                // What arrives here is a second VARIANT of one payload type: com.apple.extensiblesso and its (kerberos) surface,
+                // or the six com.apple.MCX files. A variant's requirements
+                // hold for that variant alone — Realm and TeamIdentifier are
+                // required of the Kerberos extension, not of every SSO
+                // extension — and one manifest cannot say which variant a
+                // payload is. So a merged key stays required only where every
+                // variant that shares the type requires it; letting the last
+                // variant win would reject every Okta and Entra SSO profile.
+                for (key, field) in existing.fields.iter_mut() {
+                    if !apple.fields.contains_key(key) {
+                        field.flags.required = false;
+                    }
+                }
+                for (key, mut field) in apple.fields {
+                    match existing.fields.get(&key) {
+                        Some(prior) => field.flags.required &= prior.flags.required,
+                        None => field.flags.required = false,
+                    }
                     existing.fields.insert(key.clone(), field);
                     if !existing.field_order.contains(&key) {
                         existing.field_order.push(key);
                     }
                 }
                 existing.platforms = apple.platforms;
+                // Apple contributed these paths, so they — and only they —
+                // have a source that records availability.
+                existing.fields_recording_availability = apple.fields_recording_availability;
                 // Apple is authoritative for per-OS metadata too —
                 // ProfileCreator never carried `os_support`, so this
                 // doesn't lose any pre-existing data.
@@ -281,6 +161,17 @@ fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>>
                 existing.fields = apple.fields;
                 existing.field_order = apple.field_order;
                 existing.platforms = apple.platforms;
+                // Apple is authoritative for per-OS metadata, exactly as in
+                // the non-DDM branch above. Without this a DDM type that also
+                // had a ProfileCreator entry kept the backfilled os_support,
+                // whose `allowed_scopes` is None by construction — so every
+                // DDM declaration read as having no scope restriction at all,
+                // including the 13 macOS user-only payloads.
+                existing.os_support = apple.os_support;
+                existing.fields_recording_availability = apple.fields_recording_availability;
+                if existing.min_versions.is_empty() {
+                    existing.min_versions = apple.min_versions;
+                }
                 existing.category = apple.category; // ensure ddm-* category
                 if !apple.description.is_empty() {
                     existing.description = apple.description;
@@ -288,6 +179,26 @@ fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>>
             }
         } else {
             existing_types.insert(cap.payload_type.clone());
+            manifests.push(capability_to_manifest(cap));
+        }
+    }
+
+    // Everything else Apple describes: commands, check-ins, and the shared
+    // structures from `other/`.
+    //
+    // These are not authorable — `PayloadKind::not_authorable_reason` refuses
+    // them by kind — but they have to be IN the registry for that refusal to
+    // happen. Absent, they are "unknown payload type", which is what invites
+    // an agent to invent keys for them.
+    for cap in capabilities.iter().filter(|c| {
+        matches!(
+            c.kind,
+            mdm_schema::PayloadKind::MdmCommand
+                | mdm_schema::PayloadKind::MdmCheckin
+                | mdm_schema::PayloadKind::SharedStructure
+        )
+    }) {
+        if existing_types.insert(cap.payload_type.clone()) {
             manifests.push(capability_to_manifest(cap));
         }
     }
@@ -305,17 +216,26 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
         let mut fields = HashMap::new();
         let mut field_order = Vec::new();
         for (name, ft, fdesc) in keys {
+            // Flat: the name is the path.
             field_order.push(name.to_string());
             fields.insert(
                 name.to_string(),
                 FieldDefinition {
                     name: name.to_string(),
+                    // Supplemental prefs are flat: the name is the path.
+                    path: name.to_string(),
                     field_type: ft.clone(),
                     flags: FieldFlags::default(),
                     title: name.to_string(),
                     description: fdesc.to_string(),
                     default: None,
                     allowed_values: Vec::new(),
+                    range_min: None,
+                    range_max: None,
+                    subtype: None,
+                    format: None,
+                    asset_types: Vec::new(),
+                    allowed_scopes: std::collections::HashMap::new(),
                     depth: 0,
                     parent_key: None,
                     platforms: vec![Platform::MacOS],
@@ -323,12 +243,23 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
                     deprecated_in: None,
                     introduced_by_platform: HashMap::new(),
                     deprecated_by_platform: HashMap::new(),
+                    removed_by_platform: HashMap::new(),
                     combinetype: None,
                 },
             );
         }
         PayloadManifest {
+            // A local directory states no provenance.
+            manifest_source: None,
+            // Synthesized from a preferences domain; nothing states
+            // availability.
+            fields_recording_availability: Default::default(),
             payload_type: payload_type.to_string(),
+            // A preference domain, as its category says. Left None, these
+            // were the only authorable schemas with no kind, and anything
+            // filtering by kind — `profile search --json`, an agent — skipped
+            // them.
+            kind: Some(mdm_schema::PayloadKind::ManagedPreference),
             title: title.to_string(),
             description: desc.to_string(),
             platforms: Platforms {
@@ -404,6 +335,26 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
 
 /// Translate mdm_schema's per-platform map to contour's `Platform` enum.
 /// Both enums are 5-variant; this is a 1:1 isomorphism.
+/// The same platform mapping for a map whose values are scope arrays.
+fn convert_platform_scopes(
+    src: &std::collections::HashMap<mdm_schema::Platform, Vec<String>>,
+) -> std::collections::HashMap<Platform, Vec<String>> {
+    src.iter()
+        .map(|(p, v)| (map_platform(*p), v.clone()))
+        .collect()
+}
+
+fn map_platform(p: mdm_schema::Platform) -> Platform {
+    match p {
+        mdm_schema::Platform::MacOS => Platform::MacOS,
+        mdm_schema::Platform::IOS => Platform::Ios,
+        mdm_schema::Platform::TvOS => Platform::TvOS,
+        mdm_schema::Platform::WatchOS => Platform::WatchOS,
+        mdm_schema::Platform::VisionOS => Platform::VisionOS,
+        mdm_schema::Platform::Windows => Platform::Windows,
+    }
+}
+
 fn convert_platform_map(
     src: &std::collections::HashMap<mdm_schema::Platform, String>,
 ) -> std::collections::HashMap<Platform, String> {
@@ -428,8 +379,18 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
     let mut field_order = Vec::new();
 
     for key in &cap.keys {
-        // Deduplicate across platforms but include all depths
-        if fields.contains_key(&key.name) {
+        // Deduplicate across platforms but include all depths.
+        //
+        // Keyed on the PATH, not the leaf name. A leaf name is not unique
+        // within a payload: account.mail carries Port under both
+        // IncomingServer and OutgoingServer, and keying on the name dropped
+        // 61 keys across 14 declaration types -- OutgoingServer.HostName and
+        // .Port did not appear in output at all.
+        let key_path = key
+            .key_path
+            .clone()
+            .unwrap_or_else(|| FieldDefinition::compose_path(key.parent_key.as_deref(), &key.name));
+        if fields.contains_key(&key_path) {
             continue;
         }
         let field_type = match key.data_type.as_str() {
@@ -444,6 +405,14 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
         };
         let fd = FieldDefinition {
             name: key.name.clone(),
+            // Identity. Prefer the schema's own key_path: it escapes dots
+            // inside a segment, and Apple ships key names containing dots
+            // (com.apple.EnergySaver.desktop.ACPower is one key). Composing
+            // from parent_key cannot express that, so it is the fallback for
+            // datasets predating the column.
+            path: key.key_path.clone().unwrap_or_else(|| {
+                FieldDefinition::compose_path(key.parent_key.as_deref(), &key.name)
+            }),
             field_type,
             flags: FieldFlags {
                 required: key.presence == "required",
@@ -463,20 +432,61 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
                 other => other.to_string(),
             }),
             allowed_values: key.range_list.clone().unwrap_or_default(),
+            // Present in the schema and previously dropped here: the emitter
+            // could not show a bound, a validator hint or an asset picker
+            // because FieldDefinition had nowhere to put them.
+            range_min: key.range_min,
+            range_max: key.range_max,
+            subtype: key.subtype.clone(),
+            format: key.format.clone(),
+            asset_types: key.asset_types.clone().unwrap_or_default(),
+            allowed_scopes: convert_platform_scopes(&key.allowed_scopes),
             depth: key.depth as u8,
             parent_key: key.parent_key.clone(),
-            platforms: Vec::new(),
+            // Empty = inherits the payload. Non-empty only when Apple
+            // excluded the key somewhere (`introduced: n/a`): the payload's
+            // platforms minus those, so `Allowed.DeniedApps` (`macOS: n/a`)
+            // lists every platform of app.settings except macOS.
+            platforms: {
+                let excluded = key.unavailable_on();
+                if excluded.is_empty() {
+                    Vec::new()
+                } else {
+                    cap.supported_os
+                        .iter()
+                        .map(|o| o.platform)
+                        .filter(|p| !excluded.contains(p))
+                        .map(|p| match p {
+                            mdm_schema::Platform::MacOS => Platform::MacOS,
+                            mdm_schema::Platform::IOS => Platform::Ios,
+                            mdm_schema::Platform::TvOS => Platform::TvOS,
+                            mdm_schema::Platform::WatchOS => Platform::WatchOS,
+                            mdm_schema::Platform::VisionOS => Platform::VisionOS,
+                            mdm_schema::Platform::Windows => Platform::Windows,
+                        })
+                        .collect()
+                }
+            },
             // Single-value summaries: lexicographic min across the
             // per-platform map. Backwards-compat for callers that don't
             // care which OS the value came from.
             min_version: key.earliest_introduced(),
             deprecated_in: key.deprecated.values().min().cloned(),
-            introduced_by_platform: convert_platform_map(&key.introduced),
+            // Versions only: Apple's `n/a` is an exclusion, carried in
+            // `platforms` above, not a version a consumer could compare.
+            introduced_by_platform: convert_platform_map(
+                &key.introduced
+                    .iter()
+                    .filter(|(_, v)| !mdm_schema::PayloadKey::is_unavailable_marker(v))
+                    .map(|(p, v)| (*p, v.clone()))
+                    .collect(),
+            ),
             deprecated_by_platform: convert_platform_map(&key.deprecated),
+            removed_by_platform: convert_platform_map(&key.removed),
             combinetype: key.combinetype.clone(),
         };
-        field_order.push(key.name.clone());
-        fields.insert(key.name.clone(), fd);
+        field_order.push(key_path.clone());
+        fields.insert(key_path, fd);
     }
 
     // Derive platform flags from supported_os
@@ -502,9 +512,12 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             .unwrap_or_else(|| "ddm-configuration".to_string()),
         mdm_schema::PayloadKind::CspSetting => "windows-csp".to_string(),
         mdm_schema::PayloadKind::AdmxPolicy => "windows-admx".to_string(),
+        mdm_schema::PayloadKind::ManagedPreference => "apps".to_string(),
         mdm_schema::PayloadKind::MdmCommand | mdm_schema::PayloadKind::MdmCheckin => {
             "apple".to_string()
         }
+        // Apple's `other/` shapes: catalogued, never authorable.
+        mdm_schema::PayloadKind::SharedStructure => "apple-shared".to_string(),
     };
 
     // Derive min_versions from the earliest `introduced` per platform,
@@ -546,8 +559,29 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
         );
     }
 
+    // Apple's schema states introduced/deprecated/removed; the community
+    // manifests state nothing, and both arrive here as the same nulls.
+    // Only the source tells them apart.
+    let records_availability = match cap.manifest_source.as_deref() {
+        Some("device-management") | Some("both") => true,
+        Some(_) => false,
+        // Datasets predating the column: Apple is the source for
+        // everything except ManagedPreference.
+        None => cap.kind != mdm_schema::PayloadKind::ManagedPreference,
+    };
+
     PayloadManifest {
+        manifest_source: cap.manifest_source.clone(),
+        // Apple's schema states introduced/deprecated/removed; the
+        // community manifests state nothing, and both arrive here as the
+        // same nulls. Only the source tells them apart.
+        fields_recording_availability: if records_availability {
+            fields.keys().cloned().collect()
+        } else {
+            Default::default()
+        },
         payload_type: cap.payload_type.clone(),
+        kind: Some(cap.kind),
         title: cap.title.clone(),
         description: cap.description.clone(),
         platforms,
@@ -562,12 +596,14 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
 }
 
 /// Load manifests from an external directory, auto-detecting format
+#[cfg(feature = "native")]
 pub fn load_from_directory(dir: &Path) -> Result<Vec<PayloadManifest>> {
     let format = detect_directory_format(dir)?;
     load_from_directory_with_format(dir, format)
 }
 
 /// Load manifests from directory with explicit format
+#[cfg(feature = "native")]
 pub fn load_from_directory_with_format(
     dir: &Path,
     format: SchemaFormat,
@@ -580,6 +616,7 @@ pub fn load_from_directory_with_format(
 }
 
 /// Detect the schema format from directory contents
+#[cfg(feature = "native")]
 pub fn detect_directory_format(dir: &Path) -> Result<SchemaFormat> {
     // Check for ProfileManifests structure (has ManifestsApple/ or ManagedPreferences* subdirs)
     let manifests_apple = dir.join("ManifestsApple");
@@ -658,6 +695,7 @@ pub fn detect_directory_format(dir: &Path) -> Result<SchemaFormat> {
 }
 
 /// Helper to check file extension
+#[cfg(feature = "native")]
 fn check_file_extension(
     path: &Path,
     has_plist: &mut bool,
@@ -676,6 +714,7 @@ fn check_file_extension(
 }
 
 /// Load ultra-compact format from directory
+#[cfg(feature = "native")]
 fn load_ultra_compact_directory(dir: &Path) -> Result<Vec<PayloadManifest>> {
     let mut all_manifests = Vec::new();
 
@@ -712,15 +751,70 @@ mod tests {
 
     // ========== Embedded Manifests Tests ==========
 
+    /// Every authorable schema states what it is.
+    #[test]
+    fn every_authorable_manifest_has_a_kind() {
+        let manifests = load_embedded().expect("load embedded manifests");
+        let kindless: Vec<&str> = manifests
+            .iter()
+            .filter(|m| m.is_authorable() && m.kind.is_none())
+            .map(|m| m.payload_type.as_str())
+            .collect();
+        assert!(kindless.is_empty(), "authorable with no kind: {kindless:?}");
+    }
+
+    /// The Support App declares StatusBarIconAllowsColor `Bool`
+    /// (root3nl/SupportApp@5f9cae1, Preferences.swift:86). A debug log line
+    /// reads it through `defaults.string(forKey:)`, which must not decide its
+    /// type — or every profile the support tool writes fails validation.
+    #[test]
+    fn the_support_app_colour_flag_is_a_boolean() {
+        let manifests = load_embedded().expect("load embedded manifests");
+        let support = manifests
+            .iter()
+            .find(|m| m.payload_type == "nl.root3.support")
+            .expect("nl.root3.support is described");
+        let field = support
+            .fields
+            .get("StatusBarIconAllowsColor")
+            .expect("StatusBarIconAllowsColor is described");
+        assert_eq!(field.field_type, FieldType::Boolean);
+    }
+
+    /// Apple ships com.apple.extensiblesso twice: the base schema and the
+    /// `(kerberos)` variant, which alone requires Realm and TeamIdentifier.
+    /// Merging them let the variant's requirements apply to every SSO
+    /// payload, so each Okta and Entra redirect profile failed validation.
+    #[test]
+    fn a_variant_does_not_impose_its_requirements_on_the_base_type() {
+        let manifests = load_embedded().expect("load embedded manifests");
+        let sso = manifests
+            .iter()
+            .find(|m| m.payload_type == "com.apple.extensiblesso")
+            .expect("extensiblesso is described");
+        let required = |k: &str| sso.fields.get(k).map(|f| f.flags.required);
+
+        // Required by both variants: still required.
+        assert_eq!(required("ExtensionIdentifier"), Some(true));
+        assert_eq!(required("Type"), Some(true));
+        // Required by (kerberos) only: known, but not required of every SSO payload.
+        assert_eq!(required("Realm"), Some(false));
+        assert_eq!(required("TeamIdentifier"), Some(false));
+        // And it is one field, not one per variant.
+        assert_eq!(sso.field_order.iter().filter(|k| *k == "Realm").count(), 1);
+    }
+
     #[test]
     fn test_load_embedded() {
         let manifests = load_embedded().expect("Failed to load embedded manifests");
 
-        // ProfileCreator (~200) + Apple MDM profiles (~260) + DDM declarations (~42)
-        // + supplemental prefs, minus overlaps
+        // Apple's profiles and declarations, the non-authorable kinds
+        // (commands, check-ins, shared structures), the App Schema documents
+        // and the supplemental preference domains. A smoke threshold, not a
+        // census — `contour census` reports the real figures.
         assert!(
-            manifests.len() >= 300,
-            "Expected 300+ manifests (ProfileCreator + Apple native), got {}",
+            manifests.len() >= 250,
+            "Expected 250+ manifests, got {}",
             manifests.len()
         );
 
@@ -757,10 +851,10 @@ mod tests {
 
     #[test]
     fn test_load_embedded_beta_is_superset_of_stable() {
-        // Version-independent: the beta registry is a superset of stable for every
-        // OS, and strictly exceeds it whenever a seed is pinned (historically
-        // app.settings and package.UninstallBehavior for OS 27). Post-GA, before the
-        // next seed, there is no pin and the two are equal. No OS-version literals.
+        // The beta registry is a superset of stable for every OS. It strictly
+        // exceeded it whenever a seed was pinned (historically app.settings and
+        // package.UninstallBehavior for OS 27) — that half is suspended while
+        // beta is mapped to stable; see the assertion below.
         use std::collections::BTreeSet;
         let stable: BTreeSet<String> = load_embedded()
             .expect("stable manifests")
@@ -777,15 +871,19 @@ mod tests {
             "beta registry must be a superset of stable; missing from beta: {:?}",
             stable.difference(&beta).collect::<Vec<_>>()
         );
-        if !mdm_schema::schema_versions()
-            .apple_device_management_seed_commit
-            .is_empty()
-        {
-            assert!(
-                beta.len() > stable.len(),
-                "a pinned seed must add declarations to the beta registry"
-            );
-        }
+
+        // The strict-growth half of this invariant is suspended while the beta
+        // channel is mapped to stable (see the banner on mdm-schema's
+        // `*_beta` accessors).
+        // Equality is now the correct expectation, and asserting it keeps the
+        // test honest instead of vacuous: if someone re-points the accessors
+        // at seed data without restoring the growth assertion below, this
+        // fails and says so.
+        assert_eq!(
+            beta, stable,
+            "while beta is mapped to stable the two registries must be identical; \
+             if the beta build is back, restore the pinned-seed growth assertion"
+        );
     }
 
     #[test]

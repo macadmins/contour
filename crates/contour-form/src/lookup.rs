@@ -5,6 +5,7 @@
 //! false-positive "invalid value" warnings for fields like
 //! `ExtensionIdentifier` where the upstream schema has a limited
 //! `allowed_values` list but `pfm_range_list_allow_custom_value: true`.
+#![cfg(feature = "native")]
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;

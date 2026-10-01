@@ -3,10 +3,15 @@
 //! Converts Form PayloadManifest definitions to JSON Schema format
 //! for use in documentation, validation tools, and IDE autocomplete.
 
-use crate::schema::{FieldDefinition, FieldType, PayloadManifest, SchemaRegistry};
+#[cfg(feature = "native")]
+use crate::SchemaRegistry;
+use crate::{FieldDefinition, FieldType, PayloadManifest};
+#[cfg(feature = "native")]
 use anyhow::Result;
 use serde_json::{Map, Value, json};
+#[cfg(feature = "native")]
 use std::fs;
+#[cfg(feature = "native")]
 use std::path::Path;
 
 /// Export schemas as JSON Schema Draft 2020-12
@@ -20,6 +25,7 @@ use std::path::Path;
 ///
 /// # Returns
 /// Number of schemas exported
+#[cfg(feature = "native")]
 pub fn export_json_schemas(
     registry: &SchemaRegistry,
     output: &Path,
@@ -69,7 +75,7 @@ pub fn export_json_schemas(
         }
 
         // Create index file
-        let index = create_schema_index(&manifests);
+        let index = create_schema_index(&manifests, &chrono::Utc::now().to_rfc3339());
         fs::write(
             output.join("index.json"),
             serde_json::to_string_pretty(&index)?,
@@ -306,7 +312,7 @@ fn create_bundled_schema(manifests: &[&PayloadManifest]) -> Value {
 }
 
 /// Create an index file listing all schemas
-fn create_schema_index(manifests: &[&PayloadManifest]) -> Value {
+fn create_schema_index(manifests: &[&PayloadManifest], generated: &str) -> Value {
     let schemas: Vec<_> = manifests
         .iter()
         .map(|m| {
@@ -326,7 +332,7 @@ fn create_schema_index(manifests: &[&PayloadManifest]) -> Value {
         "title": "Apple Configuration Profile Schema Index",
         "description": format!("Index of {} JSON Schema files for Apple configuration profiles", manifests.len()),
         "schemas": schemas,
-        "generated": chrono::Utc::now().to_rfc3339()
+        "generated": generated
     })
 }
 
@@ -392,11 +398,18 @@ mod tests {
 
     #[test]
     fn test_field_type_mapping() {
-        use crate::schema::types::FieldFlags;
+        use crate::types::FieldFlags;
 
         // Test string field
         let string_field = FieldDefinition {
+            allowed_scopes: std::collections::HashMap::new(),
             name: "TestString".to_string(),
+            range_min: None,
+            range_max: None,
+            subtype: None,
+            format: None,
+            asset_types: Vec::new(),
+            path: "TestString".to_string(),
             field_type: FieldType::String,
             flags: FieldFlags::default(),
             title: "Test".to_string(),
@@ -410,6 +423,7 @@ mod tests {
             deprecated_in: None,
             introduced_by_platform: std::collections::HashMap::new(),
             deprecated_by_platform: std::collections::HashMap::new(),
+            removed_by_platform: std::collections::HashMap::new(),
             combinetype: None,
         };
         let schema = field_to_json_schema(&string_field);
@@ -418,7 +432,14 @@ mod tests {
 
         // Test data field (base64)
         let data_field = FieldDefinition {
+            allowed_scopes: std::collections::HashMap::new(),
             name: "TestData".to_string(),
+            range_min: None,
+            range_max: None,
+            subtype: None,
+            format: None,
+            asset_types: Vec::new(),
+            path: "TestData".to_string(),
             field_type: FieldType::Data,
             flags: FieldFlags::default(),
             title: "Test".to_string(),
@@ -432,6 +453,7 @@ mod tests {
             deprecated_in: None,
             introduced_by_platform: std::collections::HashMap::new(),
             deprecated_by_platform: std::collections::HashMap::new(),
+            removed_by_platform: std::collections::HashMap::new(),
             combinetype: None,
         };
         let schema = field_to_json_schema(&data_field);
@@ -440,7 +462,14 @@ mod tests {
 
         // Test date field
         let date_field = FieldDefinition {
+            allowed_scopes: std::collections::HashMap::new(),
             name: "TestDate".to_string(),
+            range_min: None,
+            range_max: None,
+            subtype: None,
+            format: None,
+            asset_types: Vec::new(),
+            path: "TestDate".to_string(),
             field_type: FieldType::Date,
             flags: FieldFlags::default(),
             title: "Test".to_string(),
@@ -454,6 +483,7 @@ mod tests {
             deprecated_in: None,
             introduced_by_platform: std::collections::HashMap::new(),
             deprecated_by_platform: std::collections::HashMap::new(),
+            removed_by_platform: std::collections::HashMap::new(),
             combinetype: None,
         };
         let schema = field_to_json_schema(&date_field);

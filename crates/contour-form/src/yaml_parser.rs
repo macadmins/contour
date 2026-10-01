@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
+#[cfg(feature = "native")]
 use std::path::Path;
 
 use super::types::{FieldDefinition, FieldFlags, FieldType, PayloadManifest, Platform, Platforms};
@@ -183,6 +184,10 @@ pub fn parse_yaml_manifest(content: &str) -> Result<PayloadManifest> {
     let (fields, field_order) = parse_content_fields(&fields_source.cloned())?;
 
     Ok(PayloadManifest {
+        manifest_source: Some("device-management".into()),
+        // External schema: it does not state OS availability.
+        fields_recording_availability: Default::default(),
+        kind: None,
         payload_type,
         title: manifest.title,
         description: manifest.description.unwrap_or_default(),
@@ -276,7 +281,9 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
             let title = field.title.clone().unwrap_or_else(|| field.key.clone());
 
             let def = FieldDefinition {
+                allowed_scopes: std::collections::HashMap::new(),
                 name: field.key.clone(),
+                path: field.key.clone(),
                 field_type: parse_apple_type(&field.field_type),
                 title,
                 description: field.content.clone().unwrap_or_default(),
@@ -287,6 +294,11 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
                 },
                 default: None,
                 allowed_values: Vec::new(),
+                range_min: None,
+                range_max: None,
+                subtype: None,
+                format: None,
+                asset_types: Vec::new(),
                 depth: 0,
                 parent_key: None,
                 platforms: Vec::new(),
@@ -294,14 +306,19 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
                 deprecated_in: None,
                 introduced_by_platform: HashMap::new(),
                 deprecated_by_platform: HashMap::new(),
+                removed_by_platform: HashMap::new(),
                 combinetype: None,
             };
-            field_order.push(def.name.clone());
-            fields.insert(def.name.clone(), def);
+            field_order.push(def.path.clone());
+            fields.insert(def.path.clone(), def);
         }
     }
 
     Ok(PayloadManifest {
+        manifest_source: Some("device-management".into()),
+        // External schema: it does not state OS availability.
+        fields_recording_availability: Default::default(),
+        kind: None,
         payload_type,
         title: manifest.title,
         description: manifest.description.unwrap_or_default(),
@@ -410,6 +427,7 @@ fn categorize_ddm_type(decl_type: &str) -> String {
 }
 
 /// Parse a YAML file from path
+#[cfg(feature = "native")]
 pub fn parse_yaml_file(path: &Path) -> Result<PayloadManifest> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
@@ -417,6 +435,7 @@ pub fn parse_yaml_file(path: &Path) -> Result<PayloadManifest> {
 }
 
 /// Load all manifests from Apple device-management directory
+#[cfg(feature = "native")]
 pub fn load_from_apple_dm_dir(dir: &Path) -> Result<Vec<PayloadManifest>> {
     let mut manifests = Vec::new();
 
@@ -450,6 +469,7 @@ pub fn load_from_apple_dm_dir(dir: &Path) -> Result<Vec<PayloadManifest>> {
 }
 
 /// Load all .yaml manifests from a directory
+#[cfg(feature = "native")]
 fn load_yaml_directory(dir: &Path) -> Result<Vec<PayloadManifest>> {
     let mut manifests = Vec::new();
 
@@ -571,16 +591,16 @@ fn add_field_recursive(
 ) {
     let mut def = parse_apple_field(field, depth);
     def.parent_key = parent_path.map(ToString::to_string);
-    if !fields.contains_key(&def.name) {
-        field_order.push(def.name.clone());
-        fields.insert(def.name.clone(), def);
+    // parse_apple_field sets `path` to the bare key; now that the parent is
+    // known, recompose it so nesting is part of the identity.
+    def.path = FieldDefinition::compose_path(parent_path, &def.name);
+    if !fields.contains_key(&def.path) {
+        field_order.push(def.path.clone());
+        fields.insert(def.path.clone(), def);
     }
 
     if let Some(subkeys) = &field.subkeys {
-        let child_parent = match parent_path {
-            Some(p) => format!("{p}.{}", field.key),
-            None => field.key.clone(),
-        };
+        let child_parent = FieldDefinition::compose_path(parent_path, &field.key);
         for subkey in subkeys {
             add_field_recursive(subkey, depth + 1, Some(&child_parent), fields, field_order);
         }
@@ -615,7 +635,14 @@ fn parse_apple_field(field: &AppleField, depth: usize) -> FieldDefinition {
         .unwrap_or_default();
 
     FieldDefinition {
+        allowed_scopes: std::collections::HashMap::new(),
         name: field.key.clone(),
+        range_min: None,
+        range_max: None,
+        subtype: None,
+        format: None,
+        asset_types: Vec::new(),
+        path: field.key.clone(),
         field_type,
         title,
         description: field.content.clone().unwrap_or_default(),
@@ -629,6 +656,7 @@ fn parse_apple_field(field: &AppleField, depth: usize) -> FieldDefinition {
         deprecated_in: None,
         introduced_by_platform: HashMap::new(),
         deprecated_by_platform: HashMap::new(),
+        removed_by_platform: HashMap::new(),
         combinetype: None,
     }
 }
@@ -922,10 +950,13 @@ payloadkeys:
 
         let manifest = parse_yaml_manifest(yaml).expect("Failed to parse YAML");
 
+        // Addressed by PATH, not leaf name. `Download` under
+        // `AutomaticActions` and a `Download` elsewhere in the same payload
+        // are different keys; keying on the bare name collapsed them.
         let download = manifest
-            .fields
-            .get("Download")
+            .field_by_path("AutomaticActions.Download")
             .expect("nested subkey Download must be flattened into fields");
+        assert_eq!(download.path, "AutomaticActions.Download");
         assert_eq!(download.parent_key.as_deref(), Some("AutomaticActions"));
         assert_eq!(download.depth, 1);
         assert_eq!(
@@ -933,8 +964,10 @@ payloadkeys:
             vec!["Allowed", "AlwaysOn", "AlwaysOff"]
         );
         assert!(
-            manifest.field_order.contains(&"Download".to_string()),
-            "flattened subkeys must appear in field_order"
+            manifest
+                .field_order
+                .contains(&"AutomaticActions.Download".to_string()),
+            "flattened subkeys must appear in field_order, by path"
         );
     }
 
