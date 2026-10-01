@@ -1,0 +1,32 @@
+[package]
+name = "contour-mcp"
+version = "0.4.1-beta.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Read-only MCP server exposing contour's embedded Apple MDM, osquery and mSCP schema to AI agents"
+
+[[bin]]
+name = "contour-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# Schema data + readers. Every crate here is zero-write by construction:
+# none of them contain fs::write, File::create or OpenOptions. That is the
+# read-only guarantee — a write path is not blocked at runtime, it is not
+# linked into the binary. Deliberately absent: profile (110 write sites),
+# mscp (73), santa, pppc, btm, notifications, support.
+mdm-schema = { path = "../mdm-schema" }
+osquery-schema = { path = "../osquery-schema" }
+mscp-schema = { path = "../mscp-schema" }
+contour-core = { path = "../contour-core" }
+
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
