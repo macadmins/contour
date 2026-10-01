@@ -32,6 +32,11 @@ pub struct Bundle {
     /// (`{org}.{kind}.{intent_name}`).
     pub intent_name: String,
 
+    /// Platforms the bundle targets (`["macOS"]`). When set, compose refuses
+    /// a key Apple does not offer on one of them. `--platform` overrides it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub platforms: Vec<String>,
+
     #[serde(default)]
     pub asset: Option<BundleAsset>,
 
@@ -190,6 +195,9 @@ pub enum ComposeError {
     /// Bundle declares an asset but the configuration has no
     /// `*AssetReference` field to wire it into.
     MissingAssetRef { config_type: String },
+    /// The asset reference's path cannot be nested because the bundle's
+    /// configuration payload already holds a scalar at one of its prefixes.
+    AssetRefConflict { config_type: String, detail: String },
     /// `configuration.asset_ref_field` was set to a name that doesn't
     /// exist in the configuration's schema.
     UnknownAssetRefField {
@@ -236,6 +244,7 @@ impl ComposeError {
             | Self::WrongCategory { .. }
             | Self::OrphanAsset { .. }
             | Self::UnsubscribedStatusKey { .. }
+            | Self::AssetRefConflict { .. }
             | Self::InvalidAuthType { .. } => "SCHEMA_VIOLATION",
             Self::InvalidIdentifier { .. } => "INVALID_IDENTIFIER",
             Self::InvalidOrg { .. } => "INVALID_ORG",
@@ -249,6 +258,13 @@ impl std::fmt::Display for ComposeError {
             Self::UnknownType { kind, name } => {
                 write!(f, "{kind} declaration type '{name}' not found in schema")
             }
+            Self::AssetRefConflict {
+                config_type,
+                detail,
+            } => write!(
+                f,
+                "cannot wire the asset reference into '{config_type}': {detail}"
+            ),
             Self::InvalidIdentifier { id, reason } => {
                 write!(f, "invalid identifier '{id}': {reason}")
             }
@@ -481,6 +497,7 @@ pub fn compose(
     // 5. Build the asset declaration (if any), wiring its Authentication block.
     let asset_decl = match (&bundle.asset, asset_id.clone()) {
         (Some(asset), Some(id)) => Some(Declaration {
+            payload_scope: None,
             declaration_type: asset.type_name.clone(),
             identifier: id,
             server_token: None,
@@ -493,9 +510,22 @@ pub fn compose(
     // 6. Build the configuration declaration; wire the asset reference if applicable.
     let mut config_payload: Map<String, Value> = bundle.configuration.payload.clone();
     if let (Some(field), Some(id)) = (&asset_ref_field, &asset_id) {
-        config_payload.insert(field.clone(), Value::String(id.clone()));
+        // `field` is a schema PATH, and since keys were re-keyed by path it
+        // may be nested: network.relay's is
+        // `Relays.Relay.IdentityAssetReference`. Inserting it flat writes a
+        // literal `"Relays.Relay.IdentityAssetReference"` key — a document
+        // that validates against nothing and resolves no asset. Apple's own
+        // schema nests six of the reference fields, so this is the common
+        // case for relays, VPN and SMIME, not an edge.
+        crate::schema::FieldPath::parse(field)
+            .insert_json(&mut config_payload, Value::String(id.clone()))
+            .map_err(|e| ComposeError::AssetRefConflict {
+                config_type: bundle.configuration.type_name.clone(),
+                detail: e.to_string(),
+            })?;
     }
     let configuration_decl = Declaration {
+        payload_scope: None,
         declaration_type: bundle.configuration.type_name.clone(),
         identifier: configuration_id.clone(),
         server_token: None,
@@ -519,6 +549,7 @@ pub fn compose(
                 payload.insert("Predicate".to_string(), Value::String(predicate.clone()));
             }
             Some(Declaration {
+                payload_scope: None,
                 declaration_type: type_name,
                 identifier: id,
                 // ServerToken is assigned by the MDM server when it stores the
@@ -631,7 +662,11 @@ pub fn materialize_asset(
 }
 
 /// Lowercase hex SHA-256 of `bytes` (matches the examples' `shasum -a 256`).
-fn sha256_hex(bytes: &[u8]) -> String {
+///
+/// Shared with `ddm::legacy`, which hashes wrapped profiles for the same
+/// reason this hashes data assets: so a changed file cannot keep serving
+/// under an unchanged reference.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     use std::fmt::Write as _;
     let digest = Sha256::digest(bytes);
@@ -711,6 +746,7 @@ fn build_subscriptions_decl(
     payload.insert("StatusItems".to_string(), Value::Array(status_items));
 
     Ok(Some(Declaration {
+        payload_scope: None,
         declaration_type: "com.apple.configuration.management.status-subscriptions".to_string(),
         identifier: id,
         server_token: None,
@@ -720,23 +756,10 @@ fn build_subscriptions_decl(
 }
 
 fn validate_org_domain(domain: &str) -> Result<(), ComposeError> {
-    if domain.trim().is_empty() {
-        return Err(ComposeError::InvalidOrg {
-            domain: domain.to_string(),
-        });
-    }
-    let valid = domain
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.');
-    if !valid || domain == "com.example" {
-        return Err(ComposeError::InvalidOrg {
-            domain: domain.to_string(),
-        });
-    }
-    Ok(())
+    // The rule lives in contour-form so `form emit` and `ddm compose`
+    // cannot drift on what an org looks like.
+    crate::schema::identity::validate_org_domain(domain)
+        .map_err(|e| ComposeError::InvalidOrg { domain: e.domain })
 }
 
 fn check_identifier_shape(id: &str) -> Result<(), ComposeError> {
@@ -798,6 +821,7 @@ fn asset_ref_field_candidates(manifest: &crate::schema::types::PayloadManifest) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::schema::types::{
         FieldDefinition, FieldFlags, FieldType, PayloadManifest, Platforms,
     };
@@ -805,7 +829,14 @@ mod tests {
 
     fn make_field(name: &str) -> FieldDefinition {
         FieldDefinition {
+            allowed_scopes: std::collections::HashMap::new(),
             name: name.to_string(),
+            range_min: None,
+            range_max: None,
+            subtype: None,
+            format: None,
+            asset_types: Vec::new(),
+            path: name.to_string(),
             field_type: FieldType::String,
             flags: FieldFlags::default(),
             title: name.to_string(),
@@ -819,6 +850,7 @@ mod tests {
             deprecated_in: None,
             introduced_by_platform: std::collections::HashMap::new(),
             deprecated_by_platform: std::collections::HashMap::new(),
+            removed_by_platform: Default::default(),
             combinetype: None,
         }
     }
@@ -831,7 +863,10 @@ mod tests {
             manifest_fields.insert(name.to_string(), make_field(name));
         }
         PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: payload_type.to_string(),
+            kind: None,
             title: payload_type.to_string(),
             description: String::new(),
             platforms: Platforms::parse("*"),
@@ -866,6 +901,7 @@ mod tests {
         )]);
         let bundle = Bundle {
             intent_name: "lock".into(),
+            platforms: Vec::new(),
             asset: None,
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.passcode.settings".into(),
@@ -883,6 +919,52 @@ mod tests {
         assert!(composed.asset_ref_field_used.is_none());
     }
 
+    /// End to end for the nested shape: `network.relay` keeps its
+    /// reference at `Relays.Relay.IdentityAssetReference`, two levels down. It has two `*AssetReference`
+    /// candidates, so the bundle must name one — and the emitted
+    /// configuration must nest it, not carry a dotted key.
+    #[test]
+    fn compose_nests_a_relay_asset_reference() {
+        let registry = registry_with(vec![
+            make_manifest("com.apple.asset.relay", &["ServerConfiguration"]),
+            make_manifest(
+                "com.apple.configuration.network.relay",
+                &[
+                    "Relays.Relay.IdentityAssetReference",
+                    "Relays.Relay.PublicKeyData.PublicKeyDataAssetReference",
+                ],
+            ),
+        ]);
+        let bundle = Bundle {
+            intent_name: "relay".into(),
+            platforms: Vec::new(),
+            asset: Some(BundleAsset {
+                type_name: "com.apple.asset.relay".into(),
+                identifier: None,
+                payload: Map::new(),
+                ..Default::default()
+            }),
+            configuration: BundleConfiguration {
+                type_name: "com.apple.configuration.network.relay".into(),
+                identifier: None,
+                asset_ref_field: Some("Relays.Relay.IdentityAssetReference".into()),
+                payload: Map::new(),
+            },
+            activation: None,
+            subscriptions: None,
+        };
+        let composed = compose(&bundle, "com.acme", &registry, &ComposeOptions::default()).unwrap();
+        let payload: Map<String, Value> = composed.configuration.payload.0.into_iter().collect();
+        assert!(
+            !payload.contains_key("Relays.Relay.IdentityAssetReference"),
+            "a dotted key reaches no asset: {payload:?}"
+        );
+        assert_eq!(
+            payload["Relays"]["Relay"]["IdentityAssetReference"],
+            Value::String("com.acme.asset.relay".into())
+        );
+    }
+
     #[test]
     fn compose_wires_asset_reference_when_single_candidate() {
         let registry = registry_with(vec![
@@ -898,6 +980,7 @@ mod tests {
         ]);
         let bundle = Bundle {
             intent_name: "exchange".into(),
+            platforms: Vec::new(),
             asset: Some(BundleAsset {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
@@ -955,6 +1038,7 @@ mod tests {
         ]);
         let bundle = Bundle {
             intent_name: "mail".into(),
+            platforms: Vec::new(),
             asset: Some(BundleAsset {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
@@ -986,6 +1070,7 @@ mod tests {
         ]);
         let bundle = Bundle {
             intent_name: "x".into(),
+            platforms: Vec::new(),
             asset: Some(BundleAsset {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
@@ -1017,6 +1102,7 @@ mod tests {
         ]);
         let bundle = Bundle {
             intent_name: "exchange".into(),
+            platforms: Vec::new(),
             asset: Some(BundleAsset {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
@@ -1051,6 +1137,7 @@ mod tests {
         ]);
         let bundle = Bundle {
             intent_name: "x".into(),
+            platforms: Vec::new(),
             asset: Some(BundleAsset {
                 type_name: "com.apple.asset.credential.userpassword".into(),
                 identifier: None,
@@ -1082,6 +1169,7 @@ mod tests {
         )]);
         let bundle = Bundle {
             intent_name: "x".into(),
+            platforms: Vec::new(),
             asset: None,
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.passcode.settings".into(),
@@ -1107,6 +1195,7 @@ mod tests {
         let registry = registry_with(vec![]);
         let bundle = Bundle {
             intent_name: "x".into(),
+            platforms: Vec::new(),
             asset: None,
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.does-not-exist".into(),
@@ -1136,6 +1225,7 @@ mod tests {
         let registry = make_passcode_registry();
         let bundle = Bundle {
             intent_name: "p".into(),
+            platforms: Vec::new(),
             asset: None,
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.passcode.settings".into(),
@@ -1163,6 +1253,7 @@ mod tests {
         let registry = make_passcode_registry();
         let bundle = Bundle {
             intent_name: "p".into(),
+            platforms: Vec::new(),
             asset: None,
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.passcode.settings".into(),
@@ -1204,6 +1295,7 @@ mod tests {
         let registry = make_passcode_registry();
         let bundle = Bundle {
             intent_name: "p".into(),
+            platforms: Vec::new(),
             asset: None,
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.passcode.settings".into(),
@@ -1241,6 +1333,7 @@ mod tests {
         let registry = make_passcode_registry();
         let bundle = Bundle {
             intent_name: "p".into(),
+            platforms: Vec::new(),
             asset: None,
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.passcode.settings".into(),
@@ -1261,6 +1354,7 @@ mod tests {
     fn data_asset_bundle(asset: BundleAsset) -> Bundle {
         Bundle {
             intent_name: "sshd".into(),
+            platforms: Vec::new(),
             asset: Some(asset),
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.services.configuration-files".into(),

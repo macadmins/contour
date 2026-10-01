@@ -1,11 +1,10 @@
 # Disable Apple Intelligence on iOS / iPadOS.
 #
 # DDM bundle that flips every Apple Intelligence toggle to false in
-# `com.apple.configuration.intelligence.settings` plus the nested
-# Mail/Notes summary toggles. Identical payload to the macOS preset
-# (the DDM declaration is cross-platform); separate bundle so
-# identifiers, naming, and any future iOS-only divergence stay
-# distinct.
+# `com.apple.configuration.intelligence.settings` plus the per-app
+# toggles under Apps (Mail, Notes, Safari, Calendar). Same as the macOS
+# preset except AllowVisualIntelligenceSummary, an iOS-only key; a
+# separate bundle keeps identifiers and naming distinct.
 #
 # Compose with:
 #   contour profile ddm compose \
@@ -21,6 +20,8 @@
 # `contour profile info com.apple.configuration.intelligence.settings --full`.
 
 intent_name = "disable-apple-intelligence-ios"
+# Compose refuses any key Apple does not offer on this platform.
+platforms = ["iOS"]
 
 [configuration]
 type = "com.apple.configuration.intelligence.settings"
@@ -32,18 +33,29 @@ type = "com.apple.configuration.intelligence.settings"
   AllowImagePlayground = false
   AllowImageWand = false                       # iPad / Apple Pencil hover
   AllowPersonalizedHandwritingResults = false
-  AllowVisualIntelligenceSummary = false       # iOS Camera "what is this?"
+  AllowVisualIntelligence = false              # 27.0+
+  # Deprecated in iOS 27 by AllowVisualIntelligence, and the only control
+  # for Visual Intelligence on iOS 26.4-26.x. Kept so those devices are
+  # covered too; iOS 27 reads the key above.
+  AllowVisualIntelligenceSummary = false
   AllowWritingTools = false
 
-  # Nested Mail summary controls. Default: true.
-  [configuration.payload.Mail]
+  # Per-app controls live under `Apps`, not at the payload root: Apple
+  # ignores a `Mail` or `Notes` key placed beside the top-level toggles.
+  # Default: true.
+  [configuration.payload.Apps.Mail]
   AllowSmartReplies = false
   AllowSummary = false
 
-  # Nested Notes transcription controls. Default: true.
-  [configuration.payload.Notes]
+  [configuration.payload.Apps.Notes]
   AllowTranscription = false
   AllowTranscriptionSummary = false
+
+  [configuration.payload.Apps.Safari]
+  AllowSummary = false
+
+  [configuration.payload.Apps.Calendar]        # introduced in 27.0
+  AllowNaturalLanguageEditing = false
 
 [activation]
 # Simple activation, no predicate. Target by Fleet team / MDM group.

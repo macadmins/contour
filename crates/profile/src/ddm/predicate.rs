@@ -76,7 +76,8 @@ pub fn extract_predicate_keys(predicate: &str) -> PredicateKeys {
 fn extract_with(predicate: &str, re: &Regex) -> Vec<String> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for cap in re.captures_iter(predicate) {
-        if let Some(m) = cap.get(1) {
+        // Group 1 is the quoted form, group 2 the bare one; exactly one matches.
+        if let Some(m) = cap.get(1).or_else(|| cap.get(2)) {
             seen.insert(m.as_str().to_string());
         }
     }
@@ -86,16 +87,25 @@ fn extract_with(predicate: &str, re: &Regex) -> Vec<String> {
 fn status_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // @status('key') or @status("key") with optional whitespace.
-        // Captured group 1 = the key (string between the quotes).
-        Regex::new(r#"@status\s*\(\s*['"]([^'"]+)['"]\s*\)"#).expect("status regex compiles")
+        // @status(key), @status('key') or @status("key"), with optional
+        // whitespace. Quotes are OPTIONAL: Apple's own example in the
+        // device-management repo is `@status(device.model.family) == 'AppleTV'`
+        // and real-world predicates follow it. Matching only the quoted form
+        // silently extracted nothing from the common case, which made the
+        // subscription-coverage check pass for predicates it should have
+        // caught.
+        // Captured group 1 = the key, quoted or bare.
+        Regex::new(r#"@status\s*\(\s*(?:['"]([^'"]+)['"]|([A-Za-z0-9_.\-]+))\s*\)"#)
+            .expect("status regex compiles")
     })
 }
 
 fn property_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"@property\s*\(\s*['"]([^'"]+)['"]\s*\)"#).expect("property regex compiles")
+        // Same quoting rule as @status above.
+        Regex::new(r#"@property\s*\(\s*(?:['"]([^'"]+)['"]|([A-Za-z0-9_.\-]+))\s*\)"#)
+            .expect("property regex compiles")
     })
 }
 
@@ -113,6 +123,36 @@ mod tests {
     fn predicate_without_at_refs_yields_no_keys() {
         let keys = extract_predicate_keys("TRUE");
         assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn extracts_bare_unquoted_status_key() {
+        // Apple's own example in the device-management repo, verbatim. The
+        // extractor previously matched only quoted keys, so this returned
+        // nothing — and the subscription-coverage check that depends on it
+        // passed for every predicate anyone actually writes.
+        let keys = extract_predicate_keys("@status(device.model.family) == 'AppleTV'");
+        assert_eq!(keys.status, vec!["device.model.family"]);
+    }
+
+    #[test]
+    fn extracts_bare_key_from_a_real_world_gate() {
+        // The shape used to gate a legacy-wrapped profile on a staged update.
+        let keys = extract_predicate_keys("@status(softwareupdate.install-state) == 'prepared'");
+        assert_eq!(keys.status, vec!["softwareupdate.install-state"]);
+    }
+
+    #[test]
+    fn quoted_and_bare_forms_agree() {
+        let bare = extract_predicate_keys("@status(passcode.is-compliant) == TRUE");
+        let quoted = extract_predicate_keys("@status('passcode.is-compliant') == TRUE");
+        assert_eq!(bare.status, quoted.status);
+    }
+
+    #[test]
+    fn bare_property_keys_are_extracted_too() {
+        let keys = extract_predicate_keys("@property(device.model.identifier) BEGINSWITH 'Mac15,'");
+        assert_eq!(keys.property, vec!["device.model.identifier"]);
     }
 
     #[test]

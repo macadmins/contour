@@ -6,13 +6,23 @@
 //! Note: This module is reserved for future DDM declaration support.
 #![allow(dead_code, reason = "module under development")]
 
+pub mod app_privacy;
 pub mod compose;
+/// Wrapping classic .mobileconfig profiles in com.apple.configuration.legacy
+/// declarations, with a content-hash index so a changed profile cannot
+/// silently keep serving its old URL.
+pub mod legacy;
 pub mod notes;
 pub mod parser;
 pub mod predicate;
 pub mod presets;
 pub mod rename;
 pub mod schema;
+pub mod scope;
+/// Building and re-hosting the zip asset a
+/// `com.apple.configuration.services.configuration-files` declaration points
+/// at, with reproducible packing so an untouched tree keeps its hash.
+pub mod service_config;
 pub mod types;
 pub mod verify;
 

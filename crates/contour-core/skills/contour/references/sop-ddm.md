@@ -262,7 +262,9 @@ The CLI prevents the unsubscribed-key class at authoring time:
   (`com.apple.configuration.management.status-subscriptions`).
 - **`ddm verify <dir>`**: walks all `*.json` declarations in a
   directory and applies the same cross-check across files (useful for
-  hand-authored or externally-sourced sets — see below).
+  hand-authored or externally-sourced sets — see below). A directory with
+  no declarations in it fails with `IO_ERROR`; when they sit in
+  subdirectories the error says so — pass `-r/--recursive`.
 
 ---
 
@@ -311,7 +313,7 @@ contour profile ddm coverage --json
 
 ### Populate `app.settings` allow/deny from a signing catalog
 
-`com.apple.configuration.app.settings` (a seed/`--beta` type) gates apps by
+`com.apple.configuration.app.settings` (released in OS 27.0) gates apps by
 `AllowedBinaries`/`DeniedBinaries` keyed on `{CDHash, SigningID, TeamID}` — the
 same code-signing vocabulary Santa uses. The Santa toolkit can emit this
 declaration directly from the community **fleet-maintained-apps** catalog, so you
@@ -353,7 +355,16 @@ generate cannot.
 
 Both `generate` and `compose` are **fail-closed**: a declaration that is
 schema-invalid (missing a required field, etc.) is NOT written — the command
-errors with `SCHEMA_VIOLATION` listing what's wrong. So any file contour emits is
+errors with `SCHEMA_VIOLATION` listing what's wrong. For `compose` that
+includes an **unknown field**: a key the schema does not define at that path
+(`Mail` at the intelligence payload root, where Apple nests it under `Apps`)
+is refused, because the device ignores it. `ddm validate` reports the same
+finding as a warning, since it reads files that may be hand-authored.
+
+A declaration does not say which OS it is for, so platform checks run only
+when told: a bundle's `platforms = ["macOS"]`, or `--platform <OS>` on
+`compose` (refuses) and `validate` (warns). Then a key Apple does not offer
+on that platform — `AllowImageWand` on macOS — is reported. So any file contour emits is
 schema-valid by construction; `ddm validate`/`verify` (below) remain the gate for
 hand-edited or externally-sourced declarations.
 

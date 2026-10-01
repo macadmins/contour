@@ -36,6 +36,24 @@ pub struct Declaration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authentication: Option<serde_json::Map<String, serde_json::Value>>,
 
+    /// Top-level `PayloadScope` — `"System"` or `"User"`.
+    ///
+    /// **Not an Apple key.** Apple's DDM schema has no scope field at all:
+    /// `PayloadScope` lives in `mdm/profiles/TopLevel.yaml` and appears
+    /// nowhere under `declarative/`. A declaration's scope is the channel
+    /// the MDM sends it on, decided at delivery time.
+    ///
+    /// Fleet therefore needs a way to be told which channel to use, and
+    /// reads this top-level key to decide. It matters because Fleet
+    /// otherwise delivers on the device channel (system scope), and the
+    /// keys that are macOS user-only — `app.settings.Privacy` above all —
+    /// are then accepted and ignored.
+    ///
+    /// Omitted when absent, so a declaration for an MDM that does not use
+    /// this convention is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_scope: Option<String>,
+
     /// The payload containing the actual configuration
     pub payload: DeclarationPayload,
 }
@@ -130,6 +148,8 @@ impl Declaration {
             identifier: identifier.to_string(),
             server_token: None,
             authentication: None,
+            // Set explicitly by callers that target an MDM reading it.
+            payload_scope: None,
             payload: DeclarationPayload::new(),
         }
     }

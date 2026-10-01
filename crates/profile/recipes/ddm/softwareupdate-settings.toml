@@ -1,0 +1,57 @@
+# Managed software update behaviour.
+#
+# DDM bundle for `com.apple.configuration.softwareupdate.settings`. Ships a
+# posture that gets security fixes onto devices without taking the major-OS
+# decision away from the fleet owner:
+#
+#   * security updates install automatically and cannot be turned off
+#   * OS updates stay operator-driven (pair with
+#     `--preset softwareupdate-enforcement` to set a deadline)
+#   * enrolment in Apple's beta programs is blocked
+#   * standard users cannot start an OS update themselves
+#
+# Every other key in this declaration keeps its Apple default. `AlwaysOn`
+# and `AlwaysOff` force the setting and grey it out in System Settings;
+# `Allowed` leaves the user in control.
+#
+# Compose with:
+#   contour profile ddm compose --preset softwareupdate-settings \
+#       --org com.acme -o ./declarations/softwareupdate-settings
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's
+# group/team assignment.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/softwareupdate.settings.yaml). Verified
+# against contour's embedded schema:
+# `contour profile ddm info com.apple.configuration.softwareupdate.settings --full`.
+
+intent_name = "softwareupdate-settings"
+
+[configuration]
+type = "com.apple.configuration.softwareupdate.settings"
+
+  [configuration.payload]
+  # Let users see update notifications (Apple default, stated for clarity).
+  Notifications = true
+  # Standard users may not install OS updates — keeps the deadline authoritative.
+  AllowStandardUserOSUpdates = false
+
+    [configuration.payload.AutomaticActions]
+    # Security fixes and Rapid Security Responses install without asking.
+    InstallSecurityUpdate = "AlwaysOn"
+    # Download in the background so an enforced install is not a cold download.
+    Download = "AlwaysOn"
+    # Major/minor OS updates stay operator-driven. Set "AlwaysOn" to let
+    # devices self-update, or leave this and enforce a deadline instead.
+    InstallOSUpdates = "Allowed"
+
+    [configuration.payload.Beta]
+    # Block AppleSeed / public beta enrolment. Use --preset beta-enrollment
+    # (or `ddm beta`) to offer a specific program deliberately.
+    ProgramEnrollment = "AlwaysOff"
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

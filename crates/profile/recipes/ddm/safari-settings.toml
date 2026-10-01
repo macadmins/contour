@@ -1,0 +1,48 @@
+# Managed Safari settings.
+#
+# DDM bundle for `com.apple.configuration.safari.settings`. Ships a
+# hardened-but-usable browser: the fraud warning cannot be switched off,
+# private browsing is unavailable, and pop-ups are blocked.
+#
+# JavaScript is deliberately left enabled — disabling it breaks nearly
+# every internal web application, and it is not a meaningful security
+# control on a managed device.
+#
+# `AllowPrivateBrowsing = false` is the key with the most user-visible
+# impact: it removes the Private window option entirely. It is included
+# because private tabs bypass managed history and content filters; drop
+# it if your deployment does not need that.
+#
+# Compose with:
+#   contour profile ddm compose --preset safari-settings \
+#       --org com.acme -o ./declarations/safari-settings
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's
+# group/team assignment.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/safari.settings.yaml). Verified against
+# contour's embedded schema: `contour profile ddm info
+# com.apple.configuration.safari.settings --full`.
+
+intent_name = "safari-settings"
+
+[configuration]
+type = "com.apple.configuration.safari.settings"
+
+  [configuration.payload]
+  # Users cannot turn off the fraudulent-website warning.
+  AllowDisablingFraudWarning = false
+  # No private browsing — keeps history and content filtering effective.
+  AllowPrivateBrowsing = false
+  # Block pop-up windows.
+  AllowPopups = false
+  # Left at Apple's defaults, stated so the choice is visible:
+  # AllowJavaScript = true      # disabling breaks internal web apps
+  # AllowHistoryClearing = true # users may still clear their own history
+  # AcceptCookies = "Always"
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

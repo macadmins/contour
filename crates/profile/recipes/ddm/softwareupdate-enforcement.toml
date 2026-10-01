@@ -1,0 +1,59 @@
+# Enforced software update deadline for one specific OS release.
+#
+# DDM bundle for
+# `com.apple.configuration.softwareupdate.enforcement.specific`.
+#
+# ---------------------------------------------------------------------
+# EDIT BEFORE COMPOSING. Unlike every other built-in preset, this one is
+# not deploy-as-is: `TargetOSVersion` and `TargetLocalDateTime` are
+# required by Apple's schema and are specific to your fleet and your
+# change window. The values below are placeholders.
+#
+# A deadline in the past enforces IMMEDIATELY — devices install and
+# restart at the next opportunity with no user deferral left. Check the
+# date before you compose, not after you deploy.
+# ---------------------------------------------------------------------
+#
+# How the device behaves: it downloads the target release in the
+# background, nags with escalating urgency, and at the local date and
+# time below installs and restarts regardless of who is logged in.
+# `TargetLocalDateTime` is the DEVICE's local time, not UTC — a fleet
+# across time zones hits the deadline at different absolute moments,
+# which is usually what you want.
+#
+# Pair this with `--preset softwareupdate-settings`, whose
+# `AllowStandardUserOSUpdates = false` keeps users from pre-empting the
+# managed install path.
+#
+# Compose with:
+#   contour profile ddm compose --preset softwareupdate-enforcement \
+#       --org com.acme -o ./declarations/softwareupdate-enforcement
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's
+# group/team assignment.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/softwareupdate.enforcement.specific.yaml).
+# Verified against contour's embedded schema: `contour profile ddm info
+# com.apple.configuration.softwareupdate.enforcement.specific --full`.
+
+intent_name = "softwareupdate-enforcement"
+
+[configuration]
+type = "com.apple.configuration.softwareupdate.enforcement.specific"
+
+  [configuration.payload]
+  # PLACEHOLDER — the OS version devices must be on by the deadline.
+  TargetOSVersion = "26.1"
+  # PLACEHOLDER — device-local deadline, "YYYY-MM-DDThh:mm:ss".
+  # Set this to a real future change window before composing.
+  TargetLocalDateTime = "2027-01-15T12:00:00"
+  # Optional: a page explaining the deadline, shown in the update prompt.
+  # DetailsURL = "https://help.acme.example/os-updates"
+  # Optional: pin an exact build instead of letting the version float.
+  # TargetBuildVersion = "25B74"
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

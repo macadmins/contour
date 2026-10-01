@@ -246,10 +246,11 @@ pub fn build_beta_payload(mode: BetaMode, tokens: &[BetaToken]) -> Result<serde_
             if tokens.is_empty() {
                 anyhow::bail!("mode needs at least one beta program (pass --tokens)");
             }
-            let programs: Vec<serde_json::Value> = tokens
-                .iter()
-                .map(|t| serde_json::json!({"Program": program(t)}))
-                .collect();
+            // Each element IS a program — the same {Description, Token} shape
+            // RequireProgram carries. `Program` is Apple's name for the array
+            // element, not a key to nest under; wrapping it produced an offer
+            // that listed no programs the device could read.
+            let programs: Vec<serde_json::Value> = tokens.iter().map(program).collect();
             beta.insert(
                 "OfferPrograms".to_string(),
                 serde_json::Value::Array(programs),
@@ -328,6 +329,7 @@ pub fn handle_ddm_beta(
     payload.insert("Beta".to_string(), build_beta_payload(mode, &tokens)?);
 
     let decl = Declaration {
+        payload_scope: None,
         declaration_type: SWU_SETTINGS.to_string(),
         identifier: base_identifier,
         server_token: None,
@@ -380,6 +382,7 @@ fn build_and_check(mode: BetaMode, tokens: &[BetaToken], identifier: &str) -> Re
     let mut payload = DeclarationPayload::new();
     payload.insert("Beta".to_string(), build_beta_payload(mode, tokens)?);
     let decl = Declaration {
+        payload_scope: None,
         declaration_type: SWU_SETTINGS.to_string(),
         identifier: identifier.to_string(),
         server_token: None,
@@ -524,11 +527,12 @@ mod tests {
     fn offer_mode_builds_allowed_with_offer_programs() {
         let payload = build_beta_payload(BetaMode::Offer, &[tok("Pilot", "AAA")]).unwrap();
         assert_eq!(payload["ProgramEnrollment"], "Allowed");
-        assert_eq!(payload["OfferPrograms"][0]["Program"]["Token"], "AAA");
-        assert_eq!(
-            payload["OfferPrograms"][0]["Program"]["Description"],
-            "Pilot"
+        assert_eq!(payload["OfferPrograms"][0]["Token"], "AAA");
+        assert!(
+            payload["OfferPrograms"][0].get("Program").is_none(),
+            "a program must not be wrapped in a Program key"
         );
+        assert_eq!(payload["OfferPrograms"][0]["Description"], "Pilot");
     }
 
     #[test]
@@ -583,6 +587,7 @@ mod tests {
                 build_beta_payload(mode, &tokens).unwrap(),
             );
             let decl = Declaration {
+                payload_scope: None,
                 declaration_type: SWU_SETTINGS.to_string(),
                 identifier: "com.acme.settings".to_string(),
                 server_token: None,
