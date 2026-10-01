@@ -1,10 +1,12 @@
 # SOP: AI-tool managed configuration (app policies)
 
 Contour embeds a policy dataset for AI coding tools — the managed-
-configuration surface of Claude Code (591 keys), OpenAI Codex (14), Cursor
-(9), and Gemini Enterprise mobile (8): 622 (tool × key) rows with delivery
-channels, enum vocabularies, and NIST 800-53 control mappings
-(`app-policy-schema` crate, `app_policies.parquet`).
+configuration surface of Claude Code, OpenAI Codex, Cursor and Gemini
+Enterprise mobile — with delivery channels, enum vocabularies and NIST
+800-53 control mappings (`app-policy-schema` crate, `app_policies.parquet`).
+
+Key counts per tool move with each vendor release. `contour census` reports
+the embedded total; no count is written by hand in this SOP.
 
 **Status: dataset embedded, no query CLI yet.** There is no
 `contour app-policy search` today — this SOP documents what exists and the
