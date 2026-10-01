@@ -232,6 +232,11 @@ pub fn handle_cel_check(expression: &str, allow_v2: bool, mode: OutputMode) -> R
         }
     }
 
+    // The report above is the detail; the exit code is the verdict, so a CI
+    // step can gate on it.
+    if has_errors {
+        anyhow::bail!("CEL expression rejected: {expression}");
+    }
     Ok(())
 }
 
@@ -605,7 +610,10 @@ mod tests {
     #[test]
     fn test_handle_cel_check_invalid() {
         let result = handle_cel_check("this is not valid CEL !!!", false, OutputMode::Human);
-        result.unwrap(); // Returns Ok even for invalid - just prints error
+        assert!(
+            result.is_err(),
+            "an expression check reports a rejection as failure"
+        );
     }
 
     #[test]

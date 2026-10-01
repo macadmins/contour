@@ -86,9 +86,15 @@ impl BinaryIdentifier {
 }
 
 /// An app bundle-ID entry of `AllowedApps`/`DeniedApps` (iOS/tvOS/visionOS).
+///
+/// Serializes as the **bare bundle ID**. In Apple's schema `AppIdentifier` is
+/// the array element's name, typed `<string>` — not a key — so the arrays are
+/// `["com.example.app"]`. Apple says as much: "apps with bundle IDs in the
+/// array. Include the value `com.apple.webapp`". `[{"AppIdentifier": "…"}]`
+/// validates against nothing and matches no app.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct AppIdentifier {
-    #[serde(rename = "AppIdentifier")]
     pub app_identifier: String,
 }
 

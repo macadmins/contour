@@ -101,6 +101,12 @@ fn main() -> Result<()> {
 
         Commands::Diff { file1, file2 } => santa::cli::diff::run(&file1, &file2, output_mode),
 
+        Commands::Parity {
+            rules,
+            declaration,
+            santa_mode,
+        } => santa::cli::parity::run(&rules, &declaration, santa_mode, output_mode),
+
         Commands::Config {
             output,
             mode,
@@ -368,6 +374,7 @@ fn main() -> Result<()> {
             include_unsigned,
             org,
             rule_type,
+            no_apple,
             merge,
         } => {
             let org = resolve_org(org);
@@ -384,6 +391,7 @@ fn main() -> Result<()> {
                     include_unsigned,
                     &org,
                     rule_type,
+                    no_apple,
                     cli.verbose,
                     cli.json,
                 )
@@ -396,6 +404,7 @@ fn main() -> Result<()> {
             permissions,
             scaffold,
             always_allow_managed,
+            no_apple,
             rule_type,
             platform,
             deny,
@@ -408,10 +417,11 @@ fn main() -> Result<()> {
             permissions.as_deref(),
             scaffold,
             always_allow_managed,
+            no_apple,
             rule_type,
             platform,
             deny,
-            &org,
+            org.as_deref(),
             strict,
             output.as_deref(),
             cli.json,

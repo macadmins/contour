@@ -41,10 +41,11 @@ pub fn run(
     permissions: Option<&Path>,
     scaffold: bool,
     always_allow_managed: bool,
+    no_apple: bool,
     rule_type: ScanRuleType,
     platform: TargetPlatform,
     deny: bool,
-    org: &str,
+    org: Option<&str>,
     strict: bool,
     output: Option<&Path>,
     json_output: bool,
@@ -89,12 +90,11 @@ pub fn run(
             let mut skipped = Vec::new();
             if platform.includes_binaries() {
                 for app in &apps {
-                    match map::from_scanned_app(app, rule_type, default_policy) {
-                        Some(entry) => binaries.push(entry),
-                        None => {
-                            skipped.push(format!("{}: no usable code-signing identifier", app.name))
-                        }
+                    let entries = map::from_scanned_app(app, rule_type, default_policy);
+                    if entries.is_empty() {
+                        skipped.push(format!("{}: no usable code-signing identifier", app.name));
                     }
+                    binaries.extend(entries);
                 }
             }
             if platform.includes_apps() {
@@ -173,6 +173,7 @@ pub fn run(
         apps: app_entries,
         privacy,
         always_allow_managed,
+        omit_apple: no_apple,
     };
     if settings.is_empty() {
         bail!("nothing to emit — no valid binaries, apps, or privacy defaults");
@@ -205,7 +206,7 @@ pub fn run(
             ));
         }
         print_info(&format!(
-            "Validate: contour profile ddm validate --beta {}",
+            "Validate: contour profile ddm validate {}",
             out_path.display()
         ));
     }
@@ -267,10 +268,11 @@ fn gate_permissions(pd: &mut PermissionDefault, platform: TargetPlatform) {
 
 /// Resolve the org domain via the shared resolver:
 /// `--org` flag → `CONTOUR_ORG` env → `.contour/config.toml` → error.
-/// The clap default `com.example` is treated as "unset"; never emits `com.example`.
-fn resolve_org(flag: &str) -> Result<String> {
-    let explicit = (!flag.is_empty() && flag != "com.example").then(|| flag.to_string());
-    contour_core::resolve_org(explicit)
+///
+/// `--org` has no default: an org is the operator's, and a placeholder would
+/// put another's domain in the declaration.
+fn resolve_org(flag: Option<&str>) -> Result<String> {
+    contour_core::resolve_org(flag.filter(|f| !f.is_empty()).map(str::to_string))
 }
 
 // Reference build constants so a rename keeps this module in sync.

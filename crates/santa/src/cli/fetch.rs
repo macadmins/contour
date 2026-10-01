@@ -297,6 +297,7 @@ fn run_fleet_apps(
             apps: Vec::new(),
             privacy: Vec::new(),
             always_allow_managed: false,
+            omit_apple: false,
         };
         if !settings.is_empty() {
             let declaration = settings.to_declaration(&org, "santa");

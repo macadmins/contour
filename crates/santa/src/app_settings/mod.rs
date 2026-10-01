@@ -12,10 +12,12 @@
 //! - [`build`] — assemble the declaration JSON from validated entries.
 //! - [`validate`] — the schema `notes` rules (allow/deny identifier requirements).
 //! - [`privacy`] — `Privacy.PermissionDefaults` policy file + `--scaffold`.
+//! - [`parity`] — where a Santa ruleset and a declaration disagree.
 
 pub mod build;
 pub mod map;
 pub mod model;
+pub mod parity;
 pub mod privacy;
 pub mod validate;
 

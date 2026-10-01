@@ -3,6 +3,13 @@ use anyhow::{Context, Result};
 use plist::Value;
 use std::path::Path;
 
+/// Santa's preference domain, as Santa's own daemon names it
+/// (`kMobileConfigDomain` in `SNTConfigurator.mm`).
+pub const SANTA_DOMAIN: &str = "com.northpolesec.santa";
+
+/// The pre-fork domain. Named only so it can be refused with an explanation.
+pub const GOOGLE_SANTA_DOMAIN: &str = "com.google.santa";
+
 /// Parse rules from an existing Santa mobileconfig
 pub fn parse_mobileconfig(content: &[u8]) -> Result<RuleSet> {
     let plist: Value = plist::from_bytes(content).context("Failed to parse mobileconfig plist")?;
@@ -24,9 +31,21 @@ pub fn parse_mobileconfig(content: &[u8]) -> Result<RuleSet> {
         // Check if this is a Santa payload
         let payload_type = payload_dict.get("PayloadType").and_then(|v| v.as_string());
 
-        if payload_type != Some("com.northpolesec.santa")
-            && payload_type != Some("com.google.santa")
-        {
+        // Santa is com.northpolesec.santa. The Google domain is pre-fork and
+        // a Google-signed Santa is not supported, so reading one is refused —
+        // but refused BY NAME, because an operator holding a legacy profile
+        // needs to be told what to change it to. Silently accepting it was
+        // worse: the rules parsed, and nothing said the profile targets a
+        // binary nobody ships.
+        if payload_type == Some(GOOGLE_SANTA_DOMAIN) {
+            anyhow::bail!(
+                "this profile carries a `{GOOGLE_SANTA_DOMAIN}` payload. Santa is \
+                 `{SANTA_DOMAIN}` — the daemon names that domain itself — and a \
+                 Google-signed Santa is not supported. Change the PayloadType to \
+                 `{SANTA_DOMAIN}` and re-run."
+            );
+        }
+        if payload_type != Some(SANTA_DOMAIN) {
             continue;
         }
 

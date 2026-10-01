@@ -18,6 +18,16 @@ pub struct AppSettings {
     pub apps: Vec<(AppIdentifier, BinaryPolicy)>,
     pub privacy: Vec<PermissionDefault>,
     pub always_allow_managed: bool,
+    /// Leave Apple's own software out of an allow list.
+    ///
+    /// `AllowedBinaries` is exclusive: once present, only matching binaries
+    /// run, apart from the processes macOS deems system-critical. A list built
+    /// from a scan of `/Applications` names third-party vendors, so without an
+    /// Apple entry every Apple app that is not system-critical stops launching.
+    /// So an allow list gets `TeamID = "*APPLE*"` — Apple's sentinel for its
+    /// binaries' empty team identifier — unless one already covers them, or
+    /// this is set.
+    pub omit_apple: bool,
 }
 
 impl AppSettings {
@@ -46,6 +56,17 @@ impl AppSettings {
                 BinaryPolicy::Allow => allowed_apps.push(app),
                 BinaryPolicy::Deny => denied_apps.push(app),
             }
+        }
+
+        let apple = BinaryIdentifier {
+            team_id: Some(super::validate::APPLE_TEAM_ID.to_string()),
+            ..Default::default()
+        };
+        if !allowed_binaries.is_empty()
+            && !self.omit_apple
+            && !allowed_binaries.iter().any(|b| covers_all_apple(b))
+        {
+            allowed_binaries.insert(0, &apple);
         }
 
         let mut allowed = Map::new();
@@ -98,6 +119,16 @@ impl AppSettings {
     }
 }
 
+/// An allow entry that matches every Apple binary: the sentinel team with
+/// nothing narrowing it.
+fn covers_all_apple(b: &BinaryIdentifier) -> bool {
+    b.team_id.as_deref() == Some(super::validate::APPLE_TEAM_ID)
+        && b.signing_id.is_none()
+        && b.cdhash.is_none()
+        && b.path_prefix.is_none()
+        && b.signing_state.is_none()
+}
+
 /// Lower-case and replace any non `[a-z0-9.]` run with a single `-`.
 fn sanitize_id(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -134,6 +165,8 @@ mod tests {
                 (team("FFFFF99999"), BinaryPolicy::Deny),
             ],
             always_allow_managed: true,
+            // Grouping is what this checks; the Apple entry has its own test.
+            omit_apple: true,
             ..Default::default()
         };
         let decl = settings.to_declaration("com.acme", "fleet");
@@ -159,8 +192,13 @@ mod tests {
         };
         let decl = settings.to_declaration("com.acme", "x");
         let allowed = &decl["Payload"]["Allowed"];
-        assert_eq!(allowed["AllowedApps"][0]["AppIdentifier"], "com.allow.app");
-        assert_eq!(allowed["DeniedApps"][0]["AppIdentifier"], "com.deny.app");
+        // Bare bundle IDs: AppIdentifier is the element's name, not a key.
+        assert_eq!(allowed["AllowedApps"][0], "com.allow.app");
+        assert_eq!(allowed["DeniedApps"][0], "com.deny.app");
+        assert!(
+            allowed["AllowedApps"][0].get("AppIdentifier").is_none(),
+            "an app entry must not be wrapped in an AppIdentifier key"
+        );
     }
 
     #[test]
@@ -172,6 +210,7 @@ mod tests {
         };
         let settings = AppSettings {
             binaries: vec![(bi, BinaryPolicy::Allow)],
+            omit_apple: true,
             ..Default::default()
         };
         let decl = settings.to_declaration("com.acme", "x");
@@ -193,5 +232,47 @@ mod tests {
     fn sanitize_id_normalizes() {
         assert_eq!(sanitize_id("My Fleet!"), "my-fleet");
         assert_eq!(sanitize_id("com.example.app"), "com.example.app");
+    }
+
+    fn allowed(settings: &AppSettings) -> Vec<Value> {
+        settings.to_declaration("com.acme", "t")["Payload"]["Allowed"]["AllowedBinaries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// An allow list is exclusive, so it carries Apple's software unless told
+    /// not to — and never twice.
+    #[test]
+    fn an_allow_list_includes_apple_unless_omitted() {
+        let mut s = AppSettings {
+            binaries: vec![(team("ABCDE12345"), BinaryPolicy::Allow)],
+            ..Default::default()
+        };
+        let list = allowed(&s);
+        assert_eq!(list[0], json!({"TeamID": "*APPLE*"}), "{list:?}");
+        assert_eq!(list.len(), 2);
+
+        s.binaries.push((team("*APPLE*"), BinaryPolicy::Allow));
+        assert_eq!(
+            allowed(&s).len(),
+            2,
+            "an existing *APPLE* entry is not repeated"
+        );
+
+        s.binaries.pop();
+        s.omit_apple = true;
+        assert_eq!(allowed(&s), vec![json!({"TeamID": "ABCDE12345"})]);
+    }
+
+    /// A deny list is not exclusive, and gets nothing added.
+    #[test]
+    fn a_deny_list_gets_no_apple_entry() {
+        let s = AppSettings {
+            binaries: vec![(team("ABCDE12345"), BinaryPolicy::Deny)],
+            ..Default::default()
+        };
+        let d = s.to_declaration("com.acme", "t");
+        assert!(d["Payload"]["Allowed"]["AllowedBinaries"].is_null());
     }
 }

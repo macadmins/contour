@@ -7,7 +7,7 @@ use crate::bundle::{Bundle, BundleSet};
 use crate::cli::{ScanOutputFormat, ScanRuleType};
 use crate::generator::{self, GeneratorOptions};
 use crate::models::{Policy, Rule, RuleSet, RuleType};
-use crate::output::{print_error, print_info, print_kv, print_success};
+use crate::output::{print_info, print_kv, print_success};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -25,6 +25,14 @@ pub struct ScannedApp {
     pub sha256: Option<String>,
     pub cdhash: Option<String>,
     pub bundle_id: Option<String>,
+    /// CDHash of every architecture slice, read with `codesign`.
+    ///
+    /// `cdhash` above is one value — santactl reports the native slice
+    /// only. A universal binary has a CDHash per slice, and which of them
+    /// become rules depends on allow vs deny, so all of them travel to the
+    /// rule builder. Empty when unreadable, or from a CSV that predates it.
+    #[serde(default)]
+    pub cdhash_slices: Vec<contour_core::SliceCdHash>,
 }
 
 /// JSON output from santactl fileinfo --json
@@ -98,6 +106,7 @@ pub fn run(
     include_unsigned: bool,
     org: &str,
     rule_type: ScanRuleType,
+    no_apple: bool,
     verbose: bool,
     json_output: bool,
 ) -> Result<()> {
@@ -108,8 +117,16 @@ pub fn run(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| default_output_path(output_format));
 
+    // santactl when present; otherwise codesign, which every Mac has. Both
+    // produce the same ScannedApp, so every output format works either way.
+    let use_santactl = is_santactl_available();
+
     if !json_output {
-        print_info("Scanning local applications with santactl...");
+        print_info(if use_santactl {
+            "Scanning local applications with santactl..."
+        } else {
+            "Scanning local applications with codesign (santactl not installed)..."
+        });
         print_kv("Device", &device_name);
         print_kv(
             "Paths",
@@ -123,13 +140,6 @@ pub fn run(
             "Output format",
             &format!("{:?}", output_format).to_lowercase(),
         );
-    }
-
-    // Check if santactl is available
-    if !is_santactl_available() {
-        print_error("santactl not found. Please install Santa first.");
-        print_info("Install Santa from: https://github.com/northpolesec/santa/releases");
-        anyhow::bail!("santactl not available");
     }
 
     // Find all .app bundles
@@ -163,7 +173,12 @@ pub fn run(
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| app_path.display().to_string());
 
-        match scan_app(app_path) {
+        let result = if use_santactl {
+            scan_app(app_path)
+        } else {
+            scan_app_codesign(app_path)
+        };
+        match result {
             Ok(Some(app)) => {
                 if app.team_id.is_some() || include_unsigned {
                     scanned.push(app);
@@ -207,7 +222,14 @@ pub fn run(
             baseline_summary = Some(write_baseline(&scanned, &output_path, rule_type)?);
         }
         ScanOutputFormat::AppSettings => {
-            write_app_settings(&scanned, &output_path, org, rule_type, json_output)?;
+            write_app_settings(
+                &scanned,
+                &output_path,
+                org,
+                rule_type,
+                no_apple,
+                json_output,
+            )?;
         }
     }
 
@@ -315,20 +337,18 @@ fn print_next_steps(format: ScanOutputFormat, output: &Path) {
         ScanOutputFormat::Baseline => {
             print_info("Next steps:");
             println!("  1. Review {}", output.display());
+            println!("  2. Re-run this command to grow the baseline across machines");
+            println!("  For one core profile, scan to rules instead:");
+            println!("     contour santa scan -f rules -o core.yaml");
             println!(
-                "  2. contour santa rings generate <rules> --baseline {} -o rings/",
-                output.display()
+                "     contour santa merge core.yaml <rules> --strategy deny-wins -o merged.yaml"
             );
-            println!("     (or `santa fleet` for Fleet GitOps)");
-            println!("  3. Re-run this command to grow the baseline across machines");
+            println!("     contour santa generate merged.yaml -o santa.mobileconfig");
         }
         ScanOutputFormat::AppSettings => {
             print_info("Next steps:");
             println!("  1. Review {}", output.display());
-            println!(
-                "  2. contour profile ddm validate --beta {}",
-                output.display()
-            );
+            println!("  2. contour profile ddm validate {}", output.display());
             println!("  3. Deploy the declaration via your MDM (macOS 27+)");
         }
     }
@@ -438,10 +458,64 @@ fn scan_app(app_path: &Path) -> Result<Option<ScannedApp>> {
         sha256: clean_optional(&info.sha256),
         cdhash: clean_optional(&info.cdhash),
         bundle_id: extract_bundle_id(&info.signing_id),
+        // santactl reports one CDHash; codesign reads every slice.
+        cdhash_slices: contour_core::read_code_identity(app_path)
+            .map(|id| id.slices)
+            .unwrap_or_default(),
     }))
 }
 
 /// Clean optional string - convert "None" or empty to None.
+/// Scan a single app with `codesign` alone — no santactl needed.
+///
+/// Emits the same [`ScannedApp`] santactl would, in Santa's own conventions,
+/// because one scan feeds Santa rules as well as `app.settings`: a
+/// third-party SigningID is `TEAMID:bundle`, and an Apple binary has no
+/// TeamID and a `platform:` SigningID. The map layer converts those into
+/// Apple's form (bare SigningID) where a declaration needs it.
+///
+/// No SHA-256: that is a file hash santactl computes, and `app.settings`
+/// cannot match on it. CDHash is what binary rules use.
+pub fn scan_app_codesign(app_path: &Path) -> Result<Option<ScannedApp>> {
+    let id = match contour_core::read_code_identity(app_path) {
+        Ok(id) => id,
+        // Unsigned is a scan result, not a failure — same as santactl.
+        Err(e) if e.to_string().ends_with("not signed") => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Some(bare) = id.signing_id.clone() else {
+        return Ok(None);
+    };
+
+    let (team_id, signing_id) = match id.team_id.as_deref() {
+        Some("*APPLE*") => (None, format!("platform:{bare}")),
+        Some(team) => (Some(team.to_string()), format!("{team}:{bare}")),
+        // Ad-hoc or otherwise team-less: nothing a rule can safely match on.
+        None => return Ok(None),
+    };
+
+    // santactl reports the native slice's CDHash in the single field.
+    let cdhash = id
+        .slices
+        .iter()
+        .find(|s| crate::app_settings::map::is_apple_silicon(&s.arch))
+        .or_else(|| id.slices.first())
+        .map(|s| s.cdhash.clone());
+
+    let signing_id = Some(signing_id);
+    Ok(Some(ScannedApp {
+        name: contour_core::get_app_name(app_path),
+        path: app_path.display().to_string(),
+        version: None,
+        bundle_id: extract_bundle_id(&signing_id),
+        team_id,
+        signing_id,
+        sha256: None,
+        cdhash,
+        cdhash_slices: id.slices,
+    }))
+}
+
 fn clean_optional(value: &Option<String>) -> Option<String> {
     value.as_ref().and_then(|v| {
         if v.is_empty() || v == "None" || v == "null" {
@@ -582,6 +656,8 @@ fn write_csv(apps: &[ScannedApp], output: &Path, device_name: &str) -> Result<()
         "device_name",
         "bundle_id",
         "path",
+        "cdhash",
+        "cdhashes",
     ])?;
 
     for app in apps {
@@ -594,6 +670,8 @@ fn write_csv(apps: &[ScannedApp], output: &Path, device_name: &str) -> Result<()
             device_name,
             app.bundle_id.as_deref().unwrap_or(""),
             &app.path,
+            app.cdhash.as_deref().unwrap_or(""),
+            &format_slices(&app.cdhash_slices),
         ])?;
     }
 
@@ -741,13 +819,14 @@ fn write_app_settings(
     output: &Path,
     org: &str,
     rule_type: ScanRuleType,
+    no_apple: bool,
     json_output: bool,
 ) -> Result<()> {
     use crate::app_settings::{AppSettings, BinaryPolicy, map, partition_binaries};
 
     let entries: Vec<_> = apps
         .iter()
-        .filter_map(|a| map::from_scanned_app(a, rule_type, BinaryPolicy::Allow))
+        .flat_map(|a| map::from_scanned_app(a, rule_type, BinaryPolicy::Allow))
         .collect();
     let (valid, violations) = partition_binaries(entries);
 
@@ -760,8 +839,15 @@ fn write_app_settings(
 
     let settings = AppSettings {
         binaries: valid,
+        omit_apple: no_apple,
         ..Default::default()
     };
+    if no_apple && !json_output {
+        print_info(
+            "--no-apple: the allow list carries no *APPLE* entry — it is exclusive, so \
+             Apple apps not listed will not launch",
+        );
+    }
     let declaration = settings.to_declaration(org, "scan");
     let json = serde_json::to_string_pretty(&declaration)?;
     std::fs::write(output, json)
@@ -900,10 +986,36 @@ fn apps_to_rules(apps: &[ScannedApp], rule_type: ScanRuleType) -> RuleSet {
     rules
 }
 
+/// Slices as one CSV cell: `x86_64=cee5…;arm64=36c8…`.
+///
+/// One cell rather than a column per arch, because the set of slices varies
+/// per binary and a CSV header cannot.
+fn format_slices(slices: &[contour_core::SliceCdHash]) -> String {
+    slices
+        .iter()
+        .map(|s| format!("{}={}", s.arch, s.cdhash))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// The inverse of [`format_slices`]. A malformed entry is skipped, not fatal:
+/// one bad cell should not lose the rest of an aggregated scan.
+fn parse_slices(cell: &str) -> Vec<contour_core::SliceCdHash> {
+    cell.split(';')
+        .filter_map(|pair| {
+            let (arch, cdhash) = pair.split_once('=')?;
+            (!arch.is_empty() && !cdhash.is_empty()).then(|| contour_core::SliceCdHash {
+                arch: arch.to_string(),
+                cdhash: cdhash.to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Merge multiple scan CSVs into one (for aggregating from multiple machines).
 /// Read scanned apps from one or more scan CSV files, deduplicated by
-/// `signing_id`/`sha256`/`name`. The CSV has no `cdhash` column, so `cdhash`
-/// is always `None` on the result (re-scan locally for CDHash identifiers).
+/// `signing_id`/`sha256`/`name`. `cdhash` and `cdhashes` are read when present;
+/// a CSV written before those columns existed yields `None` and no slices.
 pub fn read_scan_csvs(inputs: &[PathBuf]) -> Result<Vec<ScannedApp>> {
     let mut all_apps: HashMap<String, ScannedApp> = HashMap::new();
 
@@ -930,8 +1042,12 @@ pub fn read_scan_csvs(inputs: &[PathBuf]) -> Result<Vec<ScannedApp>> {
                     team_id: record.get("team_id").cloned().filter(|s| !s.is_empty()),
                     signing_id: record.get("signing_id").cloned().filter(|s| !s.is_empty()),
                     sha256: record.get("sha256").cloned().filter(|s| !s.is_empty()),
-                    cdhash: None,
+                    cdhash: record.get("cdhash").cloned().filter(|s| !s.is_empty()),
                     bundle_id: record.get("bundle_id").cloned().filter(|s| !s.is_empty()),
+                    cdhash_slices: record
+                        .get("cdhashes")
+                        .map(|s| parse_slices(s))
+                        .unwrap_or_default(),
                 });
             }
         }
@@ -960,4 +1076,37 @@ pub fn merge_scans(inputs: &[PathBuf], output: &Path) -> Result<()> {
     write_csv(&apps, output, &device_str)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod slice_cell_tests {
+    use super::{format_slices, parse_slices};
+
+    #[test]
+    fn slices_round_trip_through_one_csv_cell() {
+        let slices = vec![
+            contour_core::SliceCdHash {
+                arch: "x86_64".to_string(),
+                cdhash: "c".repeat(40),
+            },
+            contour_core::SliceCdHash {
+                arch: "arm64e".to_string(),
+                cdhash: "a".repeat(40),
+            },
+        ];
+        let cell = format_slices(&slices);
+        assert_eq!(
+            cell,
+            format!("x86_64={};arm64e={}", "c".repeat(40), "a".repeat(40))
+        );
+        assert_eq!(parse_slices(&cell), slices);
+    }
+
+    #[test]
+    fn an_empty_or_malformed_cell_yields_what_it_can() {
+        assert!(parse_slices("").is_empty());
+        let parsed = parse_slices(&format!("junk;arm64={};=x", "a".repeat(40)));
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].arch, "arm64");
+    }
 }

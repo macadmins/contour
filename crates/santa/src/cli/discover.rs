@@ -56,6 +56,11 @@ pub fn run(
     // Display or process results
     if json_output {
         let bundles = result.to_bundles();
+        // --json changes what is printed, not what is written: `-o` still
+        // gets its file.
+        if let Some(output_path) = output {
+            write_bundles(&bundles, output_path)?;
+        }
         println!("{}", serde_json::to_string_pretty(&bundles)?);
         return Ok(());
     }
