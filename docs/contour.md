@@ -129,6 +129,29 @@ contour with the documented conventions.
 Emits the CLI surface as JSON — for tooling that needs a machine-readable
 command/flag schema.
 
+### `contour find`
+
+Fuzzy-searches the whole command tree — commands and SOP sections — for a
+term, and ranks the matches. Typo-tolerant. Each hit names the
+`help-agents` call that shows it in full.
+
+```
+contour find <TERM> [flags]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `<TERM>` | Search term (e.g. `secrets`, `"shared ipad"`) | **required** |
+| `--deep` | Also match flag names and flag help (broader, noisier) | `false` |
+| `--json` | JSON output | `false` |
+
+```bash
+contour find secrets
+contour find "shared ipad"
+contour find depricated        # typo-tolerant
+contour find org --deep        # also search flag help
+```
+
 ### `contour completions`
 
 Sets up shell tab-completion. Supports **zsh**, **bash**, and **fish**.

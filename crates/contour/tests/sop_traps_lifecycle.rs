@@ -383,23 +383,22 @@ services = ["camera", "microphone"]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trap 31: `btm generate --ddm` emits one `.json` DDM declaration per app —
-//          in BOTH combined (default) and `--per-app` mode. DDM is inherently
-//          per-declaration, so `--per-app` is effectively a no-op once `--ddm`
-//          is set.
+// Trap 31: `btm generate --ddm` is REFUSED — in both combined (default) and
+//          `--per-app` mode — and writes nothing.
 // SOP procedure: generate_btm_profile / STEP 2
-// Regression guard: before 8a3d742, combined-mode `--ddm` silently dropped
-// the flag and wrote a `.mobileconfig` instead — the historical "quirk" the
-// SOP used to document. If anything reverts that, this test fails.
+// BTM allow-rules pre-approve a vendor's existing login items. The only
+// candidate declaration, com.apple.configuration.services.background-tasks,
+// installs launchd jobs the MDM supplies, and Apple documents that it cannot
+// manage third-party login items — so no mapping could ever take effect.
+// Before 129de24 contour emitted one anyway; it validated and `ddm verify`
+// passed while it named assets that were never generated.
+// Regression guard: if --ddm ever emits a declaration again, in either mode,
+// or refuses without naming the path that does work, this test fails.
 // ─────────────────────────────────────────────────────────────────────────────
 #[test]
-fn trap_31_btm_ddm_emits_per_app_json_in_both_modes() {
+fn trap_31_btm_ddm_is_refused_in_both_modes() {
     let dir = tempfile::tempdir().unwrap();
     let toml = dir.path().join("btm.toml");
-    let out_combined = dir.path().join("out-combined");
-    let out_per_app = dir.path().join("out-per-app");
-    fs::create_dir_all(&out_combined).unwrap();
-    fs::create_dir_all(&out_per_app).unwrap();
 
     // Hand-author a minimal valid btm.toml with one app + one rule.
     // BTM uses `[settings]` (not `[config]`) and `[[apps]]` with at
@@ -421,69 +420,44 @@ rule_value = "BQR82RBBHL"
     )
     .unwrap();
 
-    let run = |args: &[&str]| {
+    for mode in [&[][..], &["--per-app"][..]] {
+        let out_dir = dir.path().join(if mode.is_empty() {
+            "combined"
+        } else {
+            "per-app"
+        });
+        fs::create_dir_all(&out_dir).unwrap();
+
+        let mut args = vec!["btm", "generate", toml.to_str().unwrap(), "--ddm"];
+        args.extend_from_slice(mode);
+        args.extend_from_slice(&["-o", out_dir.to_str().unwrap(), "--json"]);
+
         let out = Command::cargo_bin("contour")
             .unwrap()
-            .args(args)
+            .args(&args)
             .output()
             .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+
         assert!(
-            out.status.success(),
-            "btm generate exited non-zero; stderr: {}",
-            String::from_utf8_lossy(&out.stderr)
+            !out.status.success(),
+            "--ddm {mode:?} must be refused, not produce a declaration"
         );
-    };
-
-    // Combined (default) — emits per-app .json declarations under --ddm.
-    run(&[
-        "btm",
-        "generate",
-        toml.to_str().unwrap(),
-        "--ddm",
-        "-o",
-        out_combined.to_str().unwrap(),
-        "--json",
-    ]);
-
-    // --per-app — identical output: per-app is a no-op once --ddm is set.
-    run(&[
-        "btm",
-        "generate",
-        toml.to_str().unwrap(),
-        "--ddm",
-        "--per-app",
-        "-o",
-        out_per_app.to_str().unwrap(),
-        "--json",
-    ]);
-
-    let count_ext = |dir: &std::path::Path, ext: &str| -> usize {
-        fs::read_dir(dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some(ext))
-            .count()
-    };
-
-    // Both modes: exactly one .json per app, zero .mobileconfig.
-    assert_eq!(
-        count_ext(&out_combined, "json"),
-        1,
-        "combined --ddm must emit one .json per app"
-    );
-    assert_eq!(
-        count_ext(&out_combined, "mobileconfig"),
-        0,
-        "combined --ddm must not emit .mobileconfig"
-    );
-    assert_eq!(
-        count_ext(&out_per_app, "json"),
-        1,
-        "--per-app --ddm must emit one .json per app"
-    );
-    assert_eq!(
-        count_ext(&out_per_app, "mobileconfig"),
-        0,
-        "--per-app --ddm must not emit .mobileconfig"
-    );
+        assert!(
+            stderr.contains("no DDM equivalent"),
+            "--ddm {mode:?}: the refusal must say why; stderr: {stderr}"
+        );
+        // Refusing is only half the job: the operator needs the path that works.
+        assert!(
+            stderr.contains("ddm legacy wrap"),
+            "--ddm {mode:?}: the refusal must point at `profile ddm legacy wrap`; stderr: {stderr}"
+        );
+        // A refusal must not leave a half-written declaration, or a
+        // .mobileconfig silently standing in for the one that was asked for.
+        let written = fs::read_dir(&out_dir).unwrap().count();
+        assert_eq!(
+            written, 0,
+            "--ddm {mode:?} must write nothing, wrote {written} file(s)"
+        );
+    }
 }

@@ -7,12 +7,14 @@
 #
 # This is the embedded default. To override or extend it for a repo, drop a
 # `.contour/security-posture.toml` at that repo's root (same shape) — contour
-# uses it instead of this built-in. Every query is verified against the embedded
-# osquery schema; test one on a host with `contour osquery verify`.
+# uses it instead of this built-in. The embedded pack's tables and columns are
+# checked against the osquery schema by a unit test; a repo override is checked
+# at table level by `contour osquery validate <repo>`. `contour osquery verify`
+# prints the osqueryi and orbit commands to run each report on a host.
 #
 # Per-report fields (name, description, query are required; the rest default):
 #   platform           = "darwin"   # comma-separated osquery platforms
-#   interval           = 86400      # seconds between runs
+#   interval           = 3600       # seconds between runs
 #   observer_can_run   = true       # observers may run it ad hoc
 #   automations_enabled = false     # forward results to the log destination
 
@@ -33,7 +35,7 @@ query = "SELECT config_flag, enabled FROM sip_config;"
 
 [[report]]
 name = "macOS host: application firewall"
-description = "Application firewall global state and stealth mode (alf; limited on macOS 15+)."
+description = "Application firewall global state, stealth mode and logging (alf; these three columns still report on macOS 15+, where other alf columns do not)."
 query = "SELECT global_state, stealth_enabled, logging_enabled FROM alf;"
 
 [[report]]

@@ -164,7 +164,7 @@ Each toolkit is a subcommand of `contour`, with its own focused guide.
 | Subcommand | Guide |
 |---|---|
 | `contour profile`: `.mobileconfig`, DDM, recipes, MDM commands, ADE enrollment | [contour-profile.md](docs/contour-profile.md) |
-| `contour santa`: Santa allowlists, CEL, FAA, ring editions, baseline merge | [contour-santa.md](docs/contour-santa.md) |
+| `contour santa`: Santa allowlists, CEL, FAA | [contour-santa.md](docs/contour-santa.md) |
 | `contour pppc`: Privacy/TCC profiles from app bundles | [contour-pppc.md](docs/contour-pppc.md) |
 | `contour mscp`: macOS Security Compliance Project baselines | [contour-mscp.md](docs/contour-mscp.md) |
 | `contour btm`: Background Task Management service profiles | [contour-btm.md](docs/contour-btm.md) |

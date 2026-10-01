@@ -1,18 +1,37 @@
 # SOP: Beta (pre-release OS seed) schema
 
+> **The beta channel is DISABLED right now.** No seed dataset is compiled into
+> the binary, and `--beta` / `--channel beta` refuse with an explanation rather
+> than returning the stable dataset under another name. Everything below
+> describes how the channel works when a seed is carried, and becomes live
+> again — with no code change — the moment one is.
+>
+> Why it is off: the dataset pipeline builds beta from Apple's pre-release seed schema, and
+> the last seed held no additions over the release branch, so there was nothing
+> to ship. The pipeline's source lock records this against the
+> `device-management-beta` source. When a future seed carries seed-only
+> declarations or keys, the pipeline publishes them and the flag starts working.
+>
+> How contour knows: it compares the embedded beta table to the stable one.
+> They are currently the same bytes, which is what "no seed dataset" means in
+> practice. Nothing is hardcoded, so this state corrects itself.
+>
+> **Do not tell anyone to pass `--beta` today.** It will fail. If you are here
+> because a type was not found in stable, it is not in beta either — beta is
+> the same data.
+
 This SOP covers contour's **beta channel** — Apple's pre-release OS *seed* schema,
 exposed opt-in via the per-command `--beta` flag OR the global `--channel beta` flag
 (both select the seed; the effective channel is beta if **either** is set). The
 global flag goes before the subcommand: `contour --channel beta profile ...`. The
-channel is **rolling**: it always means *the current
-seed* (`seed_OS_27_0` / OS 27 at time of writing — run `contour profile info` for the
-live pin). When that OS ships, its payloads graduate into stable and the channel
-rolls forward to the next seed; nothing here is version-specific. The beta dataset
-is a strict **superset** of stable for additions: it carries seed-only declarations
-and keys that do not exist in the stable channel. The two channels are isolated by
-construction — seed-only types are invisible to (and rejected by) every stable
-command — so a profile built for production can never silently absorb a pre-release
-key unless `--beta` was explicitly passed.
+channel is **rolling**: it always means *the current seed*. When that OS ships, its
+payloads graduate into stable and the channel rolls forward to the next seed;
+nothing here is version-specific. The beta dataset is a strict **superset** of
+stable for additions: it carries seed-only declarations and keys that do not exist
+in the stable channel. The two channels are isolated by construction — seed-only
+types are invisible to (and rejected by) every stable command — so a profile built
+for production can never silently absorb a pre-release key unless `--beta` was
+explicitly passed.
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Companion SOPs: `--sop generative` (Apple Intelligence payloads), `--sop ddm`,
@@ -53,7 +72,7 @@ the profile as built against pre-release schema — see SAFETY before deploying.
 
 Data layer (for reference; agents use the CLI, not these directly):
 `mdm_schema::embedded_capabilities_beta()`, `embedded_skip_keys_beta()` read
-`crates/mdm-schema/data/beta/*.parquet`, published by the posture-ingest pipeline.
+`crates/mdm-schema/data/beta/*.parquet`, published by the dataset pipeline.
 
 ## INVARIANT — channel isolation
 
@@ -147,10 +166,10 @@ contour profile info --json     # sources.apple_device_management_seed.{commit,d
 ```
 
 The seed pin lives in `schema-versions.toml`, which is **gitignored and
-pipeline-maintained** (posture-ingest writes `[apple_device_management_seed]` into
+pipeline-maintained** (the dataset pipeline writes `[apple_device_management_seed]` into
 the data zip; `build.rs` extracts it). When the seed line is absent, `profile info`
 simply omits it — that means the embedded data predates seed-pin recording, not an
-error. To refresh: re-publish from posture-ingest (a *beta* config prints the exact
+error. To refresh: re-publish from the dataset pipeline (a *beta* config prints the exact
 seed-pin block to paste).
 
 ---
@@ -192,7 +211,7 @@ Contracts:
 - Seed schemas can change or be withdrawn before GA. A `--beta` artifact targets an
   OS that is not yet released; do NOT deploy it to a production fleet expecting
   stability. Treat it as authoring-ahead, validated against the current seed.
-- Bumping the embedded seed (new Seed1→Seed2 commit) is a deliberate posture-ingest
+- Bumping the embedded seed (new Seed1→Seed2 commit) is a deliberate dataset-pipeline
   regeneration, not an automatic refresh — `build.rs` keeps existing `data/` until
   it is cleared.
 

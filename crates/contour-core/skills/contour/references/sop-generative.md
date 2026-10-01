@@ -99,8 +99,8 @@ ADD app privacy permission defaults (Camera/Mic/Location per app):
   # edit OrganizationJustification + per-permission values, then:
   contour santa app-settings scan.csv --permissions app-permissions.toml --org {org} -o {output}
 
-VALIDATE (app.settings is a seed type → --beta):
-  contour profile ddm validate {output} --beta
+VALIDATE (app.settings shipped in OS 27.0 — the released schema covers it):
+  contour profile ddm validate {output}
 
 NOTE: DeniedBinaries under Endpoint Security TERMINATES running processes of a
 matched binary, not just future launches. The command warns when it emits deny
@@ -120,7 +120,7 @@ See `--sop santa` for the full identifier-strategy detail (`--rule-type`,
   Once the OS ships, these graduate to stable and `--beta` is no longer required.
   See `--sop beta` SAFETY.
 - `app.settings` deny rules are high-impact (process termination). Stage them through
-  a rollout cohort (a Fleet label / ring) before fleet-wide application.
+  a rollout cohort (a Fleet label) before fleet-wide application.
 
 ## Key flags
 

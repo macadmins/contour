@@ -88,7 +88,7 @@ Turn an mSCP baseline into a full GitOps ready tree with profiles, scripts, and
 declarative-management artifacts:
 
 ```bash
-contour mscp init --org com.acme --name "Acme Corp" --fleet --sync
+contour mscp init --org com.acme --name "Acme Corp" --fleet-gitops --sync
 contour mscp generate --mscp-repo ./macos_security --keyword cis_lvl1 \
   --output ./output --use-uv --fleet-mode --generate-ddm
 contour mscp verify --output ./output
