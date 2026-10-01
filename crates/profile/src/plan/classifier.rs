@@ -158,26 +158,16 @@ fn compare_change(
 /// Return the union-symmetric-difference of keys that differ in value.
 /// Both maps are `BTreeMap<String, plist::Value>` so iteration is
 /// deterministic; output is sorted by key.
+/// Top-level keys whose value differs, sorted.
+///
+/// Delegates to the structural walker and collapses each leaf to its first
+/// segment, so `plan` and `diff --structural` cannot disagree about whether
+/// two payloads differ.
 fn diff_content_keys(
     baseline: &BTreeMap<String, plist::Value>,
     proposed: &BTreeMap<String, plist::Value>,
 ) -> Vec<String> {
-    let mut out = Vec::new();
-    for (k, b_val) in baseline {
-        match proposed.get(k) {
-            None => out.push(k.clone()),
-            Some(p_val) if p_val != b_val => out.push(k.clone()),
-            _ => {}
-        }
-    }
-    for k in proposed.keys() {
-        if !baseline.contains_key(k) {
-            out.push(k.clone());
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
+    crate::diff::structural::changed_top_level_keys(baseline, proposed)
 }
 
 #[cfg(test)]
@@ -306,7 +296,7 @@ mod tests {
 
     #[test]
     fn fleet_okta_scep_pattern_is_replace() {
-        // The exact CodeRabbit finding: regenerated SCEP PayloadUUID,
+        // The review finding: regenerated SCEP PayloadUUID,
         // identical content. Plan must report REPLACE.
         let baseline = profile_with(vec![payload(
             "com.apple.security.scep",

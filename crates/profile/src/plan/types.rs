@@ -97,22 +97,35 @@ mod tests {
         };
 
         // Pick any payload with a Boolean field; substitute a string.
-        let mut found = None;
-        for manifest in registry.all() {
-            for (name, def) in &manifest.fields {
-                if matches!(def.field_type, crate::schema::types::FieldType::Boolean) {
-                    found = Some((manifest.payload_type.clone(), name.clone()));
-                    break;
-                }
-            }
-            if found.is_some() {
-                break;
-            }
-        }
-        let (payload_type, field_name) = match found {
-            Some(p) => p,
-            None => return, // No suitable schema — nothing to test.
-        };
+        // Deterministic — `registry.all()` iterates a HashMap, and a subject
+        // chosen by hash ordering fails on a schedule nobody can reproduce —
+        // and only over payloads an operator can author (a shared structure
+        // is refused by kind and type-checks nothing).
+        //
+        // The `None` arm fails: returning would pass on an empty registry.
+        let mut candidates: Vec<(String, String)> = registry
+            .all()
+            .filter(|m| m.is_authorable())
+            .flat_map(|m| {
+                let mut fields: Vec<&String> = m
+                    .fields
+                    .iter()
+                    .filter(|(_, def)| {
+                        matches!(def.field_type, crate::schema::types::FieldType::Boolean)
+                    })
+                    .map(|(name, _)| name)
+                    .collect();
+                fields.sort_unstable();
+                fields
+                    .into_iter()
+                    .map(move |name| (m.payload_type.clone(), name.clone()))
+            })
+            .collect();
+        candidates.sort_unstable();
+        let (payload_type, field_name) = candidates
+            .into_iter()
+            .next()
+            .expect("the embedded schema has no authorable boolean field to type-check");
 
         let mut content = BTreeMap::new();
         content.insert(

@@ -4,7 +4,7 @@
 //!
 //! 1. **TCC ACL rule shape**. `BundleIdentifier` (exact) →
 //!    `BundleIdentifierPrefix` (prefix match). `Path` (exact) →
-//!    `PathPrefix`. The CodeRabbit-flagged Okta case is the canonical
+//!    `PathPrefix`. The Okta case found in review is the canonical
 //!    example: `BundleIdentifier=com.okta.mobile` →
 //!    `BundleIdentifierPrefix=com.okta.` lets every Okta-signed bundle
 //!    match the rule.
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn okta_bundle_id_to_prefix_is_scope_broadened() {
-        // The exact CodeRabbit finding.
+        // The review finding.
         let baseline_payload = payload_with_services(services_with_one_rule(
             "SystemPolicyAllFiles",
             rule("com.okta.mobile", "bundleID"),

@@ -5,8 +5,10 @@
 //! Detection walks the parsed `plist::Value` tree (same shape the
 //! `lint` module uses) and produces structured `DeprecationFinding`s.
 //! Two sources:
-//!   - payload types: `MigrationRegistry` (legacy MDM type with a DDM
-//!     replacement — breaks on macOS 26+)
+//!   - payload types: the schema's own `os_support` deprecated / removed
+//!     versions, with `MigrationRegistry` naming the DDM replacement. A
+//!     payload the map lists but the schema does not deprecate is advice
+//!     (a declaration exists), never a deprecation.
 //!   - keys: `SchemaRegistry` `FieldDefinition.deprecated_in` (Apple
 //!     deprecated the key; it still works)
 
@@ -56,9 +58,12 @@ pub struct DeprecationFinding {
     pub severity: DeprecationSeverity,
 }
 
-/// Scan a parsed profile tree for deprecated payload types only.
-/// No schema needed — `lint`'s `deprecated-payload-type` check and
-/// `plan` reuse this directly.
+/// Payload types with a DDM replacement, from the migration map alone.
+///
+/// Advice, not deprecation: the map says a declaration exists, not that
+/// Apple deprecated the payload. Every such finding is a Warning with no
+/// `deprecated_in`. Deprecation comes from [`scan_deprecated_payload_types`]
+/// and [`scan_removed_payload_types`], which read Apple's versions.
 pub fn scan_payload_types(value: &Value, migration: &MigrationRegistry) -> Vec<DeprecationFinding> {
     let mut findings = Vec::new();
     walk_payload_types(value, None, migration, &mut findings);
@@ -87,18 +92,17 @@ fn walk_payload_types(
             payload_index: idx,
             payload_type: pt.to_string(),
             locator: pt.to_string(),
-            deprecated_in: Some("macOS 26".to_string()),
+            deprecated_in: None,
             removed_in: None,
             replacement: Some(mapping.ddm_type.to_string()),
             detail: format!(
-                "{scope}: PayloadType {pt:?} has a DDM replacement \
-                 ({ddm:?}, status={status:?}); legacy payload still works on \
-                 macOS \u{2264}25 but stops working on macOS 26+. {notes}",
+                "{scope}: PayloadType {pt:?} has a DDM equivalent \
+                 ({ddm:?}, {status}). {notes}",
                 ddm = mapping.ddm_type,
-                status = mapping.status,
+                status = mapping.status.as_str(),
                 notes = mapping.notes,
             ),
-            severity: DeprecationSeverity::Critical,
+            severity: DeprecationSeverity::Warning,
         });
     }
     if let Some(Value::Array(items)) = dict.get("PayloadContent") {
@@ -320,29 +324,27 @@ pub fn scan_deprecations(
     migration: &MigrationRegistry,
     schema: &SchemaRegistry,
 ) -> DeprecationReport {
-    // Three payload-type-level sources can flag the same payload: the migration
-    // registry (legacy→DDM), the schema's `removed` marker, and the schema's
-    // `deprecated` marker. Collect all, then keep the strongest signal per
-    // payload so a single payload isn't reported two or three times.
-    let mut payload_level = scan_payload_types(value, migration);
-    payload_level.extend(scan_removed_payload_types(value, schema));
-    payload_level.extend(scan_deprecated_payload_types(value, schema));
-
-    let mut findings = dedup_payload_findings(payload_level);
+    // Payload level: what the schema deprecates or removes, one finding per
+    // payload, naming the migration map's replacement. A payload the map
+    // lists but the schema does not deprecate is not a deprecation, so it is
+    // not reported here — `ddm map` answers "is there a declaration for it".
+    let mut findings = scan_payload_deprecations(value, migration, schema);
     findings.extend(scan_keys(value, schema));
     DeprecationReport::for_file(path, findings)
 }
 
 /// Keep one payload-type-level finding per `(payload_index, payload_type)`,
-/// preferring the strongest signal: removed > migration (critical) > schema
-/// deprecation (warning). Key findings are handled separately and untouched.
+/// preferring the strongest signal: removed > schema deprecation > the
+/// migration map's advice. The winner keeps the map's replacement when it
+/// has none of its own, so a real deprecation still names where to go.
+/// Key findings are handled separately and untouched.
 fn dedup_payload_findings(findings: Vec<DeprecationFinding>) -> Vec<DeprecationFinding> {
     fn rank(f: &DeprecationFinding) -> u8 {
-        match (f.kind, f.severity) {
-            (DeprecationKind::RemovedPayloadType, _) => 3,
-            (DeprecationKind::PayloadType, DeprecationSeverity::Critical) => 2,
-            (DeprecationKind::PayloadType, DeprecationSeverity::Warning) => 1,
-            _ => 0,
+        match f.kind {
+            DeprecationKind::RemovedPayloadType => 3,
+            DeprecationKind::PayloadType if f.deprecated_in.is_some() => 2,
+            DeprecationKind::PayloadType => 1,
+            DeprecationKind::Key => 0,
         }
     }
     let mut best: Vec<DeprecationFinding> = Vec::new();
@@ -351,14 +353,55 @@ fn dedup_payload_findings(findings: Vec<DeprecationFinding>) -> Vec<DeprecationF
             .iter_mut()
             .find(|e| e.payload_index == f.payload_index && e.payload_type == f.payload_type)
         {
+            let replacement = existing
+                .replacement
+                .clone()
+                .or_else(|| f.replacement.clone());
             if rank(&f) > rank(existing) {
                 *existing = f;
+            }
+            if existing.replacement.is_none() {
+                existing.replacement = replacement;
             }
         } else {
             best.push(f);
         }
     }
     best
+}
+
+/// Payload types Apple actually deprecated or removed, per the schema, each
+/// naming its DDM replacement when the migration map has one. What `lint`'s
+/// `deprecated-payload-type` check reports: a payload that merely HAS a
+/// declaration equivalent is not deprecated and is not reported here.
+pub fn scan_payload_deprecations(
+    value: &Value,
+    migration: &MigrationRegistry,
+    schema: &SchemaRegistry,
+) -> Vec<DeprecationFinding> {
+    let mut all = scan_removed_payload_types(value, schema);
+    all.extend(scan_deprecated_payload_types(value, schema));
+    let real: std::collections::HashSet<(Option<usize>, String)> = all
+        .iter()
+        .map(|f| (f.payload_index, f.payload_type.clone()))
+        .collect();
+    // The map's advice only rides along to lend its replacement.
+    all.extend(
+        scan_payload_types(value, migration)
+            .into_iter()
+            .filter(|f| real.contains(&(f.payload_index, f.payload_type.clone()))),
+    );
+    dedup_payload_findings(all)
+        .into_iter()
+        .map(|mut f| {
+            if let Some(r) = &f.replacement
+                && !f.detail.contains(r.as_str())
+            {
+                f.detail.push_str(&format!(" DDM replacement: {r}."));
+            }
+            f
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -409,15 +452,51 @@ mod tests {
         None
     }
 
+    /// The migration map alone is advice: a declaration exists. It claims
+    /// no deprecation version and is never Critical.
     #[test]
-    fn deprecated_payload_type_is_flagged_critical() {
+    fn a_ddm_equivalent_alone_is_advice_not_deprecation() {
         let migration = MigrationRegistry::new();
-        let v = profile(vec![payload("com.apple.SoftwareUpdate")]);
+        let v = profile(vec![payload("com.apple.caldav.account")]);
         let findings = scan_payload_types(&v, &migration);
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].kind, DeprecationKind::PayloadType);
-        assert_eq!(findings[0].severity, DeprecationSeverity::Critical);
-        assert_eq!(findings[0].payload_index, Some(0));
+        assert_eq!(findings[0].severity, DeprecationSeverity::Warning);
+        assert_eq!(findings[0].deprecated_in, None);
+        assert!(
+            !findings[0].detail.contains("stops working"),
+            "{}",
+            findings[0].detail
+        );
+        assert_eq!(
+            findings[0].replacement.as_deref(),
+            Some("com.apple.configuration.account.caldav")
+        );
+    }
+
+    /// A real deprecation or removal carries the schema's version and the map's
+    /// replacement; a payload that is only mapped is not reported at all.
+    #[test]
+    fn a_real_deprecation_names_its_version_and_replacement() {
+        let migration = MigrationRegistry::new();
+        let schema = SchemaRegistry::embedded().unwrap();
+        let v = profile(vec![
+            payload("com.apple.SoftwareUpdate"),
+            payload("com.apple.caldav.account"),
+        ]);
+        let findings = scan_payload_deprecations(&v, &migration, &schema);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        let f = &findings[0];
+        assert_eq!(f.payload_type, "com.apple.SoftwareUpdate");
+        // Deprecated in 26.0 and removed in 27.0: the removal wins, and it
+        // is the one Critical case — the payload no longer installs.
+        assert_eq!(f.kind, DeprecationKind::RemovedPayloadType);
+        assert_eq!(f.removed_in.as_deref(), Some("27.0"));
+        assert_eq!(f.severity, DeprecationSeverity::Critical);
+        assert_eq!(
+            f.replacement.as_deref(),
+            Some("com.apple.configuration.softwareupdate.settings")
+        );
+        assert!(f.detail.contains("softwareupdate.settings"), "{}", f.detail);
     }
 
     /// Build a one-payload registry whose macOS `removed` slot is populated —
@@ -433,7 +512,10 @@ mod tests {
             },
         );
         let manifest = PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: payload_type.to_string(),
+            kind: None,
             title: payload_type.to_string(),
             description: String::new(),
             platforms: Platforms::parse("*"),
@@ -472,7 +554,10 @@ mod tests {
             },
         );
         let manifest = PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: payload_type.to_string(),
+            kind: None,
             title: payload_type.to_string(),
             description: String::new(),
             platforms: Platforms::parse("*"),
@@ -514,7 +599,10 @@ mod tests {
             },
         );
         let schema = SchemaRegistry::from_manifests_for_test(vec![PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: "com.apple.SoftwareUpdate".to_string(),
+            kind: None,
             title: "SoftwareUpdate".to_string(),
             description: String::new(),
             platforms: Platforms::parse("*"),

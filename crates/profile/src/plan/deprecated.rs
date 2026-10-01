@@ -27,7 +27,7 @@ pub fn check_new_deprecations(
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    let findings = check_deprecated_payload_types(&proposed_value, &registry);
+    let findings = check_deprecated_payload_types(&proposed_value, &registry, None);
 
     let mut changes = Vec::new();
     for finding in findings {
@@ -69,7 +69,7 @@ fn collect_deprecated_keys(
         Ok(v) => v,
         Err(_) => return BTreeSet::new(),
     };
-    let findings = check_deprecated_payload_types(&value, registry);
+    let findings = check_deprecated_payload_types(&value, registry, None);
     findings
         .into_iter()
         .filter_map(|f| {
@@ -129,11 +129,11 @@ mod tests {
     #[test]
     fn pre_existing_deprecation_is_not_re_flagged() {
         // If both baseline and proposed contain the same deprecated
-        // payload (e.g. com.apple.applicationaccess, registry status
-        // Partial), plan must NOT re-flag it as a *new* change.
+        // payload (com.apple.SoftwareUpdate, deprecated in macOS 26), plan
+        // must NOT re-flag it as a *new* change.
         let p = profile_with(vec![payload(
-            "com.apple.applicationaccess",
-            "com.acme.access",
+            "com.apple.SoftwareUpdate",
+            "com.acme.swu",
             "AAA",
         )]);
         let baseline_changes = check_new_deprecations(Some(&p), &p);
@@ -150,8 +150,8 @@ mod tests {
         // PayloadType. Plan must report Deprecated.
         let baseline = profile_with(vec![]);
         let proposed = profile_with(vec![payload(
-            "com.apple.applicationaccess",
-            "com.acme.access",
+            "com.apple.SoftwareUpdate",
+            "com.acme.swu",
             "AAA",
         )]);
         let changes = check_new_deprecations(Some(&baseline), &proposed);
@@ -160,5 +160,18 @@ mod tests {
             "newly introduced deprecated PayloadType was not flagged"
         );
         assert_eq!(changes[0].tier, ChangeTier::Deprecated);
+    }
+
+    /// Restrictions are not deprecated — some keys have moved to
+    /// declarations, the payload has not. Adding one is not a deprecation.
+    #[test]
+    fn a_payload_that_is_not_deprecated_is_not_flagged() {
+        let baseline = profile_with(vec![]);
+        let proposed = profile_with(vec![payload(
+            "com.apple.applicationaccess",
+            "com.acme.access",
+            "AAA",
+        )]);
+        assert!(check_new_deprecations(Some(&baseline), &proposed).is_empty());
     }
 }

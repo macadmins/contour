@@ -211,7 +211,7 @@ pub fn lint_profile_with_options(
         all.extend(check_placeholder_uuids(value));
     }
     if options.includes("deprecated-payload-type") {
-        all.extend(check_deprecated_payload_types(value, registry));
+        all.extend(check_deprecated_payload_types(value, registry, schema));
     }
     if options.includes("deprecated-key")
         && let Some(sch) = schema
@@ -453,16 +453,28 @@ fn walk_check_uuid(value: &Value, idx: Option<usize>, findings: &mut Vec<LintFin
 
 // ── 1d. Deprecated PayloadType usage ───────────────────────────────────
 
-/// Walk every payload in the tree and warn on any PayloadType that
-/// `MigrationRegistry` knows has a DDM replacement. Cites the
-/// replacement so the agent can route the user to the supported path.
-/// Lint adapter: deprecated payload types. Delegates detection to the
-/// shared `deprecation` module and converts to `LintFinding`s.
+/// Lint adapter: payload types Apple deprecated or removed, per the
+/// schema, citing the DDM replacement when there is one. A payload that
+/// only HAS a declaration equivalent is not flagged — that is not a
+/// deprecation. Without a schema (`validate --no-schema`) the embedded one
+/// is read: deprecation versions are data, not schema validation.
 pub fn check_deprecated_payload_types(
     value: &Value,
     registry: &MigrationRegistry,
+    schema: Option<&SchemaRegistry>,
 ) -> Vec<LintFinding> {
-    deprecation::scan_payload_types(value, registry)
+    let embedded;
+    let schema = match schema {
+        Some(s) => s,
+        None => match SchemaRegistry::embedded() {
+            Ok(s) => {
+                embedded = s;
+                &embedded
+            }
+            Err(_) => return Vec::new(),
+        },
+    };
+    deprecation::scan_payload_deprecations(value, registry, schema)
         .into_iter()
         .map(|f| {
             let lf = LintFinding::warn("deprecated-payload-type", f.detail);
@@ -931,10 +943,27 @@ mod tests {
                 "B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E",
             )],
         );
-        let findings = check_deprecated_payload_types(&profile, &registry);
+        let findings = check_deprecated_payload_types(&profile, &registry, None);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].check, "deprecated-payload-type");
         assert!(findings[0].message.contains("softwareupdate"));
+    }
+
+    /// A payload that merely has a DDM equivalent is not deprecated: CalDAV
+    /// accounts map to account.caldav, and Apple has not deprecated
+    /// com.apple.caldav.account.
+    #[test]
+    fn a_payload_with_a_ddm_equivalent_is_not_flagged_deprecated() {
+        let registry = MigrationRegistry::new();
+        let profile = build_profile(
+            "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D",
+            vec![nested(
+                "com.apple.caldav.account",
+                "B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E",
+            )],
+        );
+        let findings = check_deprecated_payload_types(&profile, &registry, None);
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     #[test]
@@ -947,7 +976,7 @@ mod tests {
                 "B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E",
             )],
         );
-        assert!(check_deprecated_payload_types(&profile, &registry).is_empty());
+        assert!(check_deprecated_payload_types(&profile, &registry, None).is_empty());
     }
 
     #[test]
