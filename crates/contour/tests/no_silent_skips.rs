@@ -1,4 +1,4 @@
-//! No test in this workspace may skip itself into a pass.
+//! Two lexical checks against tests that skip themselves into a pass.
 //!
 //! A test that returns early on a missing fixture is green on every machine
 //! that lacks it — which is usually every CI runner, and eventually every
@@ -10,6 +10,11 @@
 //! reason names what it needs, so something can arrange to run it.
 //!
 //!     #[ignore = "needs <what>; run with --include-ignored"]
+//!
+//! What this file actually enforces is narrower than the rule: no
+//! `println!`/`eprintln!` line says "skip", and every `#[ignore` line
+//! contains "needs ". A bare `if !fixture() { return; }` has no tell these
+//! checks can see and passes unnoticed.
 //!
 //! This test is not itself ignored. It reads the repository's own sources.
 

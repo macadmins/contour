@@ -16,12 +16,10 @@
 //!
 //! ## Tiers
 //!
-//! **Tier 1 (Apple-spec-adjacent, always on)**: `duplicate-payload-uuid`,
-//! `payload-version-type`, `placeholder-payload-uuid`,
-//! `deprecated-payload-type`. Fired by `lint_profile_with_options` and
-//! surfaced through `profile validate`. These hurt any Apple-profile
-//! authoring workflow,
-//! regardless of vendor.
+//! **Tier 1 (Apple-spec-adjacent, default)**: the seven names in
+//! [`TIER_1_CHECKS`]. Fired by `lint_profile_with_options` when
+//! `selected_checks` is `None` and surfaced through `profile validate`.
+//! These hurt any Apple-profile authoring workflow, regardless of vendor.
 //!
 //! **Tier 2 (org-policy, opt-in)**: `payload-identifier-reverse-dns`,
 //! `payload-organization-required`, `payload-scope-consistency`,
@@ -88,8 +86,10 @@ impl LintFinding {
     }
 }
 
-/// Tier-1 (Apple-spec-adjacent) check names — always fired by
-/// `lint_profile_with_options` regardless of `selected_checks`.
+/// Tier-1 (Apple-spec-adjacent) check names — the set
+/// `lint_profile_with_options` runs when `selected_checks` is `None`.
+/// `Some(set)` is exact: Tier-1 runs only if named in the set (the CLI's
+/// `resolve_lint_options` re-adds these when `--lint-policy` is passed).
 pub const TIER_1_CHECKS: &[&str] = &[
     "duplicate-payload-uuid",
     "payload-version-type",
@@ -110,8 +110,9 @@ pub const TIER_2_CHECKS: &[&str] = &[
     "nested-payload-identifier-prefix",
 ];
 
-/// Selection knobs for the lint pass. Tier-1 always fires; Tier-2
-/// (org-policy) is opt-in via `selected_checks`.
+/// Selection knobs for the lint pass. `selected_checks: None` runs
+/// Tier-1; `Some(set)` runs exactly the named checks, Tier-1 included
+/// only if listed. Tier-2 (org-policy) is opt-in via `selected_checks`.
 ///
 /// `validate` (without `--lint-policy`) constructs a `LintOptions`
 /// with `selected_checks: None` and gets Tier-1 only. Callers that
@@ -569,7 +570,7 @@ pub fn check_single_instance_payload_repeated<S: ::std::hash::BuildHasher>(
 /// will collide in any GitOps repo with multiple profiles. Default
 /// severity: warning. Strict severity: error (promoted by the caller).
 ///
-/// Tier-2 (org-policy). Library-only — not wired into `validate`.
+/// Tier-2 (org-policy). Opt-in via `validate --lint-policy`.
 pub fn check_payload_identifier_reverse_dns(value: &Value) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     walk_check_identifier(value, None, &mut findings);
@@ -624,9 +625,10 @@ fn is_reverse_dns(s: &str) -> bool {
 
 /// PayloadOrganization is optional per Apple's spec, but required by
 /// audit conventions — without it, profiles can't be attributed to a
-/// vendor in GitOps logs. Off by default; fires in strict.
+/// vendor in GitOps logs. Off by default; fires only when selected
+/// (`strict` promotes severity, it does not enable the check).
 ///
-/// Tier-2 (org-policy). Library-only — not wired into `validate`.
+/// Tier-2 (org-policy). Opt-in via `validate --lint-policy`.
 pub fn check_payload_organization_required(value: &Value) -> Vec<LintFinding> {
     let Value::Dictionary(dict) = value else {
         return Vec::new();
@@ -664,7 +666,7 @@ const SYSTEM_ONLY_PAYLOAD_TYPES: &[&str] = &[
     "com.apple.servicemanagement.managed",
 ];
 
-/// Tier-2 (org-policy). Library-only — not wired into `validate`.
+/// Tier-2 (org-policy). Opt-in via `validate --lint-policy`.
 pub fn check_payload_scope_consistency(value: &Value) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     let Value::Dictionary(top) = value else {
@@ -713,7 +715,7 @@ pub fn check_payload_scope_consistency(value: &Value) -> Vec<LintFinding> {
 /// collisions across profiles authored by different teams. Default
 /// warning; strict error.
 ///
-/// Tier-2 (org-policy). Library-only — not wired into `validate`.
+/// Tier-2 (org-policy). Opt-in via `validate --lint-policy`.
 pub fn check_nested_payload_identifier_prefix(value: &Value) -> Vec<LintFinding> {
     let Value::Dictionary(top) = value else {
         return Vec::new();
@@ -1376,7 +1378,7 @@ mod tests {
         let mut top = Dictionary::new();
         top.insert("PayloadType".into(), s("Configuration"));
         top.insert("PayloadVersion".into(), Value::Real(1.0)); // tier-1 fires
-        top.insert("PayloadIdentifier".into(), s("bare")); // tier-2 fires (default)
+        top.insert("PayloadIdentifier".into(), s("bare")); // tier-2 defect, not selected below
         top.insert(
             "PayloadUUID".into(),
             s("00000000-0000-0000-0000-000000000000"),

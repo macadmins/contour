@@ -339,8 +339,8 @@ fn parse_key_line(line: &str) -> Result<FieldDefinition> {
 
     Ok(FieldDefinition {
         allowed_scopes: std::collections::HashMap::new(),
-        // This parser reads a flat compact format: no nesting, so the name is
-        // the path.
+        // `K>`/`K>>` set depth, but this format never links a child to its
+        // parent (`parent_key` stays None), so the bare name is the path.
         path: name.clone(),
         name,
         range_min: None,

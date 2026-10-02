@@ -126,7 +126,8 @@ pub struct FleetConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reports: Option<Vec<yaml_serde::Value>>,
 
-    /// Required by Fleet `GitOps` - path reference or inline config
+    /// Agent options — retained for reading existing repos; contour no longer
+    /// emits it (every constructor sets `None`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_options: Option<yaml_serde::Value>,
 
@@ -211,7 +212,7 @@ pub struct CustomSetting {
     pub labels_exclude_any: Option<Vec<String>>,
 }
 
-/// Script reference - Fleet `GitOps` only supports path (`BaseItem` struct).
+/// Script reference - a single `path` or a `paths` glob (exactly one; see `validate`).
 /// NOTE: Fleet does NOT support label targeting for scripts (only for profiles),
 /// so label conflicts with `paths` cannot arise here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,8 +228,9 @@ pub struct Script {
 
 /// Policy entry — either a `path:` reference, a `paths:` glob, or an inline value.
 ///
-/// Fleet GitOps supports all three shapes; the generator picks between them
-/// based on the baseline's `gitops_glob.policies` configuration.
+/// Fleet GitOps supports all three shapes. Currently only used by this module's
+/// tests; the generator does not emit `PolicyEntry` and nothing reads
+/// `gitops_glob.policies`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PolicyEntry {
@@ -293,7 +295,7 @@ impl CustomSetting {
         }
         // Fleet takes at most ONE label field per entry. `--sop fleet-migrate`
         // has said so in prose since it was written; nothing checked it, and
-        // `mscp process --interactive` prompts for all three in a row and
+        // `mscp generate --interactive` prompts for all three in a row and
         // stores whatever is typed. Two of them reaching one entry produces a
         // GitOps file Fleet rejects, at apply time, far from here.
         let set: Vec<&str> = [
@@ -500,7 +502,7 @@ mod label_field_tests {
     /// Fleet takes at most one label field per entry.
     ///
     /// `--sop fleet-migrate` has said so in prose since it was written and
-    /// nothing checked it, while `mscp process --interactive` prompts for all
+    /// nothing checked it, while `mscp generate --interactive` prompts for all
     /// three in a row and stores whatever is typed. Two of them on one entry
     /// produces a GitOps file Fleet rejects at apply time — far from here,
     /// and long after the generate that caused it.

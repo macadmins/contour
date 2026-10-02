@@ -75,7 +75,7 @@ fn run(cli: Cli) -> Result<()> {
 
     // Wrap the standalone profile tree under a synthetic `contour` root so
     // `find` results and help-ai hints match the unified `contour profile …`
-    // surface (the standalone binary has no top-level `find`/`help-ai`).
+    // surface (the standalone binary has `find` but no top-level `help-ai`).
     let clap_root = || clap::Command::new("contour").subcommand(Cli::command().name("profile"));
 
     // One dispatcher, shared with `contour profile …`.

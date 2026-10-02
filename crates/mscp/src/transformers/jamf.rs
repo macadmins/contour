@@ -352,7 +352,8 @@ impl JamfPostprocessor {
     /// Deterministic UUIDs are set by `ProfilePostprocessor` (base layer).
     /// This method handles Jamf-specific extras:
     /// - `identical_payload_uuid`: copies `PayloadUUID` → `PayloadIdentifier`
-    /// - `update_identifiers_with_baseline`: rewrites identifiers with `{domain}.{baseline}.{PayloadType}`
+    /// - `update_identifiers_with_baseline`: rewrites identifiers as `{domain}.{baseline}.{PayloadType}`
+    ///   (or `{PayloadType}.{baseline}` without a domain)
     fn process_uuids(&self, dict: &mut Dictionary) -> Result<()> {
         // If identical_payload_uuid, copy existing PayloadUUID to PayloadIdentifier
         if self.options.identical_payload_uuid {
@@ -391,7 +392,8 @@ impl JamfPostprocessor {
     }
 
     /// Update `PayloadIdentifier` and `PayloadDisplayName` with baseline name and domain
-    /// Format: `PayloadIdentifier` = {domain}.{baseline}.{PayloadType} (e.g., `io.declarative.cis_lvl1.com.apple.MCX`)
+    /// Format: `PayloadIdentifier` = {domain}.{baseline}.{PayloadType} (e.g., `io.declarative.cis_lvl1.com.apple.MCX`),
+    /// or {PayloadType}.{baseline} when no domain is configured (e.g., `com.apple.MCX.cis_lvl1`)
     /// Format: `PayloadDisplayName` = [{baseline}] {`PayloadType`} settings
     fn update_identifiers_with_baseline(
         &self,
@@ -409,7 +411,7 @@ impl JamfPostprocessor {
 
         if let Some(ptype) = payload_type {
             // Build PayloadIdentifier with optional domain prefix
-            // Format: {domain}.{baseline}.{PayloadType} or {baseline}.{PayloadType}
+            // Format: {domain}.{baseline}.{PayloadType} or {PayloadType}.{baseline}
             let identifier = if let Some(ref domain) = self.options.domain {
                 format!("{domain}.{baseline}.{ptype}")
             } else {

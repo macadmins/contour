@@ -1,4 +1,5 @@
-//! Local application scanning via santactl fileinfo.
+//! Local application scanning via santactl fileinfo, falling back to
+//! `codesign` when santactl is not installed.
 //!
 //! For users without Fleet, this provides an alternative way to gather
 //! app inventory data by scanning local applications.
@@ -465,7 +466,6 @@ fn scan_app(app_path: &Path) -> Result<Option<ScannedApp>> {
     }))
 }
 
-/// Clean optional string - convert "None" or empty to None.
 /// Scan a single app with `codesign` alone — no santactl needed.
 ///
 /// Emits the same [`ScannedApp`] santactl would, in Santa's own conventions,
@@ -516,6 +516,7 @@ pub fn scan_app_codesign(app_path: &Path) -> Result<Option<ScannedApp>> {
     }))
 }
 
+/// Clean optional string - convert "None"/"null" or empty to None.
 fn clean_optional(value: &Option<String>) -> Option<String> {
     value.as_ref().and_then(|v| {
         if v.is_empty() || v == "None" || v == "null" {
@@ -811,7 +812,7 @@ fn write_rules(apps: &[ScannedApp], output: &Path, rule_type: ScanRuleType) -> R
 ///
 /// A scan is an inventory, so every app is emitted as an **allow** entry
 /// (`Allowed.AllowedBinaries`) by its code-signing identifier. Use the standalone
-/// `santa app-settings` command (with `--from-rules` or `--policy`) for deny
+/// `santa app-settings` command (with `--from-rules` or `--deny`) for deny
 /// entries and privacy defaults. Invalid identifiers (per the schema's allow
 /// rules) are dropped with a count.
 fn write_app_settings(
@@ -1012,7 +1013,6 @@ fn parse_slices(cell: &str) -> Vec<contour_core::SliceCdHash> {
         .collect()
 }
 
-/// Merge multiple scan CSVs into one (for aggregating from multiple machines).
 /// Read scanned apps from one or more scan CSV files, deduplicated by
 /// `signing_id`/`sha256`/`name`. `cdhash` and `cdhashes` are read when present;
 /// a CSV written before those columns existed yields `None` and no slices.
@@ -1056,6 +1056,7 @@ pub fn read_scan_csvs(inputs: &[PathBuf]) -> Result<Vec<ScannedApp>> {
     Ok(all_apps.into_values().collect())
 }
 
+/// Merge multiple scan CSVs into one (for aggregating from multiple machines).
 pub fn merge_scans(inputs: &[PathBuf], output: &Path) -> Result<()> {
     // Collect device names for the merged CSV header.
     let mut device_names: Vec<String> = Vec::new();

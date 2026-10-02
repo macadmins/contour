@@ -15,6 +15,8 @@ use std::collections::HashMap;
 ///
 /// Optional fields:
 /// - ServerToken: Server-provided token for change tracking
+/// - Authentication: server-auth dictionary on asset declarations
+/// - PayloadScope: Fleet-only channel hint (`System`/`User`), not an Apple key
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Declaration {

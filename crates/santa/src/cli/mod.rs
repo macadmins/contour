@@ -80,9 +80,10 @@ pub enum ScanRuleType {
     /// `cdhash` column (40 hex characters); rows without a valid hash
     /// produce no rule. One rule per exact binary version.
     Cdhash,
-    /// Pick per list. Santa rules and deny entries: SigningID when the column
-    /// is present, or when `team_identifier` + `bundle_identifier` can be
-    /// composed into one (`TEAMID:bundle_id`); otherwise TeamID. app.settings
+    /// Pick per list. Santa rules: SigningID when the column is present, or
+    /// when `team_identifier` + `bundle_identifier` can be composed into one
+    /// (`TEAMID:bundle_id`); otherwise TeamID. app.settings deny entries:
+    /// SigningID, then TeamID, then CDHash (no composition). app.settings
     /// allow entries: the vendor's TeamID (`*APPLE*` for Apple), because an
     /// app's helpers run under other signing IDs of the same team. Recommended
     /// for Fleet CSVs built from osquery's `apps` ⋈ `signature` join.
@@ -327,11 +328,12 @@ pub enum Commands {
 
     /// Generate Santa prerequisite profiles for MDM deployment
     ///
-    /// Creates the four profiles required for Santa to function properly:
+    /// Creates the five profiles required for Santa to function properly:
     /// - System Extension Policy (allow Santa's endpoint security extension)
     /// - Service Management (managed login items)
     /// - TCC/PPPC (Full Disk Access for Santa components)
     /// - Notification Settings (enable Santa notifications)
+    /// - Santa Configuration (basic client settings)
     ///
     /// These profiles should be deployed BEFORE deploying Santa rules.
     ///
@@ -706,7 +708,7 @@ pub enum Commands {
         #[arg(long)]
         include_unsigned: bool,
 
-        /// Organization identifier (required for mobileconfig format)
+        /// Organization identifier (used for mobileconfig/app-settings identifiers)
         #[arg(long, default_value = "com.example")]
         org: String,
 

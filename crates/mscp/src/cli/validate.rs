@@ -6,7 +6,6 @@ use std::fs;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-/// Validate command - check output structure and schemas
 /// What `[validation]` in mscp.toml resolves to for one `validate` run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationOptions {
@@ -58,6 +57,7 @@ pub fn resolve_validation_options(
     })
 }
 
+/// Validate command - check output structure and schemas
 pub fn validate_output(
     output_path: PathBuf,
     schemas_path: Option<PathBuf>,

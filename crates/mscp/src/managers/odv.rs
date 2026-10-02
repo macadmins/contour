@@ -205,7 +205,7 @@ impl OdvOverrides {
         })
     }
 
-    /// Try to load an ODV file, returning None if it doesn't exist
+    /// Try to load an ODV file, returning None if it doesn't exist or fails to read/parse
     pub fn try_load(baseline: &str, path: Option<PathBuf>) -> Option<Self> {
         // Determine path to check
         let override_path = path.unwrap_or_else(|| PathBuf::from(format!("odv_{baseline}.yaml")));

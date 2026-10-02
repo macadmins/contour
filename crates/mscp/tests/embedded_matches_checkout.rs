@@ -11,9 +11,11 @@
 //! carries in `baseline_edges` must equal the `profile[].rules[]` list in the file
 //! `MscpLayout::baseline_file` resolves. A disagreement means one side moved.
 //!
-//! Needs a real mSCP 2.0 checkout: set `CONTOUR_MSCP_REPO` to one. Skips
-//! loudly when unset — a missing checkout is not a failure, and no default
-//! path is assumed, since that would only exist on one machine.
+//! Needs a real mSCP 2.0 checkout: set `CONTOUR_MSCP_REPO` to one. The tests
+//! are `#[ignore]`; run with `--include-ignored` and the var unset they PANIC
+//! rather than return (a test that returns early passes, which looks the same
+//! as a test that ran). No default path is assumed, since that would only
+//! exist on one machine.
 
 use mscp::layout::MscpLayout;
 use std::collections::BTreeSet;

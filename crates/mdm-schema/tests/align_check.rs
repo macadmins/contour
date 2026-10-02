@@ -1,4 +1,4 @@
-//! The 44-column dataset: `variant` and `key_path`.
+//! The `variant` and `key_path` columns.
 //!
 //! Both are read as optional, so a parquet predating them still loads —
 //! these tests assert the behaviour when they ARE present.

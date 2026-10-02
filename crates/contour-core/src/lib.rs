@@ -1,6 +1,6 @@
 //! # Contour Core
 //!
-//! Shared library for Contour CLI tools: profile, mscp, and santa.
+//! Shared library for every contour subcommand (profile, mscp, santa, pppc, btm, ...).
 //!
 //! This crate provides common functionality:
 //! - Output formatting (Human/JSON modes)

@@ -551,7 +551,8 @@ fn render_json(file_plans: &[FilePlan], exit_blocked: bool, _opts: &PlanOptions)
     Ok(())
 }
 
-/// Snake-case tier label shared by SARIF/markdown reporters.
+/// Snake-case tier label for the markdown reporter (SARIF has its own
+/// rule-id match).
 fn tier_label(tier: ChangeTier) -> &'static str {
     match tier {
         ChangeTier::Noop => "noop",

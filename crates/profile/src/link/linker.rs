@@ -196,7 +196,8 @@ fn update_uuid_value(value: &mut plist::Value, is_array: bool, mapping: &UuidMap
     }
 }
 
-/// Merge multiple profiles into a single profile.
+/// Link the profiles and return the first one; payloads from the rest are
+/// not merged in. Unfinished — use [`merge_profiles_v2`].
 #[allow(dead_code, reason = "reserved for future use")]
 pub fn merge_profiles(
     profiles: Vec<(PathBuf, ConfigurationProfile)>,

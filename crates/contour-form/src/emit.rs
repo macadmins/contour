@@ -1,6 +1,7 @@
 //! `emit()` — values back into a deployable document.
 //!
-//! Format and cardinality come from the schema, never from a caller hint.
+//! Format and cardinality come from the schema; `EmitOptions::format` and
+//! `nesting` are the only caller overrides, and cardinality has none.
 //! A declaration is JSON; a profile is a `.mobileconfig`, keys directly in
 //! the inner payload or wrapped in the MCX envelope for a preference domain
 //! (either is a valid delivery; the caller may override the default). A
@@ -722,7 +723,8 @@ mod tests {
 
     #[test]
     fn preference_domain_is_mcx_wrapped_by_default_and_direct_on_request() {
-        // com.microsoft.wdav is community-only, so this asks for it.
+        // com.microsoft.wdav is an app-schema preference domain, so it gets
+        // the MCX envelope by default.
         let r = reg();
         let values = json!({"antivirusEngine": {"enforcementLevel": "real_time"}});
         let mcx = emit(&r, "com.microsoft.wdav", &values, &opts("defender")).unwrap();

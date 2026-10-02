@@ -105,7 +105,7 @@ pub fn deduplicate_apps(apps: Vec<AppInfo>, output_mode: OutputMode) -> Vec<AppI
         } else {
             dup_count += 1;
             if output_mode == OutputMode::Human {
-                // Only print at debug level — summarize below
+                // Intentionally silent per duplicate; the total is reported once below.
             }
         }
     }
@@ -290,7 +290,8 @@ pub fn run(
 
 /// Read app paths from a CSV file.
 ///
-/// Expected CSV format (header optional):
+/// Expected CSV format (header row required; the first row is always
+/// consumed as the header):
 /// ```csv
 /// name,path
 /// "osquery","/opt/osquery/osquery.app"

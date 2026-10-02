@@ -1,4 +1,4 @@
-//! CLI handler for the `form link` command.
+//! CLI handler for the `profile link` command.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,7 +16,7 @@ use crate::link::{
 use crate::output::OutputMode;
 use crate::profile::{ConfigurationProfile, parser};
 
-/// Handle the `form link` command.
+/// Handle the `profile link` command.
 #[expect(
     clippy::too_many_arguments,
     clippy::fn_params_excessive_bools,

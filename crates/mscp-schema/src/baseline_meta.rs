@@ -38,7 +38,8 @@ pub fn read(bytes: &[u8]) -> Result<Vec<BaselineMeta>> {
         let titles = col(&batch, "title")?.as_string::<i32>();
         let preambles = col(&batch, "preamble")?.as_string::<i32>();
         let authors_col = col(&batch, "authors")?.as_string::<i32>();
-        // platforms column may be absent in older data
+        // `platforms` is not in the current dataset; the reader tolerates it
+        // and `platforms` reads as empty.
         let platforms_col = batch
             .column_by_name("platforms")
             .map(|c| c.as_string::<i32>());

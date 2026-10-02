@@ -12,8 +12,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Default, Clone)]
 pub struct RollbackFilter {
     /// Restore PayloadUUID values only — never overwrite payload content.
-    /// Almost always desired; the only common reason to disable is when
-    /// the user wants a full revert.
+    /// Currently unread: `restore_uuids` always behaves as if true.
     #[allow(dead_code, reason = "reserved for future use")]
     pub uuids_only: bool,
     /// Restore only payloads whose `PayloadType` is in this list.
@@ -30,7 +29,8 @@ pub struct RollbackOptions {
     pub filter: RollbackFilter,
     /// After restoring a UUID, rewrite every cross-reference in the
     /// proposed profile that pointed at the *new* UUID to point at the
-    /// *baseline* UUID. Default true.
+    /// *baseline* UUID. `Default` yields false; the CLI sets it true
+    /// unless `--no-rewrite-refs`.
     pub rewrite_refs: bool,
 }
 
@@ -51,7 +51,7 @@ pub struct RollbackResult {
 /// Restore UUIDs in-place on `proposed`, taking the canonical UUID
 /// from `baseline` for matched payloads.
 ///
-/// If `opts.rewrite_refs` is true (the default), this also rewrites
+/// If `opts.rewrite_refs` is true (the CLI default), this also rewrites
 /// every cross-reference in `proposed` whose value matched the *new*
 /// UUID so that it now points at the *baseline* UUID. The rewrite
 /// pass walks `link::REFERENCE_FIELDS` so every cross-reference type
@@ -200,16 +200,11 @@ fn navigate_nested_mut<'a>(
     content: &'a mut BTreeMap<String, plist::Value>,
     path: &[&str],
 ) -> Option<&'a mut BTreeMap<String, plist::Value>> {
-    // The path navigates through plist::Value::Dictionary entries, but
-    // the leaf must be a BTreeMap-like view. plist's Dictionary doesn't
-    // expose a BTreeMap mutable view, so this only works for the
-    // top-level when path is empty. For non-empty paths we'd need to
-    // rewrite via plist::Value::Dictionary handles instead. Cross-refs
-    // we currently care about (PayloadCertificateUUID,
-    // PayloadCertificateAnchorUUID at the top level) hit the `None`
-    // path; nested EAPClientConfiguration / IKEv2 references stay
-    // within the plist::Dictionary world and need the dictionary-walk
-    // variant, not implemented while no nested cross-ref is in scope.
+    // Only the empty path (top-level fields such as
+    // PayloadCertificateUUID / PayloadCertificateAnchorUUID) is handled.
+    // Nested specs in REFERENCE_FIELDS (EAPClientConfiguration, IKEv2)
+    // return `None` and are not rewritten here yet. A working mutable
+    // walker already exists: `link::extractor::navigate_nested_mut`.
     if path.is_empty() {
         return Some(content);
     }

@@ -3,7 +3,8 @@
 //! DDM is Apple's modern approach to device management using JSON-based
 //! declarations instead of traditional XML plist profiles.
 //!
-//! Note: This module is reserved for future DDM declaration support.
+//! Backs the `ddm` CLI: compose, verify, legacy wrapping, service
+//! configuration-files assets, and app privacy.
 #![allow(dead_code, reason = "module under development")]
 
 pub mod app_privacy;

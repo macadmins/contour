@@ -64,8 +64,7 @@ impl FleetGitOpsGenerator {
 
         // Generate global files. Agent options are intentionally NOT emitted —
         // the canonical `fleetctl new` scaffold ships no agent-options.yml (agent
-        // config is left to Fleet defaults / the target repo). `generate_agent_options`
-        // remains available as opt-in API for callers that want it.
+        // config is left to Fleet defaults / the target repo).
         self.generate_default_yml()?;
         self.generate_unassigned_yml()?;
 
@@ -630,13 +629,13 @@ fn non_empty_vec(v: &[String]) -> Option<Vec<String>> {
 fn insert_label_entry(content: &str, entry_line: &str) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find the `labels:` line (top-level, no indentation)
+    // Find the first `labels:` line (trimmed, so an indented nested `labels:` matches too)
     let labels_idx = lines.iter().position(|l| {
         let trimmed = l.trim();
         trimmed == "labels:" || trimmed.starts_with("labels:")
     })?;
 
-    // Find the indentation to use (look at existing entries under labels:)
+    // Entry indentation is fixed at two spaces
     let indent = "  ";
 
     // Find insertion point: after last `- path:` entry under labels, or right after `labels:`

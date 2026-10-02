@@ -143,7 +143,7 @@ fn cte_names(lowered: &str) -> BTreeSet<String> {
     }
 }
 
-/// Levenshtein distance, capped for short-circuiting on clearly-unrelated names.
+/// Levenshtein distance (full DP, no cap); `suggest_tables` applies the threshold.
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();

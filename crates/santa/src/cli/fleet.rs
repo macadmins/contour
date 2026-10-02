@@ -57,7 +57,7 @@ pub fn run(
 /// Produces:
 /// - `lib/macos/configuration-profiles/` with mobileconfig files
 /// - `lib/all/labels/` with ring label YAML files
-/// - `default.yml` with labels section only
+/// - `default.yml` with a labels section plus empty `reports:`/`policies:` keys
 /// - `fleets/reference-fleet.yml` with profile entries using `../lib/` paths
 /// - `fragment.toml` manifest for merge
 #[expect(

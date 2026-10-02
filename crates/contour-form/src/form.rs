@@ -2,8 +2,9 @@
 //!
 //! Four rules live here so no client re-implements them: control
 //! resolution (schema type + constraints → one of ten controls),
-//! availability against a target, scope per platform inherited down the
-//! subtree, and identity by dotted path. Operator-named keys — Apple's
+//! availability against a target, scope per platform as each key states
+//! it (the subtree union is `emit`'s channel split), and identity by
+//! dotted path. Operator-named keys — Apple's
 //! `ANY`, ProfileCreator's `{{key}}`/`{{value}}` — become `dict-of` with the
 //! value shape re-rooted under a `*` segment, so no emitted path carries a
 //! marker.
@@ -909,8 +910,8 @@ mod tests {
     /// The contract's one hard invariant, checked over every type.
     #[test]
     fn no_spec_carries_a_marker_as_key_or_path_segment() {
-        // Sweeps every spec contour can produce, community included — the
-        // widest set is the point of this test.
+        // Sweeps every spec contour can produce — the widest set is the
+        // point of this test.
         let r = reg();
         let mut count = 0;
         let mut dict_of = 0;
@@ -1206,12 +1207,11 @@ mod tests {
         );
     }
 
-    /// `source.upstream_ref` is the commit the table was read from, and
-    /// differs by dataset: Apple's repo for Apple kinds, ProfileManifests for
-    /// preference domains. Null only when the dataset does not say.
+    /// `source.upstream_ref` is the commit the table was read from — Apple's
+    /// device-management repo, the one upstream left. Null when the dataset
+    /// does not say.
     #[test]
     fn upstream_ref_names_the_commit_per_dataset() {
-        // Names the profilecreator dataset's upstream ref.
         let r = reg();
         assert!(
             !r.provenance().is_empty(),
@@ -1349,11 +1349,12 @@ mod tests {
         );
     }
 
-    /// A ProfileCreator key must not claim availability nobody checked.
+    /// A key from a source that records no availability must not claim
+    /// availability nobody checked.
     ///
-    /// Community manifests record no `introduced`/`deprecated`, and a plain
-    /// `Ok` would be indistinguishable from an Apple key whose silence
-    /// genuinely means "inherits the payload".
+    /// App-schema and supplemental sources record no
+    /// `introduced`/`deprecated`, and a plain `Ok` would be indistinguishable
+    /// from an Apple key whose silence genuinely means "inherits the payload".
     ///
     /// The subject is chosen from the dataset, not named: the test is about
     /// the CLASS — any payload carrying keys while recording no availability

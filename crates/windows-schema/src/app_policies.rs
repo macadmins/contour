@@ -3,8 +3,7 @@
 //! One row per (template, policy, element) in the file; one
 //! [`WindowsAppPolicy`] per (template, policy) out, elements in document
 //! order — the order a payload lists them in. Zero-length bytes read as no
-//! policies: the table is optional in the build, and a dataset without it
-//! carries a placeholder.
+//! policies; the build itself requires the file.
 
 use std::collections::BTreeMap;
 

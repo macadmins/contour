@@ -324,10 +324,11 @@ pub fn is_signed_profile(path: &Path) -> Result<bool> {
 }
 
 /// Remove signature from a signed profile and return unsigned data.
-/// On macOS, uses `security cms -D` for verified extraction.
+/// On macOS, uses `security cms -D` to decode the CMS envelope. This does
+/// NOT verify the signature (`-D` exits 0 regardless; see `verify_signature`).
 /// On all platforms, falls back to native CMS/PKCS#7 DER parsing.
 pub fn remove_signature(path: &Path) -> Result<Vec<u8>> {
-    // Try macOS security cms first (verifies signature)
+    // Try macOS security cms first (decode only, no verification)
     if cfg!(target_os = "macos") {
         let output = Command::new("security")
             .args([
@@ -392,7 +393,8 @@ pub fn is_signed(path: &Path) -> Result<bool> {
     // Check for PKCS#7 signature markers
     // Signed profiles start with sequence of bytes indicating CMS/PKCS#7 structure
     if data.len() > 10 {
-        // Check for ASN.1 SEQUENCE tag followed by CMS content type OID
+        // Check for the ASN.1 SEQUENCE tag only; the CMS content type
+        // OID that follows is not inspected.
         if data[0] == 0x30 {
             // ASN.1 SEQUENCE
             return Ok(true);

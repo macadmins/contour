@@ -280,8 +280,9 @@ pub struct PayloadKey {
     /// Allowed values for enumerated types.
     pub range_list: Option<Vec<String>>,
     /// OS version when this key was introduced, per platform — the key's
-    /// own `supportedOS`, not the payload's. A platform is absent from the
-    /// map when the key is `n/a` (unsupported) there; an entirely empty
+    /// own `supportedOS`, not the payload's. A platform maps to `"n/a"`
+    /// when the key is unsupported there (see [`PayloadKey::unavailable_on`]);
+    /// a platform is absent when Apple stated nothing, and an entirely empty
     /// map means the parquet carried no per-key data for this key.
     pub introduced: std::collections::HashMap<Platform, String>,
     /// OS version when this key was deprecated, per platform.
@@ -289,8 +290,8 @@ pub struct PayloadKey {
     /// OS version when this key was removed, per platform — the key's own
     /// `supportedOS.<platform>.removed`. Apple: a removed key is silently
     /// ignored on that OS and later, so this is the fact behind
-    /// `Verdict::Removed`. Empty on a dataset without the `key_removed`
-    /// column (44-column layout).
+    /// `Verdict::Removed`. Empty on an older dataset without the
+    /// `key_removed` column.
     pub removed: std::collections::HashMap<Platform, String>,
     /// Whether the key requires a supervised device, per platform.
     /// Populated from the key's own `supportedOS.<platform>.supervised`.
@@ -421,7 +422,6 @@ pub struct SkipKey {
 /// A parsed capability (MDM profile or DDM declaration).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Capability {
-    /// Payload type identifier (e.g. "com.apple.screensaver").
     /// Which of several documents under one `payload_type` this describes.
     ///
     /// A payload type is not always one payload. `com.apple.MCX` is the
@@ -431,6 +431,7 @@ pub struct Capability {
     /// carries that through as a column; `None` means the payload type has one
     /// document, or the producing parquet predates the column.
     pub variant: Option<String>,
+    /// Payload type identifier (e.g. "com.apple.screensaver").
     pub payload_type: String,
     /// Whether this is an MDM profile or DDM declaration.
     pub kind: PayloadKind,
@@ -473,12 +474,14 @@ impl Capability {
 }
 
 /// A parsed ProfileCreator manifest (one payload type with its fields).
+///
+/// The reader is kept, but no ProfileCreator parquet is shipped with this
+/// crate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PayloadSchema {
     pub payload_type: String,
-    /// Capability classification: `"MdmProfile"` / `"MdmConfig"` /
-    /// `"DdmDeclaration"` etc. 100% populated in current data;
-    /// `None` only when reading older parquets.
+    /// Capability classification (e.g. `"MdmProfile"` / `"DdmDeclaration"`).
+    /// Nullable: `None` when the column is absent or unset.
     pub kind: Option<String>,
     /// Provenance label — which upstream feed this row originated from
     /// (e.g. `"profilecreator"`, `"apple"`).
@@ -535,8 +538,8 @@ pub struct ManifestField {
     pub description: String,
     pub required: bool,
     pub supervised: bool,
-    /// Now sourced from `pfm_sensitive` (default `false`) instead of
-    /// hardcoded `false`. ~7 keys flip to `true` in the current parquet.
+    /// Sourced from `pfm_sensitive`; `false` when the column is absent or
+    /// null.
     pub sensitive: bool,
     pub default_value: Option<String>,
     pub allowed_values: Option<String>,

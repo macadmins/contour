@@ -194,7 +194,7 @@ pub fn admx_payload(
 }
 
 /// A policy from a third-party app's Administrative Template — Chrome, Edge,
-/// Firefox, the Microsoft 365 apps, OneDrive, Adobe, FSLogix, winget.
+/// Firefox, Office and other vendor templates.
 ///
 /// Delivered in two steps: ingest the template once at
 /// `admx_install_loc_uri` (the ADMX file's own XML as the body), then set the

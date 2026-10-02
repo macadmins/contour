@@ -24,15 +24,16 @@ pub enum DeprecationKind {
     PayloadType,
     Key,
     /// Payload type hard-removed on a target OS — it no longer installs.
-    /// Sourced from `os_support[macOS].removed`, populated by the
-    /// posture-ingest pipeline for the seed/beta schema.
+    /// Sourced from `os_support[macOS].removed` in the embedded schema
+    /// (e.g. `com.apple.SoftwareUpdate`, removed in 27.0).
     RemovedPayloadType,
 }
 
 /// Severity of a deprecation finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DeprecationSeverity {
-    /// Stops working on a future OS (deprecated payload type).
+    /// Payload type removed on the target OS — no longer installs
+    /// (`RemovedPayloadType` only).
     Critical,
     /// Still works; Apple flagged it for eventual removal.
     Warning,
@@ -164,9 +165,8 @@ fn walk_keys(
 
 /// Scan a parsed profile tree for payload types the schema marks as **removed**
 /// on macOS — i.e. the type no longer installs (stronger than deprecation, which
-/// still works). The signal is `os_support[macOS].removed`, populated by the
-/// posture-ingest pipeline for the seed/beta schema. With the released (stable)
-/// schema this returns nothing; pass a beta registry to detect seed removals.
+/// still works). The signal is `os_support[macOS].removed`; the embedded
+/// schema carries real removals (e.g. `com.apple.SoftwareUpdate` in 27.0).
 pub fn scan_removed_payload_types(
     value: &Value,
     schema: &SchemaRegistry,

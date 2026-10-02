@@ -3,10 +3,10 @@
 //! The Windows counterpart to the mSCP corpus, kept in its own crate by
 //! design — Apple and Windows corpora never mix (hard platform
 //! separation; `mscp-schema`'s `rules_versioned_is_apple_only` test pins
-//! the other side). Four datasets:
+//! the other side). Eight datasets:
 //!
-//! - `windows_rules` — 258 Windows 11 STIG rules (severity, tags,
-//!   check/fix flags); same column layout as mSCP's `rules_versioned`,
+//! - `windows_rules` — Windows STIG rules, one row per (rule, OS version)
+//!   (severity, tags, check/fix flags); same column layout as mSCP's `rules_versioned`,
 //!   read via [`mscp_schema::rules_versioned::read`]
 //! - `windows_baseline_edges` — baseline → section → rule membership,
 //!   read via [`mscp_schema::baseline_edges::read`]
@@ -23,7 +23,7 @@
 //!   [`mscp_schema::rule_capability_links::read`]; a separate file because
 //!   the corpora never share a table. Zero-length on a dataset without it.
 //! - `windows_app_policies` — third-party app templates (Chrome, Edge,
-//!   Firefox, Brave, Microsoft 365, OneDrive, Adobe DC, FSLogix, winget):
+//!   Firefox, Office and other vendor templates):
 //!   each policy's `{App}~Policy~{category}` LocURIs, its `ADMXInstall`
 //!   step, and whether Windows lets MDM ingest where it writes, with the
 //!   document that says so. The data behind a two-step delivery that no
@@ -91,15 +91,15 @@ pub fn embedded_windows_rule_capability_links() -> &'static [u8] {
     include_bytes!("../data/windows_rule_capability_links.parquet")
 }
 
-/// Third-party app policies (Chrome, Edge, Firefox, Microsoft 365, OneDrive,
-/// Adobe, FSLogix, winget) with both delivery steps and Windows' ingestion
-/// verdict. Zero-length on a dataset without it.
+/// Third-party app policies (Chrome, Edge, Firefox, Office and other vendor
+/// templates) with both delivery steps and Windows' ingestion verdict.
+/// Required by the build; the reader also accepts empty bytes.
 pub fn embedded_windows_app_policies() -> &'static [u8] {
     include_bytes!("../data/windows_app_policies.parquet")
 }
 
-/// Per-CSP-node DDF facts: value meanings, dependencies, Atomic. Zero-length
-/// on a dataset without it.
+/// Per-CSP-node DDF facts: value meanings, dependencies, Atomic. Required by
+/// the build; the reader also accepts empty bytes.
 pub fn embedded_windows_node_details() -> &'static [u8] {
     include_bytes!("../data/windows_node_details.parquet")
 }

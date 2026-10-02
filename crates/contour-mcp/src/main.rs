@@ -11,9 +11,10 @@
 //! to stderr. This is the same reasoning as contour's rule that `--json` error
 //! envelopes belong on stderr, applied to a second machine consumer.
 //!
-//! The binary links only zero-write crates (see Cargo.toml), so "read-only"
-//! is a property of what was compiled in, not of what the dispatcher chooses
-//! to call.
+//! No tool here calls a writer: every handler is a lookup over embedded data.
+//! The schema crates linked in (see Cargo.toml) have no write paths at all;
+//! `contour-core` does (config, fragment, help_agents) but nothing in this
+//! binary reaches them.
 
 mod protocol;
 mod tools;

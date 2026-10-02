@@ -168,8 +168,8 @@ pub enum Verdict {
     /// The schema this key came from does not record OS availability at
     /// all, so nothing is known — which is not the same as "available".
     ///
-    /// ProfileCreator's community manifests and the app-schema sources
-    /// state no `introduced`/`deprecated` for anything. Apple's schema
+    /// The app-schema and supplemental sources state no
+    /// `introduced`/`deprecated` for anything. Apple's schema
     /// does, so a key with none there inherits the payload's availability
     /// and `Ok` is the truthful answer. Both arrive as the same nulls;
     /// only the source tells them apart, and reporting `Ok` for the second

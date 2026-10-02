@@ -93,13 +93,13 @@ pub fn census() -> Result<Census> {
     // count over any one table.
     let app_schemas = registry.stats().apps_count;
 
-    // Third-party Windows app templates — Chrome, Edge, the Office family,
-    // and now Google Update and Zoom. `profile windows generate --admx-dir`
-    // reads these, and the census said nothing about them: "AI-tool policy
-    // keys" is a different table (app_policy_schema — Claude Code, Codex,
-    // Cursor), so a reader counting embedded datasets found no trace of 22
-    // ADMX templates. `read()` groups by (app, policy), so its length is
-    // policies rather than rows; rows expand per ADMX element.
+    // Third-party Windows app templates — Chrome, Edge, Office, and others.
+    // `profile windows generate --admx-dir` reads these, and the census said
+    // nothing about them: "AI-tool policy keys" is a different table
+    // (app_policy_schema — Claude Code, Codex, Cursor), so a reader counting
+    // embedded datasets found no trace of the ADMX templates. `read()` groups
+    // by (app, policy), so its length is policies rather than rows; rows
+    // expand per ADMX element.
     let win_apps =
         windows_schema::app_policies::read(windows_schema::embedded_windows_app_policies())?;
     let windows_app_policies = win_apps.len();
@@ -110,9 +110,10 @@ pub fn census() -> Result<Census> {
         .len();
 
     // Both STIG tables are counted, and the enforceable subset separately,
-    // because the total on its own overstates what contour can hand you: 188
-    // of the 836 have no enforcement to emit. A census that printed only 836
-    // would be the same kind of claim this file exists to avoid.
+    // because the total on its own overstates what contour can hand you: a
+    // sizeable share of the policies have no enforcement to emit. A census
+    // that printed only the total would be the same kind of claim this file
+    // exists to avoid.
     let stigs = windows_schema::fleet_stigs::read(windows_schema::embedded_fleet_stigs())?;
     let stig_policies = stigs.len();
     let stig_profiles = stigs

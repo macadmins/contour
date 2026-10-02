@@ -1,7 +1,7 @@
 //! `profile windows generate` — SyncML from a settings TOML.
 //!
 //! A subcommand group of its own rather than a flag on `profile generate`:
-//! that command carries 19 flags shaped for Apple payloads (`--org`,
+//! that command's flags are shaped for Apple payloads (`--org`,
 //! `--full`, `--recipe`, `--set`), none of which mean anything for a CSP,
 //! and `--org` has no Windows analogue at all.
 //!
@@ -58,7 +58,8 @@
 //! silently dropped. The dataset carries that verdict per policy with the
 //! document it rests on, and this command refuses those rather than emit
 //! them. Where Windows already ships the same template natively
-//! (`in_box_area`), it warns: ingestion is the wrong route.
+//! (`in_box_area`), it refuses too, naming the native area: ingestion is
+//! the wrong route.
 //!
 //! ## Why every problem is reported, not just the first
 //!
@@ -99,7 +100,7 @@ pub struct SettingEntry {
     #[serde(default)]
     pub csp: String,
     /// A third-party app template — `chrome`, `edge`, `firefox`, `office`,
-    /// … — whose policy `key` is. Mutually exclusive with `csp`.
+    /// … — whose policy `key` is. When set, `csp` is ignored.
     #[serde(default)]
     pub app: Option<String>,
 
@@ -124,7 +125,8 @@ pub struct SettingEntry {
     #[serde(default)]
     pub instance: Option<String>,
 
-    /// `set` (default), `delete`, `enable`, `disable`.
+    /// `set`, `delete`, `enable`, `disable`. Omitted means `set` for a CSP
+    /// node and `enable` for an `app` policy.
     #[serde(default)]
     pub action: Option<String>,
 

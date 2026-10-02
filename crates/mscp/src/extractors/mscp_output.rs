@@ -121,7 +121,7 @@ impl MscpOutputExtractor {
             mobileconfigs,
             ddm_artifacts,
             compliance_script,
-            mscp_git_hash: None, // Will be filled in by versioning module
+            mscp_git_hash: None, // Filled in by cli/process.rs from GitInfoExtractor
             mscp_git_tag: None,
         })
     }
@@ -195,7 +195,7 @@ impl MscpOutputExtractor {
         if script_path.exists() {
             Ok(Some(script_path))
         } else {
-            // Try without the .sh extension or other variations
+            // Fall back to any `*compliance*.sh` file in the build dir
             for entry in fs::read_dir(&self.build_path)? {
                 let entry = entry?;
                 let path = entry.path();
@@ -226,7 +226,7 @@ mod tests {
 }
 
 /// The platform mSCP 2.0 files `baseline` under: `baselines/macos/`,
-/// `baselines/ios/` or `baselines/visionos/`, as `<baseline>_<platform>_<os>.yaml`.
+/// `baselines/ios/` or `baselines/visionos/`, as `<baseline>_<os>_<version>.yaml`.
 /// `None` when no platform directory holds it.
 fn platform_from_baselines_dir(repo: &Path, baseline: &str) -> Option<Platform> {
     // A baseline name may already carry the platform and version

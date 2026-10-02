@@ -58,7 +58,7 @@ impl FieldPath {
     ///
     /// `\.` is a literal dot inside a segment and `\\` a literal backslash;
     /// a trailing lone backslash is kept as written. An empty string is the
-    /// empty path (no segments), which writes nothing and reads the root.
+    /// empty path (no segments): inserts are no-ops and `get_json` is `None`.
     pub fn parse(s: &str) -> Self {
         if s.is_empty() {
             return Self(Vec::new());

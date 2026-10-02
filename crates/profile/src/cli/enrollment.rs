@@ -1,7 +1,7 @@
 //! DEP/ADE enrollment profile generation from embedded skip_keys data.
 //!
-//! Provides `list` and `generate` subcommands for working with Setup Assistant
-//! skip keys across Apple platforms.
+//! Provides `list`, `generate`, `presets` and `migrate` subcommands for working
+//! with Setup Assistant skip keys across Apple platforms.
 
 use crate::output::OutputMode;
 use anyhow::{Context, Result};
@@ -57,8 +57,8 @@ pub fn parse_skip_list_file(path: &Path) -> Result<SkipListFile> {
 /// Load and filter skip keys for a given platform and optional OS version.
 ///
 /// `beta` selects the pre-release OS seed skip keys, when a seed is open.
-/// Between seeds it is the stable set (`AccessibilityAppearance` and
-/// `LiquidGlass`, once seed-only, shipped in 27.0), and the user is told so.
+/// Between seeds it is the stable set (`LiquidGlass` and `DeviceFeaturesTour`,
+/// once seed-only, shipped in 27.0), and the user is told so.
 fn load_skip_keys(platform: &str, os_version: Option<&str>, beta: bool) -> Result<Vec<SkipKey>> {
     let raw = if beta {
         crate::cli::ddm::note_if_beta_is_retired();
@@ -246,7 +246,6 @@ pub fn handle_enrollment_presets(mode: OutputMode) -> Result<()> {
     Ok(())
 }
 
-/// Write the generated ADE profile JSON to `output` (or stdout) with a summary.
 /// Write a companion `.md` next to the generated enrollment JSON: the skip keys
 /// used (with their pane titles from the schema) + links to Apple's Profile and
 /// SkipKeys documentation. Returns the path written.
@@ -310,6 +309,7 @@ fn write_skip_readme(
     Ok(md_path)
 }
 
+/// Write the generated ADE profile JSON to `output` (or stdout) with a summary.
 fn write_enrollment_json(
     profile: &serde_json::Value,
     output: Option<&str>,

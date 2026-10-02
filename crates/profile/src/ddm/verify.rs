@@ -296,13 +296,6 @@ pub fn build_report(declarations: &[(PathBuf, Declaration)]) -> VerifyReport {
     report
 }
 
-/// Recursively walk a JSON object and collect every key whose name ends
-/// with `AssetReference` paired with its string value.
-///
-/// Apple's Mail account schema has nested fields like
-/// `IncomingServer.AuthenticationCredentialsAssetReference`; the embedded
-/// CLI schema flattens those to dotted top-level keys, but profiles in
-/// the wild may keep them nested. The recursive walk handles both.
 /// Whether a payload key names one or more asset declarations.
 ///
 /// `ends_with("AssetReference")` was too narrow and missed two real fields
@@ -322,6 +315,13 @@ fn is_asset_reference_key(key: &str) -> bool {
     key.ends_with("Reference") || key.ends_with("References")
 }
 
+/// Recursively walk a payload and collect every `(key, value)` where
+/// [`is_asset_reference_key`] matches and the value is a non-empty string.
+///
+/// Apple's Mail account schema has nested fields like
+/// `IncomingServer.AuthenticationCredentialsAssetReference`; the embedded
+/// CLI schema flattens those to dotted top-level keys, but profiles in
+/// the wild may keep them nested. The recursive walk handles both.
 fn extract_asset_refs(payload: &std::collections::HashMap<String, Value>) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     walk_for_refs(payload, &mut out);

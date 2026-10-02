@@ -24,18 +24,16 @@ pub enum SchemaFormat {
     AppleYaml,
 }
 
-/// Load embedded manifests from mdm-schema's Parquet data (profiles + capabilities).
+/// Load embedded manifests from mdm-schema's `capabilities.parquet`.
 pub fn load_embedded() -> Result<Vec<PayloadManifest>> {
     load_embedded_from(mdm_schema::embedded_capabilities())
 }
 
-/// Load embedded manifests using the **beta seed** capabilities dataset.
+/// Load embedded manifests through the retired **beta** accessor.
 ///
-/// Identical to [`load_embedded`] but sources Apple capabilities from
-/// `embedded_capabilities_beta`, so pre-release (seed) declarations and keys —
-/// e.g. `com.apple.configuration.app.settings` and `package`'s
-/// `UninstallBehavior` — appear in the registry. ProfileCreator manifests and
-/// supplemental prefs are shared with the stable path.
+/// The beta channel is retired: `embedded_capabilities_beta` returns the
+/// stable bytes (`mdm_schema::beta_is_retired`), so this is
+/// [`load_embedded`] under its old name.
 pub fn load_embedded_beta() -> Result<Vec<PayloadManifest>> {
     load_embedded_from(mdm_schema::embedded_capabilities_beta())
 }
@@ -68,9 +66,9 @@ fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>>
 pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>> {
     let mut manifests: Vec<PayloadManifest> = Vec::new();
 
-    // Append Apple's native schemas from capabilities.parquet.
-    // MDM profiles override ProfileCreator where both exist (Apple is authoritative).
-    // DDM declarations are added alongside (no overlap with ProfileCreator).
+    // Everything comes from capabilities.parquet. `manifests` starts empty,
+    // so a payload type already present when a row arrives is an earlier
+    // row of the same type — a second variant — not another source.
     let capabilities = mdm_schema::capabilities::read(capabilities_bytes)
         .context("Failed to read embedded capabilities from Parquet")?;
 
@@ -89,9 +87,9 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
         )
     }) {
         if existing_types.contains(&cap.payload_type) {
-            // Merge Apple keys into existing ProfileCreator manifest.
-            // Apple keys take precedence where both define the same key,
-            // but ProfileCreator-only keys (legacy) are preserved.
+            // Merge this variant's keys into the manifest an earlier variant
+            // built. The later row wins where both define the same key;
+            // keys only the earlier variant has are preserved.
             if let Some(existing) = manifests
                 .iter_mut()
                 .find(|m| m.payload_type == cap.payload_type)
@@ -124,12 +122,11 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
                 // Apple contributed these paths, so they — and only they —
                 // have a source that records availability.
                 existing.fields_recording_availability = apple.fields_recording_availability;
-                // Apple is authoritative for per-OS metadata too —
-                // ProfileCreator never carried `os_support`, so this
-                // doesn't lose any pre-existing data.
+                // The later variant's per-OS metadata replaces the
+                // earlier's.
                 existing.os_support = apple.os_support;
-                // Apple's apply_mode wins when present; otherwise keep
-                // the ProfileCreator value already on `existing`.
+                // The later variant's apply_mode wins when present;
+                // otherwise keep the value already on `existing`.
                 if apple.apply_mode.is_some() {
                     existing.apply_mode = apple.apply_mode;
                 }
@@ -146,13 +143,13 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
         }
     }
 
-    // DDM declarations — always add/override (ProfileCreator may have stale entries)
+    // DDM declarations — a later row of the same type replaces the earlier.
     for cap in capabilities
         .iter()
         .filter(|c| c.kind == mdm_schema::PayloadKind::DdmDeclaration)
     {
         if existing_types.contains(&cap.payload_type) {
-            // Override existing ProfileCreator entry with Apple's DDM schema
+            // Replace the earlier row's schema with this one
             if let Some(existing) = manifests
                 .iter_mut()
                 .find(|m| m.payload_type == cap.payload_type)
@@ -161,12 +158,12 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
                 existing.fields = apple.fields;
                 existing.field_order = apple.field_order;
                 existing.platforms = apple.platforms;
-                // Apple is authoritative for per-OS metadata, exactly as in
-                // the non-DDM branch above. Without this a DDM type that also
-                // had a ProfileCreator entry kept the backfilled os_support,
-                // whose `allowed_scopes` is None by construction — so every
-                // DDM declaration read as having no scope restriction at all,
-                // including the 13 macOS user-only payloads.
+                // Per-OS metadata follows the schema, exactly as in the
+                // non-DDM branch above. Without this the earlier row's
+                // os_support survived — and when that row was a ProfileCreator
+                // entry its `allowed_scopes` was None by construction, so
+                // every DDM declaration read as having no scope restriction
+                // at all, including the 13 macOS user-only payloads.
                 existing.os_support = apple.os_support;
                 existing.fields_recording_availability = apple.fields_recording_availability;
                 if existing.min_versions.is_empty() {
@@ -249,7 +246,7 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
             );
         }
         PayloadManifest {
-            // A local directory states no provenance.
+            // Synthesized in code; nothing states provenance.
             manifest_source: None,
             // Synthesized from a preferences domain; nothing states
             // availability.
@@ -333,9 +330,7 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
     ]
 }
 
-/// Translate mdm_schema's per-platform map to contour's `Platform` enum.
-/// Both enums are 5-variant; this is a 1:1 isomorphism.
-/// The same platform mapping for a map whose values are scope arrays.
+/// [`map_platform`] over a map whose values are scope arrays.
 fn convert_platform_scopes(
     src: &std::collections::HashMap<mdm_schema::Platform, Vec<String>>,
 ) -> std::collections::HashMap<Platform, Vec<String>> {
@@ -344,6 +339,8 @@ fn convert_platform_scopes(
         .collect()
 }
 
+/// Translate mdm_schema's `Platform` to contour's. Both enums have the same
+/// six variants; this is 1:1.
 fn map_platform(p: mdm_schema::Platform) -> Platform {
     match p {
         mdm_schema::Platform::MacOS => Platform::MacOS,

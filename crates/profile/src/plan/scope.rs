@@ -2,18 +2,18 @@
 //!
 //! Catches changes that *widen* the access surface a profile grants:
 //!
-//! 1. **TCC ACL rule shape**. `BundleIdentifier` (exact) →
-//!    `BundleIdentifierPrefix` (prefix match). `Path` (exact) →
-//!    `PathPrefix`. The Okta case found in review is the canonical
-//!    example: `BundleIdentifier=com.okta.mobile` →
-//!    `BundleIdentifierPrefix=com.okta.` lets every Okta-signed bundle
+//! 1. **TCC ACL rule shape**. `IdentifierType=bundleID` (exact) →
+//!    `bundleIDPrefix` (prefix match). `path` (exact) → `pathPrefix`.
+//!    The Okta case found in review is the canonical example:
+//!    `bundleID Identifier=com.okta.mobile` →
+//!    `bundleIDPrefix Identifier=com.okta.` lets every Okta-signed bundle
 //!    match the rule.
 //! 2. **PayloadScope**. `User` → `System` widens the install scope
 //!    from per-user to machine-wide.
 //!
-//! This module compares one (baseline_payload, proposed_payload) pair
-//! at a time. The classifier calls into it for every payload pair where
-//! `(PayloadType, PayloadIdentifier)` matches on both sides.
+//! [`check_scope_broadening`] pairs payloads by
+//! `(PayloadType, PayloadIdentifier)` itself and compares each pair;
+//! `cli::plan` calls it alongside the classifier.
 
 use super::change::{ChangeTier, PayloadChange};
 use crate::profile::{ConfigurationProfile, PayloadContent};
@@ -162,8 +162,9 @@ fn compare_tcc_acl(
     findings
 }
 
-/// Group baseline rules by their Identifier value so the comparator
-/// can hop straight to the candidate(s) without an O(n*m) scan.
+/// Group baseline rules by Identifier, dropping non-dictionary and
+/// Identifier-less entries.
+// Scanned linearly in compare_tcc_acl; an index would pay off only for large ACLs.
 fn rules_by_identifier(rules: &[Value]) -> BTreeMap<String, Vec<&plist::Dictionary>> {
     let mut by_id: BTreeMap<String, Vec<&plist::Dictionary>> = BTreeMap::new();
     for rule in rules {

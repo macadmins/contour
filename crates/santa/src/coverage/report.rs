@@ -147,7 +147,7 @@ pub struct BundleStats {
 pub struct OrphanReport {
     /// Total orphan count.
     pub total_count: usize,
-    /// Sample of orphan app names.
+    /// All orphan app names (human-readable output shows the first 10).
     pub sample_apps: Vec<String>,
     /// Orphan apps grouped by team_id (for suggestion).
     #[serde(skip_serializing_if = "HashMap::is_empty")]

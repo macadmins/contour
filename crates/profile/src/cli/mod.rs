@@ -2706,7 +2706,7 @@ pub enum EnrollmentAction {
         #[arg(long)]
         language: Option<String>,
 
-        /// ISO 3166 region code (e.g. DE, FR, ES). Default: US
+        /// ISO 3166 region code (e.g. DE, FR, ES). Default: derived from --language (de→DE, fr→FR, es→ES, else US)
         #[arg(long)]
         region: Option<String>,
 
@@ -2719,7 +2719,8 @@ pub enum EnrollmentAction {
     Presets,
 
     /// Migrate an enrollment JSON to a target OS version, dropping skip keys
-    /// Apple removed or deprecated by then (remove-only; never adds keys).
+    /// Apple removed or deprecated by then, plus any key unknown for the
+    /// platform (remove-only; never adds keys).
     Migrate {
         /// Existing enrollment profile JSON
         input: std::path::PathBuf,
@@ -2783,9 +2784,9 @@ pub enum LibraryAction {
                       to reproduce the same payload structure.\n\
                       \n\
                       MCX-style profiles (com.apple.ManagedClient.preferences)\n\
-                      pass through faithfully — the deep nesting becomes\n\
-                      nested TOML sub-tables. No payload-type-specific\n\
-                      unwrapping.\n\
+                      in the canonical shape are flattened to [profile.fields]\n\
+                      with the domain recorded in mcx_domain; anything else\n\
+                      passes through as nested TOML sub-tables.\n\
                       \n\
                       Refuses to overwrite an existing recipe unless\n\
                       --force is passed.\n\
@@ -2806,7 +2807,7 @@ pub enum LibraryAction {
         #[arg(long, value_name = "DIR")]
         into: Option<String>,
 
-        /// Override the derived recipe name (default: snake-cased input file stem)
+        /// Override the derived recipe name (default: kebab-cased input file stem)
         #[arg(long, value_name = "NAME")]
         name: Option<String>,
 

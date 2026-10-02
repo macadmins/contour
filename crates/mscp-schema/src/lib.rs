@@ -1,6 +1,6 @@
 //! Shared mSCP (macOS Security Compliance Project) metadata and embedded Parquet data.
 //!
-//! Nine datasets:
+//! Twelve datasets:
 //! - `baseline_meta` — baseline names, titles, preambles, authors
 //! - `sections` — mSCP section names and descriptions
 //! - `control_tiers` — NIST 800-53 control → impact tier mappings
@@ -10,6 +10,9 @@
 //! - `rule_payloads` — rule enforcement payloads (scripts, mobileconfig, DDM)
 //! - `envelope_patterns` — XML envelope nesting patterns for mobileconfig
 //! - `envelope_meta_keys` — required metadata keys for envelope layers
+//! - `rule_capability_links` — rule → payload/declaration key it enforces through
+//! - `rule_control_edges` — rule → framework control it satisfies
+//! - `supported_payloads` — payload types the rule corpus enforces through
 //!
 //! Plus Fleet's GitOps JSON Schema, pinned and shipped beside them.
 
@@ -101,13 +104,14 @@ pub fn embedded_fleet_gitops_schema() -> Option<&'static [u8]> {
     (!bytes.is_empty()).then_some(bytes)
 }
 
-// ── Beta channel ────────────────────────────────────────────────────────
+// ── Beta channel (dormant) ──────────────────────────────────────────────
 //
-// Built from the mSCP OS-preview branch (e.g. `dev_27`) and published to
-// `data/beta/` by the dataset pipeline — same layout as the stable set,
-// plus preview-only rules (Apple Intelligence PCC, visual intelligence,
-// Siri AI, …). Consumers opt in explicitly via `--beta` so the stable
-// channel is never affected. Mirrors mdm-schema's `*_beta` accessors.
+// Every `*_beta` accessor below returns the STABLE bytes: no mSCP preview
+// dataset is carried today, and `--beta` refuses rather than serve the
+// released rules under another name (`beta_dataset_is_carried` is the
+// check). When a preview branch (e.g. `dev_NN`) is published again, point
+// these at their own `include_bytes!`. Mirrors mdm-schema's `*_beta`
+// accessors.
 
 /// Embedded **beta** baseline metadata Parquet data.
 pub fn embedded_baseline_meta_beta() -> &'static [u8] {
@@ -159,6 +163,10 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    /// One edge on every axis: (baseline, platform, os_version, section, rule_id).
+    /// Two rows sharing all five are the collapse signature the guard rejects.
+    type EdgeKey<'a> = (&'a str, Option<&'a str>, Option<&'a str>, &'a str, &'a str);
+
     /// Structural invariants for embedded baseline data — checked on BOTH
     /// channels, because a refresh can corrupt one and not the other.
     ///
@@ -172,10 +180,6 @@ mod tests {
     /// panicking, so the same check can be aimed at a deliberately corrupted
     /// copy to prove it fires — a guard that has never been seen failing is a
     /// guess.
-    /// One edge on every axis: (baseline, platform, os_version, section, rule_id).
-    /// Two rows sharing all five are the collapse signature the guard rejects.
-    type EdgeKey<'a> = (&'a str, Option<&'a str>, Option<&'a str>, &'a str, &'a str);
-
     fn baseline_invariants(
         channel: &str,
         edges: &[types::BaselineEdge],
@@ -567,8 +571,8 @@ mod tests {
 
     #[test]
     fn test_rules_have_platform_distinction() {
-        // mSCP 2.0 stamps platform on the rule (`rules_versioned`), not the
-        // baseline edge — V2 edges carry a null platform.
+        // mSCP 2.0 stamps platform on the rule (`rules_versioned`) as well
+        // as on the baseline edge; this pins the rule-side stamp.
         let rules = rules_versioned::read(embedded_rules_versioned())
             .expect("Failed to read embedded rules_versioned");
         let platforms: HashSet<&str> = rules.iter().map(|r| r.platform.as_str()).collect();

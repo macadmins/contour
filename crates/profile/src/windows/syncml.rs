@@ -23,8 +23,9 @@
 //!
 //! `fleet_stigs.enforcement_xml` in `windows-schema` carries 648 working
 //! fragments produced by a different toolchain. Those are the oracle: the
-//! renderer matches them, and [`tests::oracle_fleet_stigs_agreement`]
-//! compares generated output against them setting by setting. A disagreement
+//! renderer matches them, and `tests/windows_oracle.rs`
+//! (`oracle_generated_syncml_matches_fleet_stigs`) compares generated
+//! output against them setting by setting. A disagreement
 //! there is real information, not a restatement of this module's own
 //! assumptions.
 

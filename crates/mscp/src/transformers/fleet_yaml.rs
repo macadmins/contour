@@ -21,7 +21,7 @@ impl FleetYamlGenerator {
         }
     }
 
-    /// Generate a composable baseline component (lib/mscp/{baseline}/baseline.yml)
+    /// Generate a composable baseline component (written to mscp/{baseline}/baseline.toml)
     /// This creates a reusable baseline definition that fleets can reference
     pub fn generate_baseline_component(
         &self,
@@ -258,7 +258,8 @@ controls:
     /// Write fleet YAML to fleets/{baseline}.yml
     ///
     /// Places the fleet file directly in fleets/ directory (not fleets/examples/)
-    /// with proper relative paths to ../lib/mscp/{baseline}/
+    /// with example relative paths under ../platforms/macos/configuration-profiles/{baseline}/
+    /// and ../platforms/macos/scripts/{baseline}/
     pub fn write_fleet_yml(&self, baseline_name: &str) -> Result<PathBuf> {
         let fleets_dir = self.output_base.join("fleets");
         std::fs::create_dir_all(&fleets_dir)?;

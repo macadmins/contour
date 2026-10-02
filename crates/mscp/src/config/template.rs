@@ -234,7 +234,7 @@ fn add_comments(toml_str: &str) -> String {
 #
 # settings.mscp_repo: Path to a local macos_security checkout.
 #   `contour mscp init --sync` clones the mSCP 2.0 layout (the `main`
-#   branch) here; `mscp generate` auto-detects 1.x vs 2.0 from the repo.
+#   branch) here; `mscp generate` reads 2.0 only and refuses a 1.x checkout.
 #
 # settings.python_method: "auto" | "uv" | "python3"
 #   - auto: Automatically detect (prefers uv if available)

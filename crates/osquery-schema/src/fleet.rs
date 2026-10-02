@@ -47,9 +47,9 @@ pub struct FleetEntry {
     pub column_index: Option<bool>,
 }
 
-/// Read the table. Empty bytes read as an empty table: the build script
-/// writes a zero-length placeholder when the published dataset predates
-/// this file, so an older dataset means no rows rather than no build.
+/// Read the table. Empty bytes read as an empty table. The build does not
+/// write a placeholder for this file (a dataset without it fails to build);
+/// the tolerance is for callers handing in bytes from elsewhere.
 pub fn read(bytes: &[u8]) -> Result<Vec<FleetEntry>> {
     if bytes.is_empty() {
         return Ok(Vec::new());

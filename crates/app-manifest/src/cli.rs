@@ -10,7 +10,7 @@ use crate::{PARQUET_THRESHOLD, scan, write_parquet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Format {
-    /// JSON below the row threshold, Parquet above it.
+    /// JSON, or Parquet when above the row threshold and --output is given.
     Auto,
     Json,
     Parquet,
@@ -28,7 +28,7 @@ pub enum AppAction {
                       One unreadable bundle is one entry in failed[]; the scan still succeeds.\n\n\
                       Output is JSON with both tables nested, or a Parquet pair \
                       (<stem>.identity.parquet, <stem>.builds.parquet) — automatically above \
-                      2,000 apps, or with --format parquet."
+                      2,000 apps when --output is given, or with --format parquet."
     )]
     Manifest {
         #[arg(help = "App bundles or directories to scan (default: /Applications)")]

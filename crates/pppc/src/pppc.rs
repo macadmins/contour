@@ -599,11 +599,6 @@ pub fn sanitize_id(identifier: &str) -> String {
         .to_string()
 }
 
-/// Generate a PPPC mobileconfig profile from policies.
-///
-/// When `identifier_suffix` is provided, it is appended to the profile identifier
-/// to produce unique identifiers for per-app profiles. When `None`, the profile
-/// uses the base `{org}.pppc` identifier (combined mode).
 /// Build the inner `com.apple.TCC.configuration-profile-policy`
 /// payload for a set of PPPC policies. Used by both the
 /// mobileconfig generator and the recipe-TOML emitter.
@@ -646,6 +641,11 @@ pub fn build_pppc_payload(policies: &[PppcPolicy]) -> Dictionary {
     payload_content
 }
 
+/// Generate a PPPC mobileconfig profile from policies.
+///
+/// When `identifier_suffix` is provided, it is appended to the profile identifier
+/// to produce unique identifiers for per-app profiles. When `None`, the profile
+/// uses the base `{org}.pppc` identifier (combined mode).
 pub fn generate_pppc_profile(
     policies: &[PppcPolicy],
     org: &str,

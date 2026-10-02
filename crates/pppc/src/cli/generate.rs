@@ -331,8 +331,6 @@ pub fn find_duplicate_bundle_ids(config: &PppcConfig) -> Vec<(String, usize)> {
         .collect()
 }
 
-/// Generate a Fleet fragment directory.
-///
 /// Emit a combined recipe TOML for the PPPC policy.
 ///
 /// `combined = true` collapses every app's TCC entries into ONE
@@ -414,6 +412,8 @@ fn run_recipe(
     Ok(())
 }
 
+/// Generate a Fleet fragment directory.
+///
 /// Produces:
 /// - `<layout.macos_profiles_subdir>/` with mobileconfig files
 /// - `<layout.fleets_dir>/reference-fleet.yml` with profile entries

@@ -644,8 +644,9 @@ fn glob_dir_from_profiles(profiles: &[String]) -> Result<String> {
 /// operator must fill in agent_options, secrets, and host labels before
 /// deploying.
 ///
-/// The `agent_options.path` is the standard `../platforms/all/agent-options.yml`
-/// emitted by mSCP — it resolves once the first `mscp generate` runs.
+/// The `agent_options.path` (`../platforms/all/agent-options.yml`) is left
+/// dangling on purpose: `mscp generate` never emits that file, so the operator
+/// provides it (or drops the key).
 pub fn fleet_stub_yaml(fleet_name: &str) -> String {
     format!(
         "# Fleet GitOps - {fleet_name} fleet (scaffolded by `contour mscp init`)\n\

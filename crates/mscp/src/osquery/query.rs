@@ -2,8 +2,8 @@
 //! host is COMPLIANT (osquery policy convention).
 //!
 //! Note: `managed_policies` SQL is built by `transformers/fleet_policy.rs::generate_policy_for_rule`
-//! (from `mobileconfig_info`) — not duplicated here. `plist`/`nvram` rules whose
-//! fixed path/key can't be parsed cleanly fall to residual.
+//! (from `mobileconfig_info`) — not duplicated here. `plist`/`nvram` rules are
+//! not translated yet and always fall to residual.
 
 use crate::osquery::catalog::OsqueryTable;
 
@@ -24,8 +24,8 @@ pub fn build(table: OsqueryTable, rule: &crate::models::MscpRule) -> Option<Stri
             Some("SELECT 1 FROM gatekeeper WHERE assessments_enabled = 1".into())
         }
         OsqueryTable::Alf => Some("SELECT 1 FROM alf WHERE global_state >= 1".into()),
-        // managed_policies + plist + nvram queries are built from mobileconfig_info /
-        // the parsed check elsewhere; not handled by this generic entry point.
+        // managed_policies SQL is built from mobileconfig_info elsewhere; plist +
+        // nvram are not translated yet. None of them is handled here.
         _ => None,
     }
 }

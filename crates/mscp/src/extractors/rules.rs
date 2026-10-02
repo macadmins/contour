@@ -69,7 +69,7 @@ impl RuleExtractor {
         if let Some(ref v) = self.os_version {
             return Some(v.clone());
         }
-        // Sniff one rule and pick the highest version key for our OS.
+        // Sample a few rules and pick the highest version key for our OS.
         // Cheap fallback — Phase 6 fixtures and live tree both surface
         // versions like "26.0", "18.0", "15.0" lexicographically sortable.
         self.latest_os_version_in_repo().ok()
@@ -84,7 +84,9 @@ impl RuleExtractor {
             .into_iter()
             .filter_map(std::result::Result::ok)
             .take(50)
-        // 50 rule sample is enough to surface the OS's highest version
+        // First 50 WalkDir entries — directories count toward the 50, so
+        // fewer than 50 rule files are actually read; enough to surface the
+        // OS's highest version.
         {
             let p = entry.path();
             if !p.is_file() || p.extension().and_then(|s| s.to_str()) != Some("yaml") {
@@ -330,7 +332,7 @@ enum BaselineMembership {
     NoFile(std::path::PathBuf),
 }
 
-/// Minimal view of a 1.x baseline file: just the rule-id membership under
+/// Minimal view of a baseline file: just the rule-id membership under
 /// `profile[].rules[]`. All other baseline fields are ignored.
 #[derive(serde::Deserialize)]
 struct BaselineMembership_ {

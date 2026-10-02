@@ -390,7 +390,7 @@ services = ["camera", "microphone"]
 // candidate declaration, com.apple.configuration.services.background-tasks,
 // installs launchd jobs the MDM supplies, and Apple documents that it cannot
 // manage third-party login items — so no mapping could ever take effect.
-// Before 129de24 contour emitted one anyway; it validated and `ddm verify`
+// Contour previously emitted one anyway; it validated and `ddm verify`
 // passed while it named assets that were never generated.
 // Regression guard: if --ddm ever emits a declaration again, in either mode,
 // or refuses without naming the path that does work, this test fails.

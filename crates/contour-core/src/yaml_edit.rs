@@ -395,9 +395,12 @@ pub struct InsertPoint {
     pub section_exists: bool,
 }
 
-/// Append entries to a top-level section, handling all three cases:
-/// 1. Section has items → append after last item
-/// 2. Section exists but is empty → inject entries inline
+/// Append entries to a top-level section:
+/// 1. Section exists (with items or empty) → insert after the last item,
+///    or right after the key when there are none
+/// 2. Fallback for an existing empty section — `find_section_insert_point`
+///    already returns `Some` for that, so this branch is not reached in
+///    practice
 /// 3. Section missing → append section at end of file
 ///
 /// Each entry should be a pre-formatted line (e.g. `"  - path: ./foo.yml"`).
@@ -408,12 +411,12 @@ pub fn append_to_section(content: &str, section: &str, entries: &[String]) -> St
 
     let lines: Vec<&str> = content.lines().collect();
 
-    // Case 1: Section exists and has items
+    // Case 1: Section exists (empty sections included — insert point is the key line + 1)
     if let Some(insert) = find_section_insert_point(&lines, section) {
         return insert_lines_at(content, &insert, entries);
     }
 
-    // Case 2: Section exists but is empty
+    // Case 2: Fallback for an existing empty section; Case 1 already covers it
     if let Some(key_line) = find_empty_top_level_key(&lines, section) {
         let mut result: Vec<String> = lines[..=key_line].iter().map(|l| l.to_string()).collect();
         for entry in entries {

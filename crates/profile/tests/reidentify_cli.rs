@@ -74,8 +74,8 @@ fn name_scheme_rebuilds_and_remaps_reference() {
 
     // Identifier derives from the display name.
     assert!(written.contains("com.acme.profile.system-network-corp"));
-    // The Wi-Fi PayloadCertificateUUID still resolves: it must equal the cert
-    // payload's (new) UUID, and the old cert UUID must be gone.
+    // The Wi-Fi PayloadCertificateUUID was remapped: the old cert UUID
+    // must be gone (we don't assert the new value here).
     assert!(!written.contains("C0000000-0000-0000-0000-0000000000CC"));
 
     // Idempotent.

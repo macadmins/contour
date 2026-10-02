@@ -38,7 +38,7 @@ pub fn handle_schema_baselines(mode: OutputMode) -> Result<()> {
     Ok(())
 }
 
-/// List rules belonging to a specific baseline (optionally filtered by platform).
+/// List rules belonging to a specific baseline on the given platform.
 pub fn handle_schema_rules(baseline: &str, platform: &str, mode: OutputMode) -> Result<()> {
     let rules = crate::api::list_baseline_rules(baseline, platform)?;
 

@@ -15,8 +15,8 @@ pub fn embedded() -> &'static [u8] {
 
 /// Fleet's osquery schema: the same tables plus what an author actually
 /// wants — worked `examples`, `notes`, a documentation `url`, per-column
-/// platforms — and 91 tables upstream osquery does not list. Zero bytes on
-/// a dataset that predates it.
+/// platforms — and tables upstream osquery does not list. Required by the
+/// build: a dataset without it does not compile.
 pub fn embedded_fleet() -> &'static [u8] {
     include_bytes!("../data/fleet_osquery_schema.parquet")
 }

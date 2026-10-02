@@ -2,7 +2,7 @@
 //!
 //! Groups validated entries into the `Allowed` and `Privacy` dictionaries and
 //! wraps them in the `Type`/`Identifier`/`Payload` envelope (`apply: combined`).
-//! Built as `serde_json::Value` directly — same approach as `btm::generate`.
+//! Built as `serde_json::Value` directly.
 
 use serde_json::{Map, Value, json};
 

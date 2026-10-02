@@ -52,8 +52,9 @@ pub fn build_notification_entry_from_config(app: &NotificationAppEntry) -> Dicti
     // a profile should not silently take over grouping or previews for an
     // operator who never mentioned them.
     //
-    // An out-of-range number is dropped rather than written: the schema
-    // constrains these to 0-2, and `notifications validate` reports it.
+    // An out-of-range number is dropped rather than written (the schema
+    // constrains these to 0-2). Nothing reports the drop: `notifications
+    // validate` only range-checks `alert_type`.
     if let Some(value) = app.grouping_type.and_then(GroupingType::to_apple) {
         entry.insert("GroupingType".to_string(), Value::Integer(value.into()));
     }

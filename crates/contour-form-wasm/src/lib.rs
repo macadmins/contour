@@ -5,9 +5,10 @@
 //! serialiser bridge to keep in step, and every value crosses the boundary
 //! in the shape the contract already documents.
 //!
-//! The schema dataset is **not** compiled in. The host fetches the two
-//! Parquet tables as assets and hands them to [`Registry::new`], so a
-//! schema refresh is a file swap, not a rebuild.
+//! The schema dataset is **not** compiled in. The host fetches the Parquet
+//! tables as assets: `capabilities.parquet` goes to [`Registry::new`],
+//! `source_versions.parquet` to [`Registry::set_provenance`]. A schema
+//! refresh is a file swap, not a rebuild.
 
 use wasm_bindgen::prelude::*;
 
@@ -23,6 +24,7 @@ pub fn spec_version() -> String {
 
 /// A loaded schema registry.
 #[wasm_bindgen]
+#[derive(Debug)]
 pub struct Registry {
     inner: SchemaRegistry,
     annotations: Option<contour_form::Annotations>,
@@ -60,9 +62,10 @@ impl Registry {
         Ok(self.inner.provenance().len())
     }
 
-    /// Supply the three mSCP tables so `form` attaches `annotations[]` to
+    /// Supply the four mSCP tables so `form` attaches `annotations[]` to
     /// top-level keys: `rule_capability_links`, `baseline_edges`,
-    /// `rule_meta`, as bytes. Returns the number of annotated keys.
+    /// `rule_meta`, `rule_control_edges` (`controls`), as bytes. Returns the
+    /// number of annotated keys.
     pub fn annotate(
         &mut self,
         links: &[u8],

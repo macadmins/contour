@@ -116,7 +116,8 @@ pub enum Commands {
 
         /// mSCP branch to clone. `main` (default) is mSCP 2.0, the only
         /// layout contour reads; the macOS-version branches (`tahoe`,
-        /// `sequoia`, …) are the deprecated 1.x layout and are refused.
+        /// `sequoia`, …) are the deprecated 1.x layout — `--sync` warns,
+        /// `mscp generate` refuses.
         #[arg(long, default_value = "main")]
         branch: String,
 
@@ -377,7 +378,7 @@ pub enum Commands {
         #[arg(long)]
         use_container: bool,
 
-        /// Container image to use (default: ghcr.io/brodjieski/mscp_2.0:latest)
+        /// Container image to use — not yet honoured; the default image (ghcr.io/brodjieski/mscp_2.0:latest) is always used
         #[arg(long)]
         container_image: Option<String>,
 
@@ -487,7 +488,7 @@ pub enum Commands {
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         canonical_fleets: bool,
 
-        /// [FLEET] After generating, run the emitted policy/report queries through local osqueryi (skipped if absent; on Fleet hosts use `contour osquery verify --orbit`)
+        /// [FLEET] After generating, write the emitted policy/report queries as osqueryi and `orbit shell` commands to `<output>/osquery/verify-commands.md` (nothing is executed)
         #[arg(long, help_heading = "Experimental - not stable (Fleet Options)")]
         verify_queries: bool,
 
@@ -1092,7 +1093,7 @@ pub enum ContainerAction {
 
         /// Git branch to use. `main` (default) is mSCP 2.0, the only
         /// layout contour reads; `tahoe` / `sequoia` / `sonoma` are the
-        /// deprecated 1.x layout and are refused.
+        /// deprecated 1.x layout — not checked here, refused by `mscp generate`.
         #[arg(long, default_value = "main")]
         branch: String,
 
@@ -1456,7 +1457,6 @@ pub fn refuse_retired_fleet_flag(
 #[cfg(test)]
 mod fleet_flag_tests {
     use super::*;
-    use clap::Parser;
 
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("mscp").chain(args.iter().copied()))

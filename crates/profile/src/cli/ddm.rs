@@ -58,10 +58,6 @@ fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
     load_registry_opts(schema_path, false)
 }
 
-/// Load the schema registry, optionally from the beta seed dataset.
-///
-/// An explicit `schema_path` always wins (external dir); `beta` only selects
-/// the embedded **seed** schema (pre-release OS keys) when no path is given.
 /// Tell a person at a terminal, once per run, that `--beta` changes nothing.
 ///
 /// While no OS seed is open the beta channel is retired and serves the
@@ -88,6 +84,10 @@ pub(crate) fn note_if_beta_is_retired() {
     });
 }
 
+/// Load the schema registry, optionally from the beta seed dataset.
+///
+/// An explicit `schema_path` always wins (external dir); `beta` only selects
+/// the embedded **seed** schema (pre-release OS keys) when no path is given.
 pub(crate) fn load_registry_opts(schema_path: Option<&str>, beta: bool) -> Result<SchemaRegistry> {
     match schema_path {
         Some(p) => SchemaRegistry::from_auto_detect(Path::new(p)),
@@ -511,9 +511,6 @@ fn array_element_findings(
     (errors, warnings)
 }
 
-/// Schema-validation errors + warnings for an in-memory declaration. Reused by
-/// the `validate` command and as the fail-closed gate before `generate`/`compose`
-/// write a declaration.
 /// Resolve a declaration's `Identifier`.
 ///
 /// An explicit `--identifier` is used verbatim and needs no `--org` — the org
@@ -594,6 +591,9 @@ fn cross_key_errors(decl: &Declaration) -> Vec<String> {
     errors
 }
 
+/// Schema-validation errors + warnings for an in-memory declaration. Reused by
+/// the `validate` command and as the fail-closed gate before `generate`/`compose`
+/// write a declaration.
 pub fn declaration_errors(
     decl: &Declaration,
     registry: &SchemaRegistry,
@@ -816,8 +816,6 @@ pub fn declaration_errors_scoped(
 
         // Check enum membership for fields that declare a rangelist.
         // Only fields with allowed_values are checked — no data, no opinion.
-        // (The embedded parquet doesn't carry rangelists yet; --schema-path
-        // against Apple's device-management repo does.)
         for field_name in &manifest.field_order {
             let Some(field) = manifest.fields.get(field_name) else {
                 continue;
@@ -1192,7 +1190,6 @@ pub fn handle_ddm_validate(
     Ok(())
 }
 
-/// List available DDM declaration types from embedded schema
 /// Substring search across DDM declaration types. Mirrors `profile search`
 /// but scoped to `ddm-*` categories so callers don't have to filter
 /// `ddm list | grep` themselves.
@@ -1251,6 +1248,7 @@ pub fn handle_ddm_search(
     Ok(())
 }
 
+/// List available DDM declaration types from embedded schema
 pub fn handle_ddm_list(
     category: Option<&str>,
     schema_path: Option<&str>,
@@ -2230,7 +2228,8 @@ pub fn handle_ddm_generate(
     }
 
     // Build identifier.
-    // Resolve domain: profile.toml → .contour/config.toml → error.
+    // --identifier is used verbatim; otherwise domain: --org → profile.toml →
+    // CONTOUR_ORG → .contour/config.toml → error.
     // Refuse silent "com.example" defaulting — DDM declarations are deployable
     // and an example-domain identifier collides across orgs.
     let short_name = manifest
@@ -2285,11 +2284,10 @@ pub fn handle_ddm_generate(
 
     std::fs::write(&output_path, &json)?;
 
-    // Double-validate the generated file using the SAME validator that
-    // `profile ddm validate` uses. This catches nested-required-field bugs
-    // that the shallow post-generate check would miss, and turns round-trip
-    // failures into a hard error at generate time rather than leaving the
-    // user holding an invalid file.
+    // Re-validate the written file through the same path `profile ddm
+    // validate` uses. The in-memory check above already ran the schema
+    // rules; this guards the serialize/parse round-trip, so a file that
+    // would fail `validate` is a hard error here rather than left on disk.
     let result = validate_single_ddm(std::path::Path::new(&output_path), &registry, &[])?;
     if !result.valid {
         if output_mode == OutputMode::Human {
@@ -2377,14 +2375,6 @@ pub fn handle_ddm_generate(
     Ok(())
 }
 
-/// Compose a DDM bundle into asset / configuration / activation declarations
-/// in one shot. Mirror of `handle_ddm_generate` but driven by a TOML bundle
-/// describing the full intent rather than a single declaration type.
-///
-/// The org domain is resolved from `profile.toml` or `.contour/config.toml`
-/// (same fallback chain `handle_ddm_generate` uses) and threaded into
-/// [`compose`]. Failures emit the standard `{success:false, error, error_code}`
-/// envelope on stderr when `--json` is set.
 /// Print available DDM presets (embedded + external from `--preset-path`
 /// and `~/.contour/presets/`). JSON for agents, table for humans.
 fn list_presets_action(preset_path: Option<&str>, output_mode: OutputMode) -> Result<()> {
@@ -2421,6 +2411,15 @@ fn list_presets_action(preset_path: Option<&str>, output_mode: OutputMode) -> Re
     clippy::too_many_arguments,
     reason = "ddm compose threads many CLI flags including --preset / --preset-path / --list-presets"
 )]
+/// Compose a DDM bundle into asset / configuration / activation declarations
+/// in one shot. Mirror of `handle_ddm_generate` but driven by a TOML bundle
+/// describing the full intent rather than a single declaration type.
+///
+/// The org domain is resolved with the same fallback chain
+/// `handle_ddm_generate` uses (`--org` → `profile.toml` → `CONTOUR_ORG` →
+/// `.contour/config.toml`) and threaded into [`compose`]. Failures emit the
+/// standard `{success:false, error, error_code}` envelope on stderr when
+/// `--json` is set.
 pub fn handle_ddm_compose(
     bundle_path: Option<&str>,
     output_dir: Option<&str>,
@@ -4029,7 +4028,6 @@ mod scaffold_value_tests {
 #[cfg(test)]
 mod placeholder_key_tests {
     use super::*;
-    use crate::schema::SchemaRegistry;
 
     fn placeholder_keys(v: &serde_json::Value, path: &str, out: &mut Vec<String>) {
         match v {

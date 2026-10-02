@@ -331,7 +331,9 @@ fn parse_field(dict: &plist::Dictionary, depth: usize) -> Option<FieldDefinition
         subtype: None,
         format: None,
         asset_types: Vec::new(),
-        // parent_key is None here: this parser produces top-level keys only.
+        // parent_key is None even for nested subkeys: this parser records
+        // depth but never links a child to its parent, and path is the bare
+        // name (see the dedupe note in `collect_fields`).
         path: name.to_string(),
         field_type,
         title,

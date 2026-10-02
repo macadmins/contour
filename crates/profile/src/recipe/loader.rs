@@ -48,7 +48,6 @@ pub struct RecipeSummary {
     pub secrets: Vec<String>,
 }
 
-/// Load a recipe by name, checking external paths first, then embedded.
 /// Resolve a CLI `--recipe` value to a loaded recipe and its
 /// canonical name. Accepts either:
 ///
@@ -84,6 +83,7 @@ pub fn load_recipe_smart(selector: &str, recipe_path: Option<&str>) -> Result<(S
     Ok((selector.to_string(), recipe))
 }
 
+/// Load a recipe by name, checking external paths first, then embedded.
 pub fn load_recipe(name: &str, recipe_path: Option<&str>) -> Result<Recipe> {
     // 1. Explicit path (file or directory)
     if let Some(rp) = recipe_path {
@@ -211,6 +211,13 @@ fn parse_recipe_toml(content: &str, source: &str) -> Result<Recipe> {
     toml::from_str(content).with_context(|| format!("Failed to parse recipe from {source}"))
 }
 
+/// Walk a directory of `.toml` recipes, appending each to `recipes`.
+///
+/// Skips names already present in `recipes` (so the explicit
+/// `--recipe-path` wins over `~/.contour/recipes/`).
+///
+/// When a recipe's name matches a built-in, the source label flags
+/// the override so listings make the shadowing obvious.
 fn collect_external_recipes(
     dir: &Path,
     recipes: &mut Vec<RecipeSummary>,
@@ -253,13 +260,6 @@ fn collect_external_recipes(
     }
 }
 
-/// Walk a directory of `.toml` recipes, appending each to `recipes`.
-///
-/// Skips names already present in `recipes` (so the explicit
-/// `--recipe-path` wins over `~/.contour/recipes/`).
-///
-/// When a recipe's name matches a built-in, the source label flags
-/// the override so listings make the shadowing obvious.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,7 +286,7 @@ mod tests {
     /// North Pole Security's Team ID, duplicated here on purpose: the
     /// `santa` crate owns the constant, but embedded recipes are data,
     /// so only a test can pin them to it. Keep in sync with
-    /// `santa::cli::generate::NORTHPOLE_TEAM_ID`.
+    /// `santa::NORTHPOLE_TEAM_ID`.
     const NORTHPOLE_TEAM_ID: &str = "ZMCG7MLDV9";
 
     /// Any embedded recipe that configures Santa must name North Pole

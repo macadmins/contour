@@ -12,8 +12,9 @@
 //! from Apple's DEP API with an MDM server token, which itself comes out of a
 //! manual Apple Business/School Manager round-trip. [`MANUAL_TOKEN_STEPS`]
 //! documents that; when a mode needs tokens and none are present, the command
-//! prints those steps and exits non-zero so a human — or an agent driving the
-//! workflow — knows exactly which artifact to produce before retrying.
+//! exits non-zero — printing those steps in Human mode, a `MISSING_INPUT`
+//! error object in JSON mode — so a human or an agent driving the workflow
+//! knows exactly which artifact to produce before retrying.
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -74,8 +75,8 @@ pub struct BetaToken {
 }
 
 /// The manual Apple Business/School Manager round-trip that produces the
-/// tokens. Printed verbatim when a token artifact is missing, so a human or
-/// an agent can complete the step and re-run.
+/// tokens. Printed verbatim (Human mode) when a token artifact is missing,
+/// so a human or an agent can complete the step and re-run.
 pub const MANUAL_TOKEN_STEPS: &str = "\
 Seeding tokens come from Apple and cannot be generated locally.
 
@@ -377,7 +378,7 @@ pub fn handle_ddm_beta(
     Ok(())
 }
 
-/// Validate + write one declaration, returning it so callers can report.
+/// Build + validate one declaration, returning it for the caller to write.
 fn build_and_check(mode: BetaMode, tokens: &[BetaToken], identifier: &str) -> Result<Declaration> {
     let mut payload = DeclarationPayload::new();
     payload.insert("Beta".to_string(), build_beta_payload(mode, tokens)?);

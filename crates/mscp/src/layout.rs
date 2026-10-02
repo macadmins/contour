@@ -20,9 +20,9 @@ use std::path::{Path, PathBuf};
 /// Proof that a repository holds the mSCP 2.0 layout, and the owner of its
 /// file-name grammar.
 ///
-/// Obtained from [`Self::detect`]. Carrying the value (rather than a bool)
-/// keeps every path computation behind one type that has already checked
-/// the tree, so callers cannot build a 2.0 path against a 1.x checkout.
+/// [`Self::detect`] returns one after checking the tree. The type is the
+/// single owner of the 2.0 path grammar, so every path computation goes
+/// through it; it is a unit struct, so construction itself is not gated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MscpLayout;
 

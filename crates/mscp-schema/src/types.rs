@@ -8,7 +8,8 @@ pub struct BaselineMeta {
     pub preamble: Option<String>,
     pub authors: Vec<String>,
     /// Which (platform, os_version) combos this baseline was found on.
-    /// E.g. `[("iOS", "18.0"), ("iOS", "26.0")]` for indigo_base.
+    /// Empty: the `platforms` column is not in the current dataset, and the
+    /// reader tolerates its absence.
     pub platforms: Vec<(String, String)>,
 }
 
@@ -141,9 +142,9 @@ pub struct RuleCapabilityLink {
     pub capability_ref: String,
     /// Top-level key within it.
     pub capability_key: Option<String>,
-    /// `MdmProfile` / `DdmDeclaration`.
+    /// `MdmProfile` / `DdmDeclaration` / `ManagedPreference`.
     pub capability_kind: Option<String>,
-    /// `Exact`, `Strong`, `Heuristic`, `Manual`.
+    /// `Exact` or `Heuristic`; see `rule_capability_links`.
     pub confidence: String,
     pub evidence: Option<String>,
     /// `ProfileCapable` / `DeclarativeReady`.
@@ -156,7 +157,8 @@ pub struct RuleCapabilityLink {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleControlEdge {
     pub rule_id: String,
-    /// `800-53r5`, `cis`, `nist.cce.macos_27`, …
+    /// `nist.800-53r5`, `cis.benchmark.macos_27`, `cis.controls_v8`,
+    /// `disa.disa_stig.macos_26`, …
     pub framework: String,
     pub control_id: String,
 }

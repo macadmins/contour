@@ -1,4 +1,4 @@
-//! BTM generate command — generate service management profiles or DDM declarations.
+//! BTM generate command — generate service management profiles.
 
 use crate::cli::{OutputMode, print_info, print_kv, print_success, print_warning};
 use crate::config::{BtmAppEntry, BtmConfig};
@@ -83,9 +83,7 @@ pub fn run(
     // Recipe-TOML output: bundle every app's service-management
     // payload into one combined recipe TOML that drops into
     // `./recipes/<name>.toml` of a contour preset library. The recipe
-    // always carries BOTH `[[profile]]` blocks (mobileconfig rules)
-    // and `[[ddm]]` blocks (DDM-capable rules), so `--ddm` is a no-op
-    // here — the recipe is the single source for both delivery paths.
+    // carries `[[profile]]` blocks only — `--ddm` already bailed above.
     if format == "recipe" {
         return run_recipe(&config, output, per_app, output_mode);
     }
@@ -113,10 +111,9 @@ pub fn run(
     let mut profiles_written = Vec::new();
 
     if ddm {
-        // DDM declarations are emitted one `.json` per app, regardless
-        // of --per-app — a declaration is inherently per-app. (Without
-        // this branch, combined mode silently ignored --ddm and wrote a
-        // mobileconfig instead.)
+        // Dead past the `--ddm` refusal at the top of `run`; kept so the
+        // call shape stays symmetric. `generate_btm_declaration` bails
+        // anyway if anything ever reaches it.
         for app in &apps_with_btm {
             let filename = format!("{}-btm.json", sanitize_filename(&app.name));
             let output_path = output_dir.join(&filename);
@@ -351,11 +348,8 @@ fn print_btm_dry_run(apps: &[&BtmAppEntry], ddm: bool, per_app: bool, output_mod
 /// combined `com.apple.servicemanagement` payload — matches the
 /// existing combined-mobileconfig deployment model.
 ///
-/// Regardless of `per_app`, every app that has `Label`-type BTM rules
-/// also contributes one `[[ddm]]` block of type
-/// `com.apple.configuration.services.background-tasks` — the same
-/// declaration the `--format mobileconfig --ddm` path emits as JSON.
-/// A recipe is the single source for both delivery channels.
+/// No `[[ddm]]` blocks are emitted: BTM has no DDM equivalent (see
+/// [`BTM_DDM_REFUSAL`]).
 fn run_recipe(
     config: &BtmConfig,
     output: Option<&Path>,
@@ -403,10 +397,6 @@ fn run_recipe(
         }]
     };
 
-    // DDM blocks: one per app that has Label-type BTM rules. Apps with
-    // no Label rules produce a background-tasks payload with no
-    // LaunchdConfigurations, which carries no deployable intent — skip
-    // those so the recipe only emits actionable `[[ddm]]` blocks.
     // No `[[ddm]]` blocks: BTM has no DDM equivalent (see BTM_DDM_REFUSAL).
     // This previously emitted background-tasks declarations whose asset
     // references pointed at assets contour never generated.

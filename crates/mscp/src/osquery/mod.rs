@@ -130,7 +130,7 @@ pub struct OsqueryGenOptions {
 use crate::models::MscpRule;
 use audit_script::{AuditScript, plist_policy_sql};
 
-/// One emitted osquery query (rule_id + SQL + description).
+/// One emitted osquery query (rule_id + title + SQL).
 #[derive(Debug, Clone)]
 pub struct OsqueryQuery {
     pub rule_id: String,
@@ -143,8 +143,8 @@ pub struct OsqueryQuery {
 pub struct OsqueryArtifacts {
     pub queries: Vec<OsqueryQuery>,
     pub audit: AuditScript,
-    /// Per-rule routing decisions, retained for callers that want to inspect or
-    /// re-report classification (the `mscp` binary writes only `coverage_md`).
+    /// Per-rule routing decisions. Nothing reads this field today; the `mscp`
+    /// binary writes only `coverage_md`.
     #[allow(
         dead_code,
         reason = "public API consumed by adapters/tests; unused in the bin build"

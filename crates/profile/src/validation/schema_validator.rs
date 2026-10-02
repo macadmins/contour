@@ -6,7 +6,7 @@
 //! - Values are within allowed ranges
 //! - Sensitive fields are handled appropriately
 //!
-//! Note: This module is reserved for future schema-based validation.
+//! Used by `cli/validate`, `plan`, `post_generate` and `report`.
 #![allow(dead_code, reason = "module under development")]
 
 use crate::profile::{ConfigurationProfile, PayloadContent};
@@ -123,17 +123,18 @@ impl SchemaValidationResult {
 /// Options for schema validation
 #[derive(Debug, Clone, Default)]
 pub struct ValidationOptions {
-    /// Treat missing required fields as errors (default: true)
+    /// Treat missing required fields as errors (true in `default_checks()`)
     pub check_required: bool,
-    /// Validate field types (default: true)
+    /// Validate field types (true in `default_checks()`)
     pub check_types: bool,
-    /// Validate allowed values (default: true)
+    /// Validate allowed values (true in `default_checks()`)
     pub check_allowed_values: bool,
-    /// Warn about sensitive fields (default: true)
+    /// Warn about sensitive fields (true in `default_checks()`)
     pub warn_sensitive: bool,
-    /// Warn about unknown payload types (default: true)
+    /// Warn about unknown payload types (true in `default_checks()`)
     pub warn_unknown_types: bool,
-    /// Strict mode: treat unknown types and warnings as errors
+    /// Strict mode: `UNKNOWN_TYPE` and `UNKNOWN_KEY` become errors
+    /// instead of warnings. Other warnings are unaffected.
     pub strict: bool,
 }
 
@@ -523,8 +524,6 @@ impl<'a> SchemaValidator<'a> {
         }
     }
 
-    /// Find a similar payload type to suggest for typos
-    /// Uses reverse-DNS aware matching optimized for Apple payload types
     /// Report `SkipSetupItems` entries that match no documented skip key.
     ///
     /// A warning rather than an error: the registry is versioned data that
@@ -559,6 +558,8 @@ impl<'a> SchemaValidator<'a> {
         }
     }
 
+    /// Find a similar payload type to suggest for typos
+    /// Uses reverse-DNS aware matching optimized for Apple payload types
     fn find_similar_payload_type(&self, unknown_type: &str) -> Option<String> {
         let unknown_lower = unknown_type.to_lowercase();
 
@@ -771,7 +772,6 @@ fn plist_value_to_string(value: &plist::Value) -> String {
     }
 }
 
-/// Check if this is a standard payload key or ProfileManifests metadata
 /// Check if a payload type is a known custom settings container.
 /// These types are valid but don't have fixed schemas - they're used
 /// to deploy arbitrary managed preferences.
@@ -782,6 +782,7 @@ fn is_custom_settings_type(payload_type: &str) -> bool {
     )
 }
 
+/// Check if this is a standard payload key or ProfileManifests metadata
 fn is_standard_payload_key(name: &str) -> bool {
     // Standard Apple payload keys
     if matches!(

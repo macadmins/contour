@@ -54,7 +54,8 @@ impl std::fmt::Display for ProfileCategory {
 pub struct ProfileNaming {
     /// Base prefix (e.g., "santa" or "name")
     pub prefix: String,
-    /// Whether to use ring number (1, 2, 3) or ring name (ring0, ring1)
+    /// Whether to use ring number (1, 2, 3) or ring name (ring0, ring1).
+    /// Currently unread; names always use the number.
     pub use_ring_number: bool,
 }
 
@@ -76,7 +77,7 @@ impl ProfileNaming {
     }
 
     /// Generate profile name for a ring and category
-    /// Example: ring_priority=1, category=Software -> "santa1a"
+    /// Example: ring_priority=0, category=Software -> "santa1a" (priority is 0-based, name is 1-based)
     pub fn generate(&self, ring_priority: u8, category: ProfileCategory) -> String {
         format!(
             "{}{}{}",
@@ -87,7 +88,7 @@ impl ProfileNaming {
     }
 
     /// Generate profile name with split suffix for large rule sets
-    /// Example: ring_priority=1, category=Software, part=2 -> "santa1a-002"
+    /// Example: ring_priority=0, category=Software, part=2 -> "santa1a-002"
     pub fn generate_split(
         &self,
         ring_priority: u8,
@@ -104,7 +105,7 @@ impl ProfileNaming {
     }
 
     /// Generate full identifier
-    /// Example: org=com.example, ring=1, category=Software -> "com.example.santa1a"
+    /// Example: org=com.example, ring_priority=0, category=Software -> "com.example.santa1a"
     pub fn generate_identifier(
         &self,
         org: &str,
@@ -115,7 +116,7 @@ impl ProfileNaming {
     }
 
     /// Generate full identifier with split suffix
-    /// Example: org=com.example, ring=1, category=Software, part=2 -> "com.example.santa1a-002"
+    /// Example: org=com.example, ring_priority=0, category=Software, part=2 -> "com.example.santa1a-002"
     pub fn generate_identifier_split(
         &self,
         org: &str,

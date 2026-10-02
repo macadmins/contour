@@ -183,8 +183,9 @@ fn output_human(
 /// user_channel/multiple/beta), and every field with its type, plist tag
 /// (`<real>`, `<integer>`, …), required flag, default, and allowed values.
 ///
-/// `os_filter` (the `--os <NAME>` flag) restricts output to fields supported
-/// on that platform — fails fast if the payload itself isn't supported there.
+/// `os_filter` (the `--os <NAME>` flag) scopes the platform list and the
+/// per-OS support detail to that platform — fails fast if the payload itself
+/// isn't supported there. The field list is not filtered by OS.
 pub fn handle_payload_info(
     payload_type: &str,
     schema_path: Option<&str>,
@@ -563,7 +564,7 @@ fn emit_payload_info_json(
                 "allowed_values": f.allowed_values,
                 // The DDF's word, for a Windows node: what each value means,
                 // what it depends on, where it applies, and whether it must
-                // travel inside <Atomic>. Absent for Apple keys.
+                // travel inside <Atomic>. `null` for Apple keys.
                 "value_meanings": node_details()
                     .get(&(manifest.payload_type.clone(), f.path.clone()))
                     .map(|d| d.value_descriptions.iter().map(|v| serde_json::json!({"value": v.value, "description": v.description})).collect::<Vec<_>>()),

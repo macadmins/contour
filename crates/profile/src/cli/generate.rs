@@ -399,8 +399,8 @@ fn sanitize_enabled() -> bool {
     SANITIZE.get().copied().unwrap_or(false)
 }
 
-/// Resolve a value that may be a secret reference (`op://`, `env:`,
-/// `file:`, `secret:`).
+/// Resolve a value that may be a reference (see `is_secret_reference`:
+/// `op://`, `env:`, `file:`, `secret:`, `var:`).
 fn resolve_value(raw: &str) -> Result<ResolvedValue> {
     // Sanitize mode: leave any secret reference verbatim in the output.
     if sanitize_enabled() && is_secret_reference(raw) {
@@ -522,7 +522,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// Parse `KEY=VALUE` strings into a map, resolving `op://`, `env:`, and `file:` prefixes.
+/// Parse `KEY=VALUE` strings into a map, resolving reference prefixes via `resolve_value`.
 fn parse_vars(vars: &[String]) -> Result<HashMap<String, String>> {
     let mut map = HashMap::new();
     for v in vars {
@@ -535,7 +535,7 @@ fn parse_vars(vars: &[String]) -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
-/// Resolve secret references (`op://`, `env:`, `file:`) in TOML string values.
+/// Resolve references (see `is_secret_reference`) in TOML string values.
 /// For binary results, returns a plist `Data` value instead of a string.
 fn resolve_toml_value(val: &toml::Value) -> Result<toml::Value> {
     match val {
@@ -705,7 +705,6 @@ fn substitute_placeholders(content: &[u8], vars: &HashMap<String, String>) -> Ve
     s.into_bytes()
 }
 
-/// Scan a string for `{{...}}` placeholder patterns and return them.
 /// Apple-side runtime template markers that the password-policy
 /// evaluator substitutes at enforcement time — NOT user-fillable.
 /// Surfacing them as recipe placeholders is noise. Anchored here (not
@@ -713,6 +712,7 @@ fn substitute_placeholders(content: &[u8], vars: &HashMap<String, String>) -> Ve
 /// pulled from the embedded schema, never in recipe TOML bodies.
 const APPLE_RUNTIME_TEMPLATES: &[&str] = &["{{key}}", "{{value}}"];
 
+/// Scan a string for `{{...}}` placeholder patterns and return them.
 fn find_placeholders(content: &str) -> Vec<String> {
     let mut placeholders = Vec::new();
     let mut pos = 0;
@@ -974,8 +974,7 @@ pub fn handle_generate_recipe(
     }
     // Resolve `--recipe-path`: explicit CLI flag wins, otherwise fall
     // back to `defaults.library_path` from `.contour/config.toml`
-    // (with `recipes/` appended if the bare path doesn't already
-    // point at a recipes dir).
+    // (using its `recipes/` subdirectory when one exists).
     let resolved_recipe_path = resolve_recipe_path(recipe_path);
     let resolved_recipe_path_str = resolved_recipe_path.as_deref();
 
@@ -1072,8 +1071,8 @@ pub fn handle_generate_recipe(
     warn_unknown_mdm_variables(&r.profiles, &mdm_vars_cfg, output_mode);
 
     // Resolve org domain. Precedence: CLI --org → profile.toml →
-    // CWD-walked `.contour/config.toml` → anchor-walked
-    // `.contour/config.toml` → error. We refuse to default to
+    // `CONTOUR_ORG` env → CWD-walked `.contour/config.toml` →
+    // anchor-walked `.contour/config.toml` → error. We refuse to default to
     // "com.example" because the resulting PayloadIdentifier is not
     // deployable and silently produces invalid output.
     let domain = if let Some(o) = org {
@@ -2058,7 +2057,6 @@ fn parse_plist_date(s: &str) -> Option<plist::Date> {
     plist::Date::from_xml_format(s).ok()
 }
 
-/// Build a plist Dictionary from a schema manifest, applying any field overrides.
 /// ProfileManifests / ProfileCreator metadata keys — `PFC_*`
 /// (ProfileCreator widget state, e.g. `PFC_SegmentedControl_0`) and
 /// `pfm_*` (manifest metadata). Some scraped schemas carry these as if
@@ -2075,12 +2073,10 @@ fn is_profilemanifests_metadata_key(name: &str) -> bool {
 /// Build a payload dict from a schema manifest and the recipe's
 /// `[profile.fields]` (`overrides`).
 ///
-/// `overrides` are **literal** payload keys — a key like
-/// `com.apple.login.mcx.DisableAutoLoginClient` is one key, not a
-/// dot-path to nest (nesting lives in `[profile.extra_fields]`, applied
-/// by the caller). So overrides are inserted verbatim.
-///
-/// Build a payload dict from the embedded schema plus operator `overrides`.
+/// A dotted override that names a nested schema field is applied at
+/// that path (`PayloadContent.Challenge` nests). A key the schema does
+/// not know — e.g. `com.apple.login.mcx.DisableAutoLoginClient` — is
+/// one literal payload key, inserted verbatim.
 ///
 /// `full` includes every optional field (the `--full` scaffold). `backfill`
 /// controls whether *unlisted* required fields are scaffolded with their
@@ -2234,8 +2230,8 @@ fn build_payload_from_schema(
             continue;
         }
 
-        // Recipe field overrides are literal payload keys — insert
-        // verbatim (no dot-splitting; that's `extra_fields`' job).
+        // Top-level override: insert as-is. Dotted overrides are
+        // handled in the remaining-overrides pass below.
         if let Some(override_val) = overrides.get(field_name) {
             dict.insert(field_name.clone(), toml_to_plist_resolved(override_val));
             continue;
@@ -2954,7 +2950,6 @@ mod tests {
 #[cfg(test)]
 mod placeholder_key_tests {
     use super::*;
-    use crate::schema::SchemaRegistry;
 
     fn placeholder_keys(v: &Value, path: &str, out: &mut Vec<String>) {
         match v {

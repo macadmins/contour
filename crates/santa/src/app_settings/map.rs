@@ -469,7 +469,7 @@ mod tests {
         let mut a = app();
         a.cdhash = Some("not-a-hash".to_string());
         a.team_id = None;
-        // Auto allow with no team id falls back to cdhash, which is invalid → None.
+        // Explicit Cdhash with an invalid hash → no identifier.
         assert!(from_scanned_app(&a, ScanRuleType::Cdhash, BinaryPolicy::Allow).is_empty());
     }
 

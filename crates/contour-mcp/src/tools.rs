@@ -162,7 +162,8 @@ pub fn list() -> Vec<Value> {
                 // Every tool in this build is a pure lookup over embedded data.
                 // Clients are told to treat annotations as untrusted, so these
                 // are a hint, not the guarantee — the guarantee is that no
-                // crate capable of writing a file is linked into this binary.
+                // handler in this file calls a writer. (`contour-core` is
+                // linked and does have write paths; none are reached here.)
                 "annotations": {
                     "readOnlyHint": true,
                     "destructiveHint": false,
@@ -255,8 +256,9 @@ fn optional_str(args: &Value, field: &str) -> Option<String> {
 }
 
 /// Result cap. Large result sets cost the agent context without adding
-/// signal, so tools return the top slice plus an honest `truncated` flag
-/// rather than everything.
+/// signal, so the search tools return the top slice plus an honest
+/// `truncated` flag rather than everything. `mscp_baseline` caps its
+/// sections too but emits no flag, and never goes below `DEFAULT_LIMIT`.
 const DEFAULT_LIMIT: usize = 20;
 const MAX_LIMIT: usize = 100;
 
@@ -266,7 +268,8 @@ fn limit_of(args: &Value) -> usize {
         .map_or(DEFAULT_LIMIT, |n| (n as usize).clamp(1, MAX_LIMIT))
 }
 
-/// Names within edit distance 1-2 of `needle`, for "did you mean".
+/// Names within two edits of `needle`, or containing it / contained by it,
+/// for "did you mean".
 fn near_misses(needle: &str, haystack: impl Iterator<Item = String>) -> Vec<String> {
     let n = needle.to_lowercase();
     let mut hits: Vec<String> = haystack
@@ -1325,7 +1328,8 @@ mod tests {
 
     #[test]
     fn unknown_osquery_table_suggests_near_misses() {
-        // `process` is one edit away from `processes`, so the typo names its fix.
+        // `process` is two edits from `processes` and a substring of it, so
+        // either branch of `near_misses` names the fix.
         let err = osquery_table(&json!({"table": "process"})).unwrap_err();
         assert!(!err.suggestions.is_empty(), "expected suggestions");
     }

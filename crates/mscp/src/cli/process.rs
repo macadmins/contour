@@ -241,12 +241,12 @@ pub fn process_baseline(
         });
         let removed = before - baseline.mobileconfigs.len();
 
-        // Scripts are suppressed through the constraints file, which is how
-        // --exclude does it and the only mechanism downstream honours — the
-        // script transformer works from the baseline's compliance script, not
-        // from per-rule files. Using the same path means excluded_rules
-        // excludes the same things a category would, rather than dropping
-        // profiles and quietly leaving the remediation scripts in place.
+        // Scripts are suppressed via the in-memory `suppressed_scripts` set,
+        // applied where the script rules are built (the constraints file is
+        // written for the record but never read back). --exclude feeds the
+        // same set, so excluded_rules excludes the same things a category
+        // would, rather than dropping profiles and quietly leaving the
+        // remediation scripts in place.
         let is_jamf = jamf_options.is_some();
         let constraint_type = if jamf_exclude_conflicts || is_jamf {
             ConstraintType::Jamf

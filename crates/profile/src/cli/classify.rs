@@ -61,7 +61,7 @@ pub fn handle_classify(
         return emit_map_scaffold(&files, &map, out, output_mode);
     }
 
-    // Phase 1: classify every profile (no writes), in parallel.
+    // Phase 1: classify every profile (no writes); in parallel with --parallel.
     let process = |path: &PathBuf| -> Result<Classified, (String, String)> {
         classify_only(path, &map).map_err(|e| (path.display().to_string(), e.to_string()))
     };

@@ -99,7 +99,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         .build()
         .context("Failed to build capabilities Parquet reader")?;
 
-    // Use (payload_type) as grouping key. Accumulate OS support and keys.
+    // Group on (payload_type, variant); see the identity note below. Accumulate OS support and keys.
     let mut cap_map: indexmap::IndexMap<(String, Option<String>), Capability> =
         indexmap::IndexMap::new();
     // Track which (payload_type, platform) combos we've already added OsSupport for
@@ -149,8 +149,8 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         // Per-key supportedOS columns — the key's own metadata.
         let key_introduced_col = col(&batch, "key_introduced")?.as_string::<i32>();
         let key_deprecated_col = col(&batch, "key_deprecated")?.as_string::<i32>();
-        // A later column (44 -> 45). Absent in older parquet; those keys read
-        // with an empty `removed` map.
+        // Read optionally: an older layout without `key_removed` still loads,
+        // and those keys read with an empty `removed` map.
         let key_removed_col = batch
             .column_by_name("key_removed")
             .map(|c| c.as_string::<i32>());
@@ -167,13 +167,13 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         let manifest_sources = batch
             .column_by_name("manifest_source")
             .map(|c| c.as_string::<i32>());
-        // key_rangelist (JSON string array) is absent in older parquet
-        // (40-column layout); those keys read as range_list: None.
+        // key_rangelist (JSON string array) is absent in older parquet;
+        // those keys read as range_list: None.
         let key_rangelists = batch
             .column_by_name("key_rangelist")
             .map(|c| c.as_string::<i32>());
-        // Later columns (42 -> 44). Absent in older parquet, so both read as
-        // None rather than failing the load.
+        // Later columns. Absent in older parquet, so both read as None
+        // rather than failing the load.
         //
         // `variant` is the discriminator Apple puts in a FILENAME when one
         // payload type covers several surfaces — com.apple.MCX(WiFi).yaml and
@@ -391,8 +391,9 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
             // Per-key supportedOS — the key's OWN introduced/deprecated/
             // supervised, NOT the payload-level `introduced`/`deprecated`
             // columns (those feed `OsSupport` above). `key_os_value`
-            // drops the `n/a` sentinel so a platform on which the key is
-            // unsupported gets no map entry at all.
+            // keeps the `n/a` sentinel verbatim, so a platform on which the
+            // key is unsupported maps to `"n/a"` — see
+            // `PayloadKey::unavailable_on`.
             let row_introduced = key_os_value(key_introduced_col, row);
             let row_deprecated = key_os_value(key_deprecated_col, row);
             let row_removed = key_removed_col.and_then(|c| key_os_value(c, row));
@@ -405,10 +406,10 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
             // Identity is (name, parent_key), not name alone. Apple key names
             // are unique within a payload, so this is a no-op there — but a
             // Windows CSP repeats a name under each parent: `Firewall` carries
-            // three `EnableFirewall` keys, under MdmStore.DomainProfile,
-            // .PrivateProfile and .PublicProfile. Merging on name collapsed
-            // them to whichever arrived first, losing two thirds of the
-            // addressable nodes.
+            // several `EnableFirewall` keys, under MdmStore.DomainProfile,
+            // .PrivateProfile, .PublicProfile and siblings. Merging on name
+            // collapsed them to whichever arrived first, losing the rest of
+            // the addressable nodes.
             let row_key_scopes: Option<Vec<String>> = key_allowed_scopes
                 .and_then(|arr| {
                     (!arr.is_null(row)).then(|| serde_json::from_str(arr.value(row)).ok())

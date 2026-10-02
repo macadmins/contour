@@ -176,8 +176,8 @@ impl RingConfig {
     /// Create a custom N-ring configuration with sensible defaults.
     ///
     /// Each ring gets a `ring{i}` name, an incrementing priority, a clean
-    /// description, and a default `ring:{i}` Fleet label. Used as the fallback
-    /// when N is not 5 or 7, and as the template emitted by `rings init`.
+    /// description, and a default `ring:{i}` Fleet label. Used by
+    /// [`Self::from_num_rings`] (and so by `rings init`) only when N is not 5 or 7.
     pub fn custom_rings(num_rings: u8) -> Self {
         let mut config = Self::new();
         for i in 0..num_rings {

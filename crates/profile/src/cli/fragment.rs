@@ -33,7 +33,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 /// Where an activation, and the assets, go: not in Fleet's template, so the
-/// folder names Fleet's docs use (`lib/macos/activations`, `…/assets`).
+/// leaf names Fleet's docs use (`activations`, `assets`) under `platforms/macos/`.
 const ACTIVATIONS_SUBDIR: &str = "platforms/macos/activations";
 const ASSETS_SUBDIR: &str = "platforms/macos/assets";
 

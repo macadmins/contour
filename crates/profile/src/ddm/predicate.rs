@@ -5,7 +5,7 @@
 //! reference:
 //!
 //! - **`@status('key')`** — a status item the device exposes via a
-//!   `com.apple.management.status-subscriptions` declaration. If the
+//!   `com.apple.configuration.management.status-subscriptions` declaration. If the
 //!   key isn't subscribed, the device returns
 //!   `Error.UnableToEvaluatePredicate` and the activation never
 //!   installs (different from `Error.PredicateFailed`, which means
@@ -35,7 +35,7 @@ use regex::Regex;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PredicateKeys {
     /// Keys referenced via `@status('key')` — must be subscribed via a
-    /// `com.apple.management.status-subscriptions` declaration on the
+    /// `com.apple.configuration.management.status-subscriptions` declaration on the
     /// same device.
     pub status: Vec<String>,
     /// Keys referenced via `@property('key')` — built-in device
@@ -94,7 +94,7 @@ fn status_re() -> &'static Regex {
         // silently extracted nothing from the common case, which made the
         // subscription-coverage check pass for predicates it should have
         // caught.
-        // Captured group 1 = the key, quoted or bare.
+        // Group 1 = quoted key, group 2 = bare key; exactly one matches.
         Regex::new(r#"@status\s*\(\s*(?:['"]([^'"]+)['"]|([A-Za-z0-9_.\-]+))\s*\)"#)
             .expect("status regex compiles")
     })

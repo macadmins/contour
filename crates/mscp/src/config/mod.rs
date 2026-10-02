@@ -94,7 +94,7 @@ pub struct Settings {
     #[serde(default)]
     pub verbose: bool,
 
-    /// Generate DDM artifacts (pass -D flag to mSCP)
+    /// Generate DDM artifacts (pass `--ddm` to mSCP)
     #[serde(default)]
     pub generate_ddm: bool,
 
@@ -311,7 +311,7 @@ pub struct BaselineConfig {
 
     /// Fleet GitOps glob configuration.
     ///
-    /// Captures per-section decisions made via `mscp process --interactive`:
+    /// Captures per-section decisions made via `mscp generate --interactive`:
     /// which sections collapse into a single `paths:` glob and which individual
     /// items are kept as literal `path:` exceptions (optionally moved into a
     /// subfolder so the flat glob doesn't match them). Defaults to "no glob"
@@ -383,7 +383,8 @@ pub struct GlobSection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobException {
     /// Filename (basename, no directory component) the exception applies to.
-    /// Matched against discovered items by exact string equality.
+    /// Not matched against discovered items: the generator emits one literal
+    /// `path:` entry per exception, verbatim.
     pub filename: String,
 
     /// Subfolder (relative to the section's root directory) to move this

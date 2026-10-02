@@ -372,7 +372,8 @@ pub struct ImportReport {
 /// Convert a `pppc.toml` into app-privacy entries.
 ///
 /// Parsed generically rather than through the `pppc` crate: the profile crate
-/// does not depend on it, and only three fields are needed.
+/// does not depend on it, and only four fields are needed (`bundle_id`,
+/// `code_requirement`, `name`, `services`).
 pub fn import_pppc(toml_text: &str) -> Result<ImportReport> {
     let doc: toml::Value = toml::from_str(toml_text).context("parsing pppc.toml")?;
     let apps = doc

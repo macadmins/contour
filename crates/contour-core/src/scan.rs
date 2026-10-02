@@ -26,7 +26,7 @@ pub struct AppInfo {
     /// Apple Team ID extracted from the code signature, if available.
     pub team_id: Option<String>,
 
-    /// Path to the .app bundle on disk.
+    /// Path to the bundle on disk (`.app`, or another `BUNDLE_EXTENSIONS` kind).
     pub path: PathBuf,
 
     /// Path to the main executable inside the bundle, if found.
@@ -42,11 +42,13 @@ impl std::fmt::Display for AppInfo {
     }
 }
 
-/// Discover all .app bundles in the given paths and extract their metadata.
+/// Discover app bundles in the given paths and extract their metadata.
 ///
 /// For each path:
 /// - If it ends in `.app`, treats it as a single app bundle.
-/// - If it's a directory, recursively finds `.app` bundles inside it.
+/// - If it's a directory, recursively finds every `BUNDLE_EXTENSIONS` bundle
+///   inside it (`.app`, `.xpc`, `.appex`, `.systemextension`, `.bundle`,
+///   `.plugin`).
 ///
 /// Apps that fail to yield a bundle ID are silently skipped.
 /// Results are sorted by app name.

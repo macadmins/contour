@@ -1,5 +1,6 @@
-//! Composed identifiers — the nine keys where Apple attaches signing
-//! evidence to a bundle ID, and the two spellings that evidence takes.
+//! Composed identifiers — the ten keys, across seven payload types, where
+//! Apple attaches signing evidence to a bundle ID, and the two spellings
+//! that evidence takes.
 //!
 //! # This table is the source; the SOP is rendered from it
 //!

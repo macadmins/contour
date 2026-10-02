@@ -1,9 +1,16 @@
-# SOP: AI-tool managed configuration (app policies)
+# SOP: AI coding tools — managed configuration (app policies)
 
-Contour embeds a policy dataset for AI coding tools — the managed-
-configuration surface of Claude Code, OpenAI Codex, Cursor and Gemini
-Enterprise mobile — with delivery channels, enum vocabularies and NIST
-800-53 control mappings (`app-policy-schema` crate, `app_policies.parquet`).
+**Scope: the four AI coding tools' own settings — Claude Code, OpenAI Codex,
+Cursor, Gemini Enterprise mobile — pushed to managed Macs through each vendor's
+preference domain.** Contour embeds a policy dataset for them with delivery
+channels, enum vocabularies and NIST 800-53 control mappings
+(`app-policy-schema` crate, `app_policies.parquet`).
+
+> **Not this SOP:** Apple Intelligence — Writing Tools, Genmoji, the ChatGPT
+> external-intelligence hook, `app.settings` execution control. Those are Apple's
+> `com.apple.configuration.*` DDM declarations and live in `--sop generative`.
+> This SOP is vendor domains (`com.anthropic.claudecode`, `com.openai.codex`, …)
+> delivered as managed-preferences profiles.
 
 Key counts per tool move with each vendor release. `contour census` reports
 the embedded total; no count is written by hand in this SOP.

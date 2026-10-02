@@ -1,12 +1,15 @@
 //! Shared MDM payload type schemas and embedded Parquet data.
 //!
-//! Three datasets:
+//! Four datasets:
 //! - `capabilities` — Apple device-management (MDM profiles + DDM declarations)
-//! - `profiles` — ProfileCreator/PayloadSchemas (community-maintained)
 //! - `skip_keys` — Setup Assistant skip keys with platform gating
+//! - `examples` — Apple's example configurations
 //! - `app_schema` — for domains described from an App Schema v1
 //!   document: the keys a profile must not set, keys read from another
 //!   domain, and the document's rules
+//!
+//! `profiles` is a reader for a ProfileCreator/PayloadSchemas table that is
+//! not shipped; no parquet backs it.
 
 pub mod app_schema;
 pub mod capabilities;
@@ -142,8 +145,9 @@ pub fn schema_versions_toml() -> &'static str {
 pub struct SchemaVersionInfo {
     pub apple_device_management_commit: String,
     pub apple_device_management_date: String,
-    /// Beta seed pin (empty when no seed channel is recorded). Provenance for the
-    /// `data/beta/` parquet exposed via the `*_beta` accessors and `--beta`.
+    /// Beta seed pin (empty when no seed channel is recorded). Provenance for a
+    /// seed-channel parquet; none is shipped today — the `*_beta` accessors
+    /// return the stable bytes (see the banner above them).
     pub apple_device_management_seed_commit: String,
     pub apple_device_management_seed_date: String,
     pub apple_device_management_seed_release: String,
@@ -357,8 +361,8 @@ mod tests {
         );
     }
 
-    /// Build a one-row capabilities parquet in memory. With
-    /// `with_rangelist`, the `key_rangelist` column (the ≥ 41-column layout)
+    /// Build a one-row capabilities parquet in memory from the base
+    /// `schema()` columns. With `with_rangelist`, the `key_rangelist` column
     /// is appended, carrying `["Allowed","AlwaysOn"]`.
     fn one_row_capabilities_parquet(with_rangelist: bool) -> Vec<u8> {
         use arrow::array::{ArrayRef, StringArray, UInt32Array, new_null_array};
@@ -415,8 +419,8 @@ mod tests {
         );
     }
 
-    /// A 40-column parquet (pre-key_rangelist) must keep reading, with
-    /// `range_list: None` on every key.
+    /// A parquet with only the base `schema()` columns (no `key_rangelist`)
+    /// must keep reading, with `range_list: None` on every key.
     #[test]
     fn read_tolerates_missing_range_list_column() {
         let buf = one_row_capabilities_parquet(false);
@@ -424,7 +428,7 @@ mod tests {
         assert_eq!(caps[0].keys[0].range_list, None);
     }
 
-    /// The shipped stable parquet (41+ columns) carries Apple's
+    /// The shipped stable parquet carries Apple's
     /// rangelists — the data behind offline enum validation. Pin the
     /// canonical example end-to-end.
     #[test]

@@ -141,13 +141,13 @@ impl BaselineIndex {
 
     /// Find fleet files that reference a specific baseline.
     ///
-    /// Fleet v4.83+ fleet YAMLs reference baselines in three ways:
+    /// Fleet v4.83+ fleet YAMLs reference baselines in two ways:
     ///   - profile/script/policy paths under `../platforms/macos/.../{baseline}/`
     ///   - the baseline component manifest at `../mscp/{baseline}/`
-    ///   - via the `mscp-{baseline}` label attached to entries
     ///
-    /// We detect any of these patterns; the unique combination of `{baseline}/`
-    /// after a v4.83 prefix is what makes this baseline-specific.
+    /// We detect either (see `baseline_reference_patterns`); the unique
+    /// combination of `{baseline}/` after a v4.83 prefix is what makes this
+    /// baseline-specific. The `mscp-{baseline}` label is not matched.
     fn find_fleet_references(&self, baseline_name: &str) -> Result<Vec<PathBuf>> {
         let fleets_dir = self.output_base.join("fleets");
         if !fleets_dir.exists() {
@@ -185,8 +185,8 @@ impl BaselineIndex {
     /// Clean (remove) a baseline and all associated files.
     ///
     /// Fleet v4.83+: removes `mscp/{name}/` (baseline component dir),
-    /// `labels/mscp-{name}.labels.yml`, and `platforms/macos/{kind}/{name}/`
-    /// for each artifact kind (configuration-profiles, scripts, policies).
+    /// `labels/mscp-{name}.labels.yml`, and `fleets/examples/mscp-{name}-example.yml`.
+    /// Artifacts under `platforms/macos/{kind}/{name}/` are left in place.
     pub fn clean_baseline(&self, baseline_name: &str, force: bool) -> Result<CleanReport> {
         let baseline_path = self.output_base.join("mscp").join(baseline_name);
 
@@ -262,7 +262,9 @@ impl BaselineIndex {
     /// Migrate fleet files from one baseline to another
     ///
     /// This function removes all mSCP-managed sections from the old baseline
-    /// and inserts the new baseline's profiles and scripts from baseline.toml
+    /// and inserts the new baseline's profiles and scripts from baseline.toml;
+    /// `policies:` entries the fleet already took are re-pointed at
+    /// `platforms/macos/policies/{to}/`.
     pub fn migrate_fleet_file(
         &self,
         fleet_file: &Path,
@@ -712,12 +714,6 @@ pub struct OrphanedReference {
     pub reason: String,
 }
 
-/// Build the set of substring patterns that uniquely identify references to a
-/// given baseline in a Fleet v4.83+ fleet YAML.
-///
-/// A fleet YAML references a baseline through any of:
-///   1. profile/script/policy paths under `../platforms/macos/.../{name}/`
-///   2. the baseline component manifest at `../mscp/{name}/`
 /// Insert `(path, labels_include_all)` entries at the end of a section's list,
 /// as text, keeping every other line — comments included — as it was.
 ///
@@ -782,6 +778,12 @@ fn insert_section_entries(
     insert_lines_at(&opened, &point, &new_lines)
 }
 
+/// Build the set of substring patterns that uniquely identify references to a
+/// given baseline in a Fleet v4.83+ fleet YAML.
+///
+/// A fleet YAML references a baseline through any of:
+///   1. profile/script/policy paths under `../platforms/macos/.../{name}/`
+///   2. the baseline component manifest at `../mscp/{name}/`
 pub(crate) fn baseline_reference_patterns(
     layout: &FleetLayout,
     baseline_name: &str,

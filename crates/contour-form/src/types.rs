@@ -16,9 +16,9 @@ pub struct PayloadManifest {
     /// (stated by the dataset itself, with a citation), or `both`.
     ///
     /// Carried because the trust ranks differ and a caller cannot tell them
-    /// apart from the keys alone. The community manifests are deprecated and
-    /// are not loaded unless asked for — see
-    /// [`SchemaRegistry::embedded_with_community`](crate::SchemaRegistry::embedded_with_community).
+    /// apart from the keys alone. The ProfileCreator community corpus is not
+    /// loaded at all any more — see
+    /// [`REMOVED_COMMUNITY_DOMAINS`](crate::REMOVED_COMMUNITY_DOMAINS).
     /// `None` for manifests built from a local directory, which state no
     /// provenance.
     pub manifest_source: Option<String>,
@@ -56,24 +56,23 @@ pub struct PayloadManifest {
     pub category: String,
     /// Field paths whose source records OS availability.
     ///
-    /// Not a per-payload flag, because a payload is not from one source.
-    /// `com.apple.wifi.managed` loads from ProfileCreator and then has
-    /// Apple's keys merged over it, so one manifest holds Apple fields —
-    /// which state `introduced`/`deprecated` — beside ProfileCreator-only
-    /// legacy fields, which state nothing.
+    /// Not a per-payload flag, because a payload need not be from one
+    /// source. Apple's device-management schema states
+    /// `introduced`/`deprecated`; app-schema and supplemental sources state
+    /// nothing. Derived from `manifest_source` per field path so a merge
+    /// keeps the distinction.
     ///
     /// Both kinds arrive as the same nulls. Apple's silence means the key
-    /// inherits the payload's availability, so `Ok` is truthful there;
-    /// ProfileCreator's silence means nobody recorded anything, and `Ok`
-    /// would assert a check that never happened. 3,936 of 4,259
-    /// ManagedPreference rows are the second kind.
+    /// inherits the payload's availability, so `Ok` is truthful there; a
+    /// source that records nothing means nobody checked, and `Ok` would
+    /// assert a check that never happened.
     ///
     /// Empty for a manifest with no such source; every field path for a
-    /// manifest wholly from Apple's schema.
+    /// manifest wholly from Apple's schema (`com.apple.wifi.managed` is one).
     pub fields_recording_availability: std::collections::BTreeSet<String>,
-    /// Field definitions keyed by field name
+    /// Field definitions keyed by dotted path (`FieldDefinition::path`)
     pub fields: HashMap<String, FieldDefinition>,
-    /// Ordered list of field names (preserves original order)
+    /// Field paths in declaration order
     pub field_order: Vec<String>,
     /// Segments grouping field names by category (from pfm_segments)
     pub segments: Vec<Segment>,
@@ -233,7 +232,8 @@ pub struct FieldDefinition {
     pub allowed_scopes: std::collections::HashMap<Platform, Vec<String>>,
     /// Nesting depth (0=top-level, 1=first nested, etc.)
     pub depth: u8,
-    /// Parent key name for nested fields (e.g. "CustomRegex" for a "Regex" child key)
+    /// Dotted path of the parent for nested fields (e.g. "Allowed.AllowedApps"
+    /// for its "AppIdentifier" child); what `children_of` matches on.
     pub parent_key: Option<String>,
     /// Platform-specific (empty = all platforms)
     pub platforms: Vec<Platform>,
@@ -479,8 +479,9 @@ impl PayloadManifest {
     }
 
     /// `false` only for kinds that cannot be deployed as a document — MDM
-    /// commands and check-in messages. Unknown kind is authorable: refusing
-    /// on missing metadata would block every external schema.
+    /// commands, check-in messages and Apple's shared structures. Unknown
+    /// kind is authorable: refusing on missing metadata would block every
+    /// external schema.
     pub fn is_authorable(&self) -> bool {
         self.kind.is_none_or(mdm_schema::PayloadKind::is_authorable)
     }

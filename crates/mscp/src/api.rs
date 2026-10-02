@@ -88,7 +88,8 @@ pub struct BaselineCoverage {
 /// Distinct (platform, OS) coverage across all versioned rules, sorted.
 ///
 /// In mSCP 2.0 each rule self-describes its platforms, so coverage is derived
-/// from `rules_versioned` — the baseline edges carry a null platform.
+/// from `rules_versioned`, the authoritative (platform, os_version) per rule;
+/// baseline edges carry the pair too, but only for the rules a baseline lists.
 pub fn platform_coverage() -> Result<Vec<PlatformCoverage>> {
     let rules = mscp_schema::rules_versioned::read(mscp_schema::embedded_rules_versioned())?;
     let mut counts: BTreeMap<(String, String), usize> = BTreeMap::new();
@@ -267,7 +268,6 @@ fn require_beta_dataset(beta: bool) -> Result<()> {
     Ok(())
 }
 
-/// Search rules by keyword across rule_id, title, and tags. Case-insensitive.
 /// Versioned-rules bytes for the requested channel: stable, or the
 /// OS-preview (beta) dataset built from the mSCP preview branch.
 fn rules_versioned_bytes(beta: bool) -> &'static [u8] {
@@ -294,6 +294,7 @@ fn baseline_edges_bytes(beta: bool) -> &'static [u8] {
     }
 }
 
+/// Search rules by keyword across rule_id, title, and tags. Case-insensitive.
 pub fn search_rules(query: &str, platform: Option<&str>, beta: bool) -> Result<Vec<RuleVersioned>> {
     require_beta_dataset(beta)?;
     let query_lower = query.to_lowercase();

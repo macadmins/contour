@@ -1,14 +1,22 @@
-# SOP: Generative / Apple Intelligence configuration
+# SOP: Apple Intelligence configuration (DDM)
 
-This SOP covers the OS 27 **generative-AI and app-control** DDM declarations:
-on-device Apple Intelligence, third-party ("external") intelligence integrations,
-and binary execution control. Every payload here is **seed-only** — it lives in the
-beta channel and requires `--beta` on generate/validate. Read `--sop beta` first for
-channel rules and the short-name resolver gotcha; this SOP is the payload-specific
-layer on top of it.
+**Scope: Apple's own AI features, delivered as DDM declarations.** On-device Apple
+Intelligence (Writing Tools, Genmoji, Image Playground, …), the external-intelligence
+hook that lets a third-party assistant such as ChatGPT plug into the OS, and the
+`app.settings` binary execution control that shipped alongside them.
+
+> **Not this SOP:** managing the AI *coding tools* themselves — Claude Code, OpenAI
+> Codex, Cursor, Gemini Enterprise mobile — through their vendor preference domains.
+> That is `--sop app-policy`. The two share the word "AI" and nothing else: this SOP
+> is `com.apple.configuration.*` declarations; that one is `com.anthropic.claudecode`,
+> `com.openai.codex` and friends as managed-preferences profiles.
+
+Every payload here is in the **released schema** (intelligence and external-intelligence
+since 26.4, app.settings since 27.0, safari.settings since 26.0). No `--beta` — the
+beta channel is disabled and would refuse anyway (`--sop beta`).
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
-Companion SOPs: `--sop beta` (channel), `--sop santa` (the app.settings bridge), `--sop ddm`.
+Companion SOPs: `--sop ddm`, `--sop santa` (the app.settings bridge), `--sop app-policy` (AI coding tools).
 
 ## THE GENERATIVE PAYLOAD MAP
 
@@ -32,11 +40,8 @@ com.apple.configuration.app.settings                    # binary execution contr
 com.apple.configuration.safari.settings                 # incl. 27.0 Privacy.PermissionDefaults
 ```
 
-INVARIANT: all of the above are seed-only → `--beta` is mandatory on `generate` and
-`validate`. Without it the stable channel rejects them as unknown (see `--sop beta`).
-
 `intelligence.settings` is a substring of `external-intelligence.settings` — pass the
-**full type** to `generate` (the resolver gotcha in `--sop beta`).
+**full type** to `generate`, or the short-name resolver can pick the wrong one.
 
 ---
 
@@ -57,12 +62,12 @@ STEP 1 — Author the value payload (only the keys intent needs; merged over ske
                 "Mail":     { "AllowSmartReplies": true } }
     }
 
-STEP 2 — Generate against the seed schema (FULL type avoids the substring gotcha):
+STEP 2 — Generate (FULL type avoids the substring gotcha):
   contour profile ddm generate com.apple.configuration.intelligence.settings \
-      --beta --payload values.json --org {org} -o {output}
+      --payload values.json --org {org} -o {output}
 
 STEP 3 — Validate:
-  contour profile ddm validate {output} --beta   ASSERT "valid"
+  contour profile ddm validate {output}   ASSERT "valid"
   # Verify Type == com.apple.configuration.intelligence.settings (NOT external-…).
 ```
 
@@ -75,8 +80,8 @@ values.json: { "Enabled": true, "AllowSignIn": false,
                "AllowedWorkspaceIDs": ["acme-prod-workspace", "acme-research"] }
 
 contour profile ddm generate com.apple.configuration.external-intelligence.settings \
-    --beta --payload values.json --org {org} -o {output}
-contour profile ddm validate {output} --beta
+    --payload values.json --org {org} -o {output}
+contour profile ddm validate {output}
 ```
 
 ## PROCEDURE app_execution_control(org, output)
@@ -99,7 +104,7 @@ ADD app privacy permission defaults (Camera/Mic/Location per app):
   # edit OrganizationJustification + per-permission values, then:
   contour santa app-settings scan.csv --permissions app-permissions.toml --org {org} -o {output}
 
-VALIDATE (app.settings shipped in OS 27.0 — the released schema covers it):
+VALIDATE:
   contour profile ddm validate {output}
 
 NOTE: DeniedBinaries under Endpoint Security TERMINATES running processes of a
@@ -114,17 +119,13 @@ See `--sop santa` for the full identifier-strategy detail (`--rule-type`,
 
 ## SAFETY
 
-- These payloads come from the current pre-release seed (OS 27 at time of writing;
-  `contour profile info` shows the live pin). They validate against the seed, but a
-  seed can change before GA — author ahead, don't ship to production fleets as final.
-  Once the OS ships, these graduate to stable and `--beta` is no longer required.
-  See `--sop beta` SAFETY.
+- These payloads are recent (26.4 / 27.0). Older devices in the fleet ignore keys
+  their OS predates; `contour profile ddm info <type>` shows per-OS introduction.
 - `app.settings` deny rules are high-impact (process termination). Stage them through
   a rollout cohort (a Fleet label) before fleet-wide application.
 
 ## Key flags
 
-- `--beta` — mandatory: every payload here is seed-only.
 - `--payload <file>` — merge intent values over the generated skeleton.
 - `--full` — surface every optional knob (useful when exploring what a payload offers).
 - santa bridge: `--from-rules`, `--scaffold`, `--permissions`, `--deny`, `--always-allow-managed`.

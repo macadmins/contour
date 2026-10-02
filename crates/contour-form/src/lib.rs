@@ -45,7 +45,7 @@ use std::path::PathBuf;
 pub use loader::SchemaFormat;
 pub use types::{FieldDefinition, FieldType, OsSupportDetail, PayloadManifest, Platform};
 
-// The contract, at the root: five functions, none of which takes a path.
+// The contract, at the root. None of these functions takes a path.
 pub use annotations::{Annotation, Annotations};
 pub use emit::{EmitFormat, EmitOptions, Emitted, emit};
 pub use form::{Target, form, form_all, form_all_with, form_with};
@@ -949,7 +949,9 @@ mod tests {
     fn test_get_by_name_dot_boundary_no_substring_collision() {
         // `intelligence.settings` is a substring of
         // `external-intelligence.settings`: a short name must align to dot
-        // boundaries, or a substring match could return the wrong type. Both types are seed-only → use the beta registry.
+        // boundaries, or a substring match could return the wrong type. Both
+        // types are in the stable set; the beta channel is retired and
+        // `embedded_beta` returns the same bytes.
         let registry = SchemaRegistry::embedded_beta().unwrap();
 
         let intel = registry

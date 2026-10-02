@@ -53,7 +53,8 @@ const DEFAULT_SEARCH_PATHS: &[&str] = &["/Applications", "/Applications/Utilitie
 /// `app-control.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppControlFile {
-    /// Names the composed declarations: `{org}.config.{intent_name}`.
+    /// Names the composed declarations: `{org}.config.{intent_name}` and
+    /// `{org}.activation.{intent_name}`.
     #[serde(default = "default_intent_name")]
     pub intent_name: String,
     /// Add `TeamID = "*APPLE*"` to a non-empty allow list.

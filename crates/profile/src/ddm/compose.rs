@@ -32,8 +32,9 @@ pub struct Bundle {
     /// (`{org}.{kind}.{intent_name}`).
     pub intent_name: String,
 
-    /// Platforms the bundle targets (`["macOS"]`). When set, compose refuses
-    /// a key Apple does not offer on one of them. `--platform` overrides it.
+    /// Platforms the bundle targets (`["macOS"]`). `compose()` ignores it;
+    /// the `ddm compose` CLI runs `platform_findings` against each one and
+    /// refuses a key Apple does not offer there. `--platform` overrides it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<String>,
 
@@ -54,7 +55,7 @@ pub struct Bundle {
     ///
     /// When present, `compose` emits a fourth declaration file
     /// `status-subscriptions.json` (type
-    /// `com.apple.management.status-subscriptions`).
+    /// `com.apple.configuration.management.status-subscriptions`).
     #[serde(default)]
     pub subscriptions: Option<BundleSubscriptions>,
 }
@@ -123,7 +124,7 @@ pub struct BundleConfiguration {
 
 /// Bundle [subscriptions] section.
 ///
-/// Maps to a `com.apple.management.status-subscriptions` declaration —
+/// Maps to a `com.apple.configuration.management.status-subscriptions` declaration —
 /// the manifest of status items the device is willing to report. The
 /// activation's predicate (and any other declarations on the device)
 /// can only `@status('key')` reference keys present here.

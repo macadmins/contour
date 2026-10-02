@@ -75,8 +75,9 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 | MCP server, agent tooling, contour-mcp | `contour help-ai --sop mcp` |
 | Windows CSP, ADMX, DDF node lookup, DISA STIG policies | `contour help-ai --sop windows` |
 | Beta enrollment, AppleSeed for IT, seeding tokens | `contour help-ai --sop beta-enrollment` |
-| Claude Code / Codex / Cursor managed settings | `contour help-ai --sop app-policy` |
-| OS-preview compliance rules (Apple Intelligence, Siri AI) | `contour help-ai --sop beta` |
+| Apple Intelligence: Writing Tools, Genmoji, external-intelligence (ChatGPT), `app.settings` | `contour help-ai --sop generative` |
+| AI coding tools' own settings: Claude Code, OpenAI Codex, Cursor, Gemini Enterprise mobile | `contour help-ai --sop app-policy` |
+| mSCP OS-preview compliance rules (beta channel; disabled in this build) | `contour help-ai --sop beta` |
 
 For the full routing table with examples, read `references/sop-routing.md`.
 

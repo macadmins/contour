@@ -386,7 +386,8 @@ mod tests {
 
     #[test]
     fn mcx_profile_is_unwrapped_to_its_domain() {
-        // Round-trips a community-only domain.
+        // Round-trips an app-schema preference domain through its MCX
+        // envelope.
         let r = reg();
         let values = json!({"antivirusEngine": {"enforcementLevel": "real_time"}});
         let docs = emit(&r, "com.microsoft.wdav", &values, &opts("defender")).unwrap();

@@ -16,9 +16,6 @@ struct ValidateResult {
     warnings: Vec<String>,
 }
 
-/// Run the notifications validate command.
-///
-/// Validates notification settings: bundle_id non-empty, alert_type in 0..=2, etc.
 /// Keys `[[apps]]` understands. Anything else is a typo or a key contour
 /// does not implement, and either way the value is silently discarded.
 ///
@@ -81,6 +78,9 @@ fn unknown_key_warnings(raw: &str) -> Vec<String> {
     out
 }
 
+/// Run the notifications validate command.
+///
+/// Validates notification settings: bundle_id non-empty, alert_type in 0..=2, etc.
 pub fn run(input: &Path, strict: bool, output_mode: OutputMode) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();

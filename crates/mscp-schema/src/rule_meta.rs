@@ -41,8 +41,8 @@ pub fn read(bytes: &[u8]) -> Result<Vec<RuleMeta>> {
         let batch = batch.context("reading record batch")?;
         let rule_ids = col(&batch, "rule_id")?.as_string::<i32>();
         let titles = col(&batch, "title")?.as_string::<i32>();
-        // Absent from windows_rules, which is otherwise this layout; an
-        // Apple dataset always carries it.
+        // Read optionally so a dataset without the column still loads; the
+        // shipped rule_meta always carries it.
         let discussions = batch
             .column_by_name("discussion")
             .map(|c| c.as_string::<i32>());

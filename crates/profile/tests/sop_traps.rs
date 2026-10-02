@@ -3328,7 +3328,7 @@ fn trap_79_library_import_handles_ddm_json() {
     fs::write(&cfg_path, cfg_json).unwrap();
 
     // `library new` seeds the embedded DDM presets, softwareupdate-settings
-    // among them (7692aee). Importing over a seeded preset must be refused
+    // among them. Importing over a seeded preset must be refused
     // without --force, never silently replace it — which is why the import
     // below writes under its own name.
     let collide = Command::cargo_bin("profile")

@@ -167,8 +167,8 @@ fn slugify(name: &str) -> String {
     result.trim_end_matches('-').to_string()
 }
 
-/// Sanitize a name for use as a filename (no extension).
-/// "Santa Configuration Kiosk" -> "santa-configuration-kiosk"
+/// Sanitize a name for use as a filename (no extension). Case is kept.
+/// "Santa Configuration Kiosk" -> "Santa-Configuration-Kiosk"
 fn sanitize_filename(name: &str) -> String {
     let with_hyphens = name.replace(' ', "-");
     let sanitized: String = with_hyphens

@@ -411,11 +411,11 @@ mod tests {
             RuleType::Binary,
             "abc123def456",
             Policy::Allowlist,
-        )); // Different type, same ident won't conflict
+        )); // Different type and identifier; this set is not validated below
 
         let mut rules2 = RuleSet::new();
         rules2.add(Rule::new(RuleType::TeamId, "EQHXZ8M8AV", Policy::Allowlist));
-        // Create another TeamId with different casing to test conflict
+        // Same TeamId identifier with the opposite policy to test conflict
         rules2.add(
             Rule::new(RuleType::TeamId, "EQHXZ8M8AV", Policy::Blocklist)
                 .with_description("Duplicate"),

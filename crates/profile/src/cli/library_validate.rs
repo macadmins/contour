@@ -21,9 +21,9 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use std::path::{Path, PathBuf};
 
-/// Synthetic org used for DDM compose checks. Anything in `com.example`
-/// would be rejected by `validate_org_domain`, so use a clearly-CI
-/// reverse-DNS namespace.
+/// Synthetic org used for DDM compose checks. `validate_org_domain`
+/// rejects the bare `com.example` placeholder, so use a clearly-CI
+/// reverse-DNS namespace instead.
 const CI_ORG: &str = "com.contour.libvalidate";
 
 #[derive(Debug)]
@@ -189,10 +189,10 @@ fn validate_recipe_file(path: &Path, registry: &SchemaRegistry, findings: &mut V
     for spec in &recipe.profiles {
         if registry.get_by_name(&spec.payload_type).is_none() {
             // A type contour withheld is not a type contour does not know.
-            // Three of contour's own shipped recipes — Defender, Okta and
-            // Santa — describe domains only the deprecated community corpus
-            // covers, and reporting those as "unknown" would read as a broken
-            // recipe rather than a source that needs replacing.
+            // Domains in `REMOVED_COMMUNITY_DOMAINS` were described only by
+            // the removed ProfileCreator corpus; reporting those as "unknown"
+            // would read as a broken recipe rather than a source that needs
+            // replacing.
             let (check, message) = match registry.why_withheld(&spec.payload_type) {
                 Some(why) => (
                     "withheld-payload-type",

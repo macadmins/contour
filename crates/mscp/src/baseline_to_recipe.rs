@@ -1545,5 +1545,6 @@ mod tests {
     }
 
     // Round-trip through profile crate's `Recipe::resolve_odv` is
-    // exercised end-to-end by sop_traps_mscp::trap_21.
+    // exercised end-to-end by crates/contour/tests/sop_traps_mscp_round_trip.rs
+    // (`trap_21_mscp_recipe_variable_mode_round_trips_through_odv_edits`).
 }

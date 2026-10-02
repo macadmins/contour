@@ -314,9 +314,25 @@ Not available: `profile windows validate`. Generation refuses unsupported
 paths, values, channels and actions, so what contour writes is checked —
 but a SyncML document contour did not produce is not.
 
-## AI-tool managed configuration → `--sop app-policy`
+## "AI" — two SOPs, pick by what is being managed
 
-Use when: managing Claude Code / Codex / Cursor on managed Macs. The working
+| The ask is about… | SOP |
+|---|---|
+| Apple's own AI features: Writing Tools, Genmoji, Image Playground, on-device dictation, the ChatGPT external-intelligence hook, `app.settings` execution control | `--sop generative` |
+| An AI coding tool's own settings: Claude Code, OpenAI Codex, Cursor, Gemini Enterprise mobile | `--sop app-policy` |
+
+The bare alias `ai` is refused for this reason; use one of the two names.
+
+## Apple Intelligence → `--sop generative`
+
+Use when: authoring `com.apple.configuration.intelligence.settings`,
+`external-intelligence.settings`, `app.settings` or `safari.settings` DDM
+declarations. All are in the released schema (26.4 / 27.0); no `--beta`.
+
+## AI coding tools' managed configuration → `--sop app-policy`
+
+Use when: managing Claude Code, OpenAI Codex, Cursor or Gemini Enterprise
+mobile on managed Macs through the vendor's preference domain. The working
 path today is an `mcx_domain` recipe (e.g. `com.anthropic.claudecode`);
 the embedded app-policy dataset has no query CLI yet.
 
@@ -342,4 +358,5 @@ Use when (once a seed is carried again): querying preview-only compliance rules
 | `--sop support` | Root3 Support App profiles |
 | `--sop ci` | GitHub Actions setup, env vars, workflow config |
 | `--sop windows` | Windows CSP schema exploration (`--windows`), SyncML generation, DISA STIG corpus |
-| `--sop app-policy` | AI-tool managed configuration (Claude Code, Codex, Cursor) |
+| `--sop generative` | Apple Intelligence DDM payloads (intelligence / external-intelligence / app.settings) |
+| `--sop app-policy` | AI coding tools' managed configuration (Claude Code, OpenAI Codex, Cursor, Gemini Enterprise mobile) |

@@ -5,12 +5,16 @@
 //! commands that all broke after the v4.83 generate-flow migration left the
 //! downstream commands hardcoded to legacy `lib/mscp/` paths.
 //!
-//! Each trap:
-//! 1. Builds a minimal v4.83-shaped output fixture in a temp dir
-//! 2. Runs the mscp binary against it
-//! 3. Asserts the command succeeds (or returns the right v4.83 data)
+//! Each trap runs the mscp binary against a fixture and asserts on the
+//! result. The fixtures differ by group:
+//! - Traps 10-12: a minimal v4.83-shaped output dir in a temp dir; the
+//!   command must succeed.
+//! - Traps 16-18b: the embedded schema dataset (`mscp schema ...`); the
+//!   output must have the right JSON shape.
+//! - Traps 19, 22-25: a minimal mSCP 2.0 repo in a temp dir (`mscp recipe
+//!   --mscp-repo`); 23 and 25 assert a refusal, the rest a correct recipe.
 //!
-//! Failure of any trap means a v4.83 mscp command regressed.
+//! Failure of any trap means an mscp command regressed.
 
 use assert_cmd::Command;
 use serde_json::Value;

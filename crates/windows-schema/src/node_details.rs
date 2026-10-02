@@ -3,7 +3,7 @@
 //! depends on, and whether it must be delivered inside `<Atomic>`.
 //!
 //! Joins `windows_capabilities` on `(payload_type, key_path)`. Zero-length
-//! bytes read as no rows (optional table; placeholder on older datasets).
+//! bytes read as no rows; the build itself requires the file.
 
 use anyhow::{Context, Result};
 use arrow::array::{Array, AsArray};

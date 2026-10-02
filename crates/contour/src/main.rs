@@ -1,10 +1,9 @@
 //! Contour CLI - Unified macOS MDM configuration toolkit.
 //!
-//! Contour consolidates five domain-specific tools into a single CLI:
-//! - `profile` - Apple configuration profile toolkit
-//! - `pppc` - Privacy/TCC profile toolkit
-//! - `santa` - Santa allowlist/blocklist toolkit
-//! - `mscp` - mSCP baseline transformation toolkit
+//! Contour consolidates several domain-specific tools into a single CLI —
+//! `profile`, `pppc`, `santa`, `mscp`, `support`, `btm`, `notifications`,
+//! `osquery`, `app` and the agent/setup helpers. [`Commands`] is the
+//! authoritative list.
 
 use mimalloc::MiMalloc;
 

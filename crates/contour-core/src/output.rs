@@ -216,10 +216,12 @@ pub fn print_error(msg: &str) {
 /// Print an error as a JSON object on stderr.
 ///
 /// Used when `--json` is set so agents/CI receive a parseable failure shape
-/// instead of plain `Error: ...` text. Mirrors the BatchResult error_code
-/// enum from `profile/cli/glob_utils.rs::error_code_for` (INVALID_IDENTIFIER,
-/// INVALID_FORMAT, MISSING_PAYLOAD_TYPE, SCHEMA_VIOLATION, IO_ERROR,
-/// INVALID_ORG, UNKNOWN). When `error_code` is `None`, emits `"UNKNOWN"`.
+/// instead of plain `Error: ...` text. Codes come from [`classify_error`]
+/// (INVALID_IDENTIFIER, INVALID_FORMAT, MISSING_PAYLOAD_TYPE,
+/// SCHEMA_VIOLATION, IO_ERROR, INVALID_ORG, UNSUPPORTED_FORMAT,
+/// ARCHIVE_LAYOUT, UNKNOWN_SERVICE_TYPE, CONTENT_MOVED, UNKNOWN), a superset
+/// of the BatchResult codes in `profile/cli/glob_utils.rs::error_code_for`.
+/// When `error_code` is `None`, emits `"UNKNOWN"`.
 ///
 /// **Stability:** the JSON shape is part of the agent contract documented in
 /// the procedural SOP format spec. Don't rename fields without updating the spec.
@@ -260,9 +262,12 @@ pub fn write_error_json(
 /// Classify a freeform error message into one of the typed codes used by
 /// [`print_error_json`] and the BatchResult JSON contract.
 ///
-/// Substring-based; should stay in sync with `profile::cli::glob_utils::error_code_for`.
-/// We duplicate the mapping here (rather than depend on the profile crate) because
-/// `contour-core` is upstream of `profile` in the dependency graph.
+/// Substring-based. Superset of `profile::cli::glob_utils::error_code_for`:
+/// every code that function returns is returned here for the same inputs, and
+/// this adds UNSUPPORTED_FORMAT, ARCHIVE_LAYOUT, UNKNOWN_SERVICE_TYPE and
+/// CONTENT_MOVED. The shared part is duplicated here (rather than depending on
+/// the profile crate) because `contour-core` is upstream of `profile` in the
+/// dependency graph.
 #[must_use]
 pub fn classify_error(error: &str) -> &'static str {
     // Format refusals are classified before the parser-error patterns below:

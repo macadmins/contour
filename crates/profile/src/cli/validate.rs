@@ -1,7 +1,7 @@
 //! Validation CLI handlers
 //!
 //! Schema validation is enabled by default - validates payload fields against
-//! 261 embedded Apple payload schemas.
+//! the embedded Apple payload schemas.
 
 use crate::cli::ddm::handle_ddm_validate;
 use crate::cli::glob_utils::{
@@ -109,8 +109,8 @@ pub fn handle_validate(
 /// the user thought they enabled.
 ///
 /// `apply_modes` is left empty here — call sites that have a
-/// `SchemaRegistry` inject it via `with_apply_modes()` before passing
-/// the options into `lint::lint_profile_with_options`.
+/// `SchemaRegistry` fill it from `apply_modes_from_registry()` before
+/// passing the options into `lint::lint_profile_with_options`.
 fn resolve_lint_options(strict: bool, lint_policy: &[String]) -> Result<LintOptions> {
     if lint_policy.is_empty() {
         return Ok(LintOptions {
@@ -323,7 +323,8 @@ struct SingleFileValidationResult {
     warnings: Vec<String>,
 }
 
-/// Detailed validation result for JSON output — matches single-file JSON structure
+/// Detailed validation result for JSON output — mirrors the single-file JSON
+/// shape, except `profile` also carries a `payloads` array.
 struct DetailedValidationResult {
     file: String,
     valid: bool,
@@ -338,7 +339,8 @@ struct DetailedValidationResult {
     lint_findings: Vec<serde_json::Value>,
 }
 
-/// Detailed validation for JSON batch output — captures the same structure as single-file JSON
+/// Detailed validation for JSON batch output — the single-file JSON shape,
+/// plus a per-payload summary under `profile.payloads`.
 fn validate_single_file_detailed(
     file_path: &Path,
     schema: bool,
@@ -677,7 +679,7 @@ fn handle_validate_single(
             let refusal = format
                 .refusal()
                 .unwrap_or_else(|| format.describe().to_string());
-            // The top-level handler renders the JSON envelope (on stdout,
+            // The top-level handler renders the JSON envelope (on stderr,
             // classified as UNSUPPORTED_FORMAT); printing here too would emit
             // two documents and break a strict decoder.
             anyhow::bail!("{file}: {refusal}");
@@ -911,7 +913,7 @@ fn handle_validate_single(
             }
         }
 
-        // Show info items only in verbose mode or if there are few
+        // Show info items only when there are few; otherwise just the count
         let info = sr.info();
         if !info.is_empty() && info.len() <= 3 {
             println!();

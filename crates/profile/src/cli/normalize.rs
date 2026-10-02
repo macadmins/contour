@@ -108,7 +108,7 @@ pub fn handle_normalize_pasteboard(
         println!("{}", "✓ Profile normalized".green());
     }
 
-    // Regenerate UUIDs — default to predictable for pasteboard input
+    // Regenerate UUIDs — predictable only when the config asks for it
     if regen_uuid {
         let predictable = config.is_some_and(|c| c.uuid.predictable);
 
@@ -618,7 +618,8 @@ fn report_ddm_bundle(
     Ok(())
 }
 
-/// Returns Ok(fixups) on success — the list of fixups applied during parsing and normalization.
+/// Returns Ok(fixups) on success — the parse-time fixups, plus a note of any
+/// placeholders preserved.
 fn normalize_single_file_internal(
     input: &Path,
     output: &Path,

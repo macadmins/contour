@@ -69,7 +69,7 @@ fn prompt_bool(message: &str, default: bool) -> Result<bool> {
 
 /// Discover available baselines from an mSCP repository.
 ///
-/// Reads `{mscp_path}/baselines/*.yaml`, filters out template/example files,
+/// Reads `{mscp_path}/baselines/macos/*.yaml`, filters out template/example files,
 /// and returns `(name, description)` pairs sorted alphabetically.
 pub fn discover_baselines(mscp_path: &Path) -> Result<Vec<(String, String)>> {
     // Layout-aware: on a 2.0 tree `baselines/` holds only `ios/ macos/ visionos/`

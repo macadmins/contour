@@ -575,10 +575,10 @@ fn clone_mscp_repo(target_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Pick the highest available OS version for a 2.0 baseline.
-///
 /// Resolve the repo-relative baseline YAML path to feed the mSCP build,
 /// for the 2.0 layout, `baselines/<os>/<name>_<os>_<version>.yaml`.
+/// An explicit `os_version` is used as given; `None` picks the highest
+/// available version.
 fn resolve_baseline_yaml(
     mscp_repo: &Path,
     baseline_name: &str,
@@ -1181,8 +1181,7 @@ fn run_mscp_container(
     let image = DEFAULT_MSCP_CONTAINER_IMAGE;
 
     // Get absolute path (best effort — if the repo path doesn't exist
-    // yet, fall back to the caller's value; we'll re-check after creating
-    // build/).
+    // yet, fall back to the caller's value).
     let mscp_repo_abs = mscp_repo_path
         .canonicalize()
         .unwrap_or_else(|_| mscp_repo_path.clone());

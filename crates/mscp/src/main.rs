@@ -528,8 +528,9 @@ fn main() -> Result<()> {
                 osquery_opts,
             )?;
 
-            // --verify-queries: run the emitted policy/report queries through a
-            // local osqueryi (or print how to verify via orbit on a Fleet host).
+            // --verify-queries: write the emitted policy/report queries as
+            // ready-to-paste osqueryi / `orbit shell` commands to
+            // `<out>/osquery/verify-commands.md`. Nothing is executed.
             if let Some(out) = verify_output {
                 crate::osquery::verify::verify_generated(&out)?;
             }
@@ -593,12 +594,12 @@ fn main() -> Result<()> {
                 };
 
                 // Build options structures
-                // Baseline is set per-keyword in generate_all_baselines loop
+                // Baseline is filled in per-keyword inside generate_baseline
                 let jamf_options = if jamf_mode || no_creation_date || identical_payload_uuid {
                     Some(transformers::JamfOptions {
                         no_creation_date,
                         identical_payload_uuid,
-                        baseline: None, // Set per-keyword in generate loop
+                        baseline: None, // Set per-keyword in generate_baseline
                         domain: None,   // Use --config for domain settings
                         org_name: None,
                         description_format: None,
@@ -984,8 +985,9 @@ fn main() -> Result<()> {
 /// Aggregate a keyword's mobileconfig rules into one recipe TOML.
 ///
 /// Reads YAML rules directly from `<mscp_repo>/rules/**/*.yaml`,
-/// filters by keyword tag, groups by Apple payload type, and writes
-/// the rendered recipe to disk.
+/// keeps those listed in the baseline file's `profile[].rules[]`
+/// (falling back to the keyword tag when no baseline file exists),
+/// groups by Apple payload type, and writes the rendered recipe to disk.
 #[expect(
     clippy::too_many_arguments,
     reason = "CLI router carries flag-set verbatim"
