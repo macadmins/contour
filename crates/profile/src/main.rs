@@ -48,9 +48,14 @@ fn main() {
             // Phase B3: emit a parseable JSON error envelope on stderr so agents
             // and CI receive a structured failure shape, matching the BatchResult
             // error_code enum documented in the procedural SOP format spec.
-            let msg = format!("{e:#}");
-            let code = contour_core::classify_error(&msg);
-            contour_core::print_error_json(&msg, Some(code));
+            // A handler that knew the exact code has already printed the
+            // envelope (`output::Reported`); printing again would put two
+            // envelopes with different codes on stderr.
+            if e.downcast_ref::<contour_core::output::Reported>().is_none() {
+                let msg = format!("{e:#}");
+                let code = contour_core::classify_error(&msg);
+                contour_core::print_error_json(&msg, Some(code));
+            }
         } else {
             eprintln!("Error: {e:#}");
         }

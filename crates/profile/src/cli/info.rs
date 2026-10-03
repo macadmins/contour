@@ -55,6 +55,7 @@ fn output_json(
         "version": version,
         "build": build_timestamp,
         "config": config_json,
+        "next": next_steps(config),
         "schemas": {
             "total": stats.total,
             "apple": stats.apple_count,
@@ -172,6 +173,33 @@ fn output_human(
         );
     }
     println!("  Generated:               {}", sv.generation_date);
+    contour_core::output::print_next_steps(&next_steps(config));
+}
+
+/// What to do after reading the summary: set the org if there is none,
+/// then find a key or start from a preset.
+fn next_steps(config: Option<&ProfileConfig>) -> Vec<contour_core::output::NextStep> {
+    use contour_core::output::NextStep;
+    let mut steps = Vec::new();
+    let org = match config {
+        Some(c) => c.organization.domain.clone(),
+        None => {
+            steps.push(NextStep::new(
+                "No profile.toml — set your org once",
+                "contour init --domain <your.domain> --yes",
+            ));
+            "<your.domain>".to_string()
+        }
+    };
+    steps.push(NextStep::new(
+        "Find the payload or key for a setting",
+        "contour profile search <keyword> --json",
+    ));
+    steps.push(NextStep::new(
+        "Start from a DDM preset",
+        format!("contour profile ddm compose --list-presets   # then --preset <name> --org {org} -o <dir>"),
+    ));
+    steps
 }
 
 /// Handle the `info <payload_type>` command — schema lookup for a single

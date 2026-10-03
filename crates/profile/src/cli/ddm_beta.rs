@@ -292,19 +292,21 @@ pub fn handle_ddm_beta(
     // --- Gate: the manual artifact ---
     let tokens = match (mode.needs_tokens(), tokens_file) {
         (true, None) => {
+            // Reported once: the envelope here in JSON mode (with the code
+            // `main`'s classifier could not guess), the message via `main`
+            // in human mode. `Reported` keeps `main` from printing a second
+            // envelope.
+            let msg = format!(
+                "--tokens is required for `--mode {}`\n\n{MANUAL_TOKEN_STEPS}",
+                format!("{mode:?}").to_lowercase()
+            );
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(
                     "beta seeding tokens are required for this mode; see manual steps",
                     Some("MISSING_INPUT"),
                 );
-            } else {
-                eprintln!(
-                    "{} --tokens is required for `--mode {}`\n\n{MANUAL_TOKEN_STEPS}",
-                    "✗".red(),
-                    format!("{mode:?}").to_lowercase()
-                );
             }
-            anyhow::bail!("missing beta seeding tokens");
+            return Err(contour_core::output::Reported(msg).into());
         }
         (true, Some(path)) => {
             let raw = std::fs::read_to_string(path)

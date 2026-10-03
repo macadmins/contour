@@ -5301,3 +5301,81 @@ fn trap_103_platform_sso_presets_compose_into_their_scenarios() {
         assert!(v.status.success(), "{preset}: {}", String::from_utf8_lossy(&v.stderr));
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 104: a `--json` failure emits exactly ONE error envelope, with the
+// handler's code. `ddm generate` printed its own SCHEMA_VIOLATION envelope and
+// then `main` printed a second one classified UNKNOWN; an agent parsing stderr
+// saw two documents with contradictory codes.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_104_json_failure_emits_exactly_one_envelope() {
+    let dir = tempfile::tempdir().unwrap();
+    let payload = dir.path().join("bad.json");
+    fs::write(&payload, r#"{"ExtensionComposedIdentifier": "x (Y)", "Type": "Redirectt"}"#).unwrap();
+    let result = Command::cargo_bin("profile")
+        .unwrap()
+        .args([
+            "ddm", "generate", "com.apple.configuration.extensible-sso",
+            "--payload", payload.to_str().unwrap(),
+            "--org", "com.acme",
+            "-o", dir.path().join("out.json").to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    // stderr may hold several concatenated JSON documents; stream-parse them all.
+    let docs: Vec<Value> = serde_json::Deserializer::from_str(&stderr)
+        .into_iter::<Value>()
+        .map(|d| d.expect("stderr is JSON"))
+        .collect();
+    assert_eq!(docs.len(), 1, "expected one envelope on stderr, got {}:\n{stderr}", docs.len());
+    assert_eq!(docs[0]["error_code"], "SCHEMA_VIOLATION", "{stderr}");
+    assert!(docs[0]["error"].as_str().unwrap().contains("Redirectt"));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 105: results carry `next` — the same `why → command` pairs the human
+// output prints — so an agent can follow the workflow without guessing.
+// Drift signal: a surface drops the field, or a suggested command stops
+// naming a real subcommand.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_105_json_results_carry_next_steps() {
+    // profile info: always at least two suggestions, each a contour command.
+    let out = Command::cargo_bin("profile").unwrap().args(["info", "--json"]).output().unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).expect("info JSON");
+    let next = v["next"].as_array().expect("next array");
+    assert!(next.len() >= 2, "{v}");
+    for step in next {
+        assert!(step["why"].as_str().is_some_and(|w| !w.is_empty()));
+        assert!(step["command"].as_str().is_some_and(|c| c.starts_with("contour ")), "{step}");
+    }
+
+    // ddm validate on a cross-key failure points at the SOP that states the rule.
+    let dir = tempfile::tempdir().unwrap();
+    let bad = dir.path().join("sso.json");
+    fs::write(&bad, r#"{"Type":"com.apple.configuration.extensible-sso","Identifier":"com.acme.sso",
+        "Payload":{"ExtensionComposedIdentifier":"x (Y)","Type":"Redirect",
+        "PlatformSSO":{"AuthenticationMethod":"Password","UserCreation":{"EnableAtLogin":true}}}}"#).unwrap();
+    let out = Command::cargo_bin("profile").unwrap()
+        .args(["ddm", "validate", bad.to_str().unwrap(), "--json"]).output().unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).expect("validate JSON");
+    let entry = &v.as_array().unwrap()[0];
+    assert_eq!(entry["valid"], false);
+    let cmds: Vec<&str> = entry["next"].as_array().unwrap().iter().filter_map(|s| s["command"].as_str()).collect();
+    assert!(cmds.iter().any(|c| c.contains("help-ai --sop platform-sso")), "{cmds:?}");
+
+    // profile validate carries next too; every suggestion is a profile command.
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/classify/wifi.mobileconfig");
+    let out = Command::cargo_bin("profile").unwrap().args(["validate", fixture, "--json"]).output().unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).expect("validate JSON");
+    let next = v["next"].as_array().expect("single-file next");
+    assert!(!next.is_empty(), "{v}");
+    assert!(
+        next.iter().all(|s| s["command"].as_str().is_some_and(|c| c.starts_with("contour profile "))),
+        "{next:?}"
+    );
+}

@@ -230,6 +230,62 @@ pub fn print_error_json(msg: &str, error_code: Option<&str>) {
     let _ = write_error_json(&mut err, msg, error_code);
 }
 
+/// One suggested next command. Printed after a result as `why → command`
+/// in human mode (see [`print_next_steps`]) and carried as
+/// `next: [{why, command}]` in JSON, so an operator and an agent get the
+/// same path. At most three per result; each a runnable command with the
+/// operator's real values where they are known; only while its
+/// precondition holds; after a failure, only the fix.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NextStep {
+    pub why: String,
+    pub command: String,
+}
+
+impl NextStep {
+    pub fn new(why: impl Into<String>, command: impl Into<String>) -> Self {
+        Self {
+            why: why.into(),
+            command: command.into(),
+        }
+    }
+}
+
+/// The `Next` block: one aligned `why → command` line per step. Empty when
+/// there is nothing to suggest, so callers can print it unconditionally.
+pub fn render_next_steps(steps: &[NextStep]) -> String {
+    if steps.is_empty() {
+        return String::new();
+    }
+    let width = steps.iter().map(|s| s.why.chars().count()).max().unwrap_or(0);
+    let mut out = String::from("\nNext\n");
+    for s in steps {
+        out.push_str(&format!("  {:<width$}  → {}\n", s.why, s.command));
+    }
+    out
+}
+
+/// Print the `Next` block to stdout (human mode only; JSON carries `next`).
+pub fn print_next_steps(steps: &[NextStep]) {
+    print!("{}", render_next_steps(steps));
+}
+
+/// A failure whose JSON envelope the handler has already printed, because
+/// it knew the exact `error_code` where `main`'s classifier would only
+/// guess. Handlers return this instead of a bare `anyhow` error so `main`
+/// prints the message in human mode and prints nothing in JSON mode — one
+/// envelope per failure, never two with different codes.
+#[derive(Debug)]
+pub struct Reported(pub String);
+
+impl std::fmt::Display for Reported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Reported {}
+
 /// Render the error envelope to `writer`.
 ///
 /// **Stream contract:** the envelope goes to **stderr**, deliberately.
@@ -582,5 +638,24 @@ mod classify_format_tests {
             classify_error("Failed to parse plist: UnexpectedEof"),
             "INVALID_FORMAT"
         );
+    }
+}
+
+#[cfg(test)]
+mod next_step_tests {
+    use super::*;
+
+    #[test]
+    fn next_block_aligns_arrows_and_is_empty_when_nothing_to_say() {
+        assert_eq!(render_next_steps(&[]), "");
+        let out = render_next_steps(&[
+            NextStep::new("Short", "contour a"),
+            NextStep::new("A longer reason", "contour b --json"),
+        ]);
+        assert!(out.starts_with("\nNext\n"));
+        let lines: Vec<&str> = out.lines().filter(|l| l.contains('→')).collect();
+        assert_eq!(lines.len(), 2);
+        let col = |l: &str| l.find('→').unwrap();
+        assert_eq!(col(lines[0]), col(lines[1]), "arrows align: {out}");
     }
 }

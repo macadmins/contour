@@ -1273,6 +1273,50 @@ pub fn declaration_errors_scoped(
 }
 
 /// Validate a single DDM declaration file.
+/// The SOP that explains a declaration type's cross-key rules, and the
+/// section to open at when one exists.
+fn sop_for_type(declaration_type: &str) -> (&'static str, Option<&'static str>) {
+    match declaration_type {
+        "com.apple.configuration.extensible-sso" => ("platform-sso", Some("platform_sso_custom")),
+        "com.apple.configuration.softwareupdate.settings" => ("beta-enrollment", None),
+        "com.apple.configuration.app.settings" => ("app-privacy", None),
+        t if t.contains("intelligence") => ("generative", None),
+        _ => ("ddm", None),
+    }
+}
+
+/// After `ddm validate`: a clean file goes to `verify`; a cross-key error
+/// (`A ↔ B: …`) points at the SOP section that states the rule; a bad
+/// value points at the schema listing of allowed values.
+fn validate_next_steps(r: &DdmValidationResult) -> Vec<contour_core::output::NextStep> {
+    use contour_core::output::NextStep;
+    let mut steps = Vec::new();
+    if r.valid {
+        let dir = r.file.parent().filter(|p| !p.as_os_str().is_empty());
+        let dir = dir.map_or(".".to_string(), |p| p.display().to_string());
+        steps.push(NextStep::new(
+            "Check cross-references across the directory",
+            format!("contour profile ddm verify {dir} --json"),
+        ));
+        return steps;
+    }
+    if r.errors.iter().any(|e| e.contains(" ↔ ")) {
+        let (sop, at) = sop_for_type(&r.declaration_type);
+        let at = at.map_or(String::new(), |a| format!(" --at \"{a}\""));
+        steps.push(NextStep::new(
+            "The rule behind the ↔ error, in Apple's words",
+            format!("contour help-ai --sop {sop}{at}"),
+        ));
+    }
+    if r.errors.iter().any(|e| e.starts_with("Invalid value for") || e.contains("Unknown field")) {
+        steps.push(NextStep::new(
+            "Allowed values and required keys for this type",
+            format!("contour profile ddm info {} --full", r.declaration_type),
+        ));
+    }
+    steps
+}
+
 fn validate_single_ddm(
     path: &Path,
     registry: &SchemaRegistry,
@@ -1343,7 +1387,8 @@ pub fn handle_ddm_validate(
                     "file": r.file.to_string_lossy(),
                     "type": r.declaration_type,
                     "errors": r.errors,
-                    "warnings": r.warnings
+                    "warnings": r.warnings,
+                    "next": validate_next_steps(r),
                 })
             })
             .collect();
@@ -1389,6 +1434,18 @@ pub fn handle_ddm_validate(
             results.len()
         );
     }
+
+    // One merged block: the same fix for several files is said once.
+    let mut next: Vec<contour_core::output::NextStep> = Vec::new();
+    for r in &results {
+        for step in validate_next_steps(r) {
+            if !next.iter().any(|s| s.command == step.command) {
+                next.push(step);
+            }
+        }
+    }
+    next.truncate(3);
+    contour_core::output::print_next_steps(&next);
 
     if invalid_count > 0 {
         anyhow::bail!("Validation failed for {invalid_count} file(s)");
@@ -2465,7 +2522,7 @@ pub fn handle_ddm_generate(
         if output_mode == OutputMode::Json {
             contour_core::output::print_error_json(&msg, Some("SCHEMA_VIOLATION"));
         }
-        anyhow::bail!(msg);
+        return Err(contour_core::output::Reported(msg).into());
     }
 
     let json = write_declaration(&decl)?;
@@ -2662,7 +2719,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&msg, Some("UNKNOWN"));
             }
-            anyhow::anyhow!(msg)
+            anyhow::Error::from(contour_core::output::Reported(msg))
         })?;
         (body, format!("preset:{name}"))
     } else {
@@ -2675,7 +2732,7 @@ pub fn handle_ddm_compose(
                 if output_mode == OutputMode::Json {
                     contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
                 }
-                anyhow::bail!(msg);
+                return Err(contour_core::output::Reported(msg).into());
             }
         }
     };
@@ -2686,7 +2743,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&msg, Some("INVALID_FORMAT"));
             }
-            anyhow::bail!(msg);
+            return Err(contour_core::output::Reported(msg).into());
         }
     };
 
@@ -2701,7 +2758,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
             }
-            anyhow::bail!(msg);
+            return Err(contour_core::output::Reported(msg).into());
         }
     }
 
@@ -2716,7 +2773,7 @@ pub fn handle_ddm_compose(
         if output_mode == OutputMode::Json {
             contour_core::output::print_error_json(&msg, Some("INVALID_ORG"));
         }
-        anyhow::bail!(msg);
+        return Err(contour_core::output::Reported(msg).into());
     };
 
     // 3. Compose.
@@ -2727,7 +2784,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&e.to_string(), Some(e.error_code()));
             }
-            anyhow::bail!(e.to_string());
+            return Err(contour_core::output::Reported(e.to_string()).into());
         }
     };
 
@@ -2793,7 +2850,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&msg, Some("SCHEMA_VIOLATION"));
             }
-            anyhow::bail!(msg);
+            return Err(contour_core::output::Reported(msg).into());
         }
     }
 
@@ -2929,7 +2986,7 @@ pub fn handle_ddm_verify(
         if output_mode == OutputMode::Json {
             contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
         }
-        anyhow::bail!(msg);
+        return Err(contour_core::output::Reported(msg).into());
     }
 
     // Walk and parse.
@@ -2981,7 +3038,7 @@ pub fn handle_ddm_verify(
             // contract agents switch on, and "no input found" is its case.
             contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
         }
-        anyhow::bail!(msg);
+        return Err(contour_core::output::Reported(msg).into());
     }
 
     let mut declarations: Vec<(PathBuf, Declaration)> = Vec::new();
@@ -3001,10 +3058,14 @@ pub fn handle_ddm_verify(
         report.is_clean()
     };
     let exit_ok = clean && parse_errors.is_empty();
+    let next = verify_next_steps(directory, &report);
 
     match output_mode {
-        OutputMode::Json => emit_verify_json(directory, &report, &parse_errors),
-        OutputMode::Human => emit_verify_human(directory, &report, &parse_errors, strict),
+        OutputMode::Json => emit_verify_json(directory, &report, &parse_errors, &next),
+        OutputMode::Human => {
+            emit_verify_human(directory, &report, &parse_errors, strict);
+            contour_core::output::print_next_steps(&next);
+        }
     }
 
     if !exit_ok {
@@ -3019,10 +3080,68 @@ pub fn handle_ddm_verify(
     Ok(())
 }
 
-fn emit_verify_json(directory: &str, report: &VerifyReport, parse_errors: &[(PathBuf, String)]) {
+/// After `ddm verify`: a dangling asset reference becomes the `generate`
+/// call that creates the missing asset, typed from the schema's
+/// `assettypes` for that field; an unsubscribed status key points at the
+/// predicate/subscription invariant in the DDM SOP. A clean report needs
+/// nothing.
+fn verify_next_steps(directory: &str, report: &VerifyReport) -> Vec<contour_core::output::NextStep> {
+    use contour_core::output::NextStep;
+    let mut steps = Vec::new();
+    let mut registry = None;
+    for err in &report.errors {
+        match err {
+            VerifyError::DanglingAssetReference {
+                configuration_id,
+                field,
+                target,
+                ..
+            } => {
+                let config_type = report
+                    .configurations
+                    .iter()
+                    .find(|c| &c.identifier == configuration_id)
+                    .map(|c| c.r#type.as_str());
+                let registry = registry.get_or_insert_with(|| SchemaRegistry::embedded().ok());
+                let asset_type = registry
+                    .as_ref()
+                    .zip(config_type)
+                    .and_then(|(reg, t)| reg.get(t))
+                    .and_then(|m| m.fields.values().find(|f| &f.name == field))
+                    .and_then(|f| f.asset_types.iter().find(|a| a.starts_with("com.apple.asset.")))
+                    .cloned()
+                    .unwrap_or_else(|| "<asset type>".to_string());
+                let short = target.rsplit('.').next().unwrap_or("asset");
+                steps.push(NextStep::new(
+                    format!("Create the asset {field} points at"),
+                    format!(
+                        "contour profile ddm generate {asset_type} --identifier {target} --org <org> -o {directory}/{short}.json"
+                    ),
+                ));
+            }
+            VerifyError::UnsubscribedStatusKey { .. } => {
+                let cmd = "contour help-ai --sop ddm --at \"status-subscription\"";
+                if !steps.iter().any(|s: &NextStep| s.command == cmd) {
+                    steps.push(NextStep::new("Subscribe the status key the predicate reads", cmd));
+                }
+            }
+            _ => {}
+        }
+    }
+    steps.truncate(3);
+    steps
+}
+
+fn emit_verify_json(
+    directory: &str,
+    report: &VerifyReport,
+    parse_errors: &[(PathBuf, String)],
+    next: &[contour_core::output::NextStep],
+) {
     let json = serde_json::json!({
         "success":          report.is_clean() && parse_errors.is_empty(),
         "directory":        directory,
+        "next":             next,
         "asset_count":      report.assets.len(),
         "config_count":     report.configurations.len(),
         "activation_count": report.activations.len(),

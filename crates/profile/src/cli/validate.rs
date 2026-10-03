@@ -249,12 +249,20 @@ fn handle_validate_batch(
                 "total": detailed_results.len(),
                 "succeeded": detailed_results.len() - failed,
                 "failed": failed,
+                "next": batch_next_steps(&batch_dir_of(&files), failed),
                 "results": detailed_results.iter().map(|r| {
+                    let failing: Vec<String> = r
+                        .schema_validation
+                        .as_ref()
+                        .and_then(|sv| sv["errors"].as_array())
+                        .map(|a| a.iter().filter_map(|i| i["payload_type"].as_str().map(String::from)).collect())
+                        .unwrap_or_default();
                     let mut entry = serde_json::json!({
                         "file": r.file,
                         "valid": r.valid,
                         "errors": r.errors,
                         "warnings": r.warnings,
+                        "next": single_next_steps(&r.file, r.valid, &r.errors, &failing),
                         "profile": r.profile,
                         // Lint findings are emitted as a separate array
                         // keyed by stable check name. Existing consumers
@@ -310,6 +318,7 @@ fn handle_validate_batch(
     };
 
     print_batch_summary(&result, "Validation");
+    contour_core::output::print_next_steps(&batch_next_steps(&batch_dir_of(&files), result.failed));
 
     if result.failed > 0 {
         anyhow::bail!("{} file(s) failed validation", result.failed);
@@ -642,6 +651,75 @@ fn validate_single_file_internal(
     Ok(SingleFileValidationResult { warnings })
 }
 
+/// After validating one profile: a failing payload type points at its
+/// schema listing; structural errors point at `normalize`; a clean file
+/// goes on to the secrets audit and the deployed-copy comparison.
+fn single_next_steps(
+    file: &str,
+    valid: bool,
+    errors: &[String],
+    failing_types: &[String],
+) -> Vec<contour_core::output::NextStep> {
+    use contour_core::output::NextStep;
+    let mut steps = Vec::new();
+    if valid {
+        steps.push(NextStep::new(
+            "Audit for embedded secrets and certificates",
+            format!("contour profile audit {file}"),
+        ));
+        steps.push(NextStep::new(
+            "Classify the change against the deployed copy",
+            format!("contour profile plan <deployed.mobileconfig> {file}"),
+        ));
+        return steps;
+    }
+    if let Some(t) = failing_types.first() {
+        steps.push(NextStep::new(
+            format!("Allowed values and required keys for {t}"),
+            format!("contour profile info {t} --full"),
+        ));
+    }
+    if errors.iter().any(|e| {
+        e.contains("Missing")
+            || e.contains("PayloadVersion")
+            || e.contains("PayloadUUID")
+            || e.contains("PayloadIdentifier")
+    }) {
+        steps.push(NextStep::new(
+            "Repair structure, identifiers and UUIDs",
+            format!("contour profile normalize {file} --org <org>"),
+        ));
+    }
+    steps.truncate(3);
+    steps
+}
+
+/// After a batch: failures want per-file detail; a clean set wants the
+/// cross-profile collision scan.
+fn batch_next_steps(dir: &str, failed: usize) -> Vec<contour_core::output::NextStep> {
+    use contour_core::output::NextStep;
+    if failed > 0 {
+        vec![NextStep::new(
+            "Per-file detail with the failing payload types",
+            format!("contour profile validate {dir} --json"),
+        )]
+    } else {
+        vec![NextStep::new(
+            "Find profiles that manage the same domain with different values",
+            format!("contour profile collisions {dir}"),
+        )]
+    }
+}
+
+/// The directory a batch ran over, for the commands suggested afterwards.
+fn batch_dir_of(files: &[std::path::PathBuf]) -> String {
+    files
+        .first()
+        .and_then(|f| f.parent())
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or(".".to_string(), |p| p.display().to_string())
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "validate handler threads many CLI flags"
@@ -790,11 +868,16 @@ fn handle_validate_single(
     let valid = valid_after_lint && schema_result.as_ref().is_none_or(|s| s.is_valid());
 
     if output_mode == OutputMode::Json {
+        let failing: Vec<String> = schema_result
+            .as_ref()
+            .map(|sr| sr.errors().iter().map(|i| i.payload_type.clone()).collect())
+            .unwrap_or_default();
         let mut json_result = serde_json::json!({
             "file": file,
             "valid": valid,
             "errors": all_errors,
             "warnings": all_warnings,
+            "next": single_next_steps(file, valid, &all_errors, &failing),
             "profile": {
                 "display_name": profile.payload_display_name,
                 "identifier": profile.payload_identifier,
@@ -978,6 +1061,12 @@ fn handle_validate_single(
             );
         }
     }
+
+    let failing_types: Vec<String> = schema_result
+        .as_ref()
+        .map(|sr| sr.errors().iter().map(|i| i.payload_type.clone()).collect())
+        .unwrap_or_default();
+    contour_core::output::print_next_steps(&single_next_steps(file, valid, &all_errors, &failing_types));
 
     let schema_valid = schema_result
         .as_ref()
