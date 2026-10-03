@@ -11,6 +11,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+# Only for the pure types in `contour_core::osquery_validate`; contour-core
+# must not depend on this crate (arrow would ride into every binary).
+contour-core = { workspace = true }
 arrow = { workspace = true }
 parquet = { workspace = true }
 anyhow = { workspace = true }

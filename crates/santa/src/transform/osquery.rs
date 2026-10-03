@@ -54,6 +54,18 @@ pub fn parse_osquery(content: &str) -> Result<RuleSet> {
 mod tests {
     use super::*;
 
+    /// The trainer prints `SANTA_RULES` for operators to run; its SELECT list
+    /// is the only offline statement of what `santa_rules` returns, and this
+    /// parser is its consumer. The two must agree column for column.
+    #[test]
+    fn trainer_santa_rules_query_selects_what_this_parser_reads() {
+        let sql = contour_core::trainer::queries::santa::SANTA_RULES;
+        let upper = sql.to_uppercase();
+        let (from, to) = (upper.find("SELECT").unwrap() + 6, upper.find("FROM").unwrap());
+        let selected: Vec<&str> = sql[from..to].split(',').map(str::trim).collect();
+        assert_eq!(selected, ["identifier", "type", "state", "custom_msg", "custom_url"]);
+    }
+
     #[test]
     fn test_parse_osquery() {
         let json = r#"[

@@ -9,7 +9,8 @@
 //! 1. **generated** — the dataset pipeline writes it
 //! 2. **published** — it is inside a released zip
 //! 3. **embedded** — a schema crate `include_bytes!` it
-//! 4. **read** — something outside that crate calls the accessor
+//! 4. **read** — something outside that crate calls the accessor, or a
+//!    `pub fn` of the same crate that wraps it (a once-per-process cache)
 //!
 //! Stages 1 and 2 are checked where the dataset is built, which fails when a
 //! published file is missing from a crate's `LOCAL_SCHEMA_FILES`. This file owns the two failures on either side of
@@ -116,12 +117,46 @@ fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
     out
 }
 
-/// Is `fn_name` referenced from outside `owner`?
+/// Is `fn_name` referenced from outside `owner`, directly or through one
+/// `pub fn` of `owner` that calls it (a cache such as
+/// `osquery_schema::fleet_entries()`, which decodes `embedded_fleet()` once)?
 ///
 /// Crate-qualified, because one accessor is called plainly `embedded` and a
 /// bare word search matched the English word in comments across twelve
 /// crates — the false positive that hid the false negative.
 fn read_outside(root: &Path, owner: &str, fn_name: &str) -> BTreeSet<String> {
+    let mut out = read_outside_directly(root, owner, fn_name);
+    for wrapper in wrappers_of(root, owner, fn_name) {
+        out.extend(read_outside_directly(root, owner, &wrapper));
+    }
+    out
+}
+
+/// `pub fn` names in `owner` whose body calls `fn_name()`.
+fn wrappers_of(root: &Path, owner: &str, fn_name: &str) -> Vec<String> {
+    let call = format!("{fn_name}()");
+    let mut out = Vec::new();
+    for file in walk(&root.join("crates").join(owner)) {
+        let Ok(src) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for chunk in src.split("pub fn ").skip(1) {
+            let Some(name) = chunk.split(['(', '<']).next() else {
+                continue;
+            };
+            let Some(body_start) = chunk.find('{') else {
+                continue;
+            };
+            let body_end = chunk[body_start..].find("\n}").unwrap_or(chunk.len() - body_start);
+            if name.trim() != fn_name && chunk[body_start..body_start + body_end].contains(&call) {
+                out.push(name.trim().to_string());
+            }
+        }
+    }
+    out
+}
+
+fn read_outside_directly(root: &Path, owner: &str, fn_name: &str) -> BTreeSet<String> {
     let qualified = format!("{}::{fn_name}", owner.replace('-', "_"));
     let mut out = BTreeSet::new();
     for file in walk(&root.join("crates")) {

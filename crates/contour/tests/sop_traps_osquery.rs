@@ -386,3 +386,59 @@ fn trap_96_osquery_identifier_queries_stay_valid_against_the_schema() {
          agents it is a Fleet extension that does not exist in vanilla osqueryd"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 97: every fenced ```sql block in --sop osquery passes the schema check.
+// SOP procedure: the whole cookbook (is_setting_enabled, check_software_updates,
+// check_mdm_profile, resolve_app_identifier, …)
+// Catches: a cookbook query naming a table or column the embedded osquery and
+// Fleet schemas do not have, or a required column left unconstrained. The
+// cookbook is what an agent copies; a typo there ships to every fleet that
+// trusts it.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_97_cookbook_sql_names_real_tables_and_columns() {
+    use contour_core::osquery_validate::{Severity, check_query};
+    use std::path::PathBuf;
+
+    let sop = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../contour-core/skills/contour/references/sop-osquery.md");
+    let text = std::fs::read_to_string(&sop).unwrap();
+
+    // Fenced ```sql blocks only; prose and bash blocks carry no SQL contract.
+    let mut blocks: Vec<(usize, String)> = Vec::new();
+    let mut current: Option<(usize, String)> = None;
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim_start();
+        match &mut current {
+            None if t.starts_with("```sql") => current = Some((i + 1, String::new())),
+            Some((start, body)) if t.starts_with("```") => {
+                blocks.push((*start, std::mem::take(body)));
+                current = None;
+            }
+            Some((_, body)) => {
+                body.push_str(line);
+                body.push('\n');
+            }
+            None => {}
+        }
+    }
+    assert!(blocks.len() >= 8, "expected the cookbook's sql blocks, found {}", blocks.len());
+
+    let index = osquery_schema::index();
+    let mut failures = Vec::new();
+    for (line, sql) in &blocks {
+        // One block may hold several statements; check each.
+        for stmt in sql.split(';').map(str::trim).filter(|s| s.to_lowercase().contains("from")) {
+            let errors: Vec<String> = check_query(stmt, "", index)
+                .into_iter()
+                .filter(|p| p.severity() == Severity::Error)
+                .map(|p| p.to_string())
+                .collect();
+            if !errors.is_empty() {
+                failures.push(format!("sop-osquery.md:{line}: {}\n    {}", errors.join("; "), stmt.replace('\n', " ")));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "cookbook SQL fails the schema check:\n{}", failures.join("\n"));
+}

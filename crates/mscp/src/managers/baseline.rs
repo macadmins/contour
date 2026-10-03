@@ -839,7 +839,7 @@ controls:
   scripts:
   - path: ../platforms/macos/scripts/cis_lvl1/cis_lvl1_os_audit.sh
 policies:
-- path: ../platforms/macos/policies/cis_lvl1/cis_lvl1_policies.yml
+- path: ../platforms/macos/policies/cis_lvl1/cis_lvl1.policies.yml
 reports: []
 settings:
   secrets:
@@ -872,7 +872,7 @@ labels_include_all = ["mscp-800-171"]
         if with_policies {
             let p = root.join("platforms/macos/policies/800-171");
             std::fs::create_dir_all(&p).unwrap();
-            std::fs::write(p.join("800-171_policies.yml"), "[]\n").unwrap();
+            std::fs::write(p.join("800-171.policies.yml"), "[]\n").unwrap();
         }
         let file = root.join("fleets/eng.yml");
         std::fs::write(&file, fleet).unwrap();
@@ -907,7 +907,7 @@ labels_include_all = ["mscp-800-171"]
             .collect();
         assert_eq!(
             policies,
-            vec!["../platforms/macos/policies/800-171/800-171_policies.yml"]
+            vec!["../platforms/macos/policies/800-171/800-171.policies.yml"]
         );
     }
 
@@ -1013,7 +1013,7 @@ labels_include_all = ["mscp-800-171"]
             "      labels_include_all:",
             "      - mscp-800-171",
             "  - path: ../platforms/macos/scripts/800-171/800-171_os_audit.sh",
-            "- path: ../platforms/macos/policies/800-171/800-171_policies.yml",
+            "- path: ../platforms/macos/policies/800-171/800-171.policies.yml",
         ] {
             assert!(
                 text.lines().any(|l| l == line),

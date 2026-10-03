@@ -12,6 +12,39 @@ pub mod verify;
 
 use catalog::OsqueryTable;
 
+/// Check queries against the embedded osquery and Fleet schemas before they
+/// are written.
+///
+/// `what` names the file or source for the message. Errors — an unknown table
+/// or column, a platform the table does not exist on, a required column left
+/// unconstrained — bail, listing every failing query, so a typo never reaches
+/// a repo where Fleet would read "no rows" as compliant. Warnings (a
+/// Fleet-only or extension table) go to the log and the write proceeds.
+pub fn check_emitted<'a>(
+    what: &str,
+    items: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+) -> anyhow::Result<()> {
+    use contour_core::osquery_validate::{Severity, check_query};
+    let index = osquery_schema::index();
+    let mut errors = Vec::new();
+    for (name, sql, platform) in items {
+        for problem in check_query(sql, platform, index) {
+            match problem.severity() {
+                Severity::Error => errors.push(format!("  {name}: {problem}")),
+                Severity::Warning => tracing::warn!("{what}: {name}: {problem}"),
+            }
+        }
+    }
+    if errors.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{what}: {} query(s) fail the osquery schema check:\n{}",
+        errors.len(),
+        errors.join("\n")
+    )
+}
+
 /// Detection tier for a rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {

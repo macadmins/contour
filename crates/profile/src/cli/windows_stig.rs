@@ -471,6 +471,42 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    /// Every query this module shows or exports is checked against the
+    /// embedded osquery and Fleet schemas: real table, real columns, exists on
+    /// windows, required columns constrained. `mdm_bridge` is Fleet's own
+    /// table, so the only expected warning is that it needs Fleet's agent.
+    #[test]
+    fn every_stig_query_passes_the_schema_check() {
+        use contour_core::osquery_validate::{Problem, Severity, check_query};
+        let index = osquery_schema::index();
+        let mut checked = 0usize;
+        for p in policies().expect("embedded policies") {
+            let Some(q) = p.compliance_query.as_deref() else { continue };
+            checked += 1;
+            for problem in check_query(q, "windows", index) {
+                match problem {
+                    Problem::FleetOnlyTable { ref table } if table == "mdm_bridge" => {}
+                    other => assert_eq!(
+                        other.severity(),
+                        Severity::Warning,
+                        "{}: {other}\n{q}",
+                        p.oma_uri
+                    ),
+                }
+            }
+        }
+        for c in registry_checks().expect("embedded registry checks") {
+            checked += 1;
+            let errors: Vec<String> = check_query(&c.osquery_sql, "windows", index)
+                .into_iter()
+                .filter(|p| p.severity() == Severity::Error)
+                .map(|p| p.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{}: {errors:?}\n{}", c.rule_id, c.osquery_sql);
+        }
+        assert!(checked > 700, "expected the full corpus, checked {checked}");
+    }
+
     /// Fleet keys a policy by name, and upstream gives every one the same one.
     ///
     /// All 648 generated policies are called `STIG - Ensure ` — truncated at

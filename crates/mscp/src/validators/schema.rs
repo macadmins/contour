@@ -39,12 +39,16 @@ impl std::fmt::Display for SchemaOrigin {
 /// Schema validator for `FleetDM` YAML files
 pub struct SchemaValidator {
     schema: Option<jsonschema::Validator>,
+    /// The parsed root document, kept so one `$defs` entry can be compiled
+    /// into a list validator for Fleet's separate-file shapes.
+    root: Option<Value>,
 }
 
 impl std::fmt::Debug for SchemaValidator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SchemaValidator")
             .field("schema", &self.schema.as_ref().map(|_| "compiled"))
+            .field("root", &self.root.as_ref().map(|_| "parsed"))
             .finish()
     }
 }
@@ -98,7 +102,15 @@ impl SchemaValidator {
                         sha256: sha256_hex(bytes),
                     },
                 ),
-                None => return Ok((Self { schema: None }, SchemaOrigin::Absent)),
+                None => {
+                    return Ok((
+                        Self {
+                            schema: None,
+                            root: None,
+                        },
+                        SchemaOrigin::Absent,
+                    ));
+                }
             },
         };
         let value: Value = serde_json::from_slice(&bytes)
@@ -108,9 +120,40 @@ impl SchemaValidator {
         Ok((
             Self {
                 schema: Some(compiled),
+                root: Some(value),
             },
             origin,
         ))
+    }
+
+    /// Validate a flat YAML list against one `$defs` entry of Fleet's schema —
+    /// `GitOpsPolicySpec` for `*.policies.yml`, `Query` for `*.reports.yml`,
+    /// `LabelSpec` for `*.labels.yml`. These separate files have no root
+    /// object, so the root validator cannot read them.
+    ///
+    /// `Ok(None)` when this build embeds no schema (nothing to check against).
+    pub fn validate_list<P: AsRef<Path>>(&self, yaml_path: P, def: &str) -> Result<Option<ValidationResult>> {
+        let Some(root) = &self.root else {
+            return Ok(None);
+        };
+        let yaml_path = yaml_path.as_ref();
+        let content = fs::read_to_string(yaml_path)
+            .context(format!("Failed to read YAML file: {}", yaml_path.display()))?;
+        let yaml_value: yaml_serde::Value =
+            yaml_serde::from_str(&content).context("Failed to parse YAML")?;
+        let json_value: Value =
+            serde_json::to_value(&yaml_value).context("Failed to convert YAML to JSON")?;
+        if root.pointer(&format!("/$defs/{def}")).is_none() {
+            anyhow::bail!("Fleet's schema has no $defs/{def}");
+        }
+        let list_schema = serde_json::json!({
+            "$defs": root["$defs"],
+            "type": "array",
+            "items": {"$ref": format!("#/$defs/{def}")},
+        });
+        let compiled = jsonschema::validator_for(&list_schema)
+            .map_err(|e| anyhow::anyhow!("Failed to compile $defs/{def}: {e}"))?;
+        Ok(Some(Self::validate_with_schema(&compiled, &json_value)))
     }
 
     /// Validate a YAML file against a JSON schema

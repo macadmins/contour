@@ -63,10 +63,11 @@ ORDER BY a.name;
     /// Requires Trail of Bits santa extension.
     pub const SANTA_RULES: &str = r"
 SELECT
-    shasum,
-    state,
+    identifier,
     type,
-    custom_message
+    state,
+    custom_msg,
+    custom_url
 FROM santa_rules
 ORDER BY type, state;
 ";

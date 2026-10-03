@@ -1644,8 +1644,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 osquery_opts,
             )?;
 
-            // --verify-queries: run the emitted policy/report queries through a
-            // local osqueryi (or print how to verify via orbit on a Fleet host).
+            // --verify-queries: write the osqueryi / `orbit shell` commands for
+            // every emitted policy and report query to <out>/osquery/verify-commands.md.
+            // Nothing is executed.
             if let Some(out) = verify_output {
                 mscp::osquery::verify::verify_generated(&out)?;
             }

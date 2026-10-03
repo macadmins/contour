@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use mdm_schema::types::Capability;
 use mscp_schema::types::{BaselineEdge, RuleMeta};
+use osquery_schema::{TableSource, fleet_for, fleet_entries, osquery_entries, table_sources};
 use osquery_schema::types::OsqueryEntry;
 
 /// A tool execution failure: reported as a successful JSON-RPC response whose
@@ -91,9 +92,11 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "contour.osquery.search",
         title: "Search osquery tables",
-        description: "Search osquery table and column names by keyword. Returns \
-                      matching tables with their platforms. Use before writing \
-                      any osquery SQL to confirm the table exists.",
+        description: "Search osquery table and column names by keyword, across \
+                      upstream osquery and Fleet's schema. Returns matching tables \
+                      with their platforms and a `source`: `fleet` means the table \
+                      needs Fleet's agent. Pass `platform` to keep only tables \
+                      available there. Use before writing any osquery SQL.",
         input_schema: osquery_search_input,
         output_schema: osquery_search_output,
         handler: osquery_search,
@@ -101,13 +104,29 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "contour.osquery.table",
         title: "osquery table schema",
-        description: "Full column schema for one osquery table: every column with \
-                      its type and whether it is required. A misspelled table \
-                      returns no rows at runtime and a Fleet policy reads no rows \
-                      as compliant, so verify the table here before shipping SQL.",
+        description: "Full column schema for one osquery or Fleet table: every \
+                      column with its type and whether it is required, plus Fleet's \
+                      worked example, notes and docs link where it has them. A \
+                      misspelled table returns no rows at runtime and a Fleet policy \
+                      reads no rows as compliant, so verify the table here before \
+                      shipping SQL.",
         input_schema: osquery_table_input,
         output_schema: osquery_table_output,
         handler: osquery_table,
+    },
+    Tool {
+        name: "contour.osquery.validate",
+        title: "Validate osquery SQL",
+        description: "Check one SQL statement against the embedded osquery and \
+                      Fleet schemas: every table in FROM/JOIN exists, every \
+                      selected or filtered column exists (single-table queries), \
+                      required columns are constrained, and the table exists on \
+                      the given `platform`. Fleet-only tables are warnings: real \
+                      under Fleet's agent, empty under plain osqueryd. Unknown \
+                      tables come back as results with suggestions, not as errors.",
+        input_schema: osquery_validate_input,
+        output_schema: osquery_validate_output,
+        handler: osquery_validate,
     },
     Tool {
         name: "contour.mscp.rule",
@@ -210,13 +229,6 @@ fn corpus(args: &Value) -> &'static [Capability] {
     } else {
         capabilities()
     }
-}
-
-fn osquery_entries() -> &'static [OsqueryEntry] {
-    static CACHE: OnceLock<Vec<OsqueryEntry>> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        osquery_schema::osquery::read(osquery_schema::embedded()).unwrap_or_default()
-    })
 }
 
 fn rule_meta() -> &'static [RuleMeta] {
@@ -800,6 +812,7 @@ fn osquery_search_input() -> Value {
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Keyword to match against table name, description and column names"},
+            "platform": {"type": "string", "description": "Keep only tables whose platforms include this value (darwin, linux, windows)"},
             "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT}
         },
         "required": ["query"],
@@ -820,48 +833,94 @@ fn osquery_search_output() -> Value {
                     "platforms": {"type": "string"},
                     "evented": {"type": "boolean"},
                     "description": {"type": ["string", "null"]},
+                    "source": {"type": "string", "enum": ["both", "osquery", "fleet"], "description": "`fleet` = requires Fleet's agent"},
                     "matched_columns": {"type": "array", "items": {"type": "string"}}
                 },
-                "required": ["table", "platforms", "evented"]
+                "required": ["table", "platforms", "evented", "source"]
             }}
         },
         "required": ["count", "truncated", "results"]
     })
 }
 
+/// One search hit, from either schema.
+struct TableHit {
+    platforms: String,
+    evented: bool,
+    description: Option<String>,
+    columns: Vec<String>,
+}
+
 fn osquery_search(args: &Value) -> Result<Value, ToolError> {
     let query = required_str(args, "query")?.to_lowercase();
+    let platform = optional_str(args, "platform");
     let limit = limit_of(args);
+    let sources = table_sources();
+    let on_platform = |platforms: &str| platform.as_deref().is_none_or(|p| platforms.contains(p));
 
-    let mut by_table: std::collections::BTreeMap<&str, (&OsqueryEntry, Vec<String>)> =
-        std::collections::BTreeMap::new();
+    let mut by_table: std::collections::BTreeMap<&str, TableHit> = std::collections::BTreeMap::new();
     for e in osquery_entries() {
         let table_hit = e.table_name.to_lowercase().contains(&query)
             || e.table_description
                 .as_deref()
                 .is_some_and(|d| d.to_lowercase().contains(&query));
         let col_hit = e.column_name.to_lowercase().contains(&query);
-        if !table_hit && !col_hit {
+        if (!table_hit && !col_hit) || !on_platform(&e.platforms) {
             continue;
         }
-        let slot = by_table.entry(&e.table_name).or_insert((e, Vec::new()));
-        if col_hit && slot.1.len() < 10 {
-            slot.1.push(e.column_name.clone());
+        let slot = by_table.entry(&e.table_name).or_insert_with(|| TableHit {
+            platforms: e.platforms.clone(),
+            evented: e.evented,
+            description: e.table_description.clone(),
+            columns: Vec::new(),
+        });
+        if col_hit && slot.columns.len() < 10 {
+            slot.columns.push(e.column_name.clone());
+        }
+    }
+    // Fleet-only tables are real under Fleet's agent; a search that hid them
+    // would answer the wrong question. Names are disjoint from upstream, so
+    // they slot into the same ordered map.
+    for e in fleet_entries() {
+        if sources.get(&e.table_name) != Some(&TableSource::FleetOnly) {
+            continue;
+        }
+        let platforms = e.platforms.clone().unwrap_or_default();
+        let table_hit = e.table_name.to_lowercase().contains(&query)
+            || e.table_description
+                .as_deref()
+                .is_some_and(|d| d.to_lowercase().contains(&query));
+        let col_hit = e
+            .column_name
+            .as_deref()
+            .is_some_and(|c| c.to_lowercase().contains(&query));
+        if (!table_hit && !col_hit) || !on_platform(&platforms) {
+            continue;
+        }
+        let slot = by_table.entry(&e.table_name).or_insert_with(|| TableHit {
+            platforms,
+            evented: e.evented.unwrap_or(false),
+            description: e.table_description.clone(),
+            columns: Vec::new(),
+        });
+        if col_hit && slot.columns.len() < 10 && let Some(c) = &e.column_name {
+            slot.columns.push(c.clone());
         }
     }
 
     let count = by_table.len();
     let truncated = count > limit;
     let results: Vec<Value> = by_table
-        .values()
+        .iter()
         .take(limit)
-        .map(|(e, cols)| {
+        .map(|(table, hit)| {
             json!({
-                "table": e.table_name,
-                "platforms": e.platforms,
-                "evented": e.evented,
-                "description": e.table_description,
-                "matched_columns": cols,
+                "table": table,
+                "platforms": hit.platforms,
+                "evented": hit.evented,
+                "description": hit.description,
+                "source": sources.get(*table).map_or("osquery", |s| s.as_str()),
+                "matched_columns": hit.columns,
             })
         })
         .collect();
@@ -888,6 +947,11 @@ fn osquery_table_output() -> Value {
             "platforms": {"type": "string"},
             "evented": {"type": "boolean"},
             "description": {"type": ["string", "null"]},
+            "source": {"type": "string", "enum": ["both", "osquery", "fleet"]},
+            "note": {"type": ["string", "null"], "description": "Caveat when source is not `both`, e.g. requires Fleet's agent"},
+            "examples": {"type": ["string", "null"], "description": "Fleet's worked SQL for this table"},
+            "notes": {"type": ["string", "null"], "description": "Fleet's authoring notes"},
+            "url": {"type": ["string", "null"], "description": "Fleet's documentation page"},
             "columns": {"type": "array", "items": {
                 "type": "object",
                 "properties": {
@@ -895,53 +959,163 @@ fn osquery_table_output() -> Value {
                     "type": {"type": "string"},
                     "required": {"type": "boolean"},
                     "hidden": {"type": "boolean"},
-                    "description": {"type": ["string", "null"]}
+                    "description": {"type": ["string", "null"]},
+                    "platforms": {"type": ["string", "null"], "description": "Set only when this column exists on fewer platforms than the table"}
                 },
                 "required": ["name", "type", "required", "hidden"]
             }}
         },
-        "required": ["table", "platforms", "evented", "columns"]
+        "required": ["table", "platforms", "evented", "source", "columns"]
     })
 }
 
 fn osquery_table(args: &Value) -> Result<Value, ToolError> {
-    let table = required_str(args, "table")?;
-    let rows: Vec<&OsqueryEntry> = osquery_entries()
-        .iter()
-        .filter(|e| e.table_name.eq_ignore_ascii_case(&table))
-        .collect();
-
-    let first = rows.first().ok_or_else(|| {
+    let table = required_str(args, "table")?.to_lowercase();
+    let sources = table_sources();
+    let source = *sources.get(&table).ok_or_else(|| {
         ToolError::with_suggestions(
-            format!("no osquery table `{table}` in the embedded schema"),
-            near_misses(
-                &table,
-                osquery_entries().iter().map(|e| e.table_name.clone()),
-            ),
+            format!("no osquery or Fleet table `{table}` in the embedded schemas"),
+            near_misses(&table, sources.keys().cloned()),
         )
     })?;
 
-    let mut columns: Vec<Value> = rows
+    // Fleet's column rows, for per-column platforms and the Fleet-only path.
+    let fleet_rows: Vec<&osquery_schema::fleet::FleetEntry> = fleet_for(&table).collect();
+    let fleet_first = fleet_rows.first().copied();
+    let column_platforms: std::collections::BTreeMap<&str, &str> = fleet_rows
         .iter()
-        .map(|e| {
-            json!({
-                "name": e.column_name,
-                "type": e.column_type,
-                "required": e.required,
-                "hidden": e.hidden,
-                "description": e.column_description,
-            })
-        })
+        .filter_map(|e| Some((e.column_name.as_deref()?, e.column_platforms.as_deref()?)))
         .collect();
+
+    let upstream: Vec<&OsqueryEntry> = osquery_entries()
+        .iter()
+        .filter(|e| e.table_name == table)
+        .collect();
+
+    let (platforms, evented, description, mut columns): (String, bool, Option<String>, Vec<Value>) =
+        if let Some(first) = upstream.first() {
+            let cols = upstream
+                .iter()
+                .map(|e| {
+                    json!({
+                        "name": e.column_name,
+                        "type": e.column_type,
+                        "required": e.required,
+                        "hidden": e.hidden,
+                        "description": e.column_description,
+                        "platforms": column_platforms.get(e.column_name.as_str()),
+                    })
+                })
+                .collect();
+            (first.platforms.clone(), first.evented, first.table_description.clone(), cols)
+        } else {
+            // Fleet-only: every fact comes from Fleet's rows.
+            let first = fleet_first.ok_or_else(|| ToolError::new(format!("`{table}` has no rows")))?;
+            let cols = fleet_rows
+                .iter()
+                .filter_map(|e| {
+                    let name = e.column_name.as_deref()?;
+                    Some(json!({
+                        "name": name,
+                        "type": e.column_type.clone().unwrap_or_default(),
+                        "required": e.required.unwrap_or(false),
+                        "hidden": e.hidden.unwrap_or(false),
+                        "description": e.column_description,
+                        "platforms": e.column_platforms,
+                    }))
+                })
+                .collect();
+            (
+                first.platforms.clone().unwrap_or_default(),
+                first.evented.unwrap_or(false),
+                first.table_description.clone(),
+                cols,
+            )
+        };
     columns.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
 
     Ok(json!({
-        "table": first.table_name,
-        "platforms": first.platforms,
-        "evented": first.evented,
-        "description": first.table_description,
+        "table": table,
+        "platforms": platforms,
+        "evented": evented,
+        "description": description,
+        "source": source.as_str(),
+        "note": source.note(),
+        "examples": fleet_first.and_then(|f| f.examples.clone()),
+        "notes": fleet_first.and_then(|f| f.notes.clone()),
+        "url": fleet_first.and_then(|f| f.url.clone()),
         "columns": columns,
     }))
+}
+
+// ── contour.osquery.validate ─────────────────────────────────────────
+
+fn osquery_validate_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "sql": {"type": "string", "description": "One osquery SQL statement"},
+            "platform": {"type": "string", "description": "The platform the policy or report declares (darwin, linux, windows); omit for any"}
+        },
+        "required": ["sql"],
+        "additionalProperties": false
+    })
+}
+
+fn osquery_validate_output() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "ok": {"type": "boolean", "description": "No errors; warnings may still be present"},
+            "tables": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "source": {"type": "string", "enum": ["both", "osquery", "fleet", "extension"]},
+                    "platforms": {"type": "string"}
+                },
+                "required": ["name", "source", "platforms"]
+            }},
+            "errors": {"type": "array", "items": {"type": "string"}, "description": "The query is wrong as written"},
+            "warnings": {"type": "array", "items": {"type": "string"}, "description": "Runs somewhere, not everywhere a reader may assume"}
+        },
+        "required": ["ok", "tables", "errors", "warnings"]
+    })
+}
+
+fn osquery_validate(args: &Value) -> Result<Value, ToolError> {
+    use contour_core::osquery_validate::{EXTENSION_TABLES, Severity, check_query, extract_tables};
+    let sql = required_str(args, "sql")?;
+    let platform = optional_str(args, "platform").unwrap_or_default();
+    let index = osquery_schema::index();
+    let sources = table_sources();
+
+    let tables: Vec<Value> = extract_tables(&sql)
+        .into_iter()
+        .map(|t| {
+            let source = sources.get(&t).map(|s| s.as_str()).unwrap_or(
+                if EXTENSION_TABLES.contains(&t.as_str()) { "extension" } else { "unknown" },
+            );
+            let platforms = index
+                .get(&t)
+                .map(|i| i.platforms.iter().cloned().collect::<Vec<_>>().join(","))
+                .unwrap_or_default();
+            json!({ "name": t, "source": source, "platforms": platforms })
+        })
+        .collect();
+
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    for problem in check_query(&sql, &platform, index) {
+        match problem.severity() {
+            Severity::Error => errors.push(problem.to_string()),
+            Severity::Warning => warnings.push(problem.to_string()),
+        }
+    }
+    if tables.is_empty() {
+        warnings.push("no FROM or JOIN table found in the SQL".to_string());
+    }
+    Ok(json!({ "ok": errors.is_empty(), "tables": tables, "errors": errors, "warnings": warnings }))
 }
 
 // ── contour.mscp.rule ────────────────────────────────────────────────
@@ -1342,6 +1516,52 @@ mod tests {
             v["columns"].as_array().is_some_and(|c| !c.is_empty()),
             "expected columns"
         );
+    }
+
+    /// A Fleet-only table is answered, labelled, and carries Fleet's facts.
+    #[test]
+    fn osquery_table_answers_a_fleet_only_table() {
+        let v = osquery_table(&json!({"table": "filevault_status"})).unwrap();
+        assert_eq!(v["source"], "fleet");
+        assert!(v["note"].as_str().is_some_and(|n| n.contains("Fleet's agent")));
+        assert!(v["url"].as_str().is_some_and(|u| u.contains("fleetdm.com")));
+        assert!(v["columns"].as_array().is_some_and(|c| !c.is_empty()));
+    }
+
+    /// An upstream table gets Fleet's example and docs link where Fleet has them.
+    #[test]
+    fn osquery_table_carries_fleet_facts_for_an_upstream_table() {
+        let v = osquery_table(&json!({"table": "mounts"})).unwrap();
+        assert_eq!(v["source"], "both");
+        assert!(v["note"].is_null());
+        assert!(v["examples"].as_str().is_some_and(|e| e.to_lowercase().contains("select")));
+    }
+
+    #[test]
+    fn osquery_search_includes_fleet_only_hits_and_filters_by_platform() {
+        let all = osquery_search(&json!({"query": "filevault"})).unwrap();
+        let sources: Vec<&str> = all["results"].as_array().unwrap().iter().filter_map(|r| r["source"].as_str()).collect();
+        assert!(sources.contains(&"fleet"), "{sources:?}");
+        let windows = osquery_search(&json!({"query": "filevault", "platform": "windows"})).unwrap();
+        assert_eq!(windows["count"], json!(0));
+    }
+
+    #[test]
+    fn osquery_validate_reports_unknown_fleet_only_and_platform() {
+        let v = osquery_validate(&json!({
+            "sql": "SELECT 1 FROM filevault_status JOIN proceses ON 1 = 1",
+            "platform": "windows"
+        }))
+        .unwrap();
+        assert_eq!(v["ok"], json!(false));
+        let errors = v["errors"].as_array().unwrap();
+        assert!(errors.iter().any(|e| e.as_str().unwrap().contains("proceses") && e.as_str().unwrap().contains("processes")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.as_str().unwrap().contains("not available on windows")), "{errors:?}");
+        let warnings = v["warnings"].as_array().unwrap();
+        assert!(warnings.iter().any(|w| w.as_str().unwrap().contains("Fleet's agent")), "{warnings:?}");
+        let ok = osquery_validate(&json!({"sql": "SELECT name, version FROM os_version;", "platform": "darwin"})).unwrap();
+        assert_eq!(ok["ok"], json!(true));
+        assert!(ok["errors"].as_array().unwrap().is_empty());
     }
 
     #[test]

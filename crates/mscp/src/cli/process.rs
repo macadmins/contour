@@ -897,6 +897,12 @@ pub fn process_baseline(
                     )?;
                     match fmt {
                         crate::osquery::OsqueryFormat::Pack => {
+                            crate::osquery::check_emitted(
+                                &format!("{}.pack.json", baseline.name),
+                                art.queries
+                                    .iter()
+                                    .map(|q| (q.title.as_str(), q.sql.as_str(), "darwin")),
+                            )?;
                             let json = crate::osquery::adapters::pack::to_pack_json(&art);
                             std::fs::write(
                                 oq_dir.join(format!("{}.pack.json", baseline.name)),
@@ -905,6 +911,12 @@ pub fn process_baseline(
                         }
                         crate::osquery::OsqueryFormat::Fleet => {
                             let policies = crate::osquery::adapters::fleet::to_fleet_policies(&art);
+                            crate::osquery::check_emitted(
+                                &format!("{}.policies.yml", baseline.name),
+                                policies.iter().map(|p| {
+                                    (p.name.as_str(), p.query.as_str(), p.platform.as_str())
+                                }),
+                            )?;
                             let yaml = yaml_serde::to_string(&policies)?;
                             std::fs::write(
                                 oq_dir.join(format!("{}.policies.yml", baseline.name)),
@@ -922,6 +934,14 @@ pub fn process_baseline(
                                 org_domain,
                                 &baseline.name,
                             );
+                            crate::osquery::check_emitted(
+                                &format!("{}-compliance.reports.yml", baseline.name),
+                                std::iter::once((
+                                    compliance.name.as_str(),
+                                    compliance.query.as_str(),
+                                    compliance.platform.as_str(),
+                                )),
+                            )?;
                             let yaml = yaml_serde::to_string(&[compliance])?;
                             std::fs::write(
                                 reports_dir
@@ -954,6 +974,18 @@ pub fn process_baseline(
         std::fs::create_dir_all(&reports_dir)?;
         // Embedded default, overridable via <repo>/.contour/security-posture.toml.
         let pack = crate::osquery::reports::resolve_security_posture(&output_path)?;
+        // The embedded pack is guarded by a unit test; this catches a repo
+        // override that names a table or column osquery does not have.
+        let override_path = output_path.join(".contour").join("security-posture.toml");
+        let what = if override_path.is_file() {
+            override_path.display().to_string()
+        } else {
+            "security-posture.reports.yml".to_string()
+        };
+        crate::osquery::check_emitted(
+            &what,
+            pack.iter().map(|r| (r.name.as_str(), r.query.as_str(), r.platform.as_str())),
+        )?;
         let yaml = yaml_serde::to_string(&pack)?;
         std::fs::write(reports_dir.join("security-posture.reports.yml"), yaml)?;
         tracing::info!(

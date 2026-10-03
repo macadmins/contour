@@ -44,7 +44,7 @@ the OAuth authorization spec and should take credentials from the environment.
 
 2. INSPECT the catalogue without starting a server
    contour-mcp --print-tools
-   → JSON: 7 tools, each with inputSchema, outputSchema and annotations
+   → JSON: 8 tools, each with inputSchema, outputSchema and annotations
 
 3. REGISTER with the agent client
    contour-mcp --register
@@ -72,15 +72,16 @@ the OAuth authorization spec and should take credentials from the environment.
 
 ## The tools
 
-All seven are pure lookups over data compiled into the binary. Offline,
+All eight are pure lookups over data compiled into the binary. Offline,
 deterministic, and identical for a given build.
 
 | Tool | Answers |
 |---|---|
 | `contour.schema.search` | "which payload or key carries this setting?" |
 | `contour.schema.key` | "what are this payload's keys, where each sits (`path`, `parent`), platforms, and a starting snippet?" |
-| `contour.osquery.search` | "is there a table for this?" |
-| `contour.osquery.table` | "what columns does this table have?" |
+| `contour.osquery.search` | "is there a table for this?" — `source: fleet` means it needs Fleet's agent |
+| `contour.osquery.table` | "what columns does this table have?" — plus Fleet's example, notes and docs link |
+| `contour.osquery.validate` | "do these tables and columns exist, and will this SQL run here?" |
 | `contour.mscp.rule` | "what is this rule, and which baselines include it?" |
 | `contour.mscp.baseline` | "what rules are in CIS level 1?" |
 | `contour.sop` | "what is the command sequence for this workflow?" |

@@ -166,6 +166,7 @@ jobs:
               --json
           contour profile ddm verify platforms/macos/declaration-profiles \
               --json
+          contour osquery validate . --recursive --json
 
       - name: Apply (Fleet example)
         run: ./.github/fleet-gitops/gitops.sh

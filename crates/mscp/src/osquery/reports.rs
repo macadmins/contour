@@ -157,6 +157,44 @@ mod tests {
         assert!(!yaml.contains("kind:"));
     }
 
+    /// Every pack query must pass the schema check: tables, columns, the
+    /// declared platform, required columns. The pack is hand-written SQL
+    /// copied straight to YAML; this is the one place the schema the binary
+    /// already carries checks the embedded copy. A repo override is checked
+    /// the same way at generate time, by `check_emitted`.
+    #[test]
+    fn posture_pack_and_compliance_report_pass_the_schema_check() {
+        use contour_core::osquery_validate::{Severity, check_query};
+        let index = osquery_schema::index();
+        let mut pack = security_posture_pack();
+        pack.push(compliance_report("com.acme", "cis_lvl1"));
+        for r in &pack {
+            let errors: Vec<String> = check_query(&r.query, &r.platform, index)
+                .into_iter()
+                .filter(|p| p.severity() == Severity::Error)
+                .map(|p| p.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{}: {errors:?}", r.name);
+        }
+    }
+
+    /// The check must be seen failing, or a green test proves nothing.
+    #[test]
+    fn schema_check_rejects_a_planted_typo_and_wrong_platform() {
+        let bad = "[[report]]\nname = \"SIP\"\ndescription = \"d\"\nquery = \"SELECT config_flag FROM sip_configz;\"\n\
+                   [[report]]\nname = \"plist on windows\"\ndescription = \"d\"\nplatform = \"windows\"\nquery = \"SELECT key FROM plist WHERE path = '/x';\"\n";
+        let pack = parse_posture(bad).unwrap();
+        let err = crate::osquery::check_emitted(
+            "test pack",
+            pack.iter().map(|r| (r.name.as_str(), r.query.as_str(), r.platform.as_str())),
+        )
+        .expect_err("planted problems must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("2 query(s) fail"), "{msg}");
+        assert!(msg.contains("did you mean: sip_config"), "{msg}");
+        assert!(msg.contains("not available on windows"), "{msg}");
+    }
+
     #[test]
     fn posture_toml_applies_defaults_for_omitted_fields() {
         // Only name/description/query given — platform/interval/flags default.

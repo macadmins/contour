@@ -141,6 +141,33 @@ mod tests {
         );
     }
 
+    /// Every native query the bridge can emit, checked against the embedded
+    /// schema: tables, columns, the darwin platform, and required columns.
+    #[test]
+    fn every_native_query_passes_the_schema_check() {
+        use contour_core::osquery_validate::{Severity, check_query};
+        let index = osquery_schema::index();
+        let cases = [
+            (OsqueryTable::SharingPreferences, rule("system_settings_remote_management_disable", None)),
+            (OsqueryTable::SharingPreferences, rule("system_settings_printer_sharing_disable", None)),
+            (OsqueryTable::SharingPreferences, rule("system_settings_screen_sharing_disable", None)),
+            (OsqueryTable::LaunchdOverrides, rule("os_smbd_disable", Some("grep -c '\"com.apple.smbd\" => disabled'"))),
+            (OsqueryTable::DiskEncryption, rule("filevault_enforce", None)),
+            (OsqueryTable::SipConfig, rule("os_sip_enable", None)),
+            (OsqueryTable::Gatekeeper, rule("os_gatekeeper_enable", None)),
+            (OsqueryTable::Alf, rule("os_firewall_enable", None)),
+        ];
+        for (table, r) in cases {
+            let sql = build(table, &r).expect("builder returns SQL for its own table");
+            let errors: Vec<String> = check_query(&sql, "darwin", index)
+                .into_iter()
+                .filter(|p| p.severity() == Severity::Error)
+                .map(|p| p.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{sql}: {errors:?}");
+        }
+    }
+
     #[test]
     fn launchd_without_label_falls_to_residual() {
         let q = build(

@@ -22,7 +22,7 @@ Drift detector: `crates/profile/tests/sop_traps.rs`
 
 ```
 INVALID_FORMAT         malformed --json input
-SCHEMA_VIOLATION       query references nonexistent table or column
+SCHEMA_VIOLATION       query references a nonexistent table (validate is table-level across files; columns are checked for single-table queries)
 IO_ERROR               schema data missing / unreadable
 UNKNOWN                unmatched (e.g. unknown table name)
 ```
@@ -38,10 +38,11 @@ Failure-path JSON envelope (since contour ≥0.2.1):
 ## PROCEDURE find_query_table(keyword, platform)
 
 ```
-SCHEMA_SOURCE: osquery/osquery (via contour's embedded snapshot)
+SCHEMA_SOURCE: osquery/osquery + Fleet's schema (fleetdm.com/tables), both embedded
 SCHEMA_TOOL:   contour osquery search <keyword> --json
                contour osquery table <name> --json
                contour osquery stats --json
+               contour osquery validate <yaml> --json     # before deploying what you wrote
 
 INPUT:
   keyword   : a noun describing the compliance check or data point
@@ -58,9 +59,11 @@ STEP 1 — Search:
   # Returns a JSON ARRAY of column-level matches:
   #   [ { "table_name", "table_description", "platforms",
   #       "evented", "column_name", "column_description",
-  #       "column_type", "required", "hidden" }, ... ]
+  #       "column_type", "required", "hidden", "source" }, ... ]
   # NB: each entry is one matching COLUMN (so a single matching table
   #     with 8 matching columns produces 8 entries).
+  # NB: "source" is "osquery" or "fleet". A "fleet" table needs Fleet's
+  #     agent (fleetd); plain osqueryd returns no rows for it.
   # Empty array (no match) exits 0 — agents MUST check len(), not exit.
 
   ASSERT len(matches) > 0
@@ -80,7 +83,10 @@ STEP 3 — Inspect the chosen table:
   #   { "table_name", "table_description", "platforms",
   #     "evented", "columns": [ { "column_name", "column_type",
   #                                "column_description",
-  #                                "required", "hidden" }, ... ] }
+  #                                "required", "hidden" }, ... ],
+  #     "fleet": { "examples", "notes", "url" }      # when Fleet documents it
+  #     "source", "note" }                            # on a Fleet-only table
+  # Start from fleet.examples where present — it is Fleet's worked query.
   # NB: column fields are prefixed (column_name, column_type,
   #     column_description) — NOT bare name/type. Same prefix used
   #     by `osquery search` results.
@@ -161,6 +167,13 @@ Battle-tested patterns drawn from real-world osquery deployments
 verbatim; do not invent new query structures** — agents that synthesize
 queries from scratch produce false-negatives that look like compliant
 hosts but are actually unmonitored.
+
+Every `sql` block below is checked against the embedded osquery and Fleet
+schemas by a test (`trap_97`), so a table or column named here exists.
+Some patterns use Fleet agent tables (`filevault_status`, `software_update`,
+`macos_profiles`, `mdm_bridge`): `contour osquery table <name>` shows
+`source: fleet`, and the query returns nothing under plain osqueryd. Ship
+those only to Fleet-managed hosts.
 
 ### `is_setting_enabled` — boolean check
 
@@ -345,8 +358,8 @@ PRECONDITIONS:
   ASSERT the target table is `signature`, NOT `codesign`
     HALT "codesign is a Fleet extension table, absent from vanilla osqueryd.
           Use signature — it is core osquery and works in both."
-    # contour enforces this: `osquery validate` reports
-    #   unknown table 'codesign'
+    # contour flags this: `osquery validate` warns
+    #   'codesign' is a Fleet extension table; requires Fleet's agent
 
   ASSERT the query constrains signature.path
     # `signature.path` is a REQUIRED column (contour osquery table signature).
@@ -380,7 +393,9 @@ STEP 1 — Enumerate installed apps with their signing identity:
 
 STEP 2 — Validate before deploying the query:
   contour osquery validate <gitops.yml>
-  # Catches unknown tables and columns offline, including the codesign trap.
+  # Catches unknown tables offline (table-level only; columns are not checked).
+  # A Fleet-only table such as codesign is a warning: real under Fleet's agent,
+  # empty under plain osqueryd.
 
 POSTCONDITIONS:
   ASSERT the identifier came from rank 1-3, never rank 5
@@ -446,7 +461,7 @@ and the folder policies stay in a PPPC profile. See `--sop app-privacy`.
 ```
 contour osquery stats --json
 # Returns: {total_tables, total_columns, darwin_tables, linux_tables,
-#           windows_tables}
+#           windows_tables, sources: {osquery, fleet, both, fleet_only[], osquery_only[]}}
 # Live totals: contour osquery stats
 ```
 
@@ -457,6 +472,7 @@ contour osquery stats --json
 # copy-pasteable command. contour NEVER executes them — you run them on the host.
 contour osquery verify ./output                  # scan a GitOps repo (or a dir/file), print commands
 contour osquery verify ./output -o verify.md     # write a Markdown reference instead of printing
+contour osquery verify ./output --json           # {count, queries[{name, source, query, osqueryi_cmd, orbit_cmd}]}
 #
 # Each query is emitted in BOTH host forms (one doc works everywhere):
 #   dev / CI:            osqueryi --json "<sql>"

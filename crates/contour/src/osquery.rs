@@ -1,7 +1,8 @@
 //! Handlers for the `contour osquery` subcommand.
 //!
-//! Provides search, table detail, and statistics against the embedded
-//! osquery schema (286 tables, 2,624 columns).
+//! Provides search, table detail, statistics and validation against the
+//! embedded schemas: 286 upstream osquery tables plus 91 Fleet-only agent
+//! tables (377), with Fleet's examples and notes where it has them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -59,18 +60,48 @@ pub fn handle(action: OsqueryAction, json: bool) -> Result<()> {
         OsqueryAction::Validate { path, recursive } => {
             handle_validate(&path, recursive, json, &mut out)
         }
-        OsqueryAction::Verify { path, output } => handle_verify(&path, output.as_deref(), &mut out),
+        OsqueryAction::Verify { path, output } => {
+            handle_verify(&path, output.as_deref(), json, &mut out)
+        }
     }
 }
 
 /// Render every generated query under `path` as a Markdown reference with both
 /// the `osqueryi` (dev/CI) and `sudo orbit shell` (Fleet-managed host) command
 /// per query (never executed). With `--output`, write the doc to a `.md` file;
-/// otherwise print it.
-fn handle_verify(path: &Path, output: Option<&Path>, out: &mut impl Write) -> Result<()> {
+/// otherwise print it. With `--json`, emit the same commands as an object.
+fn handle_verify(path: &Path, output: Option<&Path>, json: bool, out: &mut impl Write) -> Result<()> {
     use mscp::osquery::verify;
 
     let queries = verify::collect_queries(path)?;
+    if json {
+        let osq = verify::osqueryi_or_conventional();
+        let orbit = verify::orbit_or_conventional();
+        let items: Vec<serde_json::Value> = queries
+            .iter()
+            .map(|q| {
+                serde_json::json!({
+                    "name": q.name,
+                    "source": q.source,
+                    "query": q.query,
+                    "osqueryi_cmd": osq.suggest(&q.query),
+                    "orbit_cmd": orbit.suggest(&q.query),
+                })
+            })
+            .collect();
+        let mut obj = serde_json::json!({
+            "count": items.len(),
+            "osqueryi": osq.label(),
+            "orbit": orbit.label(),
+            "queries": items,
+        });
+        if let Some(file) = output {
+            verify::write_markdown(file, &queries)?;
+            obj["wrote"] = serde_json::json!(file.display().to_string());
+        }
+        writeln!(out, "{}", serde_json::to_string_pretty(&obj)?)?;
+        return Ok(());
+    }
     if queries.is_empty() {
         writeln!(
             out,
@@ -95,95 +126,19 @@ fn handle_verify(path: &Path, output: Option<&Path>, out: &mut impl Write) -> Re
     Ok(())
 }
 
-/// Which schema describes a table.
-///
-/// The two sources agree on 286 tables today and Fleet adds 91, but that is
-/// a snapshot, not a guarantee: Fleet tracks osquery's main branch and can
-/// lag it, and its own agent ships tables upstream will never have. So the
-/// two are never merged into one list — a table carries where it came from,
-/// and a reader can act on the difference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TableSource {
-    /// In both schemas — the ordinary case.
-    Both,
-    /// Upstream osquery only. Either Fleet has not synced yet, or it
-    /// deliberately omits the table.
-    OsqueryOnly,
-    /// Fleet only: an agent extension (`ai_tools`, `cis_audit`,
-    /// `app_sso_platform`, …). Plain `osqueryi` cannot answer it.
-    FleetOnly,
-}
-
-impl TableSource {
-    fn label(self) -> &'static str {
-        match self {
-            TableSource::Both => "",
-            TableSource::OsqueryOnly => "osquery only — not in Fleet's schema",
-            TableSource::FleetOnly => {
-                "Fleet extension — requires Fleet's agent, not in upstream osquery"
-            }
-        }
-    }
-}
-
-/// Every table either schema knows, with its provenance.
-///
-/// Computed once per process: it decodes both embedded datasets, and callers
-/// reach it from per-row filters, where a fresh decode would take seconds.
-fn table_sources() -> &'static BTreeMap<String, TableSource> {
-    static SOURCES: std::sync::OnceLock<BTreeMap<String, TableSource>> = std::sync::OnceLock::new();
-    SOURCES.get_or_init(compute_table_sources)
-}
-
-fn compute_table_sources() -> BTreeMap<String, TableSource> {
-    let upstream: BTreeSet<String> = load_entries()
-        .map(|v| v.into_iter().map(|e| e.table_name).collect())
-        .unwrap_or_default();
-    let fleet: BTreeSet<String> = osquery_schema::fleet::read(osquery_schema::embedded_fleet())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|e| e.table_name)
-        .collect();
-    let mut out = BTreeMap::new();
-    for t in upstream.union(&fleet) {
-        let src = match (upstream.contains(t), fleet.contains(t)) {
-            (true, true) => TableSource::Both,
-            (true, false) => TableSource::OsqueryOnly,
-            _ => TableSource::FleetOnly,
-        };
-        out.insert(t.clone(), src);
-    }
-    out
-}
-
-/// Fleet's schema for one table: the authoring facts upstream osquery has
-/// no column for — worked examples, notes, a documentation link — and the
-/// 91 tables it does not list at all. Empty on a dataset without the file.
-fn fleet_for(table: &str) -> Vec<osquery_schema::fleet::FleetEntry> {
-    osquery_schema::fleet::read(osquery_schema::embedded_fleet())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|e| e.table_name == table)
-        .collect()
-}
-
-/// Load all entries from the embedded Parquet data.
-fn load_entries() -> Result<Vec<osquery_schema::OsqueryEntry>> {
-    osquery_schema::osquery::read(osquery_schema::embedded())
-}
+use osquery_schema::{TableSource, fleet_for, osquery_entries, table_sources};
 
 // ── Search ───────────────────────────────────────────────────────────
 
-/// Every column row of a Fleet-only table matching `q`.
+/// Every column row of a Fleet-only table matching `q`, on `platform` when
+/// one is given — the same filter the upstream rows get.
 ///
-/// `handle_search` also keeps a table-deduplicated view for the human
-/// listing; the JSON array needs the column rows so its shape matches the
-/// upstream entries beside them.
-fn fleet_columns(q: &str) -> Vec<osquery_schema::fleet::FleetEntry> {
+/// `handle_search` dedupes this by table for the human listing; the JSON
+/// array needs the column rows so its shape matches the upstream entries.
+fn fleet_columns(q: &str, platform: Option<&str>) -> Vec<&'static osquery_schema::fleet::FleetEntry> {
     let sources = table_sources();
-    osquery_schema::fleet::read(osquery_schema::embedded_fleet())
-        .unwrap_or_default()
-        .into_iter()
+    osquery_schema::fleet_entries()
+        .iter()
         .filter(|e| {
             sources.get(&e.table_name) == Some(&TableSource::FleetOnly)
                 && (e.table_name.to_lowercase().contains(q)
@@ -197,6 +152,7 @@ fn fleet_columns(q: &str) -> Vec<osquery_schema::fleet::FleetEntry> {
                         .unwrap_or_default()
                         .to_lowercase()
                         .contains(q))
+                && platform.is_none_or(|p| e.platforms.as_deref().is_some_and(|s| s.contains(p)))
         })
         .collect()
 }
@@ -207,29 +163,17 @@ fn handle_search(
     json: bool,
     out: &mut impl Write,
 ) -> Result<()> {
-    let entries = load_entries()?;
+    let entries = osquery_entries();
     let q = query.to_lowercase();
-    let sources = table_sources();
     // Fleet-only tables are real and queryable under Fleet's agent, so a
     // search that hides them answers the wrong question. They are listed
     // after the upstream hits and labelled, never mixed in silently.
-    let fleet_hits: BTreeMap<String, osquery_schema::fleet::FleetEntry> =
-        osquery_schema::fleet::read(osquery_schema::embedded_fleet())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|e| {
-                sources.get(&e.table_name) == Some(&TableSource::FleetOnly)
-                    && (e.table_name.to_lowercase().contains(&q)
-                        || e.table_description
-                            .as_deref()
-                            .unwrap_or_default()
-                            .to_lowercase()
-                            .contains(&q))
-            })
-            .fold(BTreeMap::new(), |mut m, e| {
-                m.entry(e.table_name.clone()).or_insert(e);
-                m
-            });
+    let fleet_rows = fleet_columns(&q, platform);
+    let fleet_hits: BTreeMap<&str, &osquery_schema::fleet::FleetEntry> =
+        fleet_rows.iter().fold(BTreeMap::new(), |mut m, e| {
+            m.entry(e.table_name.as_str()).or_insert(*e);
+            m
+        });
 
     let matches: Vec<_> = entries
         .iter()
@@ -278,7 +222,7 @@ fn handle_search(
         }
         // Fleet-only rows are column-level too, so they keep the array
         // uniform: every entry has a table_name and a column_name.
-        for e in fleet_columns(&q) {
+        for e in &fleet_rows {
             arr.push(serde_json::json!({
                 "table_name": e.table_name,
                 "table_description": e.table_description,
@@ -362,7 +306,7 @@ fn handle_search(
 // ── Table detail ─────────────────────────────────────────────────────
 
 fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()> {
-    let entries = load_entries()?;
+    let entries = osquery_entries();
 
     let table_entries: Vec<_> = entries
         .iter()
@@ -372,7 +316,7 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
     if table_entries.is_empty() {
         // Not upstream — but Fleet may still describe it, and saying so is
         // more useful than "not found" for a table that genuinely exists.
-        let fleet = fleet_for(table_name);
+        let fleet: Vec<_> = fleet_for(table_name).cloned().collect();
         if !fleet.is_empty() {
             return handle_fleet_only_table(table_name, &fleet, json, out);
         }
@@ -402,7 +346,7 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
         let mut obj = obj;
         // Fleet's half: present only when the dataset carries it, so a
         // consumer can tell "no examples documented" from "no Fleet data".
-        if let Some(f) = fleet_for(table_name).first()
+        if let Some(f) = fleet_for(table_name).next()
             && let Some(o) = obj.as_object_mut()
         {
             o.insert(
@@ -426,21 +370,8 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
     writeln!(out, "  Description: {desc}")?;
     writeln!(out, "  Platforms:   {}", first.platforms)?;
     writeln!(out, "  Evented:     {}", first.evented)?;
-    let fleet = fleet_for(table_name);
-    if let Some(f) = fleet.first() {
-        if let Some(u) = &f.url {
-            writeln!(out, "  Docs:        {u}")?;
-        }
-        if let Some(n) = &f.notes {
-            writeln!(out, "  Notes:       {}", n.lines().next().unwrap_or(n))?;
-        }
-        if let Some(ex) = &f.examples {
-            writeln!(out)?;
-            writeln!(out, "  {}", "Example:".cyan())?;
-            for line in ex.lines() {
-                writeln!(out, "    {line}")?;
-            }
-        }
+    if let Some(f) = fleet_for(table_name).next() {
+        write_fleet_facts(f, out)?;
     }
     writeln!(out)?;
     writeln!(
@@ -462,6 +393,31 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
     Ok(())
 }
 
+/// Fleet's authoring facts for a table: docs link, the full notes, the
+/// worked example.
+fn write_fleet_facts(f: &osquery_schema::fleet::FleetEntry, out: &mut impl Write) -> Result<()> {
+    if let Some(u) = &f.url {
+        writeln!(out, "  Docs:        {u}")?;
+    }
+    if let Some(n) = &f.notes {
+        let mut lines = n.lines();
+        if let Some(first) = lines.next() {
+            writeln!(out, "  Notes:       {first}")?;
+        }
+        for line in lines {
+            writeln!(out, "               {line}")?;
+        }
+    }
+    if let Some(ex) = &f.examples {
+        writeln!(out)?;
+        writeln!(out, "  {}", "Example:".cyan())?;
+        for line in ex.lines() {
+            writeln!(out, "    {line}")?;
+        }
+    }
+    Ok(())
+}
+
 /// A table only Fleet describes. Rendered with the same shape as an
 /// upstream table, and labelled: the query will not run under plain
 /// `osqueryi`.
@@ -478,7 +434,7 @@ fn handle_fleet_only_table(
             "table_description": first.table_description,
             "platforms": first.platforms,
             "source": "fleet",
-            "note": TableSource::FleetOnly.label(),
+            "note": TableSource::FleetOnly.note(),
             "columns": fleet.iter().filter(|e| e.column_name.is_some()).map(|e| serde_json::json!({
                 "column_name": e.column_name,
                 "column_description": e.column_description,
@@ -493,7 +449,7 @@ fn handle_fleet_only_table(
     }
 
     writeln!(out, "{}", table_name.bold())?;
-    writeln!(out, "  {}", TableSource::FleetOnly.label().yellow())?;
+    writeln!(out, "  {}", TableSource::FleetOnly.note().unwrap_or_default().yellow())?;
     if let Some(d) = &first.table_description {
         writeln!(out, "  Description: {d}")?;
     }
@@ -521,14 +477,14 @@ fn handle_fleet_only_table(
 // ── Stats ────────────────────────────────────────────────────────────
 
 fn handle_stats(json: bool, out: &mut impl Write) -> Result<()> {
-    let entries = load_entries()?;
+    let entries = osquery_entries();
 
     let mut tables: BTreeSet<&str> = BTreeSet::new();
     let mut darwin_tables: BTreeSet<&str> = BTreeSet::new();
     let mut linux_tables: BTreeSet<&str> = BTreeSet::new();
     let mut windows_tables: BTreeSet<&str> = BTreeSet::new();
 
-    for e in &entries {
+    for e in entries {
         tables.insert(&e.table_name);
         if e.platforms.contains("darwin") {
             darwin_tables.insert(&e.table_name);
@@ -627,12 +583,11 @@ fn handle_stats(json: bool, out: &mut impl Write) -> Result<()> {
 /// Tier 1 by design: a typo'd table is the failure that hides, because the
 /// query returns no rows and a Fleet policy reads no rows as compliant.
 fn handle_validate(path: &Path, recursive: bool, json: bool, out: &mut impl Write) -> Result<()> {
-    use contour_core::osquery_validate::{extract_fleet_queries, validate_query};
+    use contour_core::osquery_validate::{Severity, check_query, extract_fleet_queries};
 
-    let known: std::collections::BTreeSet<String> = load_entries()?
-        .iter()
-        .map(|e| e.table_name.to_lowercase())
-        .collect();
+    // Both schemas: a Fleet-only table is real under Fleet's agent, so it is
+    // not "unknown" — but plain osqueryd cannot answer it, so it is a warning.
+    let index = osquery_schema::index();
 
     let files = collect_yaml_files(path, recursive)?;
     if files.is_empty() {
@@ -640,26 +595,36 @@ fn handle_validate(path: &Path, recursive: bool, json: bool, out: &mut impl Writ
     }
 
     let mut findings: Vec<serde_json::Value> = Vec::new();
+    let mut warnings: Vec<serde_json::Value> = Vec::new();
+    let mut unreadable: Vec<serde_json::Value> = Vec::new();
     let mut checked = 0usize;
 
     for file in &files {
-        let Ok(text) = std::fs::read_to_string(file) else {
-            continue;
+        let text = match std::fs::read_to_string(file) {
+            Ok(t) => t,
+            Err(e) => {
+                unreadable.push(serde_json::json!({
+                    "file": file.display().to_string(),
+                    "error": e.to_string(),
+                }));
+                continue;
+            }
         };
         for query in extract_fleet_queries(&text) {
             checked += 1;
-            let Some(finding) = validate_query(&query, &known) else {
-                continue;
-            };
-            for unknown in &finding.unknown_tables {
-                findings.push(serde_json::json!({
+            let platform = query.platform.as_deref().unwrap_or("");
+            for problem in check_query(&query.sql, platform, index) {
+                let entry = serde_json::json!({
                     "file": file.display().to_string(),
-                    "kind": finding.kind,
-                    "index": finding.index,
-                    "name": finding.name,
-                    "unknown_table": unknown.name,
-                    "suggestions": unknown.suggestions,
-                }));
+                    "kind": query.kind,
+                    "index": query.index,
+                    "name": query.name,
+                    "problem": problem.to_string(),
+                });
+                match problem.severity() {
+                    Severity::Error => findings.push(entry),
+                    Severity::Warning => warnings.push(entry),
+                }
             }
         }
     }
@@ -673,56 +638,61 @@ fn handle_validate(path: &Path, recursive: bool, json: bool, out: &mut impl Writ
                 "files_scanned": files.len(),
                 "queries_checked": checked,
                 "findings": findings,
+                "warnings": warnings,
+                "unreadable": unreadable,
             }))?
         )?;
-    } else if findings.is_empty() {
-        writeln!(
-            out,
-            "{} {checked} query(s) across {} file(s): every table exists in the embedded schema",
-            "\u{2713}".green(),
-            files.len()
-        )?;
     } else {
-        for f in &findings {
-            let name = f["name"].as_str().unwrap_or("(unnamed)");
+        let locate = |v: &serde_json::Value| {
+            format!(
+                "{}:{}[{}] {}",
+                v["file"].as_str().unwrap_or_default(),
+                v["kind"].as_str().unwrap_or_default(),
+                v["index"],
+                v["name"].as_str().unwrap_or("(unnamed)")
+            )
+        };
+        for u in &unreadable {
             writeln!(
                 out,
-                "{} {}:{}[{}] {name}",
-                "\u{2717}".red(),
-                f["file"].as_str().unwrap_or_default(),
-                f["kind"].as_str().unwrap_or_default(),
-                f["index"]
-            )?;
-            let suggestions = f["suggestions"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let hint = if suggestions.is_empty() {
-                String::new()
-            } else {
-                format!(" \u{2014} did you mean: {suggestions}?")
-            };
-            writeln!(
-                out,
-                "    unknown table '{}'{hint}",
-                f["unknown_table"].as_str().unwrap_or_default()
+                "{} {}: {}",
+                "\u{26a0}".yellow(),
+                u["file"].as_str().unwrap_or_default(),
+                u["error"].as_str().unwrap_or_default()
             )?;
         }
-        writeln!(out)?;
-        writeln!(
-            out,
-            "{} unknown table reference(s) in {checked} query(s)",
-            findings.len()
-        )?;
+        for w in &warnings {
+            writeln!(
+                out,
+                "{} {} — {}",
+                "\u{26a0}".yellow(),
+                locate(w),
+                w["problem"].as_str().unwrap_or_default()
+            )?;
+        }
+        for f in &findings {
+            writeln!(out, "{} {}", "\u{2717}".red(), locate(f))?;
+            writeln!(out, "    {}", f["problem"].as_str().unwrap_or_default())?;
+        }
+        if findings.is_empty() {
+            writeln!(
+                out,
+                "{} {checked} query(s) across {} file(s): every table, column and platform checks out against the embedded osquery and Fleet schemas",
+                "\u{2713}".green(),
+                files.len()
+            )?;
+        } else {
+            writeln!(out)?;
+            writeln!(
+                out,
+                "{} problem(s) in {checked} query(s)",
+                findings.len()
+            )?;
+        }
     }
 
     if !findings.is_empty() {
-        anyhow::bail!("{} query(s) reference unknown tables", findings.len());
+        anyhow::bail!("{} query(s) fail the osquery schema check", findings.len());
     }
     Ok(())
 }
@@ -757,13 +727,45 @@ fn collect_yaml_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use contour_core::osquery_validate::{EXTENSION_TABLES, Severity, check_query, extract_tables};
+    use contour_core::trainer::queries as q;
 
-    /// `table_sources` decodes both embedded datasets. Callers reach it from
-    /// per-row filters, so it must be computed once, not once per call.
+    /// Every SQL string the trainer prints must name real tables and columns.
+    /// Queries over an extension table are skipped, and the test holds that
+    /// such a table is still absent from the index — when a dataset carries
+    /// it, the allowlist entry comes off and the query gets checked.
     #[test]
-    fn table_sources_is_computed_once() {
-        assert!(std::ptr::eq(table_sources(), table_sources()));
-        assert!(!table_sources().is_empty());
+    fn trainer_queries_pass_the_schema_check() {
+        let index = osquery_schema::index();
+        let all: &[(&str, &str)] = &[
+            ("santa::DISCOVER_APPS", q::santa::DISCOVER_APPS),
+            ("santa::APP_COVERAGE", q::santa::APP_COVERAGE),
+            ("santa::APPS_BY_TEAMID", q::santa::APPS_BY_TEAMID),
+            ("santa::SANTA_RULES", q::santa::SANTA_RULES),
+            ("pppc::DISCOVER_APPS", q::pppc::DISCOVER_APPS),
+            ("pppc::APP_SIGNATURES", q::pppc::APP_SIGNATURES),
+            ("mscp::SECURITY_SETTINGS", q::mscp::SECURITY_SETTINGS),
+            ("mscp::FILEVAULT_STATUS", q::mscp::FILEVAULT_STATUS),
+            ("mscp::GATEKEEPER_STATUS", q::mscp::GATEKEEPER_STATUS),
+            ("mscp::SIP_STATUS", q::mscp::SIP_STATUS),
+            ("fleet::PROFILE_STATUS", q::fleet::PROFILE_STATUS),
+            ("fleet::PROFILE_ISSUES", q::fleet::PROFILE_ISSUES),
+        ];
+        for (name, sql) in all {
+            let tables = extract_tables(sql);
+            if tables.iter().any(|t| EXTENSION_TABLES.contains(&t.as_str())) {
+                for t in &tables {
+                    assert!(!index.contains_key(t), "`{t}` is now in the dataset — remove it from EXTENSION_TABLES");
+                }
+                continue;
+            }
+            let errors: Vec<String> = check_query(sql, "darwin", index)
+                .into_iter()
+                .filter(|p| p.severity() == Severity::Error)
+                .map(|p| p.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{name}: {errors:?}");
+        }
     }
+
 }

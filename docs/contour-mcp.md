@@ -94,14 +94,15 @@ One JSON line comes back, with `protocolVersion`, `capabilities.tools` and `serv
 
 ## Tools
 
-All seven are pure lookups — deterministic, and identical for a given build.
+All eight are pure lookups — deterministic, and identical for a given build.
 
 | Tool | Arguments (required in **bold**) | Answers |
 |---|---|---|
 | `contour.schema.search` | **`query`**, `platform`, `windows`, `limit` | Which Apple payload, DDM declaration or Windows CSP key carries this setting? |
 | `contour.schema.key` | **`payload_type`**, `key`, `windows` | Every key of one payload with its `path` and `parent`, type, default, per-key deprecation, and a starter snippet. `key` takes a bare name (all keys of that name; `ambiguous: true` when they sit under different parents) or a dot-path (exactly one) |
-| `contour.osquery.search` | **`query`**, `limit` | Is there an osquery table for this? |
-| `contour.osquery.table` | **`table`** | The columns of one osquery table |
+| `contour.osquery.search` | **`query`**, `platform`, `limit` | Is there an osquery or Fleet table for this? Each hit carries `source`; `fleet` means it needs Fleet's agent |
+| `contour.osquery.table` | **`table`** | The columns of one osquery or Fleet table, with Fleet's `examples`, `notes` and `url` where it has them |
+| `contour.osquery.validate` | **`sql`**, `platform` | Do these tables and columns exist, is the table on this platform, and will it run under plain osqueryd? Unknown tables come back with suggestions |
 | `contour.mscp.rule` | **`rule_id`** | One mSCP rule: severity, check/fix, mobileconfig/DDM enforceable, baselines |
 | `contour.mscp.baseline` | **`baseline`**, `limit` | The rules in one baseline (CIS, STIG, 800-53 …) by section |
 | `contour.sop` | **`topic`**, `section` | The step-by-step procedure for a contour workflow (same text as `contour help-ai --sop <topic>`) |

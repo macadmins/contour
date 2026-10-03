@@ -511,6 +511,17 @@ contour mscp generate [flags]
 | `--glob` | With `--fleets`, attach the baseline as one `*.mobileconfig` glob entry instead of one entry per profile | `false` |
 | `--script-mode <MODE>` | `combined`, `granular`, `bundled`, or `both` | `bundled` |
 | `--fragment` | Generate Fleet fragment directory | `false` |
+| `--osquery` | Emit osquery detection for the baseline: native-table policies for rules a table can answer, an audit script plus launchd job for the rest, and a per-baseline compliance report. Needs the Fleet layout and an org domain | `false` |
+| `--osquery-format <FMT>` | `fleet` (`osquery/<baseline>/<baseline>.policies.yml`) or `pack` (`<baseline>.pack.json`) | `fleet` |
+| `--osquery-audit <SCOPE>` | Audit-script scope: `slim` (residual rules only) or `full` | `slim` |
+| `--verify-queries` | After generating, write every emitted query as `osqueryi` and `orbit shell` commands to `<output>/osquery/verify-commands.md`. Nothing is executed | `false` |
+
+Every query `generate` writes — bridge policies, the compliance report, the
+security-posture pack (including a `.contour/security-posture.toml` override),
+and `managed_policies` detections — is checked against the embedded osquery
+and Fleet schemas before the file is written. A typo'd table or column, a
+platform the table does not exist on, or a required column left unconstrained
+fails the run naming the query; a Fleet-only table is logged as a warning.
 
 `--fleets` appends the baseline into each named fleet file: profiles go
 into `controls.apple_settings.configuration_profiles` (current Fleet
@@ -683,7 +694,13 @@ contour mscp list -o ./output --json
 
 #### `mscp validate`
 
-Validate Fleet GitOps output against schemas.
+Validate Fleet GitOps output: `fleets/*.yml` against Fleet's GitOps JSON
+Schema (the copy this build embeds, or `--schemas <DIR>`), then every query
+file contour wrote — `*.policies.yml`, `*.reports.yml`, `*.labels.yml` under
+`platforms/` and `labels/` — against the matching Fleet definition and every
+osquery query in the repo against the embedded osquery and Fleet schemas.
+Problems in files contour wrote are errors; in other files (a hand-edited
+`default.yml`) they are warnings unless `--strict`.
 
 ```
 contour mscp validate [flags]

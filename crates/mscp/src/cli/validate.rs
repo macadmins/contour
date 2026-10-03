@@ -212,6 +212,16 @@ pub fn validate_output(
         }
     }
 
+    // Step 2b: the query files contour writes — policies, reports, labels —
+    // which the root schema never sees. Each query goes through the osquery
+    // schema check; each file's list shape through the matching Fleet $def.
+    // A file contour wrote is held to errors; anything else (default.yml, a
+    // hand-written team file) is warned about unless --strict.
+    if output_mode == OutputMode::Human {
+        println!("\n{}", "Validating osquery queries and query files...".cyan());
+    }
+    validate_query_files(&output_path, &validator, strict, output_mode, &mut result)?;
+
     // Step 3: Check for conflicts if multiple baselines exist
     if output_mode == OutputMode::Human {
         println!("\n{}", "Checking for baseline conflicts...".cyan());
@@ -288,6 +298,99 @@ fn find_baselines(output_path: &PathBuf) -> Result<Vec<String>> {
     }
 
     Ok(baselines)
+}
+
+/// Which Fleet `$defs` entry a contour-written query file's list conforms to.
+fn list_def_for(file_name: &str) -> Option<&'static str> {
+    if file_name.ends_with(".policies.yml") {
+        Some("GitOpsPolicySpec")
+    } else if file_name.ends_with(".reports.yml") {
+        Some("Query")
+    } else if file_name.ends_with(".labels.yml") {
+        Some("LabelSpec")
+    } else {
+        None
+    }
+}
+
+/// Walk every YAML under `output_path` (except `mscp/`, which holds TOML
+/// components), run each query through the osquery schema check, and hold
+/// contour-written list files to their Fleet `$def`.
+fn validate_query_files(
+    output_path: &std::path::Path,
+    validator: &SchemaValidator,
+    strict: bool,
+    output_mode: OutputMode,
+    result: &mut ValidationResult,
+) -> Result<()> {
+    use contour_core::osquery_validate::{Severity, check_query, extract_fleet_queries};
+    let index = osquery_schema::index();
+
+    for entry in WalkDir::new(output_path)
+        .into_iter()
+        .filter_entry(|e| e.file_name() != "mscp")
+        .filter_map(std::result::Result::ok)
+    {
+        let path = entry.path();
+        let ext = path.extension().and_then(|s| s.to_str());
+        if !path.is_file() || !matches!(ext, Some("yml" | "yaml")) {
+            continue;
+        }
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let contour_wrote = list_def_for(&file_name).is_some();
+        let rel = path.strip_prefix(output_path).unwrap_or(path).display().to_string();
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        for query in extract_fleet_queries(&text) {
+            let platform = query.platform.as_deref().unwrap_or("");
+            let name = query.name.clone().unwrap_or_else(|| format!("{}[{}]", query.kind, query.index));
+            for problem in check_query(&query.sql, platform, index) {
+                let line = format!("{rel}: {name}: {problem}");
+                match problem.severity() {
+                    Severity::Error => errors.push(line),
+                    Severity::Warning => warnings.push(line),
+                }
+            }
+        }
+        if let Some(def) = list_def_for(&file_name) {
+            match validator.validate_list(path, def) {
+                Ok(Some(v)) if !v.valid => {
+                    errors.extend(v.errors.iter().map(|e| format!("{rel}: {e}")));
+                }
+                Ok(_) => {}
+                Err(e) => errors.push(format!("{rel}: {e}")),
+            }
+        }
+
+        if errors.is_empty() && warnings.is_empty() {
+            continue;
+        }
+        if output_mode == OutputMode::Human {
+            let mark = if errors.is_empty() { "⚠".yellow() } else { "✗".red() };
+            println!("  {mark} {rel}");
+            for w in &warnings {
+                println!("    {} {}", "-".dimmed(), w.yellow());
+            }
+            for e in &errors {
+                println!("    {} {}", "-".dimmed(), e.red());
+            }
+        }
+        for w in warnings {
+            result.add_warning(w);
+        }
+        for e in errors {
+            if contour_wrote || strict {
+                result.add_error(e);
+            } else {
+                result.add_warning(e);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
