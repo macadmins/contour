@@ -191,6 +191,22 @@ contour profile ddm generate com.apple.configuration.passcode.settings -o decl.j
 
 After generating, update the Identifier field with the user's org domain — never leave as `com.example`.
 
+## Platform SSO → `--sop platform-sso`
+
+Use when: IdP-backed login on macOS 27 — login/unlock/FileVault policies, Touch ID
+or Apple Watch required, Authenticated Guest Mode, Tap to Login with an NFC badge.
+Four presets ship; start there.
+
+```bash
+contour profile ddm compose --list-presets --json | jq '.[] | select(.name | startswith("platform-sso"))'
+contour profile ddm compose --preset platform-sso-touchid --org com.acme -o ./out --json
+contour profile ddm validate ./out --json     # cross-key rules name both keys: "A ↔ B: …"
+```
+
+The IdP's `ExtensionComposedIdentifier` and `URLs` are placeholders in every preset;
+nothing composes correctly until they are the operator's. Tap to Login also needs two
+asset declarations the preset does not emit.
+
 ## Which apps may run (macOS allow / deny lists) → `profile ddm app-control`
 
 Use when: **allowlisting or denylisting apps on macOS** over DDM —
@@ -359,4 +375,5 @@ Use when (once a seed is carried again): querying preview-only compliance rules
 | `--sop ci` | GitHub Actions setup, env vars, workflow config |
 | `--sop windows` | Windows CSP schema exploration (`--windows`), SyncML generation, DISA STIG corpus |
 | `--sop generative` | Apple Intelligence DDM payloads (intelligence / external-intelligence / app.settings) |
+| `--sop platform-sso` | Platform SSO on macOS 27: login policies, Touch ID, guest mode, Tap to Login; four presets |
 | `--sop app-policy` | AI coding tools' managed configuration (Claude Code, OpenAI Codex, Cursor, Gemini Enterprise mobile) |

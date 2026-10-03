@@ -276,7 +276,7 @@ contour profile generate --recipe okta --recipe-path ./contour-presets/recipes \
 
 ## DDM presets — `ddm compose`
 
-Presets are standalone declarative-management bundles. Eleven ship built-in:
+Presets are standalone declarative-management bundles. Fifteen ship built-in:
 
 | Preset | Effect |
 |--------|--------|
@@ -287,15 +287,23 @@ Presets are standalone declarative-management bundles. Eleven ship built-in:
 | `keyboard-settings` | Managed keyboard settings (typing aids, dictation) |
 | `managed-migration-assistant` | Run Migration Assistant under managed control |
 | `passcode-settings` | Baseline passcode policy (required, 8+ chars, inactivity lock) |
+| `platform-sso-baseline` | Platform SSO: IdP login required at login, unlock and FileVault, with offline and registration grace periods — **edit the IdP extension first** |
+| `platform-sso-guest-mode` | Platform SSO Authenticated Guest Mode: cloud users sign in without a local account into a temporary session — **edit the IdP extension first** |
+| `platform-sso-tap-to-login` | Platform SSO Tap to Login: an NFC badge or phone opens an Authenticated Guest Mode session — **edit the IdP extension, reader group and two asset identifiers first** |
+| `platform-sso-touchid` | Platform SSO: Touch ID required at every login and unlock, password always required — **edit the IdP extension first** |
 | `safari-settings` | Hardened Safari (fraud warning locked on, no private browsing) |
 | `siri-settings` | Managed Siri settings (restrict or disable) |
 | `softwareupdate-enforcement` | Enforce a specific OS version by a deadline — **edit before composing** |
 | `softwareupdate-settings` | Security updates forced on, beta enrolment blocked |
 
-`softwareupdate-enforcement` is the one preset that is not deploy-as-is:
-`TargetOSVersion` and `TargetLocalDateTime` are schema-required and
-site-specific, and a deadline in the past enforces immediately. Edit both
-before composing.
+`softwareupdate-enforcement` is not deploy-as-is: `TargetOSVersion` and
+`TargetLocalDateTime` are schema-required and site-specific, and a deadline
+in the past enforces immediately. Edit both before composing. The four
+`platform-sso-*` presets likewise carry a placeholder
+`ExtensionComposedIdentifier` and `URLs`; set them to your identity
+provider's before composing. Apple's "only use when" and "required when"
+rules for the Platform SSO keys are enforced at compose time, so a wrong
+combination fails with the rule named.
 
 ```
 contour profile ddm compose --preset <NAME> --org <DOMAIN> -o <DIR>

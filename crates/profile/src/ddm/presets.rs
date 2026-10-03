@@ -69,6 +69,26 @@ pub const EMBEDDED: &[(&str, &str, &str)] = &[
         include_str!("../../recipes/ddm/passcode-settings.toml"),
     ),
     (
+        "platform-sso-baseline",
+        "Platform SSO — IdP login required at login/unlock/FileVault with offline and registration grace periods; EDIT the IdP extension first (extensible-sso)",
+        include_str!("../../recipes/ddm/platform-sso-baseline.toml"),
+    ),
+    (
+        "platform-sso-guest-mode",
+        "Platform SSO Authenticated Guest Mode — cloud users sign in without a local account into a temporary session; EDIT the IdP extension first (extensible-sso)",
+        include_str!("../../recipes/ddm/platform-sso-guest-mode.toml"),
+    ),
+    (
+        "platform-sso-tap-to-login",
+        "Platform SSO Tap to Login — NFC badge or phone opens an Authenticated Guest Mode session; EDIT the IdP extension, reader group and asset identifiers first (extensible-sso)",
+        include_str!("../../recipes/ddm/platform-sso-tap-to-login.toml"),
+    ),
+    (
+        "platform-sso-touchid",
+        "Platform SSO — Touch ID required at every login and unlock, password always required; EDIT the IdP extension first (extensible-sso)",
+        include_str!("../../recipes/ddm/platform-sso-touchid.toml"),
+    ),
+    (
         "safari-settings",
         "Hardened Safari — fraud warning locked on, no private browsing, pop-ups blocked (safari.settings)",
         include_str!("../../recipes/ddm/safari-settings.toml"),
@@ -336,6 +356,10 @@ mod tests {
                 "keyboard-settings",
                 "managed-migration-assistant",
                 "passcode-settings",
+                "platform-sso-baseline",
+                "platform-sso-guest-mode",
+                "platform-sso-tap-to-login",
+                "platform-sso-touchid",
                 "safari-settings",
                 "siri-settings",
                 "softwareupdate-enforcement",

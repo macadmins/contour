@@ -5259,3 +5259,45 @@ type = "com.apple.configuration.intelligence.settings"
         "the bundle's own platforms are checked"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 103: the Platform SSO presets compose into the scenario their name
+// promises, and the cross-key rules see every composed declaration.
+// Drift signal: a preset drifts from its intent (Touch ID dropped from the
+// login policy, guest mode without shared device keys), or a rule change
+// starts rejecting a shipped preset.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_103_platform_sso_presets_compose_into_their_scenarios() {
+    for (preset, expect_login, expect_user_creation) in [
+        ("platform-sso-touchid", vec!["RequireAuthentication", "RequireTouchID"], None),
+        ("platform-sso-guest-mode", vec!["RequireAuthentication"], Some("Temporary")),
+        ("platform-sso-tap-to-login", vec!["RequireAuthentication"], Some("Temporary")),
+        ("platform-sso-baseline", vec!["RequireAuthentication", "AllowOfflineGracePeriod", "AllowAuthenticationGracePeriod"], None),
+    ] {
+        let out = tempfile::tempdir().unwrap();
+        let result = Command::cargo_bin("profile")
+            .unwrap()
+            .env_remove("CONTOUR_ORG")
+            .args(["ddm", "compose", "--preset", preset, "--org", "com.acme", "-o", out.path().to_str().unwrap(), "--json"])
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{preset}: {}", String::from_utf8_lossy(&result.stderr));
+        let config: Value =
+            serde_json::from_slice(&fs::read(out.path().join("configuration.json")).unwrap()).unwrap();
+        let psso = &config["Payload"]["PlatformSSO"];
+        let login: Vec<&str> = psso["Policies"]["Login"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(login, expect_login, "{preset}: login policy");
+        if let Some(mode) = expect_user_creation {
+            assert_eq!(psso["UserCreation"]["NewUserAuthorizationMode"], mode, "{preset}");
+            assert_eq!(psso["UseSharedDeviceKeys"], true, "{preset}: guest mode needs shared keys");
+        }
+        // The written declaration passes `ddm validate`, cross-key rules included.
+        let v = Command::cargo_bin("profile")
+            .unwrap()
+            .args(["ddm", "validate", out.path().join("configuration.json").to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(v.status.success(), "{preset}: {}", String::from_utf8_lossy(&v.stderr));
+    }
+}

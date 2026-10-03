@@ -1,0 +1,60 @@
+# Platform SSO — Touch ID required at every login and unlock, password
+# always in the loop.
+#
+# DDM bundle for `com.apple.configuration.extensible-sso`. The identity
+# provider must authenticate (RequireAuthentication) AND the user must
+# present Touch ID (RequireTouchID — the sensor, not Apple Watch) at the
+# login window and at screensaver unlock. No grace periods and no OpenID
+# fallback: every one of those is a way around "every login". FileVault
+# pre-boot has no Touch ID, so it stays at RequireAuthentication.
+#
+# AuthenticationMethod is Password: Apple allows RequireTouchID only with
+# Password or UserSecureEnclaveKey, and Password is the one that keeps the
+# password required.
+#
+# Compose with:
+#   contour profile ddm compose --preset platform-sso-touchid \
+#       --org com.acme -o ./declarations/platform-sso-touchid
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's group/team
+# assignment. macOS only: the Platform SSO policies have no meaning on iOS.
+#
+# EDIT BEFORE COMPOSING: `ExtensionComposedIdentifier` and `URLs` are your
+# identity provider's, and nothing else will do. Common SSO extensions:
+#   Microsoft Company Portal  com.microsoft.CompanyPortalMac.ssoextension (UBF8T346G9)
+#   Okta Verify               com.okta.mobile.auth-service-extension (B7F62B65BN)
+# Confirm the composed identifier against your IdP's current documentation.
+#
+# Every "Only use when …" and "Required when …" sentence Apple attaches to
+# these keys is enforced by contour's cross-key rules at compose time.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/extensible-sso.yaml). Verified against
+# contour's embedded schema:
+# `contour profile ddm info com.apple.configuration.extensible-sso --full`.
+
+intent_name = "platform-sso-touchid"
+platforms = ["macOS"]
+
+[configuration]
+type = "com.apple.configuration.extensible-sso"
+
+  [configuration.payload]
+  ExtensionComposedIdentifier = "com.example.sso.extension (ABCDE12345)"
+  Type = "Redirect"
+  URLs = ["https://login.example.com/"]
+
+  [configuration.payload.PlatformSSO]
+  AuthenticationMethod = "Password"
+
+  [configuration.payload.PlatformSSO.Policies]
+  Login     = ["RequireAuthentication", "RequireTouchID"]
+  Unlock    = ["RequireAuthentication", "RequireTouchID"]
+  FileVault = ["RequireAuthentication"]
+  # To let Apple Watch satisfy the biometric too, use RequireTouchIDOrWatch
+  # in place of RequireTouchID.
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

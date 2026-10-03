@@ -273,12 +273,23 @@ The CLI prevents the unsubscribed-key class at authoring time:
 These DDM CLI operations work with the existing prose recipes; they will be
 migrated as each one is end-to-end traced.
 
+### Start from a preset
+
+```
+contour profile ddm compose --list-presets --json
+# Embedded bundles for common intents (passcode, software update, Safari,
+# Apple Intelligence off, Platform SSO scenarios, …). Compose one by name:
+contour profile ddm compose --preset passcode-settings --org {org} -o {dir} --json
+# Platform SSO has its own SOP with the four presets and their rules:
+#   contour help-ai --sop platform-sso
+```
+
 ### List available declaration types
 
 ```
 contour profile ddm list --json
-# 47 types embedded as of contour 0.2.x; covers asset, configuration,
-# activation, management, and status categories.
+# 60+ types embedded; covers asset, configuration, activation, management,
+# and status categories. `contour profile ddm list` prints the live count.
 ```
 
 ### Show schema for a specific type

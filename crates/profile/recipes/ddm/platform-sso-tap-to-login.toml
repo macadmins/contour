@@ -1,0 +1,92 @@
+# Platform SSO — Tap to Login (Authenticated Guest Mode with an access key).
+#
+# DDM bundle for `com.apple.configuration.extensible-sso`. Tap a badge or a
+# phone on the Mac's NFC reader; the credential maps to a cloud user; the
+# identity provider and Platform SSO agree; the user gets a guest session;
+# at logout the data is wiped. Tap to Login works only with Authenticated
+# Guest Mode — there is no tapping into a persistent account — so this
+# bundle is the guest-mode preset plus the access-key configuration.
+#
+# Compose with:
+#   contour profile ddm compose --preset platform-sso-tap-to-login \
+#       --org com.acme -o ./declarations/platform-sso-tap-to-login
+#
+# Output: configuration.json (the declaration) + activation.json. The
+# activation has no predicate — scope it via your MDM's group/team
+# assignment. macOS only.
+#
+# EDIT BEFORE COMPOSING — five values are yours and nothing else will do:
+#
+#   ExtensionComposedIdentifier, URLs
+#       Your identity provider's SSO extension. Common ones:
+#         Microsoft Company Portal  com.microsoft.CompanyPortalMac.ssoextension (UBF8T346G9)
+#         Okta Verify               com.okta.mobile.auth-service-extension (B7F62B65BN)
+#       Confirm against your IdP's current documentation.
+#
+#   AccessKey.ReaderGroupIdentifier
+#       The reader group identifier from your badge system, base64 (it is a
+#       Data value). "The value needs to match the configured access key."
+#
+#   AccessKey.TerminalIdentityAssetReference
+#   AccessKey.ReaderIssuerCertificateAssetReference
+#       Identifiers of two asset declarations this bundle does not emit:
+#       the Terminal identity (a credential.identity, .scep or .acme asset)
+#       and the Reader CA public key (a credential.certificate asset, which
+#       must be an elliptic-curve key — the issuer of the Terminal identity).
+#       Create them, then put their Identifiers here:
+#         contour profile ddm generate com.apple.asset.credential.identity \
+#             --identifier com.acme.asset.psso-terminal-identity --org com.acme -o terminal-identity.json
+#         contour profile ddm generate com.apple.asset.credential.certificate \
+#             --identifier com.acme.asset.psso-reader-ca --org com.acme -o reader-ca.json
+#       `contour profile ddm verify <dir>` reports the references as dangling
+#       until both assets sit beside this configuration.
+#
+# Apple marks all three AccessKey keys "Required if
+# UserCreation.AuthenticationMethods includes AccessKey"; contour's cross-key
+# rules enforce that, and that the authorization mode stays Temporary.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/extensible-sso.yaml). Verified against
+# contour's embedded schema:
+# `contour profile ddm info com.apple.configuration.extensible-sso --full`.
+
+intent_name = "platform-sso-tap-to-login"
+platforms = ["macOS"]
+
+[configuration]
+type = "com.apple.configuration.extensible-sso"
+
+  [configuration.payload]
+  ExtensionComposedIdentifier = "com.example.sso.extension (ABCDE12345)"
+  Type = "Redirect"
+  URLs = ["https://login.example.com/"]
+
+  [configuration.payload.PlatformSSO]
+  AuthenticationMethod = "Password"
+  UseSharedDeviceKeys = true
+
+  [configuration.payload.PlatformSSO.UserCreation]
+  EnableAtLogin = true
+  NewUserAuthorizationMode = "Temporary"
+  # AccessKey alone: tap is the only way in. Add "Password" to let a user
+  # without a badge type their IdP password instead.
+  NewUserAuthenticationMethods = ["AccessKey"]
+  # true: the quicker variant for many short sessions (select locations
+  # wiped per session, the full home folder every eight hours).
+  TemporarySessionQuickLogin = false
+
+  [configuration.payload.PlatformSSO.AccessKey]
+  ReaderGroupIdentifier = "AAAAAAAAAAAAAAAAAAAAAA=="
+  TerminalIdentityAssetReference = "com.acme.asset.psso-terminal-identity"
+  ReaderIssuerCertificateAssetReference = "com.acme.asset.psso-reader-ca"
+  # true: the tap alone logs in, no PIN or biometric on the badge/phone.
+  AllowExpressMode = false
+
+  [configuration.payload.PlatformSSO.Policies]
+  Login     = ["RequireAuthentication"]
+  Unlock    = ["RequireAuthentication"]
+  FileVault = ["RequireAuthentication"]
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

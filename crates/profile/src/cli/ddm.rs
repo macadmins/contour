@@ -279,33 +279,16 @@ struct DdmValidationResult {
     warnings: Vec<String>,
 }
 
-/// Resolve the ancestor path for a nested field by walking `parent_key` links.
+/// The ancestor chain of a nested field, as [`walk_payload_paths`] wants it.
 ///
-/// Returns the chain from root to immediate parent, e.g. for `AddSquareRoot`
-/// (parent=`BasicMode`, whose parent=`Calculator`) returns `["Calculator", "BasicMode"]`.
-fn resolve_ancestor_path(
-    field_name: &str,
-    manifest: &crate::schema::types::PayloadManifest,
-) -> Vec<String> {
-    let mut path = Vec::new();
-    let mut current = field_name.to_string();
-
-    for _ in 0..32 {
-        let parent = manifest
-            .fields
-            .get(&current)
-            .and_then(|f| f.parent_key.as_ref());
-        match parent {
-            Some(p) => {
-                path.push(p.clone());
-                current = p.clone();
-            }
-            None => break,
-        }
-    }
-
-    path.reverse();
-    path
+/// A manifest keys `fields` by full dotted path and stores each field's
+/// `parent_key` as a full dotted path too (`PlatformSSO.Policies`), so the
+/// chain is that one entry; the walker splits it on dots. Looking the field
+/// up by its leaf name instead found nothing, and every nested required-field
+/// and allowed-value check silently passed — a misspelt
+/// `PlatformSSO.AuthenticationMethod` value validated.
+fn ancestors_of(field: &crate::schema::types::FieldDefinition) -> Vec<String> {
+    field.parent_key.iter().cloned().collect()
 }
 
 /// Every concrete object matching `path`, expanding `ANY` segments.
@@ -502,6 +485,18 @@ fn array_element_findings(
                             element.name
                         ));
                     }
+                    // A bare string element with a fixed vocabulary — a policy
+                    // list such as PlatformSSO.Policies.Login. Checked here
+                    // because the field walker never reaches inside arrays.
+                    (_, serde_json::Value::String(text))
+                        if !element.allowed_values.is_empty()
+                            && !element.allowed_values.iter().any(|v| v == text) =>
+                    {
+                        errors.push(format!(
+                            "Invalid value for {at}: \"{text}\" (allowed: {})",
+                            element.allowed_values.join(", ")
+                        ));
+                    }
                     _ => {}
                 }
             }
@@ -552,6 +547,11 @@ pub(crate) fn resolve_declaration_identifier(
 /// descriptions. Violations install cleanly and then misbehave on device,
 /// which is exactly the failure class contour exists to catch. A type with
 /// no rules here returns no errors.
+///
+/// Every message starts with the keys in conflict, joined by `↔`, then the
+/// rule and what was found, then Apple's sentence where there is one — so a
+/// reader (or an agent parsing `--json`) sees which two keys to look at
+/// before reading why.
 fn cross_key_errors(decl: &Declaration) -> Vec<String> {
     let mut errors = Vec::new();
 
@@ -566,29 +566,232 @@ fn cross_key_errors(decl: &Declaration) -> Vec<String> {
         let has_require = beta.contains_key("RequireProgram");
 
         if has_offer && has_require {
-            errors.push(
-                "Beta.OfferPrograms and Beta.RequireProgram are mutually exclusive — \
-                 Apple: \"The OfferPrograms key must not be present if this key is present\""
-                    .to_string(),
-            );
+            errors.push(conflict(
+                &["Beta.OfferPrograms", "Beta.RequireProgram"],
+                "mutually exclusive — Apple: \"The OfferPrograms key must not be present if this key is present\"",
+            ));
         }
         if has_offer && enrollment == Some("AlwaysOff") {
-            errors.push(
-                "Beta.OfferPrograms requires Beta.ProgramEnrollment to be \
-                 Allowed or AlwaysOn (found AlwaysOff)"
-                    .to_string(),
-            );
+            errors.push(conflict(
+                &["Beta.OfferPrograms", "Beta.ProgramEnrollment"],
+                "OfferPrograms requires ProgramEnrollment Allowed or AlwaysOn (found AlwaysOff)",
+            ));
         }
         if has_require && enrollment != Some("AlwaysOn") {
             let found = enrollment.unwrap_or("absent (implicitly Allowed)");
-            errors.push(format!(
-                "Beta.RequireProgram requires Beta.ProgramEnrollment to be \
-                 AlwaysOn (found {found})"
+            errors.push(conflict(
+                &["Beta.RequireProgram", "Beta.ProgramEnrollment"],
+                format!("RequireProgram requires ProgramEnrollment AlwaysOn (found {found})"),
+            ));
+        }
+    }
+
+    if decl.declaration_type == "com.apple.configuration.extensible-sso" {
+        let Some(psso) = decl.payload.get("PlatformSSO").and_then(|v| v.as_object()) else {
+            return errors;
+        };
+        let method = psso.get("AuthenticationMethod").and_then(|v| v.as_str());
+        let found_method = method.unwrap_or("absent");
+        const METHOD: &str = "PlatformSSO.AuthenticationMethod";
+        const SHARED: &str = "PlatformSSO.UseSharedDeviceKeys";
+
+        // Apple, on both keys: "Requires that `UseSharedDeviceKeys` is
+        // `true`." Without shared keys the login window has no key to
+        // authenticate an account that does not exist yet, so the option is
+        // accepted and then does nothing.
+        let shared_keys = psso.get("UseSharedDeviceKeys").and_then(|v| v.as_bool()) == Some(true);
+        let flag_on = |section: &str, key: &str| {
+            psso.get(section)
+                .and_then(|v| v.as_object())
+                .and_then(|o| o.get(key))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+        };
+        for (section, key) in [
+            ("UserCreation", "EnableAtLogin"),
+            ("Authorization", "EnableIdentityProviderAccounts"),
+        ] {
+            if flag_on(section, key) && !shared_keys {
+                let found = psso
+                    .get("UseSharedDeviceKeys")
+                    .map_or("absent (default false)".to_string(), |v| v.to_string());
+                errors.push(conflict(
+                    &[&format!("PlatformSSO.{section}.{key}"), SHARED],
+                    format!(
+                        "{key} requires UseSharedDeviceKeys true (found {found}) — Apple: \
+                         \"Requires that UseSharedDeviceKeys is true\""
+                    ),
+                ));
+            }
+        }
+        // Apple, on EnableAtLogin: "with an AuthenticationMethod of either
+        // Password or SmartCard".
+        if flag_on("UserCreation", "EnableAtLogin")
+            && !matches!(method, Some("Password" | "SmartCard"))
+        {
+            errors.push(conflict(
+                &["PlatformSSO.UserCreation.EnableAtLogin", METHOD],
+                format!("EnableAtLogin requires AuthenticationMethod Password or SmartCard (found {found_method})"),
+            ));
+        }
+        // Apple: RegistrationToken "Requires that AuthenticationMethod in
+        // PlatformSSO isn't empty."
+        if psso.get("RegistrationToken").is_some() && method.is_none_or(str::is_empty) {
+            errors.push(conflict(
+                &["PlatformSSO.RegistrationToken", METHOD],
+                "RegistrationToken requires AuthenticationMethod to be set",
+            ));
+        }
+        // Apple: LoginFrequency "The minimum value is 3600 (1 hour)."
+        if let Some(f) = psso.get("LoginFrequency").and_then(serde_json::Value::as_i64)
+            && f < 3600
+        {
+            errors.push(conflict(
+                &["PlatformSSO.LoginFrequency"],
+                format!("must be at least 3600 seconds (found {f}) — Apple: \"The minimum value is 3600 (1 hour)\""),
+            ));
+        }
+
+        // Tap to Login. Apple, on each AccessKey key: "Required if
+        // UserCreation.AuthenticationMethods includes AccessKey" (the key is
+        // spelled NewUserAuthenticationMethods). And an access key can only
+        // open an Authenticated Guest Mode session — every tapped-in session
+        // is temporary — so the mode must be Temporary and creation at the
+        // login window must be on.
+        const METHODS: &str = "PlatformSSO.UserCreation.NewUserAuthenticationMethods";
+        let user_creation = psso.get("UserCreation").and_then(|v| v.as_object());
+        let new_methods: Vec<&str> = user_creation
+            .and_then(|u| u.get("NewUserAuthenticationMethods"))
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        if new_methods.contains(&"AccessKey") {
+            let access = psso.get("AccessKey").and_then(|v| v.as_object());
+            for key in [
+                "ReaderGroupIdentifier",
+                "TerminalIdentityAssetReference",
+                "ReaderIssuerCertificateAssetReference",
+            ] {
+                if access.and_then(|a| a.get(key)).is_none() {
+                    errors.push(conflict(
+                        &[METHODS, &format!("PlatformSSO.AccessKey.{key}")],
+                        format!(
+                            "AccessKey.{key} is required when the methods include AccessKey (found absent) — \
+                             Apple: \"Required if UserCreation.AuthenticationMethods includes AccessKey\""
+                        ),
+                    ));
+                }
+            }
+            let mode = user_creation
+                .and_then(|u| u.get("NewUserAuthorizationMode"))
+                .and_then(|v| v.as_str());
+            if mode != Some("Temporary") {
+                errors.push(conflict(
+                    &[METHODS, "PlatformSSO.UserCreation.NewUserAuthorizationMode"],
+                    format!(
+                        "Tap to Login works only with Authenticated Guest Mode: AccessKey needs \
+                         NewUserAuthorizationMode Temporary (found {})",
+                        mode.unwrap_or("absent")
+                    ),
+                ));
+            }
+            if !flag_on("UserCreation", "EnableAtLogin") {
+                errors.push(conflict(
+                    &[METHODS, "PlatformSSO.UserCreation.EnableAtLogin"],
+                    "AccessKey creates the guest account at the login window: EnableAtLogin must be true",
+                ));
+            }
+        }
+
+        // The three policy lists. Each value carries an "Only use when
+        // AuthenticationMethod is …" sentence, and two of them name a grace
+        // period that is "Required when" the value is set.
+        let Some(policies) = psso.get("Policies").and_then(|v| v.as_object()) else {
+            return errors;
+        };
+        let mut wants_offline_grace = Vec::new();
+        let mut wants_auth_grace = Vec::new();
+        for list_name in ["FileVault", "Login", "Unlock"] {
+            let Some(values) = policies.get(list_name).and_then(|v| v.as_array()) else {
+                continue;
+            };
+            let values: Vec<&str> = values.iter().filter_map(|v| v.as_str()).collect();
+            let has = |v: &str| values.contains(&v);
+            let at = format!("PlatformSSO.Policies.{list_name}");
+            for v in &values {
+                let ok = match *v {
+                    "AttemptAuthentication"
+                    | "RequireAuthentication"
+                    | "AllowAuthenticationGracePeriod"
+                    | "AllowTouchIDOrWatchForUnlock" => matches!(method, Some("Password")),
+                    "RequireTouchID" | "RequireTouchIDOrWatch" | "AllowOpenIDForTouchIDFallback" => {
+                        matches!(method, Some("Password" | "UserSecureEnclaveKey"))
+                    }
+                    "AllowOfflineGracePeriod" => {
+                        (matches!(method, Some("Password")) && has("RequireAuthentication"))
+                            || matches!(method, Some("OpenID"))
+                    }
+                    _ => true,
+                };
+                if !ok {
+                    let rule = match *v {
+                        "AllowOfflineGracePeriod" => {
+                            "AuthenticationMethod Password with RequireAuthentication in the same \
+                             list, or AuthenticationMethod OpenID"
+                        }
+                        "RequireTouchID" | "RequireTouchIDOrWatch" | "AllowOpenIDForTouchIDFallback" => {
+                            "AuthenticationMethod Password or UserSecureEnclaveKey"
+                        }
+                        _ => "AuthenticationMethod Password",
+                    };
+                    errors.push(conflict(
+                        &[&format!("{at}[{v}]"), METHOD],
+                        format!("{v} requires {rule} (found {found_method}) — Apple: \"Only use when …\""),
+                    ));
+                }
+            }
+            if has("AllowTouchIDOrWatchForUnlock") && !has("RequireAuthentication") {
+                errors.push(conflict(
+                    &[&format!("{at}[AllowTouchIDOrWatchForUnlock]"), &format!("{at}[RequireAuthentication]")],
+                    "AllowTouchIDOrWatchForUnlock applies only \"when RequireAuthentication is enabled\" \
+                     in the same list (found absent)",
+                ));
+            }
+            if has("AllowOfflineGracePeriod") {
+                wants_offline_grace.push(format!("{at}[AllowOfflineGracePeriod]"));
+            }
+            if has("AllowAuthenticationGracePeriod") {
+                wants_auth_grace.push(format!("{at}[AllowAuthenticationGracePeriod]"));
+            }
+        }
+        if !wants_offline_grace.is_empty() && policies.get("OfflineGracePeriod").is_none() {
+            let mut keys: Vec<&str> = wants_offline_grace.iter().map(String::as_str).collect();
+            keys.push("PlatformSSO.Policies.OfflineGracePeriod");
+            errors.push(conflict(
+                &keys,
+                "OfflineGracePeriod is required when a policy sets AllowOfflineGracePeriod (found absent) — \
+                 Apple: \"Required when setting AllowOfflineGracePeriod\"",
+            ));
+        }
+        if !wants_auth_grace.is_empty() && policies.get("AuthenticationGracePeriod").is_none() {
+            let mut keys: Vec<&str> = wants_auth_grace.iter().map(String::as_str).collect();
+            keys.push("PlatformSSO.Policies.AuthenticationGracePeriod");
+            errors.push(conflict(
+                &keys,
+                "AuthenticationGracePeriod is required when a policy sets AllowAuthenticationGracePeriod \
+                 (found absent) — Apple: \"Required when AllowAuthenticationGracePeriod is set\"",
             ));
         }
     }
 
     errors
+}
+
+/// One cross-key finding: the keys in conflict first, joined by `↔`, then
+/// the rule. A single key means the value conflicts with Apple's bounds for
+/// that key alone.
+fn conflict(keys: &[&str], detail: impl std::fmt::Display) -> String {
+    format!("{}: {detail}", keys.join(" ↔ "))
 }
 
 /// Schema-validation errors + warnings for an in-memory declaration. Reused by
@@ -761,8 +964,12 @@ pub fn declaration_errors_scoped(
                 if decl.payload.get(&field.name).is_none() {
                     errors.push(format!("Missing required field: {}", field.name));
                 }
-            } else if field.parent_key.is_some() {
-                let ancestors = resolve_ancestor_path(&field.name, manifest);
+            } else if field.parent_key.is_some() && field.name != "ANY" {
+                // `ANY` is Apple's placeholder for "every key of this
+                // dictionary", not a key a payload can carry; a required
+                // `ANY` says the entries are required, not that one is named
+                // so. The walker expands it for the checks that apply.
+                let ancestors = ancestors_of(field);
                 for (label, parent_obj) in walk_payload_paths(&decl.payload.0, &ancestors) {
                     if !parent_obj.contains_key(&field.name) {
                         errors.push(format!("Missing required field: {label}.{}", field.name));
@@ -829,7 +1036,7 @@ pub fn declaration_errors_scoped(
                     .map(|v| vec![(field.name.clone(), v)])
                     .unwrap_or_default()
             } else {
-                let ancestors = resolve_ancestor_path(&field.name, manifest);
+                let ancestors = ancestors_of(field);
                 walk_payload_paths(&decl.payload.0, &ancestors)
                     .into_iter()
                     .filter_map(|(label, obj)| {
@@ -887,7 +1094,7 @@ pub fn declaration_errors_scoped(
                 if f.parent_key.is_none() {
                     decl.payload.get(&f.name).is_some()
                 } else {
-                    let ancestors = resolve_ancestor_path(&f.name, manifest_cap);
+                    let ancestors = ancestors_of(f);
                     walk_payload_paths(&decl.payload.0, &ancestors)
                         .into_iter()
                         .any(|(_, obj)| obj.contains_key(&f.name))
@@ -3143,8 +3350,8 @@ mod tests {
                 if payload.get(&field.name).is_none() {
                     errors.push(format!("Missing required field: {}", field.name));
                 }
-            } else if field.parent_key.is_some() {
-                let ancestors = resolve_ancestor_path(&field.name, manifest);
+            } else if field.parent_key.is_some() && field.name != "ANY" {
+                let ancestors = ancestors_of(field);
                 for (label, parent_obj) in walk_payload_paths(&payload.0, &ancestors) {
                     if !parent_obj.contains_key(&field.name) {
                         errors.push(format!("Missing required field: {label}.{}", field.name));
@@ -3533,6 +3740,196 @@ mod cross_key_tests {
         }
     }
 
+    const SSO: &str = "com.apple.configuration.extensible-sso";
+
+    fn decl_with_psso(psso: serde_json::Value) -> Declaration {
+        let mut payload = DeclarationPayload::new();
+        payload.insert("PlatformSSO".to_string(), psso);
+        Declaration {
+            payload_scope: None,
+            declaration_type: SSO.to_string(),
+            identifier: "com.acme.sso".to_string(),
+            server_token: None,
+            authentication: None,
+            payload,
+        }
+    }
+
+    /// Apple, on EnableAtLogin: "Requires that `UseSharedDeviceKeys` is
+    /// `true`." Authenticated Guest Mode without shared device keys installs
+    /// and does nothing.
+    #[test]
+    fn enable_at_login_without_shared_device_keys_is_an_error() {
+        for psso in [
+            serde_json::json!({ "UserCreation": { "EnableAtLogin": true } }),
+            serde_json::json!({ "UseSharedDeviceKeys": false, "UserCreation": { "EnableAtLogin": true } }),
+        ] {
+            let errors = cross_key_errors(&decl_with_psso(psso));
+            assert!(
+                errors.iter().any(|e| e.contains("EnableAtLogin") && e.contains("UseSharedDeviceKeys")),
+                "expected an EnableAtLogin/UseSharedDeviceKeys error, got: {errors:?}"
+            );
+        }
+    }
+
+    /// The same sentence sits on Authorization.EnableIdentityProviderAccounts.
+    #[test]
+    fn identity_provider_accounts_without_shared_device_keys_is_an_error() {
+        let d = decl_with_psso(serde_json::json!({
+            "Authorization": { "EnableIdentityProviderAccounts": true }
+        }));
+        let errors = cross_key_errors(&d);
+        assert!(
+            errors.iter().any(|e| e.contains("EnableIdentityProviderAccounts")),
+            "got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn shared_device_keys_satisfy_both_flags_and_off_flags_need_nothing() {
+        let with_keys = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "Password",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": { "EnableAtLogin": true, "NewUserAuthorizationMode": "Temporary" },
+            "Authorization": { "EnableIdentityProviderAccounts": true }
+        }));
+        assert!(cross_key_errors(&with_keys).is_empty(), "{:?}", cross_key_errors(&with_keys));
+        let flags_off = decl_with_psso(serde_json::json!({
+            "UserCreation": { "EnableAtLogin": false }
+        }));
+        assert!(cross_key_errors(&flags_off).is_empty());
+        let no_user_creation = decl_with_psso(serde_json::json!({ "AuthenticationMethod": "Password" }));
+        assert!(cross_key_errors(&no_user_creation).is_empty());
+    }
+
+    fn with_policies(method: &str, login: &[&str], extra: serde_json::Value) -> Declaration {
+        let mut psso = serde_json::json!({
+            "AuthenticationMethod": method,
+            "Policies": { "Login": login }
+        });
+        if let (Some(dst), Some(src)) = (psso["Policies"].as_object_mut(), extra.as_object()) {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+        decl_with_psso(psso)
+    }
+
+    /// Apple: RequireTouchID / RequireTouchIDOrWatch / AllowOpenIDForTouchIDFallback
+    /// "Only use when AuthenticationMethod is Password or UserSecureEnclaveKey";
+    /// Attempt/Require/AllowAuthenticationGracePeriod "Only use when
+    /// AuthenticationMethod is Password".
+    #[test]
+    fn policy_values_are_held_to_their_authentication_method() {
+        let bad = with_policies("SmartCard", &["RequireAuthentication", "RequireTouchID"], serde_json::json!({}));
+        let errors = cross_key_errors(&bad);
+        assert!(errors.iter().any(|e| e.contains("RequireTouchID") && e.contains("SmartCard")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("RequireAuthentication") && e.contains("SmartCard")), "{errors:?}");
+
+        let sek = with_policies("UserSecureEnclaveKey", &["RequireTouchID"], serde_json::json!({}));
+        assert!(cross_key_errors(&sek).is_empty(), "{:?}", cross_key_errors(&sek));
+
+        let good = with_policies("Password", &["RequireAuthentication", "RequireTouchID"], serde_json::json!({}));
+        assert!(cross_key_errors(&good).is_empty(), "{:?}", cross_key_errors(&good));
+
+        let absent = decl_with_psso(serde_json::json!({ "Policies": { "Login": ["RequireAuthentication"] } }));
+        assert!(cross_key_errors(&absent).iter().any(|e| e.contains("PlatformSSO.AuthenticationMethod") && e.contains("found absent")));
+    }
+
+    /// Apple: AllowOfflineGracePeriod "Only use when AuthenticationMethod is
+    /// Password and RequireAuthentication is enabled, or AuthenticationMethod
+    /// is OpenID"; OfflineGracePeriod "Required when setting
+    /// AllowOfflineGracePeriod"; the same shape for the authentication grace.
+    #[test]
+    fn grace_periods_need_their_partner_keys() {
+        let no_require = with_policies("Password", &["AttemptAuthentication", "AllowOfflineGracePeriod"],
+            serde_json::json!({ "OfflineGracePeriod": 86400 }));
+        assert!(cross_key_errors(&no_require).iter().any(|e| e.contains("AllowOfflineGracePeriod")));
+
+        let no_period = with_policies("Password", &["RequireAuthentication", "AllowOfflineGracePeriod", "AllowAuthenticationGracePeriod"],
+            serde_json::json!({}));
+        let errors = cross_key_errors(&no_period);
+        assert!(errors.iter().any(|e| e.contains("OfflineGracePeriod is required")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("AuthenticationGracePeriod is required")), "{errors:?}");
+
+        let complete = with_policies("Password", &["RequireAuthentication", "AllowOfflineGracePeriod", "AllowAuthenticationGracePeriod"],
+            serde_json::json!({ "OfflineGracePeriod": 86400, "AuthenticationGracePeriod": 3600 }));
+        assert!(cross_key_errors(&complete).is_empty(), "{:?}", cross_key_errors(&complete));
+
+        let openid = with_policies("OpenID", &["AllowOfflineGracePeriod"], serde_json::json!({ "OfflineGracePeriod": 3600 }));
+        assert!(cross_key_errors(&openid).is_empty(), "{:?}", cross_key_errors(&openid));
+    }
+
+    /// Apple: RegistrationToken "Requires that AuthenticationMethod isn't
+    /// empty"; LoginFrequency "The minimum value is 3600"; EnableAtLogin
+    /// "with an AuthenticationMethod of either Password or SmartCard".
+    #[test]
+    fn registration_token_login_frequency_and_enable_at_login_rules() {
+        let token = decl_with_psso(serde_json::json!({ "RegistrationToken": "abc" }));
+        assert!(cross_key_errors(&token).iter().any(|e| e.contains("RegistrationToken")));
+
+        let freq = decl_with_psso(serde_json::json!({ "LoginFrequency": 600 }));
+        assert!(cross_key_errors(&freq).iter().any(|e| e.contains("LoginFrequency") && e.contains("600")));
+
+        let sek_guest = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "UserSecureEnclaveKey",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": { "EnableAtLogin": true }
+        }));
+        assert!(cross_key_errors(&sek_guest).iter().any(|e| e.contains("EnableAtLogin") && e.contains("Password or SmartCard")));
+    }
+
+    /// Tap to Login: Apple marks the three AccessKey keys "Required if
+    /// UserCreation.AuthenticationMethods includes AccessKey", and an access
+    /// key only opens an Authenticated Guest Mode session.
+    #[test]
+    fn tap_to_login_needs_the_access_key_block_and_guest_mode() {
+        let bare = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "Password",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": { "EnableAtLogin": true, "NewUserAuthenticationMethods": ["AccessKey"] }
+        }));
+        let errors = cross_key_errors(&bare);
+        for key in ["ReaderGroupIdentifier", "TerminalIdentityAssetReference", "ReaderIssuerCertificateAssetReference"] {
+            assert!(errors.iter().any(|e| e.contains(key)), "missing {key} error in {errors:?}");
+        }
+        assert!(errors.iter().any(|e| e.contains("Temporary")), "{errors:?}");
+
+        let persistent = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "Password",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": {
+                "EnableAtLogin": true,
+                "NewUserAuthenticationMethods": ["AccessKey"],
+                "NewUserAuthorizationMode": "Standard"
+            },
+            "AccessKey": {
+                "ReaderGroupIdentifier": "AAAA",
+                "TerminalIdentityAssetReference": "com.acme.asset.terminal",
+                "ReaderIssuerCertificateAssetReference": "com.acme.asset.reader-ca"
+            }
+        }));
+        let errors = cross_key_errors(&persistent);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("Authenticated Guest Mode") && errors[0].contains("found Standard"));
+
+        let complete = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "Password",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": {
+                "EnableAtLogin": true,
+                "NewUserAuthenticationMethods": ["AccessKey"],
+                "NewUserAuthorizationMode": "Temporary"
+            },
+            "AccessKey": {
+                "ReaderGroupIdentifier": "AAAA",
+                "TerminalIdentityAssetReference": "com.acme.asset.terminal",
+                "ReaderIssuerCertificateAssetReference": "com.acme.asset.reader-ca"
+            }
+        }));
+        assert!(cross_key_errors(&complete).is_empty(), "{:?}", cross_key_errors(&complete));
+    }
+
     /// Apple explicitly allows OfferPrograms with no ProgramEnrollment on
     /// unsupervised devices, where it is implicitly `Allowed`.
     #[test]
@@ -3674,6 +4071,69 @@ mod array_element_tests {
             "DeniedBinaries": [{"SigningID": "BJ4HAAB9B3:us.zoom.xos"}]
         }));
         assert!(mentions(&errors, "no 'TeamID:' prefix"), "{errors:?}");
+    }
+}
+
+#[cfg(test)]
+mod nested_enum_tests {
+    use super::{Declaration, DeclarationPayload, declaration_errors};
+    use crate::schema::SchemaRegistry;
+
+    fn sso(payload: serde_json::Value) -> Declaration {
+        let map: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_value(payload).expect("object payload");
+        Declaration {
+            payload_scope: None,
+            declaration_type: "com.apple.configuration.extensible-sso".to_string(),
+            identifier: "com.test.sso".to_string(),
+            server_token: None,
+            authentication: None,
+            payload: DeclarationPayload(map),
+        }
+    }
+
+    fn policy(method: &str, login: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "ExtensionComposedIdentifier": "com.example.sso.extension (ABCDE12345)",
+            "Type": "Redirect",
+            "URLs": ["https://login.example.com/"],
+            "PlatformSSO": {
+                "AuthenticationMethod": method,
+                "Policies": {
+                    "Login": login,
+                    "Unlock": ["RequireAuthentication", "RequireTouchID"],
+                    "FileVault": ["RequireAuthentication"]
+                }
+            }
+        })
+    }
+
+    /// Regression: `fields` is keyed by full path, the ancestor lookup used
+    /// the leaf name, found nothing, and every allowed-value check below the
+    /// top level passed in silence. A Platform SSO policy with a misspelt
+    /// method or policy value validated. Checked at depth one and inside a
+    /// bare string array.
+    #[test]
+    fn nested_enum_values_are_checked_at_every_depth() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry");
+
+        let (errors, _) =
+            declaration_errors(&sso(policy("Password", &["RequireAuthentication", "RequireTouchID"])), &registry);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let (errors, _) =
+            declaration_errors(&sso(policy("Passwrd", &["RequireAuthentication"])), &registry);
+        assert!(
+            errors.iter().any(|e| e.contains("PlatformSSO.AuthenticationMethod") && e.contains("Passwrd")),
+            "{errors:?}"
+        );
+
+        let (errors, _) =
+            declaration_errors(&sso(policy("Password", &["RequireAuthentication", "RequireTouchId"])), &registry);
+        assert!(
+            errors.iter().any(|e| e.contains("PlatformSSO.Policies.Login[1]") && e.contains("RequireTouchId")),
+            "{errors:?}"
+        );
     }
 }
 

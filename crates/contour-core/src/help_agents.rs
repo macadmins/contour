@@ -412,6 +412,10 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     )?;
     writeln!(
         buf,
+        "- Platform SSO, PSSO, Touch ID at login, guest mode, Tap to Login, extensible-sso → `--sop platform-sso`"
+    )?;
+    writeln!(
+        buf,
         "- GitHub Actions, CI, env vars, CONTOUR_ORG, workflow setup → `--sop ci`"
     )?;
     writeln!(
@@ -438,6 +442,10 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
         "- `--sop mscp` — query baselines, rules, ODVs, generate compliance artifacts"
     )?;
     writeln!(buf, "- `--sop ddm` — generate DDM declarations")?;
+    writeln!(
+        buf,
+        "- `--sop platform-sso` — Platform SSO on macOS 27: IdP login policies, Touch ID, Authenticated Guest Mode, Tap to Login; four presets"
+    )?;
     writeln!(
         buf,
         "- `--sop beta` — `--beta` pre-release OS seed schema (OS 27): scope, channel isolation, provenance"
@@ -551,6 +559,8 @@ fn canonical_sop_name(tool: &str) -> &str {
         "profile-naming" | "naming" | "classify" | "rename" | "display-name" => "profile-naming",
         "mcx" | "managed-preference" | "managed-preferences" | "mcx-domain" | "domain" => "mcx",
         "mcp" | "mcp-server" | "model-context-protocol" | "agent-server" => "mcp",
+        "platform-sso" | "platformsso" | "psso" | "extensible-sso" | "sso" | "tap-to-login"
+        | "guest-mode" | "authenticated-guest" | "touch-id" | "touchid" => "platform-sso",
         "maintain" | "maintenance" | "hygiene" | "collisions" | "collision" | "consolidate"
         | "audit" => "maintain",
         "windows" | "windows-csp" | "csp" | "ddf" | "admx" | "syncml" => "windows",
@@ -605,6 +615,13 @@ const SOP_MSCP: &str = include_str!("../skills/contour/references/sop-mscp.md");
 /// SOP_PROFILE and SOP_ROUTING_TEMPLATE) so the procedure blocks (which
 /// contain nested backticks and quotes) are easier to author and review.
 const SOP_DDM: &str = include_str!("../skills/contour/references/sop-ddm.md");
+
+/// SOP_PLATFORM_SSO — Platform SSO on macOS 27 as the extensible-sso
+/// declaration: the key map, the four scenarios that ship as presets
+/// (baseline, Touch ID, Authenticated Guest Mode, Tap to Login), and the
+/// cross-key rules contour enforces from Apple's prose. Builds on SOP_DDM.
+const SOP_PLATFORM_SSO: &str =
+    include_str!("../skills/contour/references/sop-platform-sso.md");
 
 /// SOP_BETA — the `--beta` (pre-release OS seed) channel: scope, channel
 /// isolation, the short-name resolver gotcha, provenance, and safety.
@@ -733,6 +750,7 @@ const SOPS: &[(&str, &str)] = &[
     ("maintain", SOP_MAINTAIN),
     ("mscp", SOP_MSCP),
     ("ddm", SOP_DDM),
+    ("platform-sso", SOP_PLATFORM_SSO),
     ("beta", SOP_BETA),
     ("generative", SOP_GENERATIVE),
     ("santa", SOP_SANTA),

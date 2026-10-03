@@ -69,6 +69,7 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 | Fleet GitOps migration | `contour help-ai --sop fleet-migrate` |
 | Santa rules, CEL, FAA | `contour help-ai --sop santa` |
 | DDM declarations | `contour help-ai --sop ddm` |
+| Platform SSO: IdP login, Touch ID at login, Authenticated Guest Mode, Tap to Login | `contour help-ai --sop platform-sso` |
 | sshd_config, sudoers, pam.d, cups, smartcard mapping, login banner | `contour help-ai --sop service-config` |
 | Rename display names, friendly naming, name.toml, reidentify | `contour help-ai --sop profile-naming` |
 | Rename/re-domain a managed-preference (MCX) domain | `contour help-ai --sop mcx` |
