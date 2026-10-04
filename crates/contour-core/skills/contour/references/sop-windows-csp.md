@@ -211,6 +211,15 @@ contour profile windows generate windows.toml --admx-dir ./admx
 fetch it. Templates are read in the encoding the vendor wrote them: Chrome's
 are UTF-16, and a UTF-8-only read refuses them.
 
+The output follows Fleet's documented practice for ADMX-backed policies:
+one profile, the `ADMXInstall` block first as a `<Replace>`, the policies
+after it, and the ADMX's `<?xml …?>` declaration on the same line as
+`<![CDATA[`. A line break or space between those two makes `ADMXInstall`
+fail with `status 500`; contour strips leading whitespace from the template
+so a vendor file with a blank first line cannot cause it. Every profile that
+sets an app's policies must carry that app's ADMX; splitting policies across
+profiles means embedding the template in each.
+
 ## Recipe 5: The SyncML contract, field by field
 
 Read this to understand what contour emitted, or to hand-author a fragment
