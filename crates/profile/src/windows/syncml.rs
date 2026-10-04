@@ -166,6 +166,12 @@ pub enum WindowsError {
         path: String,
         why: String,
     },
+    /// The ingested template defines no policy by this name, so the device
+    /// would accept the setting and apply nothing.
+    NotInTemplate {
+        key: String,
+        admx_file: String,
+    },
     /// ADMX element values that do not fit the policy's element schema.
     /// Every problem, not the first.
     BadElements {
@@ -273,6 +279,13 @@ impl fmt::Display for WindowsError {
                  Windows applies an ADMX policy only with every element it displays, in \
                  the form it declares; `profile windows apps show` or `profile info` lists them",
                 problems.join("\n    ")
+            ),
+            WindowsError::NotInTemplate { key, admx_file } => write!(
+                f,
+                "'{key}' is not a policy in the {admx_file} being ingested. Windows applies \
+                 a policy only under an area the template defines; the vendor renamed or \
+                 removed it in this version, or the template is older than the dataset. \
+                 `profile windows apps search` lists what the dataset knows"
             ),
             WindowsError::TemplateUnreadable { path, why } => write!(
                 f,
@@ -787,6 +800,56 @@ pub fn decode_admx(bytes: &[u8]) -> Result<String, String> {
     Ok(text)
 }
 
+/// Each policy an ADMX defines, with the category chain the Policy CSP area
+/// is built from: `googlechrome~Startup` for a policy whose parent category
+/// is `Startup` under `googlechrome`. The chain stops at a category from
+/// another namespace (`Google:Cat_Google`), which Windows does not put in
+/// the area.
+///
+/// The template on disk is what the device will index, so at generate time
+/// it outranks the dataset: a policy the dataset places under a category
+/// the ingested file does not have would be accepted and never applied.
+pub fn admx_policy_areas(xml: &str) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+    let name_re = regex::Regex::new(r#"\bname="([^"]+)""#).unwrap();
+    let parent_re = regex::Regex::new(r#"<parentCategory\s+ref="([^"]+)""#).unwrap();
+    let category_re = regex::Regex::new(r"(?s)<category\b([^>]*?)(?:/>|>(.*?)</category>)").unwrap();
+    let policy_re = regex::Regex::new(r"(?s)<policy\b([^>]*)>(.*?)</policy>").unwrap();
+
+    let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
+    for c in category_re.captures_iter(xml) {
+        let Some(name) = name_re.captures(&c[1]).map(|m| m[1].to_string()) else {
+            continue;
+        };
+        let parent = c
+            .get(2)
+            .and_then(|body| parent_re.captures(body.as_str()))
+            .map(|m| m[1].to_string());
+        parent_of.insert(name, parent);
+    }
+    let chain = |mut cat: Option<String>| {
+        let mut out = Vec::new();
+        while let Some(c) = cat {
+            if c.contains(':') || out.len() > 16 {
+                break;
+            }
+            cat = parent_of.get(&c).cloned().flatten();
+            out.push(c);
+        }
+        out.reverse();
+        out.join("~")
+    };
+    let mut areas = HashMap::new();
+    for c in policy_re.captures_iter(xml) {
+        let Some(name) = name_re.captures(&c[1]).map(|m| m[1].to_string()) else {
+            continue;
+        };
+        let parent = parent_re.captures(&c[2]).map(|m| m[1].to_string());
+        areas.entry(name).or_insert_with(|| chain(parent));
+    }
+    areas
+}
+
 /// The U+F000 separator Windows reads between the strings of a `multiText`
 /// or `list` element.
 pub const ADMX_LIST_SEPARATOR: char = '\u{F000}';
@@ -971,6 +1034,36 @@ fn admx_wire_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The area comes from the template's own category chain, stopping at
+    /// another namespace; a policy under the root category has a one-segment
+    /// area.
+    #[test]
+    fn admx_policy_areas_follow_the_category_chain() {
+        let xml = r#"<policyDefinitions>
+  <categories>
+    <category displayName="$(string.googlechrome)" name="googlechrome">
+      <parentCategory ref="Google:Cat_Google"/>
+    </category>
+    <category displayName="$(string.Startup)" name="Startup">
+      <parentCategory ref="googlechrome"/>
+    </category>
+    <category displayName="$(string.Top)" name="Top"/>
+  </categories>
+  <policies>
+    <policy class="Both" displayName="$(string.A)" name="HomepageIsNewTabPage" key="Software\Policies\Google\Chrome">
+      <parentCategory ref="Startup"/>
+    </policy>
+    <policy class="Both" displayName="$(string.B)" name="IncognitoModeAvailability" key="Software\Policies\Google\Chrome">
+      <parentCategory ref="googlechrome"/>
+    </policy>
+  </policies>
+</policyDefinitions>"#;
+        let areas = admx_policy_areas(xml);
+        assert_eq!(areas["HomepageIsNewTabPage"], "googlechrome~Startup");
+        assert_eq!(areas["IncognitoModeAvailability"], "googlechrome");
+        assert!(!areas.contains_key("Startup"), "categories are not policies");
+    }
 
     #[test]
     fn path_rule_matches_posture() {

@@ -220,6 +220,13 @@ so a vendor file with a blank first line cannot cause it. Every profile that
 sets an app's policies must carry that app's ADMX; splitting policies across
 profiles means embedding the template in each.
 
+The ingested template is also the authority on each policy's area. The
+dataset was built from one version of the vendor's file and the device
+indexes only the version it ingests, so `generate` reads the category chain
+from the ADMX in `--admx-dir`: a policy the template places elsewhere is
+emitted under the template's area with a warning naming both, and a policy
+the template does not define is refused.
+
 ## Recipe 5: The SyncML contract, field by field
 
 Read this to understand what contour emitted, or to hand-author a fragment

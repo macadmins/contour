@@ -77,7 +77,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::windows::syncml::{
     Channel, Operation, WindowsError, admx_element_values, apply_instance, atomic_wrap, build_path,
-    csp_for_key, decode_admx, deprecation_warning, find_admx_policy, find_app_policy,
+    admx_policy_areas, csp_for_key, decode_admx, deprecation_warning, find_admx_policy, find_app_policy,
     find_node_detail, find_setting, instance_placeholder, render, render_admx_install,
     resolve_channel, syncml_format, validate_value,
 };
@@ -227,6 +227,10 @@ pub fn assemble(resolved: &[Resolved]) -> (Vec<String>, Vec<(String, usize)>) {
     let summary = groups.into_iter().map(|(k, v)| (k, v.len())).collect();
     (commands, summary)
 }
+
+/// The ADMXInstall commands, one per template with its ref, and the
+/// warnings from holding each policy to the template's own areas.
+pub type Ingestion = (Vec<(TemplateRef, String)>, Vec<String>);
 
 /// One template to ingest: the file, the URI it is installed at, and where
 /// an operator fetches it.
@@ -428,18 +432,26 @@ fn resolve_app_policy(
 /// one each, in first-use order — or the error that says which file is
 /// missing and where to get it. Nothing is emitted for a partial set: an
 /// ingested template with a missing sibling is a half-configured device.
+///
+/// With the template in hand, each policy's area is checked against it. The
+/// dataset was built from one version of the vendor's file and the operator
+/// ingests another, and the device indexes only what it ingested: a policy
+/// placed under a category the file does not have is accepted and never
+/// applied. The template's area wins, with a warning naming both; a policy
+/// the template does not define at all is refused.
 pub fn ingestion_commands(
-    resolved: &[Resolved],
+    resolved: &mut [Resolved],
     admx_dir: Option<&std::path::Path>,
-) -> Result<Vec<(TemplateRef, String)>, WindowsError> {
-    let mut seen: Vec<&TemplateRef> = Vec::new();
+) -> Result<Ingestion, WindowsError> {
+    let mut seen: Vec<TemplateRef> = Vec::new();
     for t in resolved.iter().filter_map(|r| r.template.as_ref()) {
         if !seen.iter().any(|s| s.install_loc_uri == t.install_loc_uri) {
-            seen.push(t);
+            seen.push(t.clone());
         }
     }
     let mut out = Vec::new();
-    for t in seen {
+    let mut warnings = Vec::new();
+    for t in &seen {
         let Some(dir) = admx_dir else {
             return Err(WindowsError::TemplateMissing {
                 admx_file: t.admx_file.clone(),
@@ -478,9 +490,58 @@ pub fn ingestion_commands(
             path: path.display().to_string(),
             why,
         })?;
+        warnings.extend(reconcile_areas(resolved, t, &xml)?);
         out.push((t.clone(), render_admx_install(&t.install_loc_uri, &xml)));
     }
-    Ok(out)
+    Ok((out, warnings))
+}
+
+/// Hold every policy that uses `template` to the area the ingested ADMX
+/// defines for it. Returns one warning per corrected path.
+fn reconcile_areas(
+    resolved: &mut [Resolved],
+    template: &TemplateRef,
+    admx_xml: &str,
+) -> Result<Vec<String>, WindowsError> {
+    let areas = admx_policy_areas(admx_xml);
+    let mut warnings = Vec::new();
+    for r in resolved
+        .iter_mut()
+        .filter(|r| r.template.as_ref().is_some_and(|t| t.admx_file == template.admx_file))
+    {
+        // `…/Policy/Config/{App}~Policy~{categories}/{PolicyName}`
+        let Some((prefix, policy)) = r.path.rsplit_once('/') else {
+            continue;
+        };
+        let Some((head, area)) = prefix.rsplit_once('/') else {
+            continue;
+        };
+        let Some(chain) = areas.get(policy) else {
+            return Err(WindowsError::NotInTemplate {
+                key: policy.to_string(),
+                admx_file: template.admx_file.clone(),
+            });
+        };
+        let Some(app) = area.split('~').next() else {
+            continue;
+        };
+        let want = if chain.is_empty() {
+            format!("{app}~Policy")
+        } else {
+            format!("{app}~Policy~{chain}")
+        };
+        if want == area {
+            continue;
+        }
+        let new_path = format!("{head}/{want}/{policy}");
+        warnings.push(format!(
+            "{}: {} places '{policy}' under {want}, the dataset under {area}; using the template's area",
+            r.label, template.admx_file
+        ));
+        r.xml = r.xml.replace(&r.path, &new_path);
+        r.path = new_path;
+    }
+    Ok(warnings)
 }
 
 fn resolve_one(
@@ -681,7 +742,7 @@ pub fn handle_generate(
         bail!("no [[setting]] entries in {input} — nothing to generate");
     }
 
-    let (resolved, errors, warnings) = resolve_all(&file);
+    let (mut resolved, errors, mut warnings) = resolve_all(&file);
 
     if !errors.is_empty() {
         // Every refusal at once: a settings file is edited as a whole.
@@ -695,8 +756,10 @@ pub fn handle_generate(
 
     // Templates first: a policy under an area that does not exist yet is
     // accepted and ignored, so the ADMXInstall commands lead.
-    let ingestion = ingestion_commands(&resolved, admx_dir.map(std::path::Path::new))
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let (ingestion, area_warnings) =
+        ingestion_commands(&mut resolved, admx_dir.map(std::path::Path::new))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    warnings.extend(area_warnings);
     let mut commands: Vec<String> = ingestion.iter().map(|(_, xml)| xml.clone()).collect();
     let (settings, atomic_groups) = assemble(&resolved);
     commands.extend(settings);
@@ -1097,7 +1160,8 @@ IncognitoModeAvailability = "1"
         app_data_present(&err);
         assert!(err.is_empty(), "{err:?}");
 
-        let missing = ingestion_commands(&ok, None).unwrap_err().to_string();
+        let mut ok = ok;
+        let missing = ingestion_commands(&mut ok, None).unwrap_err().to_string();
         assert!(
             missing.contains("chrome.admx")
                 && missing.contains("--admx-dir")
@@ -1107,18 +1171,41 @@ IncognitoModeAvailability = "1"
 
         let dir = std::env::temp_dir().join(format!("contour-admx-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let wrong_dir = ingestion_commands(&ok, Some(&dir)).unwrap_err().to_string();
+        let wrong_dir = ingestion_commands(&mut ok, Some(&dir)).unwrap_err().to_string();
         assert!(
             wrong_dir.contains("is not in") && wrong_dir.contains("chrome.admx"),
             "{wrong_dir}"
         );
 
+        // A template that defines neither policy: ingesting it would make the
+        // device accept both settings and apply nothing, so it is refused.
         std::fs::write(
             dir.join("Chrome.ADMX"),
             "<policyDefinitions revision=\"1.0\"/>",
         )
         .unwrap();
-        let cmds = ingestion_commands(&ok, Some(&dir)).unwrap();
+        let absent = ingestion_commands(&mut ok, Some(&dir)).unwrap_err().to_string();
+        assert!(
+            absent.contains("is not a policy in the chrome.admx"),
+            "{absent}"
+        );
+
+        // The vendor's file is the authority on areas. Here it keeps
+        // HomepageIsNewTabPage where the dataset has it and moves
+        // IncognitoModeAvailability under a category the dataset lacks.
+        let template = r#"<policyDefinitions revision="1.0">
+  <categories>
+    <category displayName="$(string.googlechrome)" name="googlechrome"><parentCategory ref="Google:Cat_Google"/></category>
+    <category displayName="$(string.Startup)" name="Startup"><parentCategory ref="googlechrome"/></category>
+    <category displayName="$(string.Privacy)" name="Privacy"><parentCategory ref="googlechrome"/></category>
+  </categories>
+  <policies>
+    <policy class="Both" displayName="$(string.H)" name="HomepageIsNewTabPage" key="Software\Policies\Google\Chrome"><parentCategory ref="Startup"/></policy>
+    <policy class="Both" displayName="$(string.I)" name="IncognitoModeAvailability" key="Software\Policies\Google\Chrome"><parentCategory ref="Privacy"/></policy>
+  </policies>
+</policyDefinitions>"#;
+        std::fs::write(dir.join("Chrome.ADMX"), template).unwrap();
+        let (cmds, warnings) = ingestion_commands(&mut ok, Some(&dir)).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(
             cmds.len(),
@@ -1129,9 +1216,25 @@ IncognitoModeAvailability = "1"
         assert_eq!(t.admx_file, "chrome.admx");
         assert!(xml.contains("<LocURI>./Device/Vendor/MSFT/Policy/ConfigOperations/ADMXInstall/Chrome/Policy/chrome</LocURI>"), "{xml}");
         assert!(
-            xml.contains("<![CDATA[<policyDefinitions revision=\"1.0\"/>]]>"),
+            xml.contains("<![CDATA[<policyDefinitions revision=\"1.0\">"),
             "the template XML is the body: {xml}"
         );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("IncognitoModeAvailability")
+                && warnings[0].contains("Chrome~Policy~googlechrome~Privacy"),
+            "{}",
+            warnings[0]
+        );
+        let moved = ok.iter().find(|r| r.path.ends_with("/IncognitoModeAvailability")).unwrap();
+        assert!(
+            moved.path.ends_with("/Chrome~Policy~googlechrome~Privacy/IncognitoModeAvailability"),
+            "{}",
+            moved.path
+        );
+        assert!(moved.xml.contains(&moved.path), "the command follows the path: {}", moved.xml);
+        let kept = ok.iter().find(|r| r.path.ends_with("/HomepageIsNewTabPage")).unwrap();
+        assert!(kept.path.contains("~googlechrome~Startup/"), "{}", kept.path);
     }
 
     /// Vendors ship UTF-16 LE with a BOM (Chrome, Edge, Office, Brave), UTF-8
@@ -1140,8 +1243,13 @@ IncognitoModeAvailability = "1"
     #[test]
     fn a_template_in_any_vendor_encoding_becomes_the_ingestion_body() {
         use crate::windows::syncml::decode_admx;
-        let xml =
-            "<?xml version=\"1.0\" encoding=\"utf-16\"?><policyDefinitions revision=\"1.0\"/>";
+        // A real template defines the policy the settings file sets; the
+        // ingest check below holds the policy to it.
+        let xml = "<?xml version=\"1.0\" encoding=\"utf-16\"?><policyDefinitions revision=\"1.0\">\
+                   <categories><category name=\"googlechrome\"><parentCategory ref=\"Google:Cat_Google\"/></category>\
+                   <category name=\"Startup\"><parentCategory ref=\"googlechrome\"/></category></categories>\
+                   <policies><policy class=\"Both\" name=\"HomepageIsNewTabPage\"><parentCategory ref=\"Startup\"/></policy></policies>\
+                   </policyDefinitions>";
         let mut utf16 = vec![0xFF, 0xFE];
         for u in xml.encode_utf16() {
             utf16.extend_from_slice(&u.to_le_bytes());
@@ -1151,7 +1259,7 @@ IncognitoModeAvailability = "1"
             decoded.starts_with("<?xml version=\"1.0\" encoding=\"utf-8\"?>"),
             "{decoded}"
         );
-        assert!(decoded.ends_with("<policyDefinitions revision=\"1.0\"/>"));
+        assert!(decoded.ends_with("</policyDefinitions>"));
 
         let mut bom8 = vec![0xEF, 0xBB, 0xBF];
         bom8.extend_from_slice(b"<?xml version=\"1.0\" ?><policyDefinitions/>");
@@ -1175,14 +1283,15 @@ IncognitoModeAvailability = "1"
         assert!(err.contains("not UTF-8"), "{err}");
 
         // And through the whole path: a UTF-16 chrome.admx on disk.
-        let (ok, err, _) =
+        let (mut ok, err, _) =
             resolve("[[setting]]\napp = \"chrome\"\nkey = \"HomepageIsNewTabPage\"\n");
         app_data_present(&err);
         let dir = std::env::temp_dir().join(format!("contour-admx16-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("chrome.admx"), &utf16).unwrap();
-        let cmds = ingestion_commands(&ok, Some(&dir)).unwrap();
+        let (cmds, area_warnings) = ingestion_commands(&mut ok, Some(&dir)).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+        assert!(area_warnings.is_empty(), "same area as the dataset: {area_warnings:?}");
         assert!(
             cmds[0]
                 .1
