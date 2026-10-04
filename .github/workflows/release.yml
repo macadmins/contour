@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # A manual run builds and uploads the archives as workflow artifacts and
+  # creates no release; only a tag push publishes.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -36,8 +39,13 @@ jobs:
       - name: Extract version from tag
         id: meta
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            # Manual run: the version the tree declares.
+            echo "version=$(grep -m1 '^version = ' crates/contour/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set SOURCE_DATE_EPOCH
         env:
@@ -64,6 +72,10 @@ jobs:
             grep -Fq "$EXPECTED_MACHINE" binary-type.txt
             "$TARGET_DIR/$bin" --version
           done
+          # The datasets are compiled in; census reads them back out of the
+          # binary. A zero count means a crate shipped without its data.
+          "$TARGET_DIR/contour" census --json | tee census.json
+          ! grep -E '"[a-z_]+": 0(,|$)' census.json
 
       - name: Package binaries
         env:
@@ -94,6 +106,7 @@ jobs:
   release:
     name: Create Release
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
