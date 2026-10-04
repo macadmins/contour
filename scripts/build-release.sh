@@ -478,7 +478,10 @@ create_checksums() {
     log_step "Creating checksums"
 
     cd "$DIST_DIR"
-    rm -f checksums.txt
+    # Named for the platform: the Linux workflow publishes its own manifests
+    # to the same release, and two files called checksums.txt overwrite each
+    # other there.
+    rm -f checksums-macos-arm64.txt
 
     # The current version of every known target present, not a glob:
     # dist/ now keeps earlier releases, whose files are not this release.
@@ -488,12 +491,12 @@ create_checksums() {
     for bin in "${KNOWN_BINARIES[@]}"; do
         BINARY="$bin"
         for f in $(artifacts_for "$bin"); do
-            [[ -f "$f" ]] && shasum -a 256 "$f" >> checksums.txt
+            [[ -f "$f" ]] && shasum -a 256 "$f" >> checksums-macos-arm64.txt
         done
     done
 
     log_info "Checksums:"
-    cat checksums.txt
+    cat checksums-macos-arm64.txt
 }
 
 verify_artifacts() {
