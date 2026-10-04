@@ -1160,6 +1160,12 @@ IncognitoModeAvailability = "1"
             "<?xml version=\"1.0\" ?><policyDefinitions/>"
         );
 
+        // A blank first line would land between `<![CDATA[` and `<?xml`, which
+        // ADMXInstall rejects with status 500; the body starts at the `<`.
+        assert_eq!(
+            decode_admx(b"\xEF\xBB\xBF\n\n  <?xml version=\"1.0\" ?>\n<policyDefinitions/>").unwrap(),
+            "<?xml version=\"1.0\" ?>\n<policyDefinitions/>"
+        );
         assert_eq!(
             decode_admx(b"<policyDefinitions/>").unwrap(),
             "<policyDefinitions/>"

@@ -757,7 +757,12 @@ pub fn decode_admx(bytes: &[u8]) -> Result<String, String> {
         let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
         String::from_utf8(body.to_vec()).map_err(|e| format!("not UTF-8: {e}"))?
     };
-    if !text.trim_start().starts_with("<?xml") && !text.trim_start().starts_with('<') {
+    // Nothing may sit between `<![CDATA[` and `<?xml`: a line break or a
+    // space there makes ADMXInstall fail with status 500 (Fleet, 2026-10).
+    // Vendors do ship files with a blank first line, so the body starts at
+    // the first `<`.
+    let text = text.trim_start().to_string();
+    if !text.starts_with("<?xml") && !text.starts_with('<') {
         return Err("does not begin with XML".into());
     }
     // Only the declaration, only the encoding attribute.
