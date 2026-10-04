@@ -19,7 +19,7 @@ use crate::versioning::{GitInfoExtractor, ManifestStore, ProfileInfo};
 use anyhow::Result;
 use colored::Colorize;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// What `--osquery` will do on this run, and why.
 ///
@@ -195,7 +195,7 @@ pub fn process_baseline(
         if !plan.unresolved.is_empty() {
             let mut near: Vec<String> = Vec::new();
             if let Ok(all) =
-                RuleExtractor::new(repo_path).extract_rules_for_baseline(&baseline.name)
+                rule_extractor_for(&baseline, repo_path).extract_rules_for_baseline(&baseline.name)
             {
                 for missing in &plan.unresolved {
                     let needle = missing.to_lowercase();
@@ -581,8 +581,7 @@ pub fn process_baseline(
 
         // Extract rules from mSCP repository or embedded data
         let mut rules = if let Some(ref repo_path) = mscp_repo_path {
-            let rule_extractor = RuleExtractor::new(repo_path);
-            rule_extractor.extract_rules_for_baseline(&baseline.name)?
+            rule_extractor_for(&baseline, repo_path).extract_rules_for_baseline(&baseline.name)?
         } else {
             tracing::info!("No mSCP repo path — using embedded rule data");
             crate::extractors::rules_from_embedded(&baseline.name, "macOS")?
@@ -709,8 +708,7 @@ pub fn process_baseline(
 
     if should_generate_individual_scripts {
         let mut rules = if let Some(ref repo_path) = mscp_repo_path {
-            let rule_extractor = RuleExtractor::new(repo_path);
-            rule_extractor.extract_rules_for_baseline(&baseline.name)?
+            rule_extractor_for(&baseline, repo_path).extract_rules_for_baseline(&baseline.name)?
         } else {
             tracing::info!("No mSCP repo path — using embedded rule data for scripts");
             crate::extractors::rules_from_embedded(&baseline.name, "macOS")?
@@ -772,8 +770,7 @@ pub fn process_baseline(
     let mut policy_path: Option<PathBuf> = None;
     if is_fleet_output && !is_jamf_mode && !dry_run && baseline.platform == Platform::MacOS {
         let rules = if let Some(ref repo_path) = mscp_repo_path {
-            let rule_extractor = RuleExtractor::new(repo_path);
-            rule_extractor.extract_rules_for_baseline(&baseline.name)?
+            rule_extractor_for(&baseline, repo_path).extract_rules_for_baseline(&baseline.name)?
         } else {
             tracing::info!("No mSCP repo path — using embedded rule data for policies");
             crate::extractors::rules_from_embedded(&baseline.name, "macOS")?
@@ -839,7 +836,8 @@ pub fn process_baseline(
             }
             OsqueryPlan::Build => {
                 let rules = if let Some(ref repo_path) = mscp_repo_path {
-                    RuleExtractor::new(repo_path).extract_rules_for_baseline(&baseline.name)?
+                    rule_extractor_for(&baseline, repo_path)
+                        .extract_rules_for_baseline(&baseline.name)?
                 } else {
                     crate::extractors::rules_from_embedded(&baseline.name, "macOS")?
                 };
@@ -1456,8 +1454,51 @@ fn apply_script_subfolder_placement(
     Ok(())
 }
 
+/// An extractor aimed at the baseline file this build was made from.
+///
+/// mSCP 2.0 builds into `build/<name>_<os>_<version>`, and that directory
+/// name is the only place the version survives to here. Handing it on with
+/// the platform makes rule membership come from
+/// `baselines/<os>/<name>_<os>_<version>.yaml` for the release that was
+/// built, not from the newest file in the checkout. A 1.x build path has no
+/// suffix; the version stays unset and the extractor picks as before.
+fn rule_extractor_for(baseline: &crate::models::MscpBaseline, repo_path: &Path) -> RuleExtractor {
+    let version = build_version(&baseline.name, baseline.platform, &baseline.build_path);
+    RuleExtractor::new(repo_path).with_os(baseline.platform, version)
+}
+
+/// The `<version>` in a 2.0 build directory name `<name>_<os>_<version>`.
+fn build_version(name: &str, platform: Platform, build_path: &Path) -> Option<String> {
+    let prefix = format!("{name}_{}_", platform.mscp_dir_name());
+    build_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix(prefix.as_str()))
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod osquery_gate_tests {
+    /// A 2.0 build dir carries the version; a 1.x one does not.
+    #[test]
+    fn build_version_comes_from_the_2_0_build_dir_name() {
+        assert_eq!(
+            build_version("cis_lvl1", Platform::MacOS, Path::new("build/cis_lvl1_macos_26.0")),
+            Some("26.0".to_string())
+        );
+        assert_eq!(
+            build_version("cis_lvl1", Platform::Ios, Path::new("/x/build/cis_lvl1_ios_18.0")),
+            Some("18.0".to_string())
+        );
+        assert_eq!(build_version("cis_lvl1", Platform::MacOS, Path::new("build/cis_lvl1")), None);
+        // Another baseline's directory is not this baseline's version.
+        assert_eq!(
+            build_version("cis_lvl1", Platform::MacOS, Path::new("build/cis_lvl2_macos_26.0")),
+            None
+        );
+    }
+
     use super::*;
 
     /// Every non-emitting outcome is distinguishable from every other.

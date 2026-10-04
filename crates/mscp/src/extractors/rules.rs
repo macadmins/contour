@@ -254,8 +254,19 @@ impl RuleExtractor {
             .resolved_os_version()
             .context("no OS version available for 2.0 baseline lookup")?;
 
+        // The build's own version first. A checkout that has moved past that
+        // release no longer carries its file; the newest one is then the
+        // closest statement of membership, and still better than tags.
+        let pinned = layout.baseline_file(&self.mscp_repo_path, baseline_name, os, Some(&version));
         let path =
-            match layout.baseline_file(&self.mscp_repo_path, baseline_name, os, Some(&version)) {
+            match pinned.or_else(|_| {
+                layout.baseline_file(&self.mscp_repo_path, baseline_name, os, None).inspect(|p| {
+                    tracing::warn!(
+                        "baseline `{baseline_name}`: no file for {os} {version}; using {}",
+                        p.display()
+                    );
+                })
+            }) {
                 Ok(p) => p,
                 Err(_) => {
                     // Reconstruct the path that was tried purely for the message;

@@ -523,6 +523,12 @@ and Fleet schemas before the file is written. A typo'd table or column, a
 platform the table does not exist on, or a required column left unconstrained
 fails the run naming the query; a Fleet-only table is logged as a warning.
 
+Fleet rejects two policies with one name in a team. mSCP ships rules that
+share a title and a baseline (the `os_` and `system_settings_` pairs for
+personalized advertising and diagnostics reports, in 800-53r5 and cisv8 among
+others), so when a baseline carries both, each policy name gets its rule id
+appended. Unique names are left as they are.
+
 `--fleets` appends the baseline into each named fleet file: profiles go
 into `controls.apple_settings.configuration_profiles` (current Fleet
 GitOps schema), scripts into `controls.scripts`, and the baseline's label

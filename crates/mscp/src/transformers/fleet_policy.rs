@@ -59,12 +59,15 @@ impl FleetPolicyGenerator {
         output_dir: &Path,
     ) -> Result<(Vec<FleetPolicy>, PathBuf)> {
         let mut policies = Vec::new();
+        let mut rule_ids = Vec::new();
 
         for rule in rules {
             if let Some(policy) = self.generate_policy_for_rule(rule, baseline_name, odv_manager) {
                 policies.push(policy);
+                rule_ids.push(rule.id.as_str());
             }
         }
+        disambiguate_names(&mut policies, &rule_ids);
 
         let file_path = output_dir.join(format!("{baseline_name}.policies.yml"));
 
@@ -336,8 +339,67 @@ fn sanitize_title(title: &str) -> String {
     title.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Fleet rejects two policies with one name in a team, and the GitOps run
+/// stops on it. mSCP ships rules that share a title and a baseline: the
+/// `os_` and `system_settings_` pairs for personalized advertising and for
+/// diagnostics reports both sit in 800-53r5 low, moderate and high, cisv8 and
+/// cmmc_lvl1. When a baseline carries both, the rule id tells them apart.
+/// Names that are already unique are left exactly as they were.
+fn disambiguate_names(policies: &mut [FleetPolicy], rule_ids: &[&str]) {
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for policy in policies.iter() {
+        *seen.entry(policy.name.as_str()).or_default() += 1;
+    }
+    let clashing: std::collections::HashSet<String> = seen
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(name, _)| name.to_string())
+        .collect();
+    for (policy, rule_id) in policies.iter_mut().zip(rule_ids) {
+        if clashing.contains(&policy.name) {
+            policy.name = format!("{} ({rule_id})", policy.name);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// Two rules with one title in one baseline: both get their rule id,
+    /// the unique name stays as it was.
+    #[test]
+    fn duplicate_policy_names_get_the_rule_id() {
+        let make = |name: &str| FleetPolicy {
+            name: name.to_string(),
+            description: String::new(),
+            query: String::new(),
+            platform: "darwin".to_string(),
+            critical: false,
+            calendar_events_enabled: false,
+        };
+        let mut policies = vec![
+            make("mSCP - Disable Personalized Advertising"),
+            make("mSCP - Enforce Screen Saver Password"),
+            make("mSCP - Disable Personalized Advertising"),
+        ];
+        disambiguate_names(
+            &mut policies,
+            &[
+                "os_personalized_advertising_disable",
+                "os_screensaver_password_enforce",
+                "system_settings_personalized_advertising_disable",
+            ],
+        );
+        let names: Vec<&str> = policies.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "mSCP - Disable Personalized Advertising (os_personalized_advertising_disable)",
+                "mSCP - Enforce Screen Saver Password",
+                "mSCP - Disable Personalized Advertising (system_settings_personalized_advertising_disable)",
+            ]
+        );
+    }
     use super::*;
     use std::collections::HashMap;
 
