@@ -4,6 +4,9 @@
 # matters; a grep can be worked around, a linker cannot.
 name: contour-form purity
 
+permissions:
+  contents: read
+
 # mdm-schema's build script fetches its dataset from here.
 env:
   CONTOUR_SCHEMA_ZIP_BASE: ${{ secrets.CONTOUR_SCHEMA_ZIP_BASE }}
