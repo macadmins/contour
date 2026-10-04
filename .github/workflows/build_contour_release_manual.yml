@@ -77,7 +77,7 @@ jobs:
         files: |
           ${{ github.workspace }}/dist/*.pkg
           ${{ github.workspace }}/dist/*.zip
-          ${{ github.workspace }}/dist/checksums.txt
+          ${{ github.workspace }}/dist/checksums-macos-arm64.txt
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v7

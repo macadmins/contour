@@ -120,9 +120,11 @@ jobs:
 
       - name: Combine checksums
         run: |
-          sort artifacts/checksums-*/checksums-*.txt > checksums.txt
+          # Named for the platform: the macOS workflow publishes its own
+          # manifest to the same release.
+          sort artifacts/checksums-*/checksums-*.txt > checksums-linux.txt
           # two binaries on two targets
-          test "$(wc -l < checksums.txt)" -eq 4
+          test "$(wc -l < checksums-linux.txt)" -eq 4
 
       - name: Create release
         uses: softprops/action-gh-release@v3
@@ -131,5 +133,5 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/checksums-*/checksums-*.txt
-            checksums.txt
+            checksums-linux.txt
           generate_release_notes: true
