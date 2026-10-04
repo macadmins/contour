@@ -61,18 +61,34 @@ impl MscpOutputExtractor {
             );
         }
 
-        // Detect platform from VERSION.yaml if repo path provided
+        // Detect the platform. mSCP 1.x states it repo-wide in VERSION.yaml;
+        // 2.0 has no such file and files each baseline under
+        // baselines/<platform>/, so a 2.0 checkout warned "VERSION.yaml not
+        // found" on every run while being perfectly valid.
         let platform = if let Some(ref repo_path) = self.mscp_repo_path {
-            match VersionYaml::load(repo_path) {
-                Ok(version) => {
-                    let p = version.to_platform();
-                    tracing::info!("Detected platform: {} from VERSION.yaml", p);
-                    p
+            if repo_path.join("VERSION.yaml").exists() {
+                match VersionYaml::load(repo_path) {
+                    Ok(version) => {
+                        let p = version.to_platform();
+                        tracing::info!("Detected platform: {} from VERSION.yaml", p);
+                        p
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load VERSION.yaml: {}. Defaulting to macOS.", e);
+                        Platform::MacOS
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to load VERSION.yaml: {}. Defaulting to macOS.", e);
-                    Platform::MacOS
-                }
+            } else if let Some(p) = platform_from_baselines_dir(repo_path, &self.baseline_name) {
+                tracing::info!("Detected platform: {} from baselines/ (mSCP 2.0)", p);
+                p
+            } else {
+                tracing::warn!(
+                    "Neither VERSION.yaml (mSCP 1.x) nor a baselines/<platform>/{}_* file \
+                     (mSCP 2.0) names this baseline's platform in {}. Defaulting to macOS.",
+                    self.baseline_name,
+                    repo_path.display()
+                );
+                Platform::MacOS
             }
         } else {
             tracing::info!("No repo path provided, defaulting to macOS platform");
@@ -105,7 +121,7 @@ impl MscpOutputExtractor {
             mobileconfigs,
             ddm_artifacts,
             compliance_script,
-            mscp_git_hash: None, // Will be filled in by versioning module
+            mscp_git_hash: None, // Filled in by cli/process.rs from GitInfoExtractor
             mscp_git_tag: None,
         })
     }
@@ -179,7 +195,7 @@ impl MscpOutputExtractor {
         if script_path.exists() {
             Ok(Some(script_path))
         } else {
-            // Try without the .sh extension or other variations
+            // Fall back to any `*compliance*.sh` file in the build dir
             for entry in fs::read_dir(&self.build_path)? {
                 let entry = entry?;
                 let path = entry.path();
@@ -206,5 +222,81 @@ mod tests {
     fn test_extractor_creation() {
         let extractor = MscpOutputExtractor::new("/tmp/test", "cis_lvl1".to_string());
         assert_eq!(extractor.baseline_name, "cis_lvl1");
+    }
+}
+
+/// The platform mSCP 2.0 files `baseline` under: `baselines/macos/`,
+/// `baselines/ios/` or `baselines/visionos/`, as `<baseline>_<os>_<version>.yaml`.
+/// `None` when no platform directory holds it.
+fn platform_from_baselines_dir(repo: &Path, baseline: &str) -> Option<Platform> {
+    // A baseline name may already carry the platform and version
+    // (`cis_lvl1_macos_27.0`, the build directory's name); strip that so both
+    // spellings resolve.
+    [
+        ("macos", Platform::MacOS),
+        ("ios", Platform::Ios),
+        ("visionos", Platform::VisionOS),
+    ]
+    .into_iter()
+    .find(|(dir, _)| {
+        let bare = baseline
+            .split_once(&format!("_{dir}_"))
+            .map_or(baseline, |(b, _)| b);
+        let prefix = format!("{bare}_{dir}_");
+        std::fs::read_dir(repo.join("baselines").join(dir)).is_ok_and(|entries| {
+            entries.filter_map(Result::ok).any(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.ends_with(".yaml")
+                    && (name.starts_with(&prefix) || name == format!("{bare}.yaml"))
+            })
+        })
+    })
+    .map(|(_, p)| p)
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+
+    fn repo(files: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for f in files {
+            let p = dir.path().join("baselines").join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "title: x\n").unwrap();
+        }
+        dir
+    }
+
+    /// mSCP 2.0 has no VERSION.yaml; the directory is the platform.
+    #[test]
+    fn a_2_0_baseline_takes_its_platform_from_its_directory() {
+        let r = repo(&[
+            "macos/cis_lvl1_macos_27.0.yaml",
+            "ios/cisv8_ios_27.0.yaml",
+            "visionos/cisv8_visionos_27.0.yaml",
+        ]);
+        assert_eq!(
+            platform_from_baselines_dir(r.path(), "cis_lvl1"),
+            Some(Platform::MacOS)
+        );
+        // The build directory's name carries the platform, and wins.
+        assert_eq!(
+            platform_from_baselines_dir(r.path(), "cisv8_ios_27.0"),
+            Some(Platform::Ios)
+        );
+        assert_eq!(
+            platform_from_baselines_dir(r.path(), "cisv8_visionos_27.0"),
+            Some(Platform::VisionOS)
+        );
+    }
+
+    #[test]
+    fn a_baseline_no_directory_holds_is_not_guessed() {
+        let r = repo(&["macos/cis_lvl1_macos_27.0.yaml"]);
+        assert_eq!(platform_from_baselines_dir(r.path(), "stig"), None);
+        // A prefix of another baseline's name is not that baseline.
+        assert_eq!(platform_from_baselines_dir(r.path(), "cis"), None);
     }
 }

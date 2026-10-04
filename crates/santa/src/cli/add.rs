@@ -46,6 +46,46 @@ pub fn run(
     };
     let description = description.as_deref();
 
+    // Refuse an identifier that cannot be what its flag says, before the file
+    // is touched — the same checks `santa validate` applies. A malformed
+    // TeamID is refused too: typed on the command line it is a mistake, not
+    // a judgment call.
+    let candidate = crate::models::Rule::new(rule_type, identifier.clone(), policy);
+    let check = crate::validator::validate_rule(&candidate, 0);
+    let suspicious_team = check.warnings.iter().any(|w| {
+        matches!(
+            w,
+            crate::validator::ValidationWarning::SuspiciousTeamId { .. }
+        )
+    });
+    if !check.errors.is_empty() || suspicious_team {
+        let why: Vec<String> = check
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .chain(
+                check
+                    .warnings
+                    .iter()
+                    .filter(|w| {
+                        matches!(
+                            w,
+                            crate::validator::ValidationWarning::SuspiciousTeamId { .. }
+                        )
+                    })
+                    .map(ToString::to_string),
+            )
+            .map(|m| m.replace(" at rule 0", "").replace("Rule 0 ", ""))
+            .collect();
+        anyhow::bail!(
+            "not a valid {} identifier: {identifier}\n  {}\n\
+             TeamID is 10 letters/digits, SigningID TEAMID:bundle.id, CDHash 40 hex, \
+             binary and certificate 64 hex. `contour app manifest <app>` prints an app's.",
+            rule_type.as_str(),
+            why.join("\n  ")
+        );
+    }
+
     // Load existing rules or create new file
     let mut rules = if file.exists() {
         parse_file(file).with_context(|| format!("Failed to parse {}", file.display()))?

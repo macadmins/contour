@@ -1,6 +1,6 @@
 [package]
 name = "contour"
-version = "0.4.1-beta.1"
+version = "0.5.0-beta.1"
 description = "Unified macOS MDM configuration toolkit"
 edition.workspace = true
 authors.workspace = true
@@ -23,8 +23,17 @@ notifications = { path = "../notifications" }
 support = { path = "../support" }
 santa = { path = "../santa" }
 mscp = { path = "../mscp" }
+app-manifest.workspace = true
 contour-core.workspace = true
 osquery-schema.workspace = true
+# Read only to count what is embedded — see src/census.rs. The skill file
+# states the dataset's size to an agent before it runs anything, so that
+# sentence is computed here rather than typed into the markdown.
+contour-form.workspace = true
+mdm-schema.workspace = true
+mscp-schema.workspace = true
+windows-schema.workspace = true
+app-policy-schema.workspace = true
 
 # CLI
 clap.workspace = true
@@ -43,14 +52,18 @@ inquire.workspace = true
 walkdir.workspace = true
 
 # Serialization
+serde.workspace = true
 serde_json.workspace = true
 
 # Memory allocator
 mimalloc.workspace = true
 
 [dev-dependencies]
+plist.workspace = true
 assert_cmd.workspace = true
 tempfile.workspace = true
+jsonschema.workspace = true
+yaml_serde.workspace = true
 
 [build-dependencies]
 chrono.workspace = true

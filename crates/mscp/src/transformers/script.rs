@@ -23,7 +23,8 @@ impl ScriptTransformer {
     }
 
     /// Transform compliance script into separate audit and remediate scripts
-    /// Returns (`audit_script_path`, `remediate_script_path`)
+    /// Returns (`audit_script_path`, `Option<remediate_script_path>`); remediate is
+    /// `None` when the compliance script has no `--fix` block.
     pub fn transform(
         &self,
         baseline_name: &str,

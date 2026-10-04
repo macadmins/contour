@@ -166,16 +166,26 @@ fn build_system_extension_payload() -> Dictionary {
         Value::Dictionary(allowed_types),
     );
 
-    payload.insert("AllowUserOverrides".to_string(), Value::Boolean(true));
+    // Apple: "If false, restricts users from approving additional system
+    // extensions that configuration profiles don't explicitly allow." An
+    // endpoint security agent wants that restriction, and the `santa` recipe
+    // has always set false — these two paths produce the same artifact and
+    // must not disagree about its posture.
+    payload.insert("AllowUserOverrides".to_string(), Value::Boolean(false));
 
-    // NonRemovableFromUISystemExtensions (prevent user from removing)
+    // NonRemovableSystemExtensions, NOT NonRemovableFromUISystemExtensions.
+    // Apple documents the former as "can't be disabled or uninstalled when
+    // SIP is enabled" and the latter as only blocking System Settings and
+    // Finder. The UI-only key leaves `systemextensionsctl` able to unload
+    // Santa, which is the one removal path an attacker would reach for.
+    // Both are macOS 15+.
     let mut non_removable = Dictionary::new();
     non_removable.insert(
         NORTHPOLE_TEAM_ID.to_string(),
         Value::Array(vec![Value::String(SANTA_DAEMON_BUNDLE_ID.to_string())]),
     );
     payload.insert(
-        "NonRemovableFromUISystemExtensions".to_string(),
+        "NonRemovableSystemExtensions".to_string(),
         Value::Dictionary(non_removable),
     );
 

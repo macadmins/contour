@@ -69,36 +69,30 @@ fn prompt_bool(message: &str, default: bool) -> Result<bool> {
 
 /// Discover available baselines from an mSCP repository.
 ///
-/// Reads `{mscp_path}/baselines/*.yaml`, filters out template/example files,
+/// Reads `{mscp_path}/baselines/macos/*.yaml`, filters out template/example files,
 /// and returns `(name, description)` pairs sorted alphabetically.
 pub fn discover_baselines(mscp_path: &Path) -> Result<Vec<(String, String)>> {
-    let baselines_dir = mscp_path.join("baselines");
-    if !baselines_dir.exists() {
-        anyhow::bail!(
-            "Baselines directory not found at: {}",
-            baselines_dir.display()
-        );
-    }
+    // Layout-aware: on a 2.0 tree `baselines/` holds only `ios/ macos/ visionos/`
+    // and listing it directly found no YAML at all — an empty answer that
+    // read as "no baselines". The layout owns the file grammar.
+    let layout = crate::layout::MscpLayout::detect(mscp_path)
+        .with_context(|| format!("detecting mSCP layout in {}", mscp_path.display()))?;
+    // init is a macOS-first flow; on 2.0 the same name recurs per OS, so one
+    // OS is enough to enumerate names without duplicates.
+    let entries = layout.list_baselines(mscp_path, "macos")?;
 
+    let mut seen = std::collections::HashSet::new();
     let mut baselines = Vec::new();
-    for entry in std::fs::read_dir(&baselines_dir).context(format!(
-        "Failed to read baselines directory: {}",
-        baselines_dir.display()
-    ))? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("yaml") {
-            if let Some(basename) = path.file_stem().and_then(|s| s.to_str()) {
-                // Skip template/example files
-                if basename.contains("template") || basename.contains("example") {
-                    continue;
-                }
-
-                let description = read_baseline_description(&path).unwrap_or_default();
-                baselines.push((basename.to_string(), description));
-            }
+    for (name, _version, path) in entries {
+        // Skip template/example files
+        if name.contains("template") || name.contains("example") {
+            continue;
         }
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let description = read_baseline_description(&path).unwrap_or_default();
+        baselines.push((name, description));
     }
 
     baselines.sort_by(|a, b| a.0.cmp(&b.0));
@@ -298,14 +292,14 @@ pub fn init_project<P: AsRef<Path>>(
         let mscp_path = output.join("macos_security");
         sync_mscp_repo(&mscp_path, branch)?;
 
-        // Clarify which mSCP layout the synced repo carries — `main`
-        // is 2.0, `tahoe` and other macOS-version branches are 1.x.
+        // Verify the synced repo is mSCP 2.0 — `main` is; the macOS-version
+        // branches are the deprecated 1.x layout and the error says so.
         match crate::layout::MscpLayout::detect(&mscp_path) {
             Ok(layout) => {
-                println!("  ✓ Detected mSCP layout: {}", layout.display_name());
+                println!("  ✓ mSCP layout: {}", layout.display_name());
             }
             Err(e) => {
-                println!("  ⚠ Could not detect mSCP layout: {e}");
+                println!("  ⚠ {e}");
             }
         }
     }

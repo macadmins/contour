@@ -48,8 +48,13 @@ pub fn handle_search(
     schema_path: Option<&str>,
     channel: crate::schema::Channel,
     windows: bool,
+    kind: Option<&str>,
     output_mode: OutputMode,
 ) -> Result<()> {
+    let kind = match kind {
+        Some(raw) => Some(parse_kind_arg(raw)?),
+        None => None,
+    };
     let registry = if windows {
         crate::schema::SchemaRegistry::embedded_windows()?
     } else {
@@ -57,16 +62,17 @@ pub fn handle_search(
     };
 
     if let Some(name) = field {
-        return handle_field_lookup(&registry, name, output_mode);
+        return handle_field_lookup(&registry, name, kind, output_mode);
     }
 
     let q = query.expect("clap enforces a query when --field is unset");
 
     if include_fields {
-        return handle_polymorphic_search(&registry, q, output_mode);
+        return handle_polymorphic_search(&registry, q, kind, output_mode);
     }
 
     let mut results: Vec<&PayloadManifest> = registry.search(q);
+    results.retain(|m| kind_allows(m, kind));
 
     // Sort by payload_type for deterministic output
     results.sort_by(|a, b| a.payload_type.cmp(&b.payload_type));
@@ -89,13 +95,14 @@ pub fn handle_search(
 fn handle_polymorphic_search(
     registry: &SchemaRegistry,
     query: &str,
+    kind: Option<mdm_schema::PayloadKind>,
     output_mode: OutputMode,
 ) -> Result<()> {
     let q = query.to_lowercase();
     let mut payload_hits: Vec<(&PayloadManifest, Vec<&'static str>)> = Vec::new();
     let mut field_hits: Vec<(&PayloadManifest, &FieldDefinition, Vec<&'static str>)> = Vec::new();
 
-    for m in registry.all() {
+    for m in registry.all().filter(|m| kind_allows(m, kind)) {
         // Payload-level axes
         let mut p_in = Vec::new();
         if m.payload_type.to_lowercase().contains(&q) {
@@ -149,6 +156,8 @@ fn handle_polymorphic_search(
                     "title": m.title,
                     "description": m.description,
                     "category": m.category,
+                    "kind": m.kind.map(|k| k.as_str()),
+                    "authorable": m.is_authorable(),
                     "platforms": m.platforms.to_vec(),
                     "field_count": m.fields.len(),
                     "matched_in": in_,
@@ -256,6 +265,7 @@ fn handle_polymorphic_search(
 fn handle_field_lookup(
     registry: &crate::schema::SchemaRegistry,
     name: &str,
+    kind: Option<mdm_schema::PayloadKind>,
     output_mode: OutputMode,
 ) -> Result<()> {
     let target = name.to_lowercase();
@@ -271,6 +281,7 @@ fn handle_field_lookup(
 
     // Deterministic order: by payload_type, then field name (which is the
     // same across matches but kept for symmetry with future-proofing).
+    matches.retain(|(m, _)| kind_allows(m, kind));
     matches.sort_by(|(a_m, a_f), (b_m, b_f)| {
         a_m.payload_type
             .cmp(&b_m.payload_type)
@@ -285,6 +296,8 @@ fn handle_field_lookup(
                     "payload_type": m.payload_type,
                     "title": m.title,
                     "category": m.category,
+                    "kind": m.kind.map(|k| k.as_str()),
+                    "authorable": m.is_authorable(),
                     "field": {
                         "name": f.name,
                         "type": f.field_type.as_str(),
@@ -364,19 +377,17 @@ fn output_json(results: &[&PayloadManifest]) -> Result<()> {
     let entries: Vec<serde_json::Value> = results
         .iter()
         .map(|m| {
-            let kind = if m.category.starts_with("ddm-") {
-                "DdmDeclaration"
-            } else {
-                "MdmProfile"
-            };
             serde_json::json!({
                 "payload_type": m.payload_type,
                 "title": m.title,
                 "description": m.description,
                 "category": m.category,
+                // From the source's `kind` column, not inferred from the
+                // category: that inference filed every command as a profile.
+                "kind": m.kind.map(|k| k.as_str()),
+                "authorable": m.is_authorable(),
                 "platforms": m.platforms.to_vec(),
                 "field_count": m.fields.len(),
-                "kind": kind,
             })
         })
         .collect();
@@ -421,6 +432,103 @@ fn output_human(query: &str, results: &[&PayloadManifest], channel: crate::schem
             m.category,
             m.fields.len(),
             platforms,
+        );
+    }
+}
+
+/// `--kind` accepts the column value (`MdmCommand`) or a plain word.
+fn parse_kind_arg(raw: &str) -> Result<mdm_schema::PayloadKind> {
+    use mdm_schema::PayloadKind as K;
+    K::parse(raw)
+        .or_else(|| match raw.to_ascii_lowercase().as_str() {
+            "profile" | "profiles" => Some(K::MdmProfile),
+            "declaration" | "declarations" | "ddm" => Some(K::DdmDeclaration),
+            "command" | "commands" => Some(K::MdmCommand),
+            "checkin" | "check-in" => Some(K::MdmCheckin),
+            "preference" | "preferences" | "prefs" => Some(K::ManagedPreference),
+            "csp" => Some(K::CspSetting),
+            "admx" => Some(K::AdmxPolicy),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown --kind '{raw}'. One of: profile, declaration, command, checkin, \
+                 preference, csp, admx (or the column value, e.g. MdmCommand)"
+            )
+        })
+}
+
+/// Without `--kind`, protocol traffic is hidden: a search for "lock" must not
+/// offer `DeviceLock` as something to put in a profile. With it, the filter is
+/// exact — asking for commands is how you see them.
+fn kind_allows(m: &PayloadManifest, kind: Option<mdm_schema::PayloadKind>) -> bool {
+    match kind {
+        Some(k) => m.kind == Some(k),
+        None => m.is_authorable(),
+    }
+}
+
+#[cfg(test)]
+mod kind_filter_tests {
+    use super::*;
+    use mdm_schema::PayloadKind as K;
+
+    fn manifest(kind: Option<K>) -> PayloadManifest {
+        PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
+            payload_type: "X".into(),
+            kind,
+            title: String::new(),
+            description: String::new(),
+            platforms: crate::schema::types::Platforms::default(),
+            min_versions: std::collections::HashMap::new(),
+            os_support: std::collections::HashMap::new(),
+            apply_mode: None,
+            category: "apple".into(),
+            fields: std::collections::HashMap::new(),
+            field_order: vec![],
+            segments: vec![],
+        }
+    }
+
+    /// The default view is the authorable set. A command has a schema and a
+    /// listing that shows it offers a payload that can never be built.
+    #[test]
+    fn protocol_kinds_are_hidden_unless_asked_for() {
+        assert!(kind_allows(&manifest(Some(K::MdmProfile)), None));
+        assert!(kind_allows(&manifest(Some(K::DdmDeclaration)), None));
+        assert!(kind_allows(&manifest(Some(K::ManagedPreference)), None));
+        assert!(!kind_allows(&manifest(Some(K::MdmCommand)), None));
+        assert!(!kind_allows(&manifest(Some(K::MdmCheckin)), None));
+        // Unknown kind is not a reason to hide an external schema.
+        assert!(kind_allows(&manifest(None), None));
+
+        assert!(kind_allows(
+            &manifest(Some(K::MdmCommand)),
+            Some(K::MdmCommand)
+        ));
+        assert!(!kind_allows(
+            &manifest(Some(K::MdmProfile)),
+            Some(K::MdmCommand)
+        ));
+        assert!(
+            !kind_allows(&manifest(None), Some(K::MdmProfile)),
+            "unknown never matches an exact ask"
+        );
+    }
+
+    #[test]
+    fn kind_arg_accepts_words_and_column_values() {
+        assert_eq!(parse_kind_arg("command").unwrap(), K::MdmCommand);
+        assert_eq!(parse_kind_arg("MdmCommand").unwrap(), K::MdmCommand);
+        assert_eq!(parse_kind_arg("ddm").unwrap(), K::DdmDeclaration);
+        assert_eq!(parse_kind_arg("prefs").unwrap(), K::ManagedPreference);
+        assert!(
+            parse_kind_arg("bogus")
+                .unwrap_err()
+                .to_string()
+                .contains("One of:")
         );
     }
 }

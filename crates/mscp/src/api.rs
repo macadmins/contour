@@ -88,7 +88,8 @@ pub struct BaselineCoverage {
 /// Distinct (platform, OS) coverage across all versioned rules, sorted.
 ///
 /// In mSCP 2.0 each rule self-describes its platforms, so coverage is derived
-/// from `rules_versioned` — the baseline edges carry a null platform.
+/// from `rules_versioned`, the authoritative (platform, os_version) per rule;
+/// baseline edges carry the pair too, but only for the rules a baseline lists.
 pub fn platform_coverage() -> Result<Vec<PlatformCoverage>> {
     let rules = mscp_schema::rules_versioned::read(mscp_schema::embedded_rules_versioned())?;
     let mut counts: BTreeMap<(String, String), usize> = BTreeMap::new();
@@ -250,7 +251,23 @@ pub struct RuleDetail {
     pub baselines: Vec<String>,
 }
 
-/// Search rules by keyword across rule_id, title, and tags. Case-insensitive.
+/// Refuse a `--beta` query when no preview dataset is compiled in.
+///
+/// mSCP's `--beta` reaches its own tables, not the Apple schema registry, so
+/// it did not inherit that side's refusal: `mscp schema search <kw> --beta`
+/// went on returning stable rules with a 0 exit and no warning after the
+/// preview channel was retired. Every entry point that takes `beta` calls
+/// this first.
+///
+/// The predicate and the message are shared rather than restated — one
+/// channel, one answer, one explanation.
+fn require_beta_dataset(beta: bool) -> Result<()> {
+    if beta && !mscp_schema::beta_dataset_is_carried() {
+        anyhow::bail!(mdm_schema::BETA_DISABLED_MESSAGE);
+    }
+    Ok(())
+}
+
 /// Versioned-rules bytes for the requested channel: stable, or the
 /// OS-preview (beta) dataset built from the mSCP preview branch.
 fn rules_versioned_bytes(beta: bool) -> &'static [u8] {
@@ -277,7 +294,9 @@ fn baseline_edges_bytes(beta: bool) -> &'static [u8] {
     }
 }
 
+/// Search rules by keyword across rule_id, title, and tags. Case-insensitive.
 pub fn search_rules(query: &str, platform: Option<&str>, beta: bool) -> Result<Vec<RuleVersioned>> {
+    require_beta_dataset(beta)?;
     let query_lower = query.to_lowercase();
     let rules = mscp_schema::rules_versioned::read(rules_versioned_bytes(beta))?;
     Ok(rules
@@ -296,6 +315,7 @@ pub fn search_rules(query: &str, platform: Option<&str>, beta: bool) -> Result<V
 
 /// Get full detail for a single rule.
 pub fn get_rule_detail(rule_id: &str, beta: bool) -> Result<Option<RuleDetail>> {
+    require_beta_dataset(beta)?;
     let rules = mscp_schema::rules_versioned::read(rules_versioned_bytes(beta))?;
     // Prefer the latest macOS variant — in mSCP 2.0 the shell check is macOS-only,
     // so it's the richest row to surface; fall back to any platform otherwise.
@@ -335,23 +355,46 @@ pub fn get_rule_detail(rule_id: &str, beta: bool) -> Result<Option<RuleDetail>> 
 mod tests {
     use super::*;
 
-    /// The beta channel carries mSCP OS-preview rules (Apple Intelligence
-    /// PCC etc.) that stable does not — `--beta` must reach them.
+    /// `--beta` reaches the preview channel, or refuses — never silently stable.
+    ///
+    /// It follows the dataset. Carried: beta must resolve preview rules and
+    /// search must surface them. Not carried: both entry points must refuse,
+    /// because returning stable under beta's name would pass a test that
+    /// only checks beta resolves something — out of the stable table. When a new seed diverges the channels, re-add a
+    /// stable-negative on one of its preview-only rules to the carried arm.
     #[test]
-    fn beta_channel_reaches_os_preview_rules() {
-        let detail = get_rule_detail("os_apple_intelligence_pcc_disable", true)
-            .expect("get_rule_detail beta failed");
-        assert!(detail.is_some(), "beta channel should carry the PCC rule");
+    fn beta_either_reaches_the_preview_channel_or_refuses() {
+        const PREVIEW_RULE: &str = "os_apple_intelligence_pcc_disable";
 
-        let stable = get_rule_detail("os_apple_intelligence_pcc_disable", false)
-            .expect("get_rule_detail stable failed");
-        assert!(stable.is_none(), "stable channel should not carry it yet");
+        if mscp_schema::beta_dataset_is_carried() {
+            let detail = get_rule_detail(PREVIEW_RULE, true).expect("get_rule_detail beta failed");
+            assert!(detail.is_some(), "beta channel should carry the PCC rule");
+            let hits = search_rules("intelligence", None, true).expect("beta search failed");
+            assert!(
+                hits.iter().any(|r| r.rule_id == PREVIEW_RULE),
+                "beta search should surface the PCC rule"
+            );
+            return;
+        }
 
-        let hits = search_rules("intelligence", None, true).expect("beta search failed");
+        for err in [
+            get_rule_detail(PREVIEW_RULE, true).err(),
+            search_rules("intelligence", None, true).err(),
+        ] {
+            let e = err.expect(
+                "no preview dataset is carried, so a --beta query must refuse rather than \
+                 answer from the stable tables",
+            );
+            assert!(e.to_string().contains("disabled"), "{e}");
+        }
+
+        // The stable path is untouched by any of this, and says so here so a
+        // failure above is not read as "rule lookup is broken".
         assert!(
-            hits.iter()
-                .any(|r| r.rule_id == "os_apple_intelligence_pcc_disable"),
-            "beta search should surface the PCC rule"
+            get_rule_detail(PREVIEW_RULE, false)
+                .expect("stable lookup")
+                .is_some(),
+            "the rule graduated to stable in 2026-09; it must still resolve there"
         );
     }
 

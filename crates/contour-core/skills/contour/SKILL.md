@@ -4,7 +4,7 @@ description: >
   macOS MDM configuration toolkit. Generates and validates Apple configuration
   profiles, DDM declarations, MDM commands, Fleet GitOps output, Santa
   allowlists, and mSCP compliance artifacts from embedded Apple schema data.
-  All output is auto-validated against 13,500+ Apple capability keys.
+  All output is auto-validated against the embedded Apple capability schema.
 allowed-tools:
   - Bash
   - Read
@@ -19,6 +19,9 @@ allowed-tools:
 
 Activate when the user mentions:
 - mobileconfig, configuration profile, MDM profile, payload
+- scan, audit, review, lint, check, health, hygiene — of profiles that already exist
+- deprecated, deprecation, superseded, migration target, successor
+- collision, conflict, two profiles managing the same setting
 - Fleet policy, osquery query, compliance check, software install
 - Santa, allowlist, blocklist, CEL, FAA
 - mSCP, CIS, STIG, 800-53, security baseline
@@ -38,7 +41,15 @@ NEVER fall back to `com.example`.{{ORG_LINE}}
 
 All generators auto-validate output against the embedded Apple schema.
 Look for `✓ Schema validation passed` or error/warning output after every generation.
-No separate validate step needed — it is built in.
+No separate validate step is needed **when generating** — it is built in.
+
+**Files that already exist are not covered by that.** Nothing inspects a
+profile you did not just generate until you ask it to:
+
+```
+contour profile report <dir>       # audit + collisions + deprecations + validate
+contour profile validate <file>    # schema validation only
+```
 
 ## Step 1: Route to the right SOP
 
@@ -46,6 +57,9 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 
 | User intent | SOP command |
 |-------------|-------------|
+| Scan, audit, review, lint, or health-check EXISTING profiles | `contour profile report <dir>` |
+| Deprecated payloads/keys, migration targets, successors | `contour profile scan --deprecations <path>` |
+| Two profiles managing the same domain, conflicts | `contour profile collisions <dir> -r` |
 | Fleet policy, osquery query, compliance check | `contour help-ai --sop osquery` |
 | Software install, self-service, deployment | `contour help-ai --sop osquery` |
 | Mobileconfig, configuration profile | `contour help-ai --sop profile` |
@@ -55,16 +69,35 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 | Fleet GitOps migration | `contour help-ai --sop fleet-migrate` |
 | Santa rules, CEL, FAA | `contour help-ai --sop santa` |
 | DDM declarations | `contour help-ai --sop ddm` |
+| Platform SSO: IdP login, Touch ID at login, Authenticated Guest Mode, Tap to Login | `contour help-ai --sop platform-sso` |
+| sshd_config, sudoers, pam.d, cups, smartcard mapping, login banner | `contour help-ai --sop service-config` |
 | Rename display names, friendly naming, name.toml, reidentify | `contour help-ai --sop profile-naming` |
 | Rename/re-domain a managed-preference (MCX) domain | `contour help-ai --sop mcx` |
-| Windows CSP, ADMX, DDF node lookup | `contour help-ai --sop windows` |
+| MCP server, agent tooling, contour-mcp | `contour help-ai --sop mcp` |
+| Windows CSP, ADMX, DDF node lookup, DISA STIG policies | `contour help-ai --sop windows` |
 | Beta enrollment, AppleSeed for IT, seeding tokens | `contour help-ai --sop beta-enrollment` |
-| Claude Code / Codex / Cursor managed settings | `contour help-ai --sop app-policy` |
-| OS-preview compliance rules (Apple Intelligence, Siri AI) | `contour help-ai --sop beta` |
+| Apple Intelligence: Writing Tools, Genmoji, external-intelligence (ChatGPT), `app.settings` | `contour help-ai --sop generative` |
+| AI coding tools' own settings: Claude Code, OpenAI Codex, Cursor, Gemini Enterprise mobile | `contour help-ai --sop app-policy` |
+| mSCP OS-preview compliance rules (beta channel; disabled in this build) | `contour help-ai --sop beta` |
 
 For the full routing table with examples, read `references/sop-routing.md`.
 
 ## Step 2: Execute
+
+Inspecting profiles that already exist — start here for any scan, audit,
+review, lint, deprecation or hygiene request:
+
+```
+contour profile report <dir>                     # audit+collisions+deprecations+validate
+contour profile validate <file>                  # schema-validate one existing profile
+contour profile scan --deprecations <path>       # per-payload AND per-key deprecations + successors
+contour profile collisions <dir> -r --flat       # cross-profile domain conflicts
+contour profile audit <dir>                      # secrets / certs / binary payloads
+contour profile diff <a> <b>                     # compare two profiles
+contour profile mcx list <path>                  # managed-preference domains in scope
+```
+
+Generating and looking things up:
 
 ```
 contour profile search <keyword> --json          # find payload types
@@ -93,4 +126,11 @@ contour help-ai --sop <tool>                     # detailed SOP
 
 ## Embedded data (offline, no network)
 
-283 osquery tables · 13,500+ Apple MDM keys · 1,400+ mSCP rules · 51 baselines · 71 skip keys · 200+ app schemas · 2,925 Windows CSP nodes (`--windows`) · 622 AI-tool policy keys · OS-preview beta channels (`--beta`)
+{{CENSUS}}
+
+These figures were counted when this skill file was installed. If the contour
+binary has been upgraded since, run `contour census` (add `--json`) — it
+counts the bytes the binary actually carries, so it is never stale. Quote it,
+not this line, when a number matters.
+
+`--beta` and `--channel beta` are **disabled** and refuse: Apple's `release` branch moved ahead of the last OS 27 seed, so the seed set held no additions and no pre-release dataset is compiled in. They used to return the stable dataset silently, which is what this line warned about; now the command declines and says why. Do not tell a user to pass `--beta` — it will fail, and there is no pre-release schema to see. The flags are kept because the next seed restores them, and contour decides from the embedded bytes, so nothing needs editing when it does. `contour census` reports the state.

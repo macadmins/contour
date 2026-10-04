@@ -207,8 +207,7 @@ impl Pipeline {
             DedupLevel::SigningId => apps.dedup_by_signing_id(),
             DedupLevel::Binary => apps.dedup_by_sha256(),
             DedupLevel::Adaptive => {
-                // Adaptive: group by best available identifier
-                // This keeps TeamID apps grouped, SigningID apps grouped, etc.
+                // Adaptive: currently the same as SigningId.
                 apps.dedup_by_signing_id();
             }
         }

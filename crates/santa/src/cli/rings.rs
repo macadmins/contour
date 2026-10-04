@@ -109,7 +109,8 @@ pub fn run(
 }
 
 /// Walk the resolved ring config and emit one mobileconfig per
-/// (ring × category × split-part). Shared by both the rings and fleet paths.
+/// (ring × category × split-part). Called from `rings generate` only;
+/// `fleet generate` has its own emit loop.
 #[expect(clippy::too_many_arguments, reason = "internal helper")]
 pub(crate) fn emit_ring_editions(
     all_rules: &crate::models::RuleSet,

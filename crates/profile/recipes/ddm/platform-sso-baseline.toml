@@ -1,0 +1,63 @@
+# Platform SSO baseline — IdP-backed login with grace periods.
+#
+# DDM bundle for `com.apple.configuration.extensible-sso` with the
+# PlatformSSO policies most deployments start from: the identity provider
+# must authenticate the user at the login window, at screensaver unlock
+# and at FileVault, with an offline grace period for travel and an
+# authentication grace period so existing local accounts keep working
+# until they register.
+#
+# Compose with:
+#   contour profile ddm compose --preset platform-sso-baseline \
+#       --org com.acme -o ./declarations/platform-sso-baseline
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's group/team
+# assignment. macOS only: the Platform SSO policies have no meaning on iOS.
+#
+# EDIT BEFORE COMPOSING: `ExtensionComposedIdentifier` and `URLs` are your
+# identity provider's, and nothing else will do. Common SSO extensions:
+#   Microsoft Company Portal  com.microsoft.CompanyPortalMac.ssoextension (UBF8T346G9)
+#   Okta Verify               com.okta.mobile.auth-service-extension (B7F62B65BN)
+# Confirm the composed identifier against your IdP's current documentation.
+#
+# Every "Only use when …" and "Required when …" sentence Apple attaches to
+# these keys is enforced by contour's cross-key rules at compose time.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/extensible-sso.yaml). Verified against
+# contour's embedded schema:
+# `contour profile ddm info com.apple.configuration.extensible-sso --full`.
+
+intent_name = "platform-sso-baseline"
+platforms = ["macOS"]
+
+[configuration]
+type = "com.apple.configuration.extensible-sso"
+
+  [configuration.payload]
+  ExtensionComposedIdentifier = "com.example.sso.extension (ABCDE12345)"
+  Type = "Redirect"
+  URLs = ["https://login.example.com/"]
+
+  [configuration.payload.PlatformSSO]
+  AuthenticationMethod = "Password"
+
+  [configuration.payload.PlatformSSO.Policies]
+  # RequireAuthentication: the IdP must say yes (AttemptAuthentication would
+  # fall back to the local password offline).
+  # AllowOfflineGracePeriod: offline, the local password works for
+  # OfflineGracePeriod seconds after the last successful IdP login.
+  # AllowAuthenticationGracePeriod: accounts not yet registered for
+  # Platform SSO keep working for AuthenticationGracePeriod seconds after
+  # the policy lands.
+  Login     = ["RequireAuthentication", "AllowOfflineGracePeriod", "AllowAuthenticationGracePeriod"]
+  Unlock    = ["RequireAuthentication", "AllowOfflineGracePeriod", "AllowAuthenticationGracePeriod"]
+  FileVault = ["RequireAuthentication", "AllowOfflineGracePeriod", "AllowAuthenticationGracePeriod"]
+  # Seven days offline; three days for unregistered local accounts.
+  OfflineGracePeriod = 604800
+  AuthenticationGracePeriod = 259200
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

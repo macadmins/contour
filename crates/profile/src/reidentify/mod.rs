@@ -266,8 +266,7 @@ fn reidentify_uuid(profile: &mut ConfigurationProfile, org: &str) -> ReidentifyR
     }
 }
 
-/// `name` scheme: derive identifiers from the display name. (UUID regeneration
-/// and reference remap are added in Task 4.)
+/// `name` scheme: derive identifiers from the display name.
 fn reidentify_name(profile: &mut ConfigurationProfile, org: &str) -> Result<ReidentifyReport> {
     let slug = {
         let s = slugify(&profile.payload_display_name);

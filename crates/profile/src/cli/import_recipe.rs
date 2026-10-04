@@ -4,9 +4,11 @@
 //! The inverse of `synthesize`: synthesize takes bare managed-pref
 //! plists and produces `.mobileconfig`; this command takes a complete
 //! `.mobileconfig` and produces a `recipe.toml` plus a `.meaning.md`
-//! sidecar. Faithful pass-through — no payload-type-specific
-//! unwrapping. MCX-style profiles produce deeply-nested `[profile.fields.*]`
-//! sub-tables; the structure round-trips exactly.
+//! sidecar. Faithful pass-through, with one exception: a canonical
+//! `com.apple.ManagedClient.preferences` payload is flattened and its
+//! domain recorded in `mcx_domain` (see `unwrap_mcx_if_canonical`);
+//! anything non-canonical keeps its nested `[profile.fields.*]`
+//! sub-tables so the structure round-trips exactly.
 
 use crate::cli::generate::load_registry;
 use crate::cli::info::plist_tag_for;
@@ -22,9 +24,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Envelope keys that live on every payload — these are profile
-/// metadata, not user-authored content. Mirror of
-/// `synthesize::MANAGEMENT_KEYS` plus the Display/Description ones
-/// that we hoist into `display_name` / `description` separately.
+/// metadata, not user-authored content. `synthesize::MANAGEMENT_KEYS`
+/// minus `PayloadContent`, which here is real payload data (MCX).
+/// Display/Description are hoisted into `display_name` / `description`.
 const MANAGEMENT_KEYS: &[&str] = &[
     "PayloadUUID",
     "PayloadIdentifier",
@@ -235,8 +237,8 @@ fn handle_directory_import_files(
     }
 
     if !failed.is_empty() {
-        // Non-fatal exit for bulk imports — partial success is the
-        // common case. JSON consumers gate on `success` / `failed`.
+        // Every successful import is already written; exit non-zero so
+        // CI notices. JSON consumers gate on `success` / `failed`.
         anyhow::bail!("{} of {} imports failed", failed.len(), files.len());
     }
     Ok(())
@@ -458,10 +460,9 @@ fn import_one(
 /// "primary" file carries display name and organization while
 /// supporting files leave them empty.
 ///
-/// MCX unwrap, XML comment injection, placeholder restoration, and
-/// `removal_disallowed` propagation all run per-source so the
-/// combined output preserves the same fidelity guarantees as a
-/// single-file import.
+/// MCX unwrap and `removal_disallowed` propagation run per-source.
+/// Placeholder mappings and XML comments are accumulated across all
+/// sources; comments are injected once into the combined TOML.
 fn import_combined(
     inputs: &[PathBuf],
     into: &Path,
@@ -643,9 +644,9 @@ fn import_combined(
     }
 
     Ok(SingleImportReport {
-        // Use the first source as the "input" for the report — the
-        // others are listed inline in the JSON envelope's
-        // `payload_types` array.
+        // Use the first source as the "input" for the report. The other
+        // source paths are not reported; `payload_types` lists every
+        // payload across all sources.
         input: inputs[0].clone(),
         recipe_path,
         meaning_path,
@@ -1112,20 +1113,6 @@ fn lookup_data_sentinel(decoded: &str, mapping: &[(String, String)]) -> Option<S
         .map(|(_, original)| original.clone())
 }
 
-/// Snake-case the file stem so `Privileges.mobileconfig` →
-/// `privileges`, `My Org-Wifi.mobileconfig` → `my_org_wifi`.
-/// MCX (Managed Client for X) preferences ship the actual settings
-/// deeply nested under
-/// `PayloadContent.<domain>.Forced[0].mcx_preference_settings`. When
-/// the source profile follows that *exact* canonical shape (one
-/// domain, one `Forced` entry, only the `mcx_preference_settings`
-/// key inside), we flatten the nested settings to top-level
-/// `[profile.fields]` and record the domain in `mcx_domain` so
-/// `generate --recipe` can re-wrap on the way out.
-///
-/// Anything non-canonical (multiple domains, multiple Forced entries,
-/// extra peer keys) falls back to faithful pass-through — better an
-/// ugly recipe that round-trips than silent data loss.
 /// Inject XML comments captured from the source mobileconfig as TOML
 /// `#` lines above the matching `key = value` pair.
 ///
@@ -1236,6 +1223,18 @@ fn comment_to_toml_lines(raw: &str) -> String {
     out
 }
 
+/// MCX (Managed Client for X) preferences ship the actual settings
+/// deeply nested under
+/// `PayloadContent.<domain>.Forced[0].mcx_preference_settings`. When
+/// the source profile follows that *exact* canonical shape (one
+/// domain, one `Forced` entry, only the `mcx_preference_settings`
+/// key inside), we flatten the nested settings to top-level
+/// `[profile.fields]` and record the domain in `mcx_domain` so
+/// `generate --recipe` can re-wrap on the way out.
+///
+/// Anything non-canonical (multiple domains, multiple Forced entries,
+/// extra peer keys) falls back to faithful pass-through — better an
+/// ugly recipe that round-trips than silent data loss.
 fn unwrap_mcx_if_canonical(
     payload_type: &str,
     fields: BTreeMap<String, toml::Value>,
@@ -1321,6 +1320,8 @@ fn identifier_intent_tail(identifier: &str) -> Option<String> {
     }
 }
 
+/// Kebab-case the file stem so `Privileges.mobileconfig` →
+/// `privileges`, `My Org-Wifi.mobileconfig` → `my-org-wifi`.
 fn recipe_name_from_path(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     let mut out = String::with_capacity(stem.len());

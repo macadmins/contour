@@ -586,22 +586,6 @@ What would you like to do?
 ───────────────────────────────────────────────────────────────
 ```
 
-### With Profile Splitting
-
-```bash
-contour santa select \
-  --input fleet-export.csv \
-  --output-dir ./profiles \
-  --split 3 \
-  --org com.yourcompany \
-  --prefix santa-allowlist
-```
-
-Output:
-- `santa-allowlist-1.mobileconfig`
-- `santa-allowlist-2.mobileconfig`
-- `santa-allowlist-3.mobileconfig`
-
 ---
 
 ## SOP 4: Bundle Discovery from Fleet Data
@@ -934,7 +918,8 @@ contour santa scan --output $(hostname)-apps.csv
 Collect all CSVs to a central location, then merge:
 ```bash
 # Merge multiple scans into one
-contour santa scan --merge machine1-apps.csv machine2-apps.csv machine3-apps.csv --output fleet-combined.csv
+contour santa scan --merge machine1-apps.csv --merge machine2-apps.csv \
+  --merge machine3-apps.csv --output fleet-combined.csv
 ```
 
 #### Step 3: Run Discovery and Pipeline

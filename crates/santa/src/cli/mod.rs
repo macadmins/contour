@@ -14,6 +14,7 @@ pub mod fleet;
 pub mod generate;
 pub mod init;
 pub mod merge;
+pub mod parity;
 pub mod pipeline_cmd;
 pub mod prep;
 pub mod remove;
@@ -79,9 +80,12 @@ pub enum ScanRuleType {
     /// `cdhash` column (40 hex characters); rows without a valid hash
     /// produce no rule. One rule per exact binary version.
     Cdhash,
-    /// Pick the best rule per row: SigningID when the column is present, or
+    /// Pick per list. Santa rules: SigningID when the column is present, or
     /// when `team_identifier` + `bundle_identifier` can be composed into one
-    /// (`TEAMID:bundle_id`); otherwise fall back to a TeamID rule. Recommended
+    /// (`TEAMID:bundle_id`); otherwise TeamID. app.settings deny entries:
+    /// SigningID, then TeamID, then CDHash (no composition). app.settings
+    /// allow entries: the vendor's TeamID (`*APPLE*` for Apple), because an
+    /// app's helpers run under other signing IDs of the same team. Recommended
     /// for Fleet CSVs built from osquery's `apps` ⋈ `signature` join.
     Auto,
 }
@@ -324,11 +328,12 @@ pub enum Commands {
 
     /// Generate Santa prerequisite profiles for MDM deployment
     ///
-    /// Creates the four profiles required for Santa to function properly:
+    /// Creates the five profiles required for Santa to function properly:
     /// - System Extension Policy (allow Santa's endpoint security extension)
     /// - Service Management (managed login items)
     /// - TCC/PPPC (Full Disk Access for Santa components)
     /// - Notification Settings (enable Santa notifications)
+    /// - Santa Configuration (basic client settings)
     ///
     /// These profiles should be deployed BEFORE deploying Santa rules.
     ///
@@ -372,8 +377,19 @@ pub enum Commands {
         #[arg(long, default_value = "santa")]
         prefix: String,
 
-        /// Fleet team name
-        #[arg(long, default_value = "Workstations")]
+        /// Fleet name — written as `name:` in the fleet file (slugified).
+        ///
+        /// `--team` still works. Fleet renamed teams to fleets, which is why
+        /// the output tree has a `fleets/` directory, so `--fleet` is the
+        /// current word and leads. Singular because this names one fleet;
+        /// `mscp generate --fleets` takes a list. It names the fleet, not the
+        /// file: the file is always `fleets/reference-fleet.yml`.
+        #[arg(
+            long = "fleet",
+            visible_alias = "team",
+            value_name = "NAME",
+            default_value = "Workstations"
+        )]
         team: String,
 
         /// Number of rings (5 or 7 for built-in configs; otherwise custom)
@@ -407,11 +423,14 @@ pub enum Commands {
 
     /// Add a rule to an existing rules file (for posthook integration)
     ///
-    /// Designed for use with Installomator posthooks or santactl output to maintain an allowlist.
+    /// Designed for Installomator posthooks and scripts that maintain an allowlist.
     ///
     /// Examples:
     ///   contour santa add --file rules.yaml --teamid EQHXZ8M8AV --description "Google"
-    ///   santactl fileinfo /path/to/app | contour santa add --file rules.yaml --from-stdin
+    ///   contour santa add --file rules.yaml --signingid 276HSJ6V54:de.martinlexow.Theine -d "Theine"
+    ///
+    /// The identifiers come from the app's signature: `contour app manifest <app>`
+    /// prints its team id and signing id.
     Add {
         /// Rules file to update (YAML)
         #[arg(short, long)]
@@ -656,12 +675,15 @@ pub enum Commands {
         dry_run: bool,
     },
 
-    /// Scan local applications using santactl (alternative to Fleet)
+    /// Scan local applications with santactl, or codesign when Santa is not installed
     ///
     /// For users without Fleet, this scans local applications and generates
     /// output in various formats for different workflows.
     ///
-    /// Requires Santa to be installed (santactl must be available).
+    /// Uses `santactl fileinfo` when Santa is installed, and `codesign` — which
+    /// every Mac has — when it is not. For an app.settings declaration alone,
+    /// `contour profile ddm app-control scan` does the same without Santa's
+    /// rule formats.
     ///
     /// Examples:
     ///   contour santa scan                                    # Scan /Applications → CSV
@@ -686,7 +708,7 @@ pub enum Commands {
         #[arg(long)]
         include_unsigned: bool,
 
-        /// Organization identifier (required for mobileconfig format)
+        /// Organization identifier (used for mobileconfig/app-settings identifiers)
         #[arg(long, default_value = "com.example")]
         org: String,
 
@@ -694,9 +716,38 @@ pub enum Commands {
         #[arg(long, value_enum, default_value = "team-id")]
         rule_type: ScanRuleType,
 
+        /// app-settings output: leave Apple's software out of the allow list.
+        /// By default it gets `TeamID = "*APPLE*"`: the list is exclusive, and
+        /// without it Apple's own apps stop launching
+        #[arg(long)]
+        no_apple: bool,
+
         /// Merge multiple scan CSVs into one (for aggregating from multiple machines)
         #[arg(long)]
         merge: Option<Vec<PathBuf>>,
+    },
+
+    /// Report where a Santa ruleset and an app.settings declaration disagree
+    ///
+    /// Santa and app.settings are independent gates: a binary runs only when
+    /// neither blocks it. This reports every app one gate allows and the other
+    /// would block, allows cancelled by a deny on the other gate, and Santa
+    /// rules app.settings cannot express. Matching is by coverage — a TeamID
+    /// allow admits every SigningID allow from that team. Exits non-zero on
+    /// drift.
+    Parity {
+        /// Santa rule file(s)
+        #[arg(required = true)]
+        rules: Vec<PathBuf>,
+
+        /// The com.apple.configuration.app.settings declaration (JSON)
+        #[arg(long)]
+        declaration: PathBuf,
+
+        /// Santa's client mode. In monitor mode Santa blocks nothing, so an
+        /// app.settings-only allow is harmless; lockdown is the strict default.
+        #[arg(long, value_enum, default_value = "lockdown")]
+        santa_mode: crate::config::ClientMode,
     },
 
     /// Generate a com.apple.configuration.app.settings declaration (macOS 27+)
@@ -727,6 +778,12 @@ pub enum Commands {
         #[arg(long)]
         always_allow_managed: bool,
 
+        /// Leave Apple's software out of an allow list. By default an
+        /// `AllowedBinaries` list gets `TeamID = "*APPLE*"`: the list is
+        /// exclusive, and without it Apple's own apps stop launching
+        #[arg(long)]
+        no_apple: bool,
+
         /// Identifier strategy for scan input
         #[arg(long, value_enum, default_value = "auto")]
         rule_type: ScanRuleType,
@@ -739,9 +796,10 @@ pub enum Commands {
         #[arg(long)]
         deny: bool,
 
-        /// Organization reverse domain (or set CONTOUR_ORG)
-        #[arg(long, default_value = "com.example")]
-        org: String,
+        /// Organization reverse domain. Without it: CONTOUR_ORG, then
+        /// .contour/config.toml; with none of the three the command stops.
+        #[arg(long)]
+        org: Option<String>,
 
         /// Fail if any input entry can't be converted or fails validation
         #[arg(long)]

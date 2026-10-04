@@ -1,6 +1,6 @@
 //! # Contour Core
 //!
-//! Shared library for Contour CLI tools: profile, mscp, and santa.
+//! Shared library for every contour subcommand (profile, mscp, santa, pppc, btm, ...).
 //!
 //! This crate provides common functionality:
 //! - Output formatting (Human/JSON modes)
@@ -15,7 +15,9 @@ pub mod codesign;
 pub mod completions;
 pub mod config;
 pub mod errors;
+pub mod fleet_keys;
 pub mod fleet_layout;
+pub mod fleet_rules;
 pub mod fragment;
 pub mod help_agents;
 pub mod logging;
@@ -28,7 +30,10 @@ pub mod validation;
 pub mod yaml_edit;
 
 pub use app_discovery::{BUNDLE_EXTENSIONS, extract_team_id, find_apps_recursive, is_bundle_dir};
-pub use codesign::{find_main_executable, get_app_name, get_bundle_id, get_code_requirement};
+pub use codesign::{
+    CodeIdentity, RequirementFlaw, SigningState, SliceCdHash, find_main_executable, get_app_name,
+    get_bundle_id, get_bundle_versions, get_code_requirement, read_code_identity, requirement_flaw,
+};
 pub use completions::generate_completions;
 pub use config::{ConfigSettings, ContourConfig, resolve_name, resolve_org};
 pub use errors::{ContourError, ContourResult};

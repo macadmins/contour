@@ -18,6 +18,13 @@ pub struct ConfigDerivedOptions {
     pub jamf_exclude_conflicts: bool,
     pub generate_ddm: bool,
     pub fleet_names: Option<Vec<String>>,
+    /// osquery detection, from `[settings.osquery]`.
+    ///
+    /// `None` when the section is absent or `enabled = false`. Config-driven
+    /// generation reads no CLI flags, so without this there was no way to ask
+    /// for osquery output at all — `generate-all --config` simply never
+    /// emitted any, and said nothing about it.
+    pub osquery_options: Option<crate::osquery::OsqueryGenOptions>,
 }
 
 /// Build option bundle from config for a single baseline.
@@ -115,6 +122,47 @@ pub fn build_options_from_config(
         jamf_exclude_conflicts: config.settings.jamf.exclude_conflicts,
         generate_ddm: config.settings.generate_ddm,
         fleet_names,
+        // No CLI flags reach this path, so the config section alone decides.
+        osquery_options: resolve_osquery_options(config, None),
+    }
+}
+
+/// Decide whether a config-driven run emits osquery detection, and how.
+///
+/// Config-driven generation has two possible sources and had neither wired:
+/// `generate --config … --osquery` passed the flag into a hardcoded `None`,
+/// and `generate-all --config` had no flag to pass. Both call this now, so
+/// the precedence is written once instead of three times differently.
+///
+/// - `cli` is `Some` only when `--osquery` was actually passed. It wins, and
+///   carries the `--osquery-format` / `--osquery-audit` values with it.
+/// - Otherwise `[settings.osquery] enabled` decides, with the format and
+///   audit from that section.
+/// - The org is the CLI `--org` when given, else `[settings.organization]
+///   domain`. An empty result is left empty on purpose: `--osquery` refuses a
+///   run with no org rather than inventing one, and that refusal is the right
+///   place for it to surface.
+pub fn resolve_osquery_options(
+    config: &Config,
+    cli: Option<crate::osquery::OsqueryGenOptions>,
+) -> Option<crate::osquery::OsqueryGenOptions> {
+    let from_config = || config.settings.organization.domain.clone();
+    match cli {
+        Some(mut opts) => {
+            if opts.org.as_deref().is_none_or(str::is_empty) {
+                opts.org = Some(from_config());
+            }
+            Some(opts)
+        }
+        None => config
+            .settings
+            .osquery
+            .enabled
+            .then(|| crate::osquery::OsqueryGenOptions {
+                format: config.settings.osquery.format.clone(),
+                audit: config.settings.osquery.audit.clone(),
+                org: Some(from_config()),
+            }),
     }
 }
 
@@ -154,9 +202,9 @@ pub fn generate_from_config(config: Config) -> Result<()> {
         if let Some(ref branch) = baseline_config.branch {
             println!("  Branch: {branch}");
         }
-        if !baseline_config.excluded_rules.is_empty() {
-            println!("  Excluded rules: {}", baseline_config.excluded_rules.len());
-        }
+        // process_baseline reports what the exclusion actually did — rules
+        // matched, profiles dropped, scripts suppressed — which is the number
+        // worth seeing, not the count of ids in the config.
         if let Some(ref fleet) = baseline_config.fleet {
             println!("  Fleet: {fleet}");
         }
@@ -189,24 +237,23 @@ pub fn generate_from_config(config: Config) -> Result<()> {
             false, // batch_mode - false for config-based individual generation
             ScriptMode::Bundled, // Default to bundled mode for config-based generation
             None,  // exclude_categories - not supported in config-based generation
+            // The setting this whole path exists to honour. It was parsed,
+            // counted and printed here, and then not passed — see the note
+            // where it is applied in process.rs.
+            Some(baseline_config.excluded_rules.clone()),
+            // [baselines.labels] — the other setting this path parsed and dropped.
+            Some(baseline_config.labels.clone()),
             false, // fragment - not supported in config-based generation
             opts.structure,
             Some(baseline_config.gitops_glob.clone()),
-            "auto".to_string(),  // mscp_version — config path auto-detects layout
             "macos".to_string(), // os
             None,                // os_version
             None,                // odv_path — auto-detects odv_<baseline>.yaml per baseline
-            None,                // osquery — not exposed in config-driven generation
+            opts.osquery_options,
         )?;
     }
 
     println!("\n✓ All baselines generated successfully!");
-
-    // Optional: Run validation if enabled
-    if config.validation.check_conflicts {
-        println!("\nRunning conflict detection...");
-        // TODO: Implement cross-baseline conflict check
-    }
 
     Ok(())
 }
@@ -308,5 +355,119 @@ mod tests {
         let config = Config::default();
         let opts = build_options_from_config(&config, &baseline_with_fleet(None));
         assert!(opts.fleet_names.is_none());
+    }
+}
+
+#[cfg(test)]
+mod osquery_plumbing_tests {
+    use super::*;
+    use crate::osquery::OsqueryGenOptions;
+
+    fn config_with(enabled: bool, domain: &str) -> Config {
+        let mut c = Config::default();
+        c.settings.organization.domain = domain.to_string();
+        c.settings.osquery.enabled = enabled;
+        c
+    }
+
+    fn cli(format: &str, audit: &str, org: Option<&str>) -> OsqueryGenOptions {
+        OsqueryGenOptions {
+            format: format.to_string(),
+            audit: audit.to_string(),
+            org: org.map(str::to_string),
+        }
+    }
+
+    /// The flag must survive the config path.
+    ///
+    /// This is the bug. `generate --config mscp.toml --osquery` built the
+    /// options and then passed a hardcoded `None` into `generate_baseline` at
+    /// two call sites. The command succeeded, wrote no osquery tree, and said
+    /// nothing — a flag accepted and discarded.
+    #[test]
+    fn the_cli_flag_is_not_dropped_on_the_config_path() {
+        let opts = resolve_osquery_options(
+            &config_with(false, "com.acme"),
+            Some(cli("pack", "full", Some("com.cli"))),
+        )
+        .expect("--osquery was passed; it must reach the generator");
+        assert_eq!(opts.format, "pack");
+        assert_eq!(opts.audit, "full");
+        assert_eq!(opts.org.as_deref(), Some("com.cli"));
+    }
+
+    /// `[settings.osquery]` is the only way `generate-all --config` can ask.
+    ///
+    /// That path reads no flags at all, so without the section there was no
+    /// way to get osquery output from a config-driven run of any size.
+    #[test]
+    fn the_config_section_drives_a_run_with_no_flags() {
+        let mut c = config_with(true, "com.acme");
+        c.settings.osquery.format = "pack".into();
+        c.settings.osquery.audit = "full".into();
+        let opts = resolve_osquery_options(&c, None).expect("enabled = true must emit");
+        assert_eq!(opts.format, "pack");
+        assert_eq!(opts.audit, "full");
+        assert_eq!(opts.org.as_deref(), Some("com.acme"));
+    }
+
+    /// Off by default, and off is off.
+    #[test]
+    fn nothing_is_emitted_when_neither_asks() {
+        assert!(resolve_osquery_options(&config_with(false, "com.acme"), None).is_none());
+        assert!(
+            !Config::default().settings.osquery.enabled,
+            "the section must default to off — enabling osquery for every existing \
+             mscp.toml on upgrade would be a silent change in what gets written"
+        );
+    }
+
+    /// The flag wins over the section, including when the section says off.
+    ///
+    /// Stated as its own test because the opposite rule is just as plausible
+    /// and would be just as quiet: an operator adding `--osquery` to a run
+    /// whose config says `enabled = false` is asking for it this once.
+    #[test]
+    fn the_flag_overrides_the_section_in_both_directions() {
+        let on = config_with(true, "com.acme");
+        let from_flag =
+            resolve_osquery_options(&on, Some(cli("pack", "full", None))).expect("flag present");
+        assert_eq!(
+            from_flag.format, "pack",
+            "the flag's format must win over the section's"
+        );
+
+        let off = config_with(false, "com.acme");
+        assert!(
+            resolve_osquery_options(&off, Some(cli("fleet", "slim", None))).is_some(),
+            "--osquery must work against a config that has the section off"
+        );
+    }
+
+    /// A missing org falls through to the refusal, rather than being invented.
+    ///
+    /// `--osquery` errors downstream when no org resolves, and that is the
+    /// right place for it: the message names the three ways to supply one.
+    /// Filling in a placeholder here would produce artifacts under a launchd
+    /// label and plist path that belong to nobody.
+    #[test]
+    fn an_absent_org_is_carried_through_empty_not_invented() {
+        let mut c = config_with(true, "");
+        c.settings.osquery.enabled = true;
+        let opts = resolve_osquery_options(&c, None).expect("enabled");
+        assert_eq!(
+            opts.org.as_deref(),
+            Some(""),
+            "an empty domain must stay empty so the downstream refusal fires"
+        );
+
+        // The CLI's own empty org is backfilled from config, which is the
+        // only substitution this function makes.
+        let filled = resolve_osquery_options(
+            &config_with(false, "com.acme"),
+            Some(cli("fleet", "slim", None)),
+        )
+        .expect("flag present");
+        assert_eq!(filled.org.as_deref(), Some("com.acme"));
     }
 }

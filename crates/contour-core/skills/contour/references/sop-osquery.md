@@ -22,7 +22,7 @@ Drift detector: `crates/profile/tests/sop_traps.rs`
 
 ```
 INVALID_FORMAT         malformed --json input
-SCHEMA_VIOLATION       query references nonexistent table or column
+SCHEMA_VIOLATION       query references a nonexistent table (validate is table-level across files; columns are checked for single-table queries)
 IO_ERROR               schema data missing / unreadable
 UNKNOWN                unmatched (e.g. unknown table name)
 ```
@@ -38,10 +38,11 @@ Failure-path JSON envelope (since contour ≥0.2.1):
 ## PROCEDURE find_query_table(keyword, platform)
 
 ```
-SCHEMA_SOURCE: osquery/osquery (via contour's embedded snapshot)
+SCHEMA_SOURCE: osquery/osquery + Fleet's schema (fleetdm.com/tables), both embedded
 SCHEMA_TOOL:   contour osquery search <keyword> --json
                contour osquery table <name> --json
                contour osquery stats --json
+               contour osquery validate <yaml> --json     # before deploying what you wrote
 
 INPUT:
   keyword   : a noun describing the compliance check or data point
@@ -58,9 +59,11 @@ STEP 1 — Search:
   # Returns a JSON ARRAY of column-level matches:
   #   [ { "table_name", "table_description", "platforms",
   #       "evented", "column_name", "column_description",
-  #       "column_type", "required", "hidden" }, ... ]
+  #       "column_type", "required", "hidden", "source" }, ... ]
   # NB: each entry is one matching COLUMN (so a single matching table
   #     with 8 matching columns produces 8 entries).
+  # NB: "source" is "osquery" or "fleet". A "fleet" table needs Fleet's
+  #     agent (fleetd); plain osqueryd returns no rows for it.
   # Empty array (no match) exits 0 — agents MUST check len(), not exit.
 
   ASSERT len(matches) > 0
@@ -80,7 +83,10 @@ STEP 3 — Inspect the chosen table:
   #   { "table_name", "table_description", "platforms",
   #     "evented", "columns": [ { "column_name", "column_type",
   #                                "column_description",
-  #                                "required", "hidden" }, ... ] }
+  #                                "required", "hidden" }, ... ],
+  #     "fleet": { "examples", "notes", "url" }      # when Fleet documents it
+  #     "source", "note" }                            # on a Fleet-only table
+  # Start from fleet.examples where present — it is Fleet's worked query.
   # NB: column fields are prefixed (column_name, column_type,
   #     column_description) — NOT bare name/type. Same prefix used
   #     by `osquery search` results.
@@ -161,6 +167,13 @@ Battle-tested patterns drawn from real-world osquery deployments
 verbatim; do not invent new query structures** — agents that synthesize
 queries from scratch produce false-negatives that look like compliant
 hosts but are actually unmonitored.
+
+Every `sql` block below is checked against the embedded osquery and Fleet
+schemas by a test (`trap_97`), so a table or column named here exists.
+Some patterns use Fleet agent tables (`filevault_status`, `software_update`,
+`macos_profiles`, `mdm_bridge`): `contour osquery table <name>` shows
+`source: fleet`, and the query returns nothing under plain osqueryd. Ship
+those only to Fleet-managed hosts.
 
 ### `is_setting_enabled` — boolean check
 
@@ -307,6 +320,140 @@ software:
 
 ---
 
+## PROCEDURE resolve_app_identifier(app_name)
+
+Use when a downstream artifact is keyed by an app's **bundle identifier** or
+**Team ID** — PPPC profiles, `com.apple.configuration.app.settings` privacy
+defaults, BTM allow-rules, Santa rules.
+
+These artifacts share a failure mode that makes identifier accuracy the whole
+job: **naming an app that is not installed is not an error.** The profile or
+declaration is schema-valid, installs cleanly, and reports Verified. It simply
+grants nothing. Nothing in the chain ever signals it, so a wrong identifier
+survives indefinitely.
+
+### IDENTIFIER_TRUST_HIERARCHY
+
+Use the highest-ranked source available.
+
+| Rank | Source | Trust |
+|---|---|---|
+| 1 | `apps` + `signature` on the device | What the device actually has. Authoritative. |
+| 2 | `codesign -dr -` on an installed copy | Authoritative for that one machine. |
+| 3 | An existing profile's `Identifier` + `CodeRequirement` | Was true when written; may be stale. |
+| 4 | Vendor docs / community lists | Unversioned, often a different edition. |
+| 5 | **Installer metadata** (pkg/dmg receipt id) | **Not a bundle identifier at all.** |
+
+**Rank 5 is the common trap.** A pkg receipt or updater identifier is a
+different namespace from the app's `CFBundleIdentifier`, and they are similar
+enough to look right (`com.vendor.product.updater` vs `com.vendor.Product`).
+Take only the **Team ID** from installer metadata — that comes from the signing
+certificate and is reliable.
+
+```
+SCHEMA_TOOL: contour osquery table apps
+             contour osquery table signature
+
+PRECONDITIONS:
+  ASSERT the target table is `signature`, NOT `codesign`
+    HALT "codesign is a Fleet extension table, absent from vanilla osqueryd.
+          Use signature — it is core osquery and works in both."
+    # contour flags this: `osquery validate` warns
+    #   'codesign' is a Fleet extension table; requires Fleet's agent
+
+  ASSERT the query constrains signature.path
+    # `signature.path` is a REQUIRED column (contour osquery table signature).
+    # Unconstrained, the table returns nothing. A JOIN on apps.path supplies it.
+
+STEP 1 — Enumerate installed apps with their signing identity:
+  SELECT DISTINCT
+    a.name, a.bundle_identifier, a.bundle_short_version AS version,
+    a.path, s.team_identifier, s.authority
+  FROM apps a
+  JOIN signature s ON s.path = a.path
+  WHERE a.path LIKE '/Applications/%.app'
+    AND a.path NOT LIKE '%/Contents/%'
+    AND a.bundle_identifier <> ''
+    AND s.hash_resources = 0
+    AND s.hash_executable = 0
+  ORDER BY a.name;
+
+  # Every clause earns its place:
+  #  DISTINCT               — a universal binary emits one signature row per
+  #                           architecture; without it each app appears 2-3x.
+  #  NOT LIKE '%/Contents/%'— `apps` indexes nested helper bundles. Unfiltered,
+  #                           one Electron app returns its Helper, WebView and
+  #                           ModuleHost as separate rows.
+  #  bundle_identifier <> ''— some bundles carry no CFBundleIdentifier.
+  #  hash_* = 0             — these are TABLE PARAMETERS, not predicates: the
+  #                           column docs read "Set to 1 to also hash resources,
+  #                           or 0 otherwise. Default is 1". Passing 0 skips
+  #                           expensive hashing. Omitting them hashes every
+  #                           binary on the box.
+
+STEP 2 — Validate before deploying the query:
+  contour osquery validate <gitops.yml>
+  # Catches unknown tables offline (table-level only; columns are not checked).
+  # A Fleet-only table such as codesign is a warning: real under Fleet's agent,
+  # empty under plain osqueryd.
+
+POSTCONDITIONS:
+  ASSERT the identifier came from rank 1-3, never rank 5
+  RETURN { bundle_identifier, team_identifier, path }
+```
+
+### Helper binaries are invisible to `apps`
+
+`apps` returns `.app` bundles only. Separately-signed components inside a
+bundle — daemons, XPC services, system extensions — never appear, however the
+query is filtered. This matters because **PPPC and Santa grants are made per
+signed component, not per app**, so coverage cannot be audited from `apps`
+alone.
+
+`signature` reaches them, because it accepts `LIKE` on `path`:
+
+```sql
+SELECT DISTINCT identifier, team_identifier
+FROM signature
+WHERE (   path LIKE '/Applications/<App>.app/Contents/MacOS/%'
+       OR path LIKE '/Applications/<App>.app/Contents/Library/SystemExtensions/%/Contents/MacOS/%')
+  AND signed = 1 AND hash_resources = 0 AND hash_executable = 0;
+```
+
+Both patterns are required: helpers live in `Contents/MacOS/`, system
+extensions under `Contents/Library/SystemExtensions/`. A security agent
+commonly ships 6-8 signed components behind a single `.app`.
+
+### Reading drift results without false positives
+
+Comparing profile identifiers against device inventory finds stale profiles,
+but only one pattern is real drift:
+
+> **the app is installed, under a different bundle ID than the profile names.**
+
+Two false-positive classes to exclude first:
+
+- **Not installed.** An identifier absent from one machine usually means the
+  app is not on that machine. Only a fleet-wide run distinguishes this from
+  drift.
+- **Legitimate sub-bundles.** A profile targeting `com.vendor.app.daemon`
+  while the installed app is `com.vendor.app` is normally correct — PPPC
+  targets the daemon deliberately. See the helper-binaries note above.
+- **Fuzzy name matching.** Match on bundle identifier, never on display name:
+  matching a folder named `ms-office` against "any app whose name starts
+  Microsoft" pairs it with Teams.
+
+### Scope limit
+
+This procedure yields *identity*, not *entitlement*. Which permissions an app
+needs is a separate decision — and for several the answer is that DDM cannot
+express it at all. Camera, Microphone, Accessibility, Dictation, Bluetooth,
+LocalNetwork, Location and LocationAccuracy are the entire declarative
+surface; Full Disk Access, ScreenCapture, AppleEvents, Calendar, AddressBook
+and the folder policies stay in a PPPC profile. See `--sop app-privacy`.
+
+---
+
 ## Other operations (prose)
 
 ### Statistics on the embedded osquery schema
@@ -314,8 +461,8 @@ software:
 ```
 contour osquery stats --json
 # Returns: {total_tables, total_columns, darwin_tables, linux_tables,
-#           windows_tables}
-# As of contour 0.2.x: 283 tables, 2581 columns total.
+#           windows_tables, sources: {osquery, fleet, both, fleet_only[], osquery_only[]}}
+# Live totals: contour osquery stats
 ```
 
 ### Verify generated queries against a host (osqueryi / orbit)
@@ -325,6 +472,7 @@ contour osquery stats --json
 # copy-pasteable command. contour NEVER executes them — you run them on the host.
 contour osquery verify ./output                  # scan a GitOps repo (or a dir/file), print commands
 contour osquery verify ./output -o verify.md     # write a Markdown reference instead of printing
+contour osquery verify ./output --json           # {count, queries[{name, source, query, osqueryi_cmd, orbit_cmd}]}
 #
 # Each query is emitted in BOTH host forms (one doc works everywhere):
 #   dev / CI:            osqueryi --json "<sql>"

@@ -21,9 +21,9 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use std::path::{Path, PathBuf};
 
-/// Synthetic org used for DDM compose checks. Anything in `com.example`
-/// would be rejected by `validate_org_domain`, so use a clearly-CI
-/// reverse-DNS namespace.
+/// Synthetic org used for DDM compose checks. `validate_org_domain`
+/// rejects the bare `com.example` placeholder, so use a clearly-CI
+/// reverse-DNS namespace instead.
 const CI_ORG: &str = "com.contour.libvalidate";
 
 #[derive(Debug)]
@@ -188,14 +188,29 @@ fn validate_recipe_file(path: &Path, registry: &SchemaRegistry, findings: &mut V
     // CI can opt-in to gating.
     for spec in &recipe.profiles {
         if registry.get_by_name(&spec.payload_type).is_none() {
+            // A type contour withheld is not a type contour does not know.
+            // Domains in `REMOVED_COMMUNITY_DOMAINS` were described only by
+            // the removed ProfileCreator corpus; reporting those as "unknown"
+            // would read as a broken recipe rather than a source that needs
+            // replacing.
+            let (check, message) = match registry.why_withheld(&spec.payload_type) {
+                Some(why) => (
+                    "withheld-payload-type",
+                    format!("profile '{}': {why}", spec.display_name),
+                ),
+                None => (
+                    "unknown-payload-type",
+                    format!(
+                        "profile '{}' uses payload_type '{}' not in the embedded schema",
+                        spec.display_name, spec.payload_type
+                    ),
+                ),
+            };
             findings.push(Finding {
                 file: path.to_path_buf(),
                 severity: Severity::Warning,
-                check: "unknown-payload-type",
-                message: format!(
-                    "profile '{}' uses payload_type '{}' not in the embedded schema",
-                    spec.display_name, spec.payload_type
-                ),
+                check,
+                message,
             });
         }
     }

@@ -48,7 +48,7 @@ pub struct Cli {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
-    /// Organization identifier (required for one-shot mode)
+    /// Organization identifier (falls back to CONTOUR_ORG, then .contour/config.toml)
     #[arg(long)]
     pub org: Option<String>,
 
@@ -135,8 +135,9 @@ pub enum Commands {
 
         /// Generate Fleet GitOps fragment directory instead of plain profiles
         ///
-        /// Creates a directory with fragment.toml manifest and lib/ structure
-        /// for merging into a Fleet GitOps repository.
+        /// Creates a directory with a fragment.toml manifest,
+        /// platforms/macos/configuration-profiles/ and fleets/ for merging
+        /// into a Fleet GitOps repository.
         #[arg(long)]
         fragment: bool,
 
@@ -203,7 +204,8 @@ pub enum Commands {
     /// Validate a pppc.toml policy file
     ///
     /// Checks structural correctness: TOML parses, org is set, each app
-    /// has bundle_id and code_requirement, and no duplicate bundle_ids.
+    /// has a bundle_id or path, and no duplicate bundle_ids. An empty
+    /// code_requirement is a warning.
     ///
     /// Examples:
     ///   contour pppc validate pppc.toml

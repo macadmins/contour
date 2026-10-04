@@ -72,7 +72,9 @@ fn main() -> Result<()> {
             sync,
             branch,
             keywords,
+            legacy_fleet,
         } => {
+            cli::refuse_retired_fleet_flag(legacy_fleet, "mscp init", "--fleet-gitops")?;
             cli::init_project(
                 &output, org, name, force, fleet, jamf, munki, sync, &branch, keywords, cli.json,
             )?;
@@ -199,6 +201,8 @@ fn main() -> Result<()> {
                 output_mode,
                 script_mode.into(),
                 exclude,
+                None, // excluded_rules - `process` reads no mscp.toml; use `generate --config`
+                None, // baseline_labels - likewise
                 fragment,
                 crate::config::OutputStructure::default(),
                 None, // glob_config - process has no mscp.toml in scope; use `generate --config` for glob support
@@ -212,14 +216,13 @@ fn main() -> Result<()> {
             branch,
             keyword,
             preset,
-            mscp_version,
             os,
             os_version,
             output,
             use_uv,
             use_python3,
             use_container,
-            container_image: _container_image, // TODO: Support custom container image
+            container_image: _container_image, // not yet supported
             jamf_mode,
             deterministic_uuids,
             no_creation_date,
@@ -353,14 +356,22 @@ fn main() -> Result<()> {
                     false, // batch_mode = false for single keyword
                     script_mode.into(),
                     exclude,
+                    Some(baseline_config.excluded_rules.clone()),
+                    Some(baseline_config.labels.clone()),
                     fragment,
                     opts.structure,
                     Some(baseline_config.gitops_glob.clone()),
-                    "auto".to_string(), // mscp_version — config path auto-detects layout
                     "macos".to_string(), // os
-                    None,               // os_version
-                    odv.clone(),        // --odv override (else auto-detect odv_<keyword>.yaml)
-                    None,               // osquery — not exposed in config-driven generation
+                    None,                // os_version
+                    odv.clone(),         // --odv override (else auto-detect odv_<keyword>.yaml)
+                    crate::cli::config_generate::resolve_osquery_options(
+                        &loaded_config,
+                        osquery.then(|| crate::osquery::OsqueryGenOptions {
+                            format: osquery_format.clone(),
+                            audit: osquery_audit.clone(),
+                            org: org.clone(),
+                        }),
+                    ),
                 )?;
                 return Ok(());
             }
@@ -506,18 +517,20 @@ fn main() -> Result<()> {
                 false, // batch_mode = false for single keyword
                 script_mode.into(),
                 exclude,
+                None, // excluded_rules - CLI-flag mode does not carry mscp.toml
+                None, // baseline_labels - likewise
                 fragment,
                 crate::config::OutputStructure::default(),
                 None, // glob_config - CLI-flag mode does not carry mscp.toml
-                mscp_version,
                 os.as_str().to_string(),
                 os_version,
                 odv, // --odv override (else auto-detect odv_<keyword>.yaml)
                 osquery_opts,
             )?;
 
-            // --verify-queries: run the emitted policy/report queries through a
-            // local osqueryi (or print how to verify via orbit on a Fleet host).
+            // --verify-queries: write the emitted policy/report queries as
+            // ready-to-paste osqueryi / `orbit shell` commands to
+            // `<out>/osquery/verify-commands.md`. Nothing is executed.
             if let Some(out) = verify_output {
                 crate::osquery::verify::verify_generated(&out)?;
             }
@@ -581,12 +594,12 @@ fn main() -> Result<()> {
                 };
 
                 // Build options structures
-                // Baseline is set per-keyword in generate_all_baselines loop
+                // Baseline is filled in per-keyword inside generate_baseline
                 let jamf_options = if jamf_mode || no_creation_date || identical_payload_uuid {
                     Some(transformers::JamfOptions {
                         no_creation_date,
                         identical_payload_uuid,
-                        baseline: None, // Set per-keyword in generate loop
+                        baseline: None, // Set per-keyword in generate_baseline
                         domain: None,   // Use --config for domain settings
                         org_name: None,
                         description_format: None,
@@ -666,13 +679,22 @@ fn main() -> Result<()> {
             output,
             schemas,
             strict,
+            config,
         } => {
             let output_mode = if cli.json {
                 output::OutputMode::Json
             } else {
                 output::OutputMode::Human
             };
-            cli::validate_output(output, schemas, strict, output_mode)?;
+            let opts =
+                cli::validate::resolve_validation_options(config.as_deref(), schemas, strict)?;
+            cli::validate_output(
+                output,
+                opts.schemas_path,
+                opts.strict,
+                opts.validate_paths,
+                output_mode,
+            )?;
         }
 
         Commands::Deduplicate {
@@ -755,9 +777,11 @@ fn main() -> Result<()> {
             from,
             to,
             fleet,
+            fleet_file,
             output,
             no_backup,
         } => {
+            let fleet = cli::resolve_migrate_fleet(fleet, fleet_file)?;
             cli::migrate_fleet_file(from, to, fleet, output, !no_backup)?;
         }
 
@@ -939,7 +963,6 @@ fn main() -> Result<()> {
             org,
             odv,
             odv_mode,
-            mscp_version,
             os,
             os_version,
         } => {
@@ -949,7 +972,6 @@ fn main() -> Result<()> {
                 output.as_deref(),
                 org.as_deref(),
                 odv_mode,
-                &mscp_version,
                 os.into(),
                 os_version,
                 odv,
@@ -963,8 +985,9 @@ fn main() -> Result<()> {
 /// Aggregate a keyword's mobileconfig rules into one recipe TOML.
 ///
 /// Reads YAML rules directly from `<mscp_repo>/rules/**/*.yaml`,
-/// filters by keyword tag, groups by Apple payload type, and writes
-/// the rendered recipe to disk.
+/// keeps those listed in the baseline file's `profile[].rules[]`
+/// (falling back to the keyword tag when no baseline file exists),
+/// groups by Apple payload type, and writes the rendered recipe to disk.
 #[expect(
     clippy::too_many_arguments,
     reason = "CLI router carries flag-set verbatim"
@@ -975,15 +998,14 @@ fn run_recipe_command(
     output: Option<&std::path::Path>,
     org: Option<&str>,
     mode: baseline_to_recipe::OdvMode,
-    mscp_version: &str,
     os: models::mscp::Platform,
     os_version: Option<String>,
     odv_path: Option<std::path::PathBuf>,
 ) -> Result<()> {
     use anyhow::Context;
 
-    let layout = layout::MscpLayout::detect_or_from(Some(mscp_version), mscp_repo)
-        .with_context(|| format!("detecting mSCP layout in {}", mscp_repo.display()))?;
+    let layout = layout::MscpLayout::detect(mscp_repo)
+        .with_context(|| format!("verifying mSCP layout in {}", mscp_repo.display()))?;
     let extractor = extractors::RuleExtractor::new(mscp_repo)
         .with_layout(layout)
         .with_os(os, os_version);

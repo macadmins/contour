@@ -1,94 +1,154 @@
-//! mSCP repository layout detection (1.x vs 2.0).
+//! mSCP repository layout verification (2.0 only).
 //!
-//! Today the macos_security project ships in two coexisting shapes. The
-//! `main` branch (mSCP 2.0; `dev_2.0` is now a legacy alias) leaves the
-//! 1.x-style `rules`/`baselines` symlinks in place, so path-based
-//! extraction keeps reaching the YAML files — but the
-//! schema underneath has changed substantially. We need to detect which
-//! shape the operator pointed `--mscp-repo` at and parse accordingly.
+//! contour reads the mSCP 2.0 schema: the `main` branch of macos_security,
+//! where every rule carries a `platforms:` block and baselines live at
+//! `baselines/<os>/<name>_<os>_<version>.yaml`. The 1.x layout (flat rule
+//! schema with top-level `tags`/`check`/`fix`, baselines at
+//! `baselines/<name>.yaml`, the `tahoe`/`sequoia`/… release branches) is
+//! deprecated upstream and no longer parsed here.
 //!
-//! Detection sniffs the first rule YAML it finds and inspects the top-level
-//! keys. `platforms:` ⇒ 2.0; `tags:` + `check:` ⇒ 1.x. Anything else returns
-//! a clear error so the operator can decide.
+//! [`MscpLayout::detect`] sniffs the first rule YAML it finds. `platforms:`
+//! ⇒ 2.0. An `id:` without `platforms:` is the 1.x shape and is refused with
+//! the fix spelled out, rather than parsed into something plausible: the
+//! embedded dataset, the recipe pipeline and the build all assume 2.0, and a
+//! 1.x tree quietly answered "zero rules" before this was a hard stop.
 
 use anyhow::{Context, Result, anyhow, bail};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// Named mSCP repository layout versions.
+/// Proof that a repository holds the mSCP 2.0 layout, and the owner of its
+/// file-name grammar.
+///
+/// [`Self::detect`] returns one after checking the tree. The type is the
+/// single owner of the 2.0 path grammar, so every path computation goes
+/// through it; it is a unit struct, so construction itself is not gated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MscpLayout {
-    /// 1.x — flat rule schema with top-level `tags`, `check`, `fix`,
-    /// `result`, `mobileconfig_info` (dict shape), and per-baseline YAML
-    /// files under `baselines/`.
-    V1x,
-    /// 2.0 — multi-OS rule schema with `platforms.{macOS,iOS,visionOS}.<version>`,
-    /// nested `enforcement_info`, array-shaped `mobileconfig_info`, and
-    /// dynamic baselines derived from `platforms.X.benchmarks[]`.
-    #[default]
-    V2x,
-}
+pub struct MscpLayout;
 
-#[allow(
-    dead_code,
-    reason = "lib API: `all`/`rules_subdir`/`rules_dir`/`baselines_dir` reachable from external consumers + tests; not transitively from the bin's `detect_or_from` → `detect` path"
-)]
 impl MscpLayout {
-    /// All known layouts, newest first.
-    pub fn all() -> &'static [Self] {
-        &[Self::V2x, Self::V1x]
-    }
-
-    /// Resolve a layout from a CLI string. Returns `None` for "auto" so
-    /// callers can fall through to [`Self::detect`].
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_lowercase().as_str() {
-            "1.x" | "v1.x" | "v1" | "1" | "legacy" => Some(Self::V1x),
-            "2.0" | "v2.0" | "v2" | "2" | "current" | "latest" => Some(Self::V2x),
-            _ => None,
-        }
-    }
-
-    /// Human-readable name for help text.
+    /// Human-readable name for help text and diagnostics.
     pub fn display_name(self) -> &'static str {
-        match self {
-            Self::V1x => "1.x (flat schema)",
-            Self::V2x => "2.0 (multi-OS schema)",
-        }
+        "2.0 (multi-OS schema)"
     }
 
-    /// Subpath under the repo root holding rule YAML files.
-    /// Both layouts use `rules/` thanks to the mSCP 2.0 (`main`) symlink,
-    /// but callers may want the canonical 2.0 path for diagnostics.
-    pub fn rules_subdir(self) -> &'static str {
-        match self {
-            Self::V1x => "rules",
-            // 2.0 still exposes `rules` as a symlink to config/default/rules.
-            Self::V2x => "rules",
-        }
-    }
-
-    /// Resolve `<repo>/rules` for this layout.
+    /// Resolve `<repo>/rules`. mSCP 2.0 keeps `rules` as a symlink to the
+    /// canonical tree, so path-based access works on a plain checkout.
     pub fn rules_dir(self, repo: &Path) -> PathBuf {
-        repo.join(self.rules_subdir())
+        repo.join("rules")
     }
 
-    /// Resolve `<repo>/baselines` for this layout. Only meaningful for
-    /// 1.x — 2.0 baselines are derived from rule metadata, but the
-    /// directory exists as a symlink so callers can probe it.
+    /// Resolve `<repo>/baselines`, the parent of the per-OS directories.
     pub fn baselines_dir(self, repo: &Path) -> PathBuf {
         repo.join("baselines")
     }
 
-    /// Auto-detect the layout from the contents of a rule YAML file.
+    /// Every baseline file defined for `os`, as `(name, os_version, path)`,
+    /// sorted by name then version.
     ///
-    /// Walks `<repo>/rules/` (resolves symlinks), takes the first
-    /// `*.yaml` it can read, and inspects the top-level keys.
+    /// `baselines/<os>/<name>_<os>_<version>.yaml` → the canonical name with
+    /// the `_<os>_<version>` suffix stripped, and the version. This is the one
+    /// place that knows the file-name grammar. Callers that listed
+    /// `baselines/` themselves found only the `ios/ macos/ visionos/`
+    /// directories and no YAML — an empty answer that looked like "no
+    /// baselines" rather than "wrong directory".
+    pub fn list_baselines(self, repo: &Path, os: &str) -> Result<Vec<(String, String, PathBuf)>> {
+        let dir = self.baselines_dir(repo).join(os);
+        let entries = std::fs::read_dir(&dir).map_err(|e| {
+            anyhow!(
+                "reading mSCP {self} baselines directory {}: {e}",
+                dir.display()
+            )
+        })?;
+
+        let mut out = Vec::new();
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let path = entry.path();
+            if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("yaml") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            // `<name>_<os>_<version>` — split on the LAST `_<os>_` so a name
+            // that itself contains the token cannot shift the cut.
+            let token = format!("_{os}_");
+            if let Some((name, version)) = stem.rsplit_once(&token) {
+                out.push((name.to_string(), version.to_string(), path));
+            }
+            // A yaml in this directory without the suffix is not a baseline
+            // for this OS; skip it rather than invent a name.
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// The baseline YAML for `name` on `os`, or an error naming the path
+    /// that was tried.
+    ///
+    /// With `os_version = None` the newest version present is chosen, by
+    /// numeric major.minor — not lexically, so `10.15` never beats `26.0`.
+    ///
+    /// This deliberately does **not** return `Option`: `None` would let a
+    /// caller fall back to tag membership, and a wrong name would silently
+    /// produce an empty answer. Callers that have a legitimate fallback
+    /// (tag-only baselines exist) decide that themselves, with the failed
+    /// path in hand.
+    pub fn baseline_file(
+        self,
+        repo: &Path,
+        name: &str,
+        os: &str,
+        os_version: Option<&str>,
+    ) -> Result<PathBuf> {
+        let version = match os_version {
+            Some(v) => v.to_string(),
+            None => {
+                let mut versions: Vec<(u32, u32, String)> = self
+                    .list_baselines(repo, os)?
+                    .into_iter()
+                    .filter(|(n, _, _)| n == name)
+                    .filter_map(|(_, v, _)| {
+                        let mut parts = v.split('.');
+                        let major: u32 = parts.next()?.parse().ok()?;
+                        let minor: u32 = parts.next().and_then(|m| m.parse().ok()).unwrap_or(0);
+                        Some((major, minor, v))
+                    })
+                    .collect();
+                versions.sort();
+                versions.pop().map(|(_, _, v)| v).ok_or_else(|| {
+                    anyhow!(
+                        "no mSCP 2.0 baseline files matching `{name}_{os}_*.yaml` under {}",
+                        self.baselines_dir(repo).join(os).display()
+                    )
+                })?
+            }
+        };
+        let path = self
+            .baselines_dir(repo)
+            .join(os)
+            .join(format!("{name}_{os}_{version}.yaml"));
+
+        if !path.exists() {
+            bail!(
+                "baseline YAML not found: {} (mSCP {self} layout)",
+                path.display()
+            );
+        }
+        Ok(path)
+    }
+
+    /// Verify that `repo` holds the mSCP 2.0 layout.
+    ///
+    /// Walks `<repo>/rules/` (resolves symlinks), takes the first `*.yaml`
+    /// it can read, and inspects the top-level keys.
     ///
     /// # Errors
     /// - No `rules/` directory under `repo`
     /// - No `*.yaml` files found in the tree
-    /// - First rule's top-level keys match neither schema
+    /// - The rule is the deprecated 1.x shape (`id:` without `platforms:`):
+    ///   the error names the file and says how to move to `main`
+    /// - The rule matches neither schema
     pub fn detect(repo: &Path) -> Result<Self> {
         let rules_root = repo.join("rules");
         if !rules_root.exists() {
@@ -108,33 +168,30 @@ impl MscpLayout {
             .as_mapping()
             .ok_or_else(|| anyhow!("sample rule {} is not a YAML mapping", sample.display()))?;
 
-        // The discriminating signal is the 2.0 `platforms` key. Anything
-        // without it is treated as 1.x — covers script-only rules,
-        // mobileconfig-only rules, and rules missing optional fields.
         let has_platforms = map.contains_key(yaml_serde::Value::String("platforms".into()));
         let has_id = map.contains_key(yaml_serde::Value::String("id".into()));
         if has_platforms {
-            Ok(Self::V2x)
+            Ok(Self)
         } else if has_id {
-            Ok(Self::V1x)
+            // Script-only and mobileconfig-only 1.x rules may lack `check`
+            // or `tags`; an `id` with no `platforms` block is the 1.x shape.
+            bail!(
+                "mSCP 1.x layout detected at {sample}: rules carry top-level \
+                 `tags`/`check` and no `platforms:` block. contour reads mSCP 2.0 \
+                 only; 1.x is deprecated upstream and its release branches \
+                 (`tahoe`, `sequoia`, …) receive no new rules. Switch the checkout \
+                 to `main`:\n  git -C {repo} fetch origin main && git -C {repo} \
+                 checkout main\nCustom 1.x baselines migrate with mSCP's own \
+                 `--migrate` flag.",
+                sample = sample.display(),
+                repo = repo.display()
+            )
         } else {
             bail!(
                 "could not detect mSCP layout from {}: not a recognizable mSCP rule \
-                 (no `id` or `platforms` at top level). Pass --mscp-version 1.x|2.0 to override.",
+                 (no `id` or `platforms` at top level)",
                 sample.display()
             )
-        }
-    }
-
-    /// Resolve a layout from a CLI override string, falling back to
-    /// auto-detection on `None` or `"auto"`.
-    pub fn detect_or_from(opt: Option<&str>, repo: &Path) -> Result<Self> {
-        match opt {
-            None => Self::detect(repo),
-            Some(s) if s.eq_ignore_ascii_case("auto") => Self::detect(repo),
-            Some(s) => Self::from_name(s).ok_or_else(|| {
-                anyhow!("unknown mscp layout '{s}'; expected one of: 1.x, 2.0, auto")
-            }),
         }
     }
 }
@@ -176,28 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn from_name_accepts_aliases() {
-        assert_eq!(MscpLayout::from_name("1.x"), Some(MscpLayout::V1x));
-        assert_eq!(MscpLayout::from_name("legacy"), Some(MscpLayout::V1x));
-        assert_eq!(MscpLayout::from_name("2.0"), Some(MscpLayout::V2x));
-        assert_eq!(MscpLayout::from_name("current"), Some(MscpLayout::V2x));
-        assert_eq!(MscpLayout::from_name("nope"), None);
-    }
-
-    #[test]
-    fn detect_v1x_from_flat_rule() {
-        let tmp = tempdir().unwrap();
-        let rules = tmp.path().join("rules").join("audit");
-        write_rule(
-            &rules,
-            "sample.yaml",
-            "id: x\ntitle: x\ncheck: 'true'\nfix: 'true'\ntags: [cis_lvl1]\n",
-        );
-        assert_eq!(MscpLayout::detect(tmp.path()).unwrap(), MscpLayout::V1x);
-    }
-
-    #[test]
-    fn detect_v2x_from_platforms_rule() {
+    fn detect_accepts_a_platforms_rule() {
         let tmp = tempdir().unwrap();
         let rules = tmp.path().join("rules").join("os");
         write_rule(
@@ -205,7 +241,37 @@ mod tests {
             "sample.yaml",
             "id: x\ntitle: x\ndiscussion: x\nplatforms:\n  macOS:\n    '15.0':\n      benchmarks:\n        - name: cis_lvl1\nreferences: {}\n",
         );
-        assert_eq!(MscpLayout::detect(tmp.path()).unwrap(), MscpLayout::V2x);
+        assert_eq!(MscpLayout::detect(tmp.path()).unwrap(), MscpLayout);
+    }
+
+    /// The 1.x shape is refused, not parsed — and the refusal says what to do.
+    #[test]
+    fn detect_refuses_a_1x_flat_rule_and_names_the_fix() {
+        let tmp = tempdir().unwrap();
+        let rules = tmp.path().join("rules").join("audit");
+        write_rule(
+            &rules,
+            "sample.yaml",
+            "id: x\ntitle: x\ncheck: 'true'\nfix: 'true'\ntags: [cis_lvl1]\n",
+        );
+        let err = MscpLayout::detect(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("1.x layout"), "err: {err}");
+        assert!(err.contains("sample.yaml"), "err must name the file: {err}");
+        assert!(
+            err.contains("checkout main"),
+            "err must give the fix: {err}"
+        );
+    }
+
+    /// Mobileconfig-only 1.x rules lack `check`/`tags`; an `id` with no
+    /// `platforms` is still 1.x and still refused.
+    #[test]
+    fn detect_refuses_an_id_only_rule_as_1x() {
+        let tmp = tempdir().unwrap();
+        let rules = tmp.path().join("rules");
+        write_rule(&rules, "sample.yaml", "id: x\ntitle: x\n");
+        let err = MscpLayout::detect(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("1.x layout"), "err: {err}");
     }
 
     #[test]
@@ -216,43 +282,121 @@ mod tests {
     }
 
     #[test]
-    fn detect_v1x_when_only_id_present() {
-        // Mobileconfig-only or minimal 1.x rules may lack `check`/`tags`;
-        // the absence of `platforms` is enough to call it V1x.
-        let tmp = tempdir().unwrap();
-        let rules = tmp.path().join("rules");
-        write_rule(&rules, "sample.yaml", "id: x\ntitle: x\n");
-        assert_eq!(MscpLayout::detect(tmp.path()).unwrap(), MscpLayout::V1x);
-    }
-
-    #[test]
     fn detect_errors_on_unrecognized_schema() {
         let tmp = tempdir().unwrap();
         let rules = tmp.path().join("rules");
         write_rule(&rules, "sample.yaml", "title: missing-id\n");
-        let err = MscpLayout::detect(tmp.path()).unwrap_err();
-        assert!(err.to_string().contains("could not detect"));
-    }
-
-    #[test]
-    fn detect_or_from_explicit_override() {
-        let tmp = tempdir().unwrap();
-        // Empty repo — detect would fail, but explicit flag wins.
-        assert_eq!(
-            MscpLayout::detect_or_from(Some("2.0"), tmp.path()).unwrap(),
-            MscpLayout::V2x
+        let err = MscpLayout::detect(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("could not detect"), "err: {err}");
+        assert!(
+            !err.contains("1.x"),
+            "an id-less file is not a 1.x rule: {err}"
         );
     }
 
-    /// Live smoke: only runs if the local mSCP 2.0 (`main`) checkout is
-    /// present. Skipped silently in CI where the path doesn't exist.
+    /// Live smoke against a real checkout: point `CONTOUR_MSCP_REPO` at an
+    /// mSCP 2.0 (`main`) tree to enable it. Skipped when unset, so the suite
+    /// does not depend on any one machine's layout.
     #[test]
     fn detect_live_main_tree() {
-        let repo = Path::new("/Users/henry/Projects/Dev/macos_security");
+        let Some(repo) = std::env::var_os("CONTOUR_MSCP_REPO").map(PathBuf::from) else {
+            return;
+        };
         if !repo.join("rules").exists() {
             return;
         }
-        let detected = MscpLayout::detect(repo).expect("live detect");
-        assert_eq!(detected, MscpLayout::V2x, "main should detect as V2x");
+        MscpLayout::detect(&repo).expect("main should verify as 2.0");
+    }
+
+    fn write(path: &Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn list_baselines_strips_the_os_version_suffix() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path()
+                .join("baselines/macos/example_baseline_macos_27.0.yaml"),
+            "profile: []\n",
+        );
+        write(
+            &tmp.path()
+                .join("baselines/macos/example_baseline_macos_26.0.yaml"),
+            "profile: []\n",
+        );
+        write(
+            &tmp.path()
+                .join("baselines/ios/example_baseline_ios_27.0.yaml"),
+            "profile: []\n",
+        );
+        // A stray yaml without the suffix is not a baseline for this OS.
+        write(&tmp.path().join("baselines/macos/README.yaml"), "x: 1\n");
+        let got = MscpLayout.list_baselines(tmp.path(), "macos").unwrap();
+        let pairs: Vec<(&str, &str)> = got
+            .iter()
+            .map(|(n, v, _)| (n.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![("example_baseline", "26.0"), ("example_baseline", "27.0")]
+        );
+    }
+
+    #[test]
+    fn baseline_file_picks_the_newest_version_numerically() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 10.15 sorts AFTER 26.0 lexically; numerically it is older. The
+        // lookup must not hand back a Catalina baseline on a 26.0 tree.
+        write(
+            &tmp.path()
+                .join("baselines/macos/example_baseline_macos_10.15.yaml"),
+            "profile: []\n",
+        );
+        write(
+            &tmp.path()
+                .join("baselines/macos/example_baseline_macos_26.0.yaml"),
+            "profile: []\n",
+        );
+        let p = MscpLayout
+            .baseline_file(tmp.path(), "example_baseline", "macos", None)
+            .unwrap();
+        assert!(
+            p.ends_with("example_baseline_macos_26.0.yaml"),
+            "got {}",
+            p.display()
+        );
+    }
+
+    #[test]
+    fn baseline_file_honours_an_explicit_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path()
+                .join("baselines/macos/example_baseline_macos_26.0.yaml"),
+            "profile: []\n",
+        );
+        write(
+            &tmp.path()
+                .join("baselines/macos/example_baseline_macos_27.0.yaml"),
+            "profile: []\n",
+        );
+        let p = MscpLayout
+            .baseline_file(tmp.path(), "example_baseline", "macos", Some("26.0"))
+            .unwrap();
+        assert!(p.ends_with("example_baseline_macos_26.0.yaml"));
+    }
+
+    #[test]
+    fn missing_baseline_file_errors_with_the_path_and_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("baselines/macos")).unwrap();
+        let err = MscpLayout
+            .baseline_file(tmp.path(), "nope", "macos", Some("27.0"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("nope_macos_27.0.yaml"), "err: {err}");
+        assert!(err.contains("2.0"), "err should name the layout: {err}");
     }
 }

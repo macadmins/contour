@@ -4,6 +4,7 @@
 //! custom organization rules defined in TOML configuration files.
 
 pub mod schema_validator;
+pub mod skip_items;
 
 use crate::profile::ConfigurationProfile;
 use anyhow::{Context, Result};

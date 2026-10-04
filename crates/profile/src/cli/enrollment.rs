@@ -1,7 +1,7 @@
 //! DEP/ADE enrollment profile generation from embedded skip_keys data.
 //!
-//! Provides `list` and `generate` subcommands for working with Setup Assistant
-//! skip keys across Apple platforms.
+//! Provides `list`, `generate`, `presets` and `migrate` subcommands for working
+//! with Setup Assistant skip keys across Apple platforms.
 
 use crate::output::OutputMode;
 use anyhow::{Context, Result};
@@ -56,16 +56,26 @@ pub fn parse_skip_list_file(path: &Path) -> Result<SkipListFile> {
 
 /// Load and filter skip keys for a given platform and optional OS version.
 ///
-/// `beta` selects the pre-release OS seed dataset (e.g. OS 27.0 keys like
-/// `AccessibilityAppearance` / `LiquidGlass`); the stable set is the default.
+/// `beta` selects the pre-release OS seed skip keys, when a seed is open.
+/// Between seeds it is the stable set (`LiquidGlass` and `DeviceFeaturesTour`,
+/// once seed-only, shipped in 27.0), and the user is told so.
 fn load_skip_keys(platform: &str, os_version: Option<&str>, beta: bool) -> Result<Vec<SkipKey>> {
     let raw = if beta {
+        crate::cli::ddm::note_if_beta_is_retired();
         mdm_schema::embedded_skip_keys_beta()
     } else {
         mdm_schema::embedded_skip_keys()
     };
     let all = mdm_schema::skip_keys::read(raw).context("Failed to read embedded skip_keys")?;
 
+    // Apple's skipkeys schema lists iPad panes under iOS: iPadOS has no rows
+    // of its own, so asking for it found nothing and every iPadOS enrollment
+    // failed with "No skip keys found".
+    let platform = if platform.eq_ignore_ascii_case("iPadOS") {
+        "iOS"
+    } else {
+        platform
+    };
     let filtered = all
         .into_iter()
         .filter(|k| k.platform.eq_ignore_ascii_case(platform))
@@ -236,7 +246,6 @@ pub fn handle_enrollment_presets(mode: OutputMode) -> Result<()> {
     Ok(())
 }
 
-/// Write the generated ADE profile JSON to `output` (or stdout) with a summary.
 /// Write a companion `.md` next to the generated enrollment JSON: the skip keys
 /// used (with their pane titles from the schema) + links to Apple's Profile and
 /// SkipKeys documentation. Returns the path written.
@@ -300,6 +309,7 @@ fn write_skip_readme(
     Ok(md_path)
 }
 
+/// Write the generated ADE profile JSON to `output` (or stdout) with a summary.
 fn write_enrollment_json(
     profile: &serde_json::Value,
     output: Option<&str>,
@@ -721,7 +731,15 @@ pub fn handle_enrollment_generate(
             .map(str::to_string)
             .collect()
     } else if skip_all {
-        available_keys.iter().map(|k| k.key.clone()).collect()
+        // Every pane that MAY be skipped. Taking every pane listed would
+        // include FileVault and SoftwareUpdate, which the guardrail below
+        // refuses — so --skip-all could never succeed on macOS or iOS.
+        available_keys
+            .iter()
+            .map(|k| k.key.as_str())
+            .filter(|k| !NEVER_SKIP.contains(k))
+            .map(str::to_string)
+            .collect()
     } else if skip_list.is_some() || !skip.is_empty() {
         // Union of file's `skip` and `--skip` CLI args. Dedup preserves first-seen order.
         let mut combined: Vec<String> = skip_list

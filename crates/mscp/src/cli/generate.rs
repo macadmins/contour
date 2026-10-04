@@ -63,13 +63,12 @@ const MSCP_PYTHON_VERSION_LEGACY: &str = "3.13";
 /// Both layouts accept the long form `--ddm`, but the short forms differ
 /// and the wrong one is silently miscompiled into the wrong feature:
 ///
-/// - mSCP **1.x** (`tahoe` branch): `-D` is `--ddm`.
-/// - mSCP **2.0** (`main` branch — contour's default; mSCP merged the
-///   2.0 layout to `main`, so `dev_2.0` is now a legacy alias):
-///   `-D` was repurposed for `--debug` (hidden via
-///   `argparse.SUPPRESS`), and `-d`/`--ddm` is the DDM flag. Passing
-///   `-D` on 2.0 silently enables debug mode and produces zero DDM
-///   artifacts.
+/// On mSCP 2.0 — `main`, or an OS-preview branch such as `dev_28` — `-D`
+/// was repurposed for `--debug` (hidden via `argparse.SUPPRESS`), and
+/// `-d`/`--ddm` is the DDM flag. Passing `-D` silently enables debug mode
+/// and produces zero DDM artifacts, which is why contour always sends the
+/// long form. (The 1.x script mapped `-D` to `--ddm`; contour refuses those
+/// trees, so only the long form is ever correct here.)
 ///
 /// Using the unambiguous long form keeps the call site layout-agnostic.
 const MSCP_DDM_FLAG: &str = "--ddm";
@@ -196,10 +195,11 @@ pub fn generate_baseline(
     batch_mode: bool, // If true, suppress individual output (used by generate-all)
     script_mode: ScriptMode,
     exclude_categories: Option<Vec<String>>,
+    excluded_rules: Option<Vec<String>>,
+    baseline_labels: Option<crate::config::LabelConfig>,
     fragment: bool,
     output_structure: OutputStructure,
     glob_config: Option<GitopsGlobConfig>,
-    mscp_version: String,
     os: String,
     os_version: Option<String>,
     odv_path: Option<PathBuf>,
@@ -247,7 +247,6 @@ pub fn generate_baseline(
         &baseline_name,
         method,
         generate_ddm,
-        &mscp_version,
         &os,
         os_version.as_deref(),
     )?;
@@ -352,6 +351,8 @@ pub fn generate_baseline(
             OutputMode::Human, // Use human mode - batch_mode handles JSON at a higher level
             script_mode,
             exclude_categories,
+            excluded_rules,
+            baseline_labels,
             fragment,
             output_structure,
             glob_config,
@@ -574,80 +575,35 @@ fn clone_mscp_repo(target_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Pick the highest available OS version for a 2.0 baseline.
-///
-/// mSCP 2.0 names baseline files `<name>_<os>_<version>.yaml` under
-/// `baselines/<os>/`. With no explicit `--os-version`, choose the newest.
-fn highest_baseline_version(mscp_repo: &Path, baseline_name: &str, os: &str) -> Result<String> {
-    let dir = mscp_repo.join("baselines").join(os);
-    let prefix = format!("{baseline_name}_{os}_");
-    let mut versions: Vec<(u32, u32, String)> = std::fs::read_dir(&dir)
-        .with_context(|| format!("reading mSCP 2.0 baselines directory {}", dir.display()))?
-        .filter_map(std::result::Result::ok)
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter_map(|name| {
-            let ver = name.strip_prefix(&prefix)?.strip_suffix(".yaml")?;
-            let mut parts = ver.split('.');
-            let major: u32 = parts.next()?.parse().ok()?;
-            let minor: u32 = parts.next().and_then(|m| m.parse().ok()).unwrap_or(0);
-            Some((major, minor, ver.to_string()))
-        })
-        .collect();
-    versions.sort();
-    versions.pop().map(|(_, _, v)| v).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no mSCP 2.0 baseline files matching '{prefix}*.yaml' under {}; \
-             check --os or pass --os-version",
-            dir.display()
-        )
-    })
-}
-
 /// Resolve the repo-relative baseline YAML path to feed the mSCP build,
-/// handling both layouts:
-/// - 1.x: `baselines/<name>.yaml`
-/// - 2.0: `baselines/<os>/<name>_<os>_<version>.yaml`
+/// for the 2.0 layout, `baselines/<os>/<name>_<os>_<version>.yaml`.
+/// An explicit `os_version` is used as given; `None` picks the highest
+/// available version.
 fn resolve_baseline_yaml(
     mscp_repo: &Path,
     baseline_name: &str,
-    mscp_version: &str,
     os: &str,
     os_version: Option<&str>,
 ) -> Result<String> {
-    let layout = crate::layout::MscpLayout::detect_or_from(Some(mscp_version), mscp_repo)
-        .with_context(|| format!("detecting mSCP layout in {}", mscp_repo.display()))?;
-
-    let rel = match layout {
-        crate::layout::MscpLayout::V1x => format!("baselines/{baseline_name}.yaml"),
-        crate::layout::MscpLayout::V2x => {
-            let version = match os_version {
-                Some(v) => v.to_string(),
-                None => highest_baseline_version(mscp_repo, baseline_name, os)?,
-            };
-            format!("baselines/{os}/{baseline_name}_{os}_{version}.yaml")
-        }
-    };
-
-    if !mscp_repo.join(&rel).exists() {
-        anyhow::bail!(
-            "Baseline YAML not found: {} (detected mSCP {} layout)",
-            mscp_repo.join(&rel).display(),
-            layout
-        );
-    }
+    let layout = crate::layout::MscpLayout::detect(mscp_repo)
+        .with_context(|| format!("verifying mSCP layout in {}", mscp_repo.display()))?;
+    let abs = layout.baseline_file(mscp_repo, baseline_name, os, os_version)?;
+    let rel = abs
+        .strip_prefix(mscp_repo)
+        .unwrap_or(&abs)
+        .to_string_lossy()
+        .into_owned();
     tracing::info!("Using baseline manifest: {rel} (mSCP {layout})");
     Ok(rel)
 }
 
 /// Run mSCP baseline generation. Returns the `build/<subdir>` directory
-/// name the build wrote to (`<baseline>` for 1.x, `<baseline>_<os>_<version>`
-/// for 2.0).
+/// name the build wrote to (`<baseline>_<os>_<version>`).
 fn run_mscp_generation(
     mscp_repo_path: &PathBuf,
     baseline_name: &str,
     method: PythonMethod,
     generate_ddm: bool,
-    mscp_version: &str,
     os: &str,
     os_version: Option<&str>,
 ) -> Result<String> {
@@ -668,15 +624,22 @@ fn run_mscp_generation(
         ensure_mscp_repo(mscp_repo_path)?;
     }
 
-    // Resolve the baseline YAML path for the repo's mSCP layout. Container
-    // mode without a local checkout has nothing to inspect, so it falls
-    // back to the 1.x flat path.
-    let baseline_yaml_relative =
-        if method == PythonMethod::Container && !mscp_repo_path.join("rules").exists() {
-            format!("baselines/{baseline_name}.yaml")
-        } else {
-            resolve_baseline_yaml(mscp_repo_path, baseline_name, mscp_version, os, os_version)?
-        };
+    // Resolve the baseline YAML path. Container mode without a local
+    // checkout has no tree to pick the newest version from, so it needs the
+    // version spelled out to name the image's baked-in file.
+    let baseline_yaml_relative = if method == PythonMethod::Container
+        && !mscp_repo_path.join("rules").exists()
+    {
+        let version = os_version.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--use-container without a local mSCP checkout needs --os-version \
+                     to name the image's baseline file (baselines/{os}/{baseline_name}_{os}_<version>.yaml)"
+                )
+            })?;
+        format!("baselines/{os}/{baseline_name}_{os}_{version}.yaml")
+    } else {
+        resolve_baseline_yaml(mscp_repo_path, baseline_name, os, os_version)?
+    };
 
     // The mSCP build writes to `build/<yaml-stem>`.
     let build_subdir = Path::new(&baseline_yaml_relative)
@@ -1178,43 +1141,23 @@ pub fn test_container(image: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Bail with a clear next-step if the operator's local mSCP repo is on
-/// a different layout than the container image expects. The default
-/// image (`ghcr.io/brodjieski/mscp_2.0:latest`) bakes in 2.0 scripts
-/// that can't read 1.x rule semantics; running them against a 1.x repo
-/// fails with a confusing "build output not found" *after* the
-/// container exits. Failing fast here surfaces the actual problem and
-/// tells the operator how to switch.
+/// Refuse to start the container against a local mSCP repo that is not
+/// 2.0. The image (`ghcr.io/brodjieski/mscp_2.0:latest`) bakes in 2.0
+/// scripts; run against a 1.x tree they fail with a confusing "build output
+/// not found" *after* the container exits. [`MscpLayout::detect`] fails
+/// fast instead and its error says how to switch the checkout to `main`.
 ///
-/// Only enforced when a local repo with a `rules/` directory exists —
-/// bare container mode (no local mSCP checkout) still works against
-/// the image's baked-in baselines/rules.
-fn assert_compatible_layout(mscp_repo_abs: &Path, image: &str) -> Result<()> {
+/// Only enforced when a local repo with a `rules/` directory exists — bare
+/// container mode (no local mSCP checkout) still works against the image's
+/// baked-in baselines/rules.
+///
+/// [`MscpLayout::detect`]: crate::layout::MscpLayout::detect
+fn assert_2_0_layout(mscp_repo_abs: &Path) -> Result<()> {
     if !mscp_repo_abs.join("rules").exists() {
         return Ok(());
     }
-    let Ok(layout) = crate::layout::MscpLayout::detect(mscp_repo_abs) else {
-        // `rules/` exists but layout detection failed — let the script
-        // produce its own error rather than guessing here.
-        return Ok(());
-    };
-
-    if layout == crate::layout::MscpLayout::V1x && image.contains("mscp_2.0") {
-        anyhow::bail!(
-            "Local mSCP repo at `{repo}` is on the 1.x layout (flat \
-             `baselines/<name>.yaml`), but the default container image \
-             `{image}` is mSCP 2.0. The image's 2.0 scripts can't read 1.x \
-             rules, so the run would fail with a confusing error after the \
-             container exits.\n\n\
-             Fix by switching the local repo to 2.0:\n  \
-             git -C {repo} fetch origin main && \\\n  \
-             git -C {repo} checkout main\n\n\
-             Or drop `--use-container` and use the local Python interpreter \
-             (`--use-uv` / `--use-python3`), which works with either layout.",
-            repo = mscp_repo_abs.display(),
-            image = image,
-        );
-    }
+    crate::layout::MscpLayout::detect(mscp_repo_abs)
+        .with_context(|| format!("verifying mSCP layout in {}", mscp_repo_abs.display()))?;
     Ok(())
 }
 
@@ -1226,9 +1169,8 @@ fn assert_compatible_layout(mscp_repo_abs: &Path, image: &str) -> Result<()> {
 /// image keeps its Python venv, scripts/, src/, and templates/; the
 /// operator's customisations become visible to the script.
 ///
-/// The default image (`mscp_2.0:latest`) bakes in mSCP 2.0 scripts that
-/// don't understand 1.x rule semantics. So before mounting, the local
-/// repo's layout must match the image's layout — otherwise bail with a
+/// The image (`mscp_2.0:latest`) bakes in mSCP 2.0 scripts. Before
+/// mounting, the local repo is verified to be 2.0 — otherwise bail with a
 /// clear next-step instead of producing a confusing "build output not
 /// found" error after the container runs.
 fn run_mscp_container(
@@ -1239,8 +1181,7 @@ fn run_mscp_container(
     let image = DEFAULT_MSCP_CONTAINER_IMAGE;
 
     // Get absolute path (best effort — if the repo path doesn't exist
-    // yet, fall back to the caller's value; we'll re-check after creating
-    // build/).
+    // yet, fall back to the caller's value).
     let mscp_repo_abs = mscp_repo_path
         .canonicalize()
         .unwrap_or_else(|_| mscp_repo_path.clone());
@@ -1248,7 +1189,7 @@ fn run_mscp_container(
     // Layout safety check first — runs without needing a container
     // runtime, so it fails fast with an actionable message even on a
     // machine without Docker/Apple container.
-    assert_compatible_layout(&mscp_repo_abs, image)?;
+    assert_2_0_layout(&mscp_repo_abs)?;
 
     let runtime = detect_container_runtime().ok_or_else(|| {
         anyhow::anyhow!("No container runtime found. Install Docker or Apple container tool.")
@@ -1419,14 +1360,20 @@ pub fn generate_all_baselines(
                     true,              // batch_mode - suppress individual output
                     script_mode,
                     None, // exclude_categories - not supported in generate-all mode
+                    None, // excluded_rules - per-baseline, and this mode has no mscp.toml
+                    None, // baseline_labels - likewise
                     fragment,
                     output_structure.clone(),
-                    None, // glob_config - not yet plumbed per-baseline in generate-all
-                    "auto".to_string(), // mscp_version — auto-detect layout
+                    // Both None by construction, not by omission: this is
+                    // `generate-all` in CLI-flag mode, which takes no mscp.toml
+                    // (so there is no gitops_glob to read) and exposes no
+                    // --osquery flag (so there is nothing to pass). The config
+                    // path is `generate_from_config`, and it wires both.
+                    None,                // glob_config
                     "macos".to_string(), // os
-                    None, // os_version
+                    None,                // os_version
                     None, // odv_path — generate-all auto-detects odv_<baseline>.yaml per baseline
-                    None, // osquery — not yet plumbed for generate-all
+                    None, // osquery
                 );
 
                 (i, baseline_name.clone(), result)
@@ -1479,14 +1426,18 @@ pub fn generate_all_baselines(
                 true,              // batch_mode - suppress individual output
                 script_mode,
                 None, // exclude_categories - not supported in generate-all mode
+                None, // excluded_rules - per-baseline, and this mode has no mscp.toml
+                None, // baseline_labels - likewise
                 fragment,
                 output_structure.clone(),
-                None,               // glob_config - not yet plumbed per-baseline in generate-all
-                "auto".to_string(), // mscp_version — auto-detect layout
+                // See the note in the parallel branch above: None by
+                // construction, because this mode has neither an mscp.toml
+                // nor an --osquery flag.
+                None,                // glob_config
                 "macos".to_string(), // os
-                None,               // os_version
-                None,               // odv_path — auto-detects odv_<baseline>.yaml per baseline
-                None,               // osquery — not yet plumbed for generate-all
+                None,                // os_version
+                None,                // odv_path — auto-detects odv_<baseline>.yaml per baseline
+                None,                // osquery
             ) {
                 Ok(()) => {
                     all_result.processed += 1;
@@ -1574,34 +1525,33 @@ pub fn list_available_baselines(mscp_repo_path: PathBuf, output_mode: OutputMode
     let current_branch = get_current_branch(&mscp_repo_path)?;
     let (platform, version) = parse_branch_info(&current_branch);
 
-    let baselines_dir = mscp_repo_path.join("baselines");
+    // `baselines/` holds only `ios/ macos/ visionos/`; listing it directly
+    // finds no YAML. The layout owns the file grammar, and the directory *is* the
+    // platform — no need to sniff it out of the description text.
+    let layout = crate::layout::MscpLayout::detect(&mscp_repo_path)
+        .with_context(|| format!("verifying mSCP layout in {}", mscp_repo_path.display()))?;
+    let baselines_dir = layout.baselines_dir(&mscp_repo_path);
 
-    if !baselines_dir.exists() {
-        anyhow::bail!(
-            "Baselines directory not found at: {}. Is this a valid mSCP repo?",
-            baselines_dir.display()
-        );
-    }
-
-    // Read all .yaml files in baselines directory
-    let mut baselines = Vec::new();
-    for entry in fs::read_dir(&baselines_dir).context(format!(
-        "Failed to read baselines directory: {}",
-        baselines_dir.display()
-    ))? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_file()
-            && path.extension().and_then(|s| s.to_str()) == Some("yaml")
-            && let Some(basename) = path.file_stem().and_then(|s| s.to_str())
-        {
-            // Skip template/example files
-            if !basename.contains("template") && !basename.contains("example") {
-                let description = read_baseline_description(&path);
-                let platform = detect_baseline_platform(&description);
-                baselines.push((basename.to_string(), path, description, platform));
+    // (name, path, description, platform)
+    let mut baselines: Vec<(String, PathBuf, Option<String>, String)> = Vec::new();
+    for (dir, display) in [("macos", "macOS"), ("ios", "iOS"), ("visionos", "visionOS")] {
+        // A platform directory that does not exist in this checkout is not an
+        // error — not every mSCP tree ships every OS.
+        let Ok(entries) = layout.list_baselines(&mscp_repo_path, dir) else {
+            continue;
+        };
+        let mut names: Vec<String> = entries.into_iter().map(|(n, _, _)| n).collect();
+        names.sort();
+        names.dedup();
+        for name in names {
+            if name.contains("template") || name.contains("example") {
+                continue;
             }
+            // One row per (name, platform): the newest version, chosen
+            // numerically by the same code that resolves it for a build.
+            let path = layout.baseline_file(&mscp_repo_path, &name, dir, None)?;
+            let description = read_baseline_description(&path);
+            baselines.push((name, path, description, display.to_string()));
         }
     }
 
@@ -1859,41 +1809,54 @@ pub fn switch_branch(repo_path: &PathBuf, branch_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Parse platform and version from branch name
+/// Describe what an mSCP branch carries, for display beside a baseline list.
+///
+/// Returns `(scope, detail)` where `scope` is the platforms the branch's tree
+/// covers and `detail` names the release or preview. Both are display strings;
+/// nothing routes on them.
+///
+/// **The branch no longer determines the platform.** On mSCP 2.0 every rule
+/// self-describes its platforms and versions, so one tree covers macOS, iOS
+/// and visionOS at once and `--os` / `--os-version` select the target. The
+/// per-OS release branches were 1.x, where the branch WAS the platform. This
+/// function still recognises them so a checkout sitting on one is labelled
+/// rather than called "Unknown" — contour refuses to parse those trees, and
+/// saying which branch is the problem is more useful than silence.
+///
+/// Modern branches must keep working without a code change: `main` today,
+/// `dev_27` yesterday, `dev_28` whenever Apple seeds the next release. Any
+/// `dev_<n>` is read as an OS preview, so a future branch needs nothing here.
+///
 /// Examples:
-/// - "sequoia" -> ("macOS", "Sequoia")
-/// - "`dev_sequoia_stig`" -> ("macOS", "Sequoia")
-/// - "`ios_18`" -> ("iOS", "18")
-/// - "`dev_ios_18`" -> ("iOS", "18")
+/// - `main` -> ("all platforms", "mSCP 2.0")
+/// - `dev_28` -> ("all platforms", "OS 28 preview")
+/// - `sequoia` -> ("macOS", "Sequoia (15.x) — 1.x layout, refused")
 pub(crate) fn parse_branch_info(branch: &str) -> (String, String) {
-    let branch_lower = branch.to_lowercase();
+    const ALL: &str = "all platforms";
+    let b = branch.to_lowercase();
+    let b = b.trim_start_matches("origin/");
 
-    // iOS branches
-    if branch_lower.contains("ios") {
-        // Extract version number
-        if let Some(idx) = branch_lower.rfind("ios") {
-            let after_ios = &branch_lower[idx + 3..];
-            // Look for numbers
-            let version_chars: String = after_ios
-                .chars()
-                .skip_while(|c| *c == '_' || *c == ' ')
-                .take_while(|c| c.is_numeric())
-                .collect();
-
-            if !version_chars.is_empty() {
-                return ("iOS".to_string(), version_chars);
-            }
-        }
-        return ("iOS".to_string(), String::new());
+    // ── mSCP 2.0 branches ────────────────────────────────────────────────
+    // `dev_2.0` is a legacy alias of main, kept because checkouts still sit
+    // on it.
+    if b == "main" || b == "dev_2.0" {
+        return (ALL.to_string(), "mSCP 2.0".to_string());
+    }
+    // `dev_<n>` is the OS-preview line: dev_27 shipped OS 27 rules before
+    // they merged to main, dev_28 will do the same. Matched by shape, so a
+    // future branch needs no change here.
+    if let Some(rest) = b.strip_prefix("dev_")
+        && !rest.is_empty()
+        && rest.chars().all(|c| c.is_ascii_digit())
+    {
+        return (ALL.to_string(), format!("OS {rest} preview"));
     }
 
-    // visionOS branches
-    if branch_lower.contains("vision") {
-        return ("visionOS".to_string(), String::new());
-    }
-
-    // macOS branches - check for codenames
-    let macos_versions = vec![
+    // ── 1.x release branches — recognised, not supported ─────────────────
+    // contour reads the 2.0 schema only; these are labelled so a checkout on
+    // one is diagnosable at a glance.
+    const LEGACY: &str = " — 1.x layout, refused";
+    for (codename, release) in [
         ("tahoe", "Tahoe (26.x)"),
         ("sequoia", "Sequoia (15.x)"),
         ("sonoma", "Sonoma (14.x)"),
@@ -1901,33 +1864,31 @@ pub(crate) fn parse_branch_info(branch: &str) -> (String, String) {
         ("monterey", "Monterey (12.x)"),
         ("big_sur", "Big Sur (11.x)"),
         ("catalina", "Catalina (10.15)"),
-    ];
-
-    for (codename, display_name) in macos_versions {
-        if branch_lower.contains(codename) {
-            return ("macOS".to_string(), display_name.to_string());
+    ] {
+        if b.contains(codename) {
+            return ("macOS".to_string(), format!("{release}{LEGACY}"));
         }
     }
-
-    // Default
-    ("Unknown".to_string(), String::new())
-}
-
-/// Detect baseline platform from description
-fn detect_baseline_platform(description: &Option<String>) -> String {
-    if let Some(desc) = description {
-        let desc_lower = desc.to_lowercase();
-        if desc_lower.contains("macos") || desc_lower.contains("mac os") {
-            return "macOS".to_string();
-        }
-        if desc_lower.contains("ios") || desc_lower.contains("ipados") {
-            return "iOS".to_string();
-        }
-        if desc_lower.contains("visionos") || desc_lower.contains("vision os") {
-            return "visionOS".to_string();
-        }
+    if b.contains("vision") {
+        return ("visionOS".to_string(), format!("1.x branch{LEGACY}"));
     }
-    "Unknown".to_string()
+    if let Some(idx) = b.rfind("ios") {
+        let version: String = b[idx + 3..]
+            .chars()
+            .skip_while(|c| *c == '_' || *c == ' ')
+            .take_while(char::is_ascii_digit)
+            .collect();
+        let detail = if version.is_empty() {
+            format!("1.x branch{LEGACY}")
+        } else {
+            format!("{version}{LEGACY}")
+        };
+        return ("iOS".to_string(), detail);
+    }
+
+    // An unrecognised branch is not an error: an operator may work on a fork
+    // or a topic branch. Name it rather than claiming to know nothing.
+    (ALL.to_string(), format!("branch `{branch}`"))
 }
 
 /// Read baseline description from YAML file
@@ -2016,78 +1977,103 @@ pub fn list_baselines(output: PathBuf, output_mode: OutputMode) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_highest_baseline_version_picks_newest() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let dir = tmp.path().join("baselines/macos");
-        fs::create_dir_all(&dir).unwrap();
-        for f in [
-            "800-53r5_high_macos_15.0.yaml",
-            "800-53r5_high_macos_26.0.yaml",
-            "800-53r5_high_macos_14.0.yaml",
-            "cis_lvl1_macos_26.0.yaml", // different baseline — must be ignored
-        ] {
-            fs::write(dir.join(f), "x").unwrap();
-        }
-        let v = highest_baseline_version(tmp.path(), "800-53r5_high", "macos").unwrap();
-        assert_eq!(v, "26.0");
-    }
-
-    #[test]
-    fn test_highest_baseline_version_errors_when_absent() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(tmp.path().join("baselines/ios")).unwrap();
-        let err = highest_baseline_version(tmp.path(), "800-53r5_high", "ios").unwrap_err();
-        assert!(err.to_string().contains("no mSCP 2.0 baseline files"));
-    }
-
-    /// Build a fake mSCP repo on disk just complete enough for
-    /// `MscpLayout::detect` to classify it. The detector keys on
-    /// flat `rules/*.yaml` (1.x) vs `rules/<os>/` subdirs (2.0).
-    fn fake_repo(tmp: &Path, layout: crate::layout::MscpLayout) -> &Path {
+    /// A 1.x-shaped repo: flat rule YAML with no `platforms:` block.
+    fn fake_1x_repo(tmp: &Path) -> &Path {
         fs::create_dir_all(tmp.join("rules")).unwrap();
-        match layout {
-            crate::layout::MscpLayout::V1x => {
-                // 1.x: flat rule YAML directly under rules/
-                fs::write(
-                    tmp.join("rules/os_sample.yaml"),
-                    "id: os_sample\ntitle: sample\n",
-                )
-                .unwrap();
-                fs::create_dir_all(tmp.join("baselines")).unwrap();
-                fs::write(tmp.join("baselines/cis_lvl1.yaml"), "title: sample\n").unwrap();
-            }
-            crate::layout::MscpLayout::V2x => {
-                // 2.0: the discriminating signal in MscpLayout::detect is
-                // the top-level `platforms` key. Per-OS sub-tree layout
-                // matters for path resolution; the detect probe only
-                // reads the first rule.
-                fs::create_dir_all(tmp.join("rules/macos")).unwrap();
-                fs::write(
-                    tmp.join("rules/macos/os_sample.yaml"),
-                    "id: os_sample\ntitle: sample\nplatforms:\n  macos:\n    enforcement_info: {}\n",
-                )
-                .unwrap();
-                fs::create_dir_all(tmp.join("baselines/macos")).unwrap();
-                fs::write(
-                    tmp.join("baselines/macos/cis_lvl1_macos_26.0.yaml"),
-                    "title: sample\n",
-                )
-                .unwrap();
-            }
-        }
+        fs::write(
+            tmp.join("rules/os_sample.yaml"),
+            "id: os_sample\ntitle: sample\n",
+        )
+        .unwrap();
+        fs::create_dir_all(tmp.join("baselines")).unwrap();
+        fs::write(tmp.join("baselines/cis_lvl1.yaml"), "title: sample\n").unwrap();
         tmp
     }
 
+    /// A 2.0-shaped repo: the discriminating signal in `MscpLayout::detect`
+    /// is the top-level `platforms` key; the probe only reads the first rule.
+    fn fake_2_0_repo(tmp: &Path) -> &Path {
+        fs::create_dir_all(tmp.join("rules/macos")).unwrap();
+        fs::write(
+            tmp.join("rules/macos/os_sample.yaml"),
+            "id: os_sample\ntitle: sample\nplatforms:\n  macos:\n    enforcement_info: {}\n",
+        )
+        .unwrap();
+        fs::create_dir_all(tmp.join("baselines/macos")).unwrap();
+        fs::write(
+            tmp.join("baselines/macos/cis_lvl1_macos_26.0.yaml"),
+            "title: sample\n",
+        )
+        .unwrap();
+        tmp
+    }
+
+    /// `main` is where contour lives. Reporting "Unknown" for the only
+    /// supported branch was the visible tail of 1.x thinking: the branch used
+    /// to BE the platform, and on 2.0 one tree carries them all.
     #[test]
-    fn assert_compatible_layout_bails_when_1x_repo_meets_2_0_image() {
+    fn the_supported_branch_is_not_reported_as_unknown() {
+        let (scope, detail) = parse_branch_info("main");
+        assert_eq!(scope, "all platforms");
+        assert_eq!(detail, "mSCP 2.0");
+        assert!(!detail.contains("Unknown"));
+    }
+
+    /// The next OS preview must work without a code change. dev_27 shipped
+    /// OS 27 rules before they merged; dev_28 will do the same.
+    #[test]
+    fn any_dev_preview_branch_is_recognised_by_shape() {
+        for (branch, expected) in [
+            ("dev_27", "OS 27 preview"),
+            ("dev_28", "OS 28 preview"),
+            ("dev_31", "OS 31 preview"),
+        ] {
+            let (scope, detail) = parse_branch_info(branch);
+            assert_eq!(scope, "all platforms", "{branch}");
+            assert_eq!(detail, expected, "{branch}");
+        }
+    }
+
+    #[test]
+    fn the_legacy_alias_of_main_is_still_understood() {
+        assert_eq!(parse_branch_info("dev_2.0").1, "mSCP 2.0");
+    }
+
+    /// A 1.x release branch is labelled rather than parsed. contour refuses
+    /// those trees, so naming the branch is the diagnosis.
+    #[test]
+    fn a_1_x_release_branch_says_it_is_refused() {
+        let (platform, detail) = parse_branch_info("sequoia");
+        assert_eq!(platform, "macOS");
+        assert!(detail.contains("Sequoia"), "{detail}");
+        assert!(detail.contains("refused"), "{detail}");
+
+        let (platform, detail) = parse_branch_info("ios_18");
+        assert_eq!(platform, "iOS");
+        assert!(
+            detail.contains("18") && detail.contains("refused"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn a_remote_ref_and_an_unknown_branch_are_both_handled() {
+        assert_eq!(parse_branch_info("origin/main").1, "mSCP 2.0");
+        // A fork or topic branch is not an error; name it.
+        let (scope, detail) = parse_branch_info("feature/my-rules");
+        assert_eq!(scope, "all platforms");
+        assert!(detail.contains("feature/my-rules"), "{detail}");
+    }
+
+    #[test]
+    fn container_run_refuses_a_1x_repo_before_starting() {
         let tmp = tempfile::tempdir().unwrap();
-        let repo = fake_repo(tmp.path(), crate::layout::MscpLayout::V1x);
+        let repo = fake_1x_repo(tmp.path());
 
-        let err = assert_compatible_layout(repo, "ghcr.io/brodjieski/mscp_2.0:latest")
-            .expect_err("1.x repo + 2.0 image must bail");
+        let err =
+            assert_2_0_layout(repo).expect_err("1.x repo must bail before the container runs");
 
-        let msg = err.to_string();
+        let msg = format!("{err:#}");
         assert!(
             msg.contains("1.x layout"),
             "error must name the layout: {msg}"
@@ -2096,37 +2082,21 @@ mod tests {
             msg.contains("checkout main"),
             "error must point at the mSCP 2.0 `main` branch: {msg}"
         );
-        assert!(
-            msg.contains("--use-uv") || msg.contains("--use-python3"),
-            "error must offer the non-container fallback: {msg}"
-        );
     }
 
     #[test]
-    fn assert_compatible_layout_passes_when_2_0_repo_meets_2_0_image() {
+    fn container_run_accepts_a_2_0_repo() {
         let tmp = tempfile::tempdir().unwrap();
-        let repo = fake_repo(tmp.path(), crate::layout::MscpLayout::V2x);
-        assert_compatible_layout(repo, "ghcr.io/brodjieski/mscp_2.0:latest")
-            .expect("2.0 repo + 2.0 image must pass");
+        let repo = fake_2_0_repo(tmp.path());
+        assert_2_0_layout(repo).expect("2.0 repo must pass");
     }
 
     #[test]
-    fn assert_compatible_layout_skips_check_when_no_local_repo() {
+    fn container_run_skips_the_check_without_a_local_repo() {
         // Container-only mode (no local rules/ dir) should pass — the
         // image's baked-in source is the only source of truth.
         let tmp = tempfile::tempdir().unwrap();
-        assert_compatible_layout(tmp.path(), "ghcr.io/brodjieski/mscp_2.0:latest")
-            .expect("bare container mode must skip the layout check");
-    }
-
-    #[test]
-    fn assert_compatible_layout_passes_when_image_is_not_2_0() {
-        // A 1.x repo paired with a non-2.0 image is the legacy
-        // compatible combination and must not be blocked.
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = fake_repo(tmp.path(), crate::layout::MscpLayout::V1x);
-        assert_compatible_layout(repo, "ghcr.io/brodjieski/mscp:latest")
-            .expect("1.x repo + non-2.0 image must pass");
+        assert_2_0_layout(tmp.path()).expect("bare container mode must skip the layout check");
     }
 
     #[test]

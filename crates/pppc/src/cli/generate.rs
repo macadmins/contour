@@ -331,8 +331,6 @@ pub fn find_duplicate_bundle_ids(config: &PppcConfig) -> Vec<(String, usize)> {
         .collect()
 }
 
-/// Generate a Fleet fragment directory.
-///
 /// Emit a combined recipe TOML for the PPPC policy.
 ///
 /// `combined = true` collapses every app's TCC entries into ONE
@@ -414,6 +412,8 @@ fn run_recipe(
     Ok(())
 }
 
+/// Generate a Fleet fragment directory.
+///
 /// Produces:
 /// - `<layout.macos_profiles_subdir>/` with mobileconfig files
 /// - `<layout.fleets_dir>/reference-fleet.yml` with profile entries
@@ -500,6 +500,7 @@ fn run_fragment(
             labels_include_any: None,
             labels_include_all: None,
             labels_exclude_any: None,
+            activation: None,
         });
         profiles_written += 1;
     }
@@ -515,8 +516,8 @@ fn run_fragment(
              \n\
              name: pppc-reference\n\
              controls:\n\
-             \x20 macos_settings:\n\
-             \x20   custom_settings:\n",
+             \x20 apple_settings:\n\
+             \x20   configuration_profiles:\n",
         );
 
         for entry in &profile_entries {
@@ -546,6 +547,7 @@ fn run_fragment(
                 reports: Vec::new(),
                 policies: Vec::new(),
                 software: Vec::new(),
+                assets: Vec::new(),
             },
             lib_files: LibFiles {
                 copy: lib_files.clone(),

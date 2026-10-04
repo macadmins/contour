@@ -73,9 +73,10 @@ impl TrainerWorkflow for MscpWorkflow {
                      - DISA STIG (stig)\n\
                      - CMMC (cmmc_lvl1, cmmc_lvl2)\n\n\
                      Each baseline generates mobileconfig profiles and scripts for compliance.\n\n\
-                     Note: Platform (macOS/iOS) is determined by the mSCP branch:\n\
-                     - tahoe = macOS 26.x, sequoia = macOS 15.x, sonoma = macOS 14.x\n\
-                     - ios_18 = iOS 18",
+                     Note: mSCP 2.0 (`main`) covers macOS, iOS and visionOS in one tree;\n\
+                     pick the platform with --os and the release with --os-version.\n\
+                     The per-OS release branches (tahoe, sequoia, ios_18) are the\n\
+                     deprecated 1.x layout and contour refuses them.",
                 )
                 .with_osquery(OsqueryQuery::new(
                     "Check current security settings on your fleet",
@@ -97,7 +98,7 @@ impl TrainerWorkflow for MscpWorkflow {
                 .with_commands(vec![
                     CommandPreview::new(
                         format!(
-                            "contour mscp init --output {} --org {} --fleet --sync",
+                            "contour mscp init --output {} --org {} --fleet-gitops --sync",
                             output_dir.display(),
                             org
                         ),
@@ -244,9 +245,7 @@ impl TrainerWorkflow for MscpWorkflow {
                      - Fleet/Jamf manifests for deployment\n\
                      - Documentation and compliance mapping\n\n\
                      Use --odv to apply custom values, --deterministic-uuids for reproducible builds.\n\n\
-                     mSCP 2.0 support:\n\
-                     - --mscp-version (auto / 1.x / 2.0) selects the repository layout;\n\
-                       2.0 is the default layout, and auto detects it for you\n\
+                     mSCP 2.0 targeting:\n\
                      - --os (macos / ios / visionos) picks the target platform\n\
                      - --os-version targets a specific OS release",
                 )

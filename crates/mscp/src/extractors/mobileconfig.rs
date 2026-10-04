@@ -128,7 +128,7 @@ fn plist_to_json(plist: &Value) -> serde_json::Value {
             serde_json::Value::Object(map)
         }
         Value::Data(data) => {
-            // Convert data to base64 string
+            // Convert data to a lowercase hex string
             serde_json::Value::String(base64_encode(data))
         }
         Value::Date(date) => serde_json::Value::String(format!("{date:?}")),
@@ -136,7 +136,7 @@ fn plist_to_json(plist: &Value) -> serde_json::Value {
     }
 }
 
-/// Simple base64 encoding
+/// Lowercase hex encoding (name is historical; not base64)
 #[allow(dead_code, reason = "reserved for future use")]
 fn base64_encode(data: &[u8]) -> String {
     use std::fmt::Write;

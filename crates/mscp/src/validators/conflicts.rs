@@ -1,4 +1,5 @@
-// Planned feature: Conflict detection across baselines
+// Conflict detection. `detect_internal_conflicts` / `format_report` run in
+// `mscp process`; cross-baseline `detect_conflicts` is not wired up yet.
 #![allow(dead_code, reason = "module under development")]
 
 use crate::models::MscpBaseline;

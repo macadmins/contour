@@ -1,6 +1,7 @@
-# Mould PPPC Standard Operating Procedures
+# contour pppc — Standard Operating Procedures
 
-This document provides step-by-step procedures for generating PPPC (Privacy Preferences Policy Control) profiles using mould.
+Step-by-step procedures for generating PPPC (Privacy Preferences Policy
+Control) profiles with `contour pppc`.
 
 ---
 
@@ -9,51 +10,54 @@ This document provides step-by-step procedures for generating PPPC (Privacy Pref
 1. [Overview](#overview)
 2. [Prerequisites](#prerequisites)
 3. [Supported Services](#supported-services)
-4. [SOP 1: One-Shot PPPC Generation](#sop-1-one-shot-pppc-generation)
+4. [SOP 1: Quick Start (Scan, Grant, Generate)](#sop-1-quick-start-scan-grant-generate)
 5. [SOP 2: GitOps Workflow (Scan, Edit, Generate)](#sop-2-gitops-workflow-scan-edit-generate)
-6. [SOP 3: Interactive PPPC Configuration](#sop-3-interactive-pppc-configuration)
+6. [SOP 3: Interactive Scan](#sop-3-interactive-scan)
 7. [SOP 4: Configure Command (Post-Scan Walkthrough)](#sop-4-configure-command-post-scan-walkthrough)
-8. [SOP 5: CSV-Based App Selection](#sop-5-csv-based-app-selection)
-9. [SOP 6: Path-Based Binaries (Non-.app Executables)](#sop-6-path-based-binaries-non-app-executables)
-10. [SOP 7: Two-Machine Workflow (Test Computer to Admin Workstation)](#sop-7-two-machine-workflow-test-computer-to-admin-workstation)
-11. [SOP 8: Generating Notification Profiles](#sop-8-generating-notification-profiles)
-12. [SOP 9: Generating Service Management Profiles](#sop-9-generating-service-management-profiles)
-13. [SOP 10: Per-App vs Combined Profile Generation](#sop-10-per-app-vs-combined-profile-generation)
-14. [Configuration Reference](#configuration-reference)
-15. [pppc.toml Format Reference](#pppctoml-format-reference)
-16. [Troubleshooting](#troubleshooting)
+8. [SOP 5: Batch Command (Non-Interactive Edits)](#sop-5-batch-command-non-interactive-edits)
+9. [SOP 6: CSV-Based App Selection](#sop-6-csv-based-app-selection)
+10. [SOP 7: Path-Based Binaries (Non-.app Executables)](#sop-7-path-based-binaries-non-app-executables)
+11. [SOP 8: Two-Machine Workflow (Test Computer to Admin Workstation)](#sop-8-two-machine-workflow-test-computer-to-admin-workstation)
+12. [SOP 9: Per-App vs Combined Profile Generation](#sop-9-per-app-vs-combined-profile-generation)
+13. [SOP 10: Fleet GitOps Fragments and Recipes](#sop-10-fleet-gitops-fragments-and-recipes)
+14. [Notifications and Service Management](#notifications-and-service-management)
+15. [Command Reference](#command-reference)
+16. [pppc.toml Format Reference](#pppctoml-format-reference)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Overview
 
-PPPC (Privacy Preferences Policy Control) profiles allow MDM administrators to pre-authorize applications for macOS privacy permissions (TCC). This eliminates user prompts for permissions like Full Disk Access, Camera, Microphone, Screen Recording, and more.
+PPPC profiles let MDM administrators pre-authorize applications for macOS
+privacy permissions (TCC), removing user prompts for Full Disk Access,
+Screen Recording, Accessibility and more.
 
 ### Key Capabilities
 
-- Scans `.app` bundles and extracts code requirements automatically
-- Supports path-based identifiers for non-bundled binaries (e.g., Munki, osquery)
-- All 24 Apple TCC services supported
-- Per-app individual profiles (default) or combined profiles
-- Notification and service management profiles
-- Interactive walkthrough for configuring services
-- Two-machine workflow: scan on test computers, generate on admin workstation
+- Scans `.app` bundles and signed bare binaries, extracting code requirements automatically
+- Path-based identifiers for non-bundled binaries (e.g. Munki, osquery)
+- All 24 Apple TCC services
+- Per-app profiles (default) or one combined profile
+- Interactive (`configure`) and non-interactive (`batch`) service editing
+- Fleet GitOps fragment and recipe output
 
 ### Workflows
 
 | Workflow | Commands | Use Case |
 |----------|----------|----------|
-| **One-Shot** | `mould --org ...` | Quick generation, simple deployments |
-| **GitOps** | `mould scan` + `mould generate` | Version-controlled, auditable, team workflows |
-| **Two-Machine** | `mould-scan.sh` + `mould generate` | Scan test fleet, generate profiles centrally |
+| **Quick start** | `contour pppc scan` + `batch` + `generate` | Grant a service to a set of apps without hand-editing |
+| **GitOps** | `contour pppc scan` + edit + `generate` | Version-controlled, reviewed policy |
+| **Two-machine** | `scan` on a test computer, `generate` on the admin workstation | Scan a reference fleet, generate centrally |
 
-### Profile Types Generated
+### Profile Type Generated
 
 | Profile Type | Payload Type | Purpose |
 |--------------|--------------|---------|
 | **PPPC/TCC** | `com.apple.TCC.configuration-profile-policy` | Privacy permission grants |
-| **Notifications** | `com.apple.notificationsettings` | Notification settings |
-| **Service Management** | `com.apple.servicemanagement` | Managed login items |
+
+Notification and service-management profiles come from `contour notifications`
+and `contour btm` — see [Notifications and Service Management](#notifications-and-service-management).
 
 ---
 
@@ -61,69 +65,75 @@ PPPC (Privacy Preferences Policy Control) profiles allow MDM administrators to p
 
 ### Required Tools
 
-- macOS (for code requirement extraction via `codesign`)
-- `mould` binary (part of the Contour CLI toolkit)
+- macOS (code requirements are read from the code signature)
+- `contour` installed (`contour --version`)
 - Signed application bundles (.app) or signed binaries
 
 ### Permissions
 
 - Read access to application bundles / binaries
-- Write access to output directory
+- Write access to the output directory
 
-### Inputs Required
+### Inputs
 
 | Input | Description | Source |
 |-------|-------------|--------|
-| Application paths | Directory, .app bundles, or binary paths | Local filesystem |
-| Organization ID | Identifier prefix (e.g., `com.yourcompany`) | Your organization |
+| Application paths | Directories, .app bundles or binary paths | Local filesystem |
+| Organization ID | Identifier prefix (e.g. `com.yourcompany`) | Your organization, or `.contour/config.toml` |
 | (Optional) CSV file | App names and paths | Manual or exported |
 
 ---
 
 ## Supported Services
 
-Mould supports all 24 Apple TCC services:
+`contour pppc` supports all 24 Apple TCC services. The CLI name is what
+`batch` takes and what `pppc.toml` stores:
 
-| CLI Name | TOML Name | Apple Key | Display Name |
-|----------|-----------|-----------|--------------|
-| `fda` | `fda` | `SystemPolicyAllFiles` | Full Disk Access |
-| `documents` | `documents` | `SystemPolicyDocumentsFolder` | Documents Folder |
-| `desktop` | `desktop` | `SystemPolicyDesktopFolder` | Desktop Folder |
-| `downloads` | `downloads` | `SystemPolicyDownloadsFolder` | Downloads Folder |
-| `network-volumes` | `network-volumes` | `SystemPolicyNetworkVolumes` | Network Volumes |
-| `removable-volumes` | `removable-volumes` | `SystemPolicyRemovableVolumes` | Removable Volumes |
-| `sysadmin-files` | `sysadmin-files` | `SystemPolicySysAdminFiles` | SysAdmin Files |
-| `app-management` | `app-management` | `SystemPolicyAppBundles` | App Management (macOS 13+) |
-| `app-data` | `app-data` | `SystemPolicyAppData` | App Data Access (macOS 14+) |
-| `camera` | `camera` | `Camera` | Camera |
-| `microphone` | `microphone` | `Microphone` | Microphone |
-| `screen-capture` | `screen-capture` | `ScreenCapture` | Screen Recording |
-| `accessibility` | `accessibility` | `Accessibility` | Accessibility |
-| `contacts` | `contacts` | `AddressBook` | Contacts |
-| `calendar` | `calendar` | `Calendar` | Calendar |
-| `photos` | `photos` | `Photos` | Photos |
-| `reminders` | `reminders` | `Reminders` | Reminders |
-| `apple-events` | `apple-events` | `AppleEvents` | Apple Events / Automation |
-| `post-event` | `post-event` | `PostEvent` | CoreGraphics Event Posting |
-| `listen-event` | `listen-event` | `ListenEvent` | CoreGraphics Event Listening |
-| `speech-recognition` | `speech-recognition` | `SpeechRecognition` | Speech Recognition |
-| `media-library` | `media-library` | `MediaLibrary` | Apple Music / Media Library |
-| `file-provider` | `file-provider` | `FileProviderPresence` | File Provider |
-| `bluetooth` | `bluetooth` | `BluetoothAlways` | Bluetooth (macOS 11+) |
+| CLI / TOML Name | Apple Key | Display Name |
+|-----------------|-----------|--------------|
+| `fda` | `SystemPolicyAllFiles` | Full Disk Access |
+| `documents` | `SystemPolicyDocumentsFolder` | Documents Folder |
+| `desktop` | `SystemPolicyDesktopFolder` | Desktop Folder |
+| `downloads` | `SystemPolicyDownloadsFolder` | Downloads Folder |
+| `network-volumes` | `SystemPolicyNetworkVolumes` | Network Volumes |
+| `removable-volumes` | `SystemPolicyRemovableVolumes` | Removable Volumes |
+| `sysadmin-files` | `SystemPolicySysAdminFiles` | SysAdmin Files |
+| `app-management` | `SystemPolicyAppBundles` | App Management (macOS 13+) |
+| `app-data` | `SystemPolicyAppData` | App Data Access (macOS 14+) |
+| `camera` | `Camera` | Camera |
+| `microphone` | `Microphone` | Microphone |
+| `screen-capture` | `ScreenCapture` | Screen Recording |
+| `accessibility` | `Accessibility` | Accessibility |
+| `contacts` | `AddressBook` | Contacts |
+| `calendar` | `Calendar` | Calendar |
+| `photos` | `Photos` | Photos |
+| `reminders` | `Reminders` | Reminders |
+| `apple-events` | `AppleEvents` | Apple Events / Automation |
+| `post-event` | `PostEvent` | CoreGraphics Event Posting |
+| `listen-event` | `ListenEvent` | CoreGraphics Event Listening |
+| `speech-recognition` | `SpeechRecognition` | Speech Recognition |
+| `media-library` | `MediaLibrary` | Apple Music / Media Library |
+| `file-provider` | `FileProviderPresence` | File Provider |
+| `bluetooth` | `BluetoothAlways` | Bluetooth (macOS 11+) |
 
 ### TCC Authorization Behavior (macOS 11+)
 
-Mould uses the modern `Authorization` string key instead of the legacy `Allowed` boolean, per the `com.apple.TCC.configuration-profile-policy` Apple spec. Not all services can be granted via profile — the behavior depends on the service category:
+Profiles use the `Authorization` string key, not the legacy `Allowed`
+boolean, per the `com.apple.TCC.configuration-profile-policy` spec. What a
+profile can do depends on the service:
 
 | Category | Services | Authorization Value | Notes |
 |----------|----------|-------------------|-------|
 | **Allowable** | SystemPolicyAllFiles, Accessibility, AddressBook, Calendar, Photos, SystemPolicyDocumentsFolder, SystemPolicyDesktopFolder, SystemPolicyDownloadsFolder, SystemPolicyNetworkVolumes, SystemPolicyRemovableVolumes, SystemPolicySysAdminFiles, SystemPolicyAppBundles, SystemPolicyAppData, AppleEvents, PostEvent, SpeechRecognition, MediaLibrary, FileProviderPresence, BluetoothAlways, Reminders | `Allow` | Profile can grant access |
-| **Standard-user-settable** | ScreenCapture, ListenEvent | `AllowStandardUserToSetSystemService` | Profile can't directly grant access; it can allow standard users to toggle |
+| **Standard-user-settable** | ScreenCapture, ListenEvent | `AllowStandardUserToSetSystemService` | Profile can't grant access; it lets standard users toggle it |
 | **Deny-only** | Camera, Microphone | `Deny` | Profile can only deny access, not grant it |
 
-When generating profiles, mould automatically selects the correct authorization value for each service. If Camera or Microphone are included, a warning is shown during configuration because the resulting profile will deny (not grant) access.
+`generate` picks the right value per service. Camera or Microphone produce a
+`Deny` entry; `configure` warns about this when you select them.
 
-### Service Aliases (CLI only)
+### Service Aliases
+
+`batch` also accepts these aliases:
 
 | Alias | Resolves To |
 |-------|-------------|
@@ -137,76 +147,59 @@ When generating profiles, mould automatically selects the correct authorization 
 
 ---
 
-## SOP 1: One-Shot PPPC Generation
+## SOP 1: Quick Start (Scan, Grant, Generate)
 
-**Use Case**: Quick PPPC profile generation without intermediate files.
+**Use Case**: Grant services to a set of apps without editing the TOML by hand.
+There is no single-command mode: `scan` writes `pppc.toml`, `batch` sets
+services in it, and `generate` turns it into profiles.
 
-### Basic Usage
+### Grant Full Disk Access to One App
 
 ```bash
-# Grant Full Disk Access to a single app
-mould \
-  --org com.yourcompany \
-  --service fda \
-  --path /Applications/YourApp.app \
-  --output yourapp-pppc.mobileconfig
+contour pppc scan --path /Applications/YourApp.app --org com.yourcompany -o yourapp.toml
+contour pppc batch yourapp.toml --add-services fda
+contour pppc generate yourapp.toml -o ./profiles/
 ```
 
-### Scanning a Directory
+### Grant a Service to Every App in a Directory
 
 ```bash
-# Scan /Applications and grant FDA to all signed apps
-mould \
-  --org com.yourcompany \
-  --service fda \
-  --path /Applications \
-  --output all-apps-fda.mobileconfig
+contour pppc scan --path /Applications --org com.yourcompany -o pppc.toml
+contour pppc batch pppc.toml --add-services fda
+contour pppc generate pppc.toml -o ./profiles/
 ```
 
-### Multiple Services
+### Multiple Services, Selected Apps
 
 ```bash
-# Grant camera and microphone to Zoom
-mould \
-  --org com.yourcompany \
-  --service camera \
-  --service microphone \
-  --path "/Applications/zoom.us.app" \
-  --output zoom-pppc.mobileconfig
+# --apps matches app names, case-insensitive substring, comma-separated
+contour pppc batch pppc.toml --add-services screen-capture,accessibility --apps "Zoom,Slack"
 ```
 
 ### Multiple Paths
 
 ```bash
-# Scan multiple directories
-mould \
-  --org com.yourcompany \
-  --service fda \
+# Repeat --path, or give a comma-separated list
+contour pppc scan \
   --path /Applications \
   --path ~/Applications \
   --path /opt/tools \
-  --output company-pppc.mobileconfig
+  --org com.yourcompany \
+  -o pppc.toml
 ```
 
 ### Dry Run (Preview)
 
 ```bash
-# Preview what would be generated without writing
-mould \
-  --org com.yourcompany \
-  --service fda \
-  --path /Applications \
-  --dry-run
+contour pppc batch pppc.toml --add-services fda --dry-run   # preview the TOML change
+contour pppc generate pppc.toml --dry-run                   # preview the profiles
 ```
 
-### Validate Output
+### Validate
 
 ```bash
-# Validate the generated profile
-plutil -lint yourapp-pppc.mobileconfig
-
-# View profile contents
-plutil -p yourapp-pppc.mobileconfig
+contour pppc validate pppc.toml            # the policy file
+plutil -lint ./profiles/*.mobileconfig     # the generated profiles
 ```
 
 ---
@@ -219,62 +212,52 @@ plutil -p yourapp-pppc.mobileconfig
 
 ```
 Step 1: Scan
-  mould scan --path /Applications --org com.example --output pppc.toml
-  - Extracts bundle IDs, code requirements, Team IDs
+  contour pppc scan --path /Applications --org com.example -o pppc.toml
+  - Extracts bundle IDs and code requirements
            |
            v
 Step 2: Edit (Human Review)
-  Edit pppc.toml:
-  - services = ["fda", "camera"]
-  - notifications = true
-  - service_management = true
+  Set services = ["fda", "screen-capture"] per app
+  (by hand, `contour pppc configure`, or `contour pppc batch`)
   Commit to version control
            |
            v
 Step 3: Generate
-  mould generate pppc.toml --output ./profiles/
-  - Per-app TCC profiles (default)
-  - Per-app notification profiles
-  - Per-app service management profiles
+  contour pppc generate pppc.toml -o ./profiles/
+  - One TCC profile per app (default)
            |
            v
 Step 4: Deploy
-  Upload profiles to MDM (Jamf, Kandji, Mosyle, Fleet, etc.)
+  Upload profiles to MDM (Fleet, Jamf, Kandji, Mosyle, ...)
 ```
 
 ### Step 1: Scan Applications
 
 ```bash
-mould scan \
+contour pppc scan \
   --path /Applications \
   --org com.yourcompany \
-  --output pppc.toml
+  -o pppc.toml
 ```
 
 **Output:**
 ```
-Scanning applications for PPPC policy generation...
+ℹ Scanning applications for PPPC policy generation...
   Organization: com.yourcompany
   Paths: /Applications
   Apps found: 67
 
-! Skipped 4 app(s):
-  > Empty/stub bundle (no Contents directory) (4)
-    . Excel
-    . Microsoft PowerPoint
-    . Microsoft Teams
-    . Slack
-
 ✓ PPPC policy written to pppc.toml
 
-Next steps:
+ℹ Next steps:
   1. Edit pppc.toml to configure services per app
-  2. Run: mould generate pppc.toml --output pppc.mobileconfig
+  2. Run: contour pppc generate pppc.toml --output pppc.mobileconfig
 ```
 
-### Step 2: Edit pppc.toml
+Apps that can't be read are listed as skipped, with the reason (see
+[Troubleshooting](#problem-skipped-apps-emptystub-bundle)).
 
-Open the file and configure services for each app:
+### Step 2: Edit pppc.toml
 
 ```bash
 $EDITOR pppc.toml
@@ -292,47 +275,43 @@ bundle_id = "com.google.Chrome"
 code_requirement = 'identifier "com.google.Chrome" and anchor apple generic...'
 path = "/Applications/Google Chrome.app"
 services = ["fda", "screen-capture"]
-notifications = false
-service_management = false
-team_id = "EQHXZ8M8AV"
 
 [[apps]]
 name = "Zoom"
 bundle_id = "us.zoom.xos"
 code_requirement = 'identifier "us.zoom.xos" and anchor apple generic...'
 path = "/Applications/zoom.us.app"
-services = ["camera", "microphone", "screen-capture"]
-notifications = true
-service_management = true
-team_id = "BJ4HAAB9B3"
+services = ["screen-capture", "accessibility"]
+```
+
+Check the edit before generating:
+
+```bash
+contour pppc validate pppc.toml
 ```
 
 ### Step 3: Generate Profiles
 
 ```bash
-mould generate pppc.toml --output ./profiles/
+contour pppc generate pppc.toml -o ./profiles/
 ```
 
 **Output:**
 ```
-Loading PPPC policy from pppc.toml...
+ℹ Loading PPPC policy from pppc.toml...
   Organization: com.yourcompany
   Apps in policy: 2
   Mode: per-app (individual profiles)
   Apps with TCC services: 2
-  Total TCC entries: 5
-  Apps with notifications: 1
-  Apps with service management: 1
+  Total TCC entries: 4
 
-✓ Generated 4 profile(s)
+✓ Generated 2 profile(s)
 
-Profiles created:
+ℹ Profiles created:
     Google Chrome PPPC: ./profiles/google-chrome-pppc.mobileconfig
     Zoom PPPC: ./profiles/zoom-pppc.mobileconfig
-    Zoom Notifications: ./profiles/zoom-notifications.mobileconfig
-    Zoom Service Management: ./profiles/zoom-service-management.mobileconfig
 
-Next steps:
+ℹ Next steps:
   1. Validate: plutil -lint <profile>.mobileconfig
   2. Deploy via MDM to grant permissions automatically
 ```
@@ -340,9 +319,7 @@ Next steps:
 ### Step 4: Validate and Deploy
 
 ```bash
-# Validate all generated profiles
 for f in ./profiles/*.mobileconfig; do
-  echo "Validating: $f"
   plutil -lint "$f"
 done
 
@@ -350,135 +327,83 @@ done
 cp ./profiles/*.mobileconfig /path/to/fleet-repo/profiles/
 ```
 
+To compare two versions of a policy file before committing:
+
+```bash
+contour pppc diff pppc.toml pppc-proposed.toml
+```
+
 ---
 
-## SOP 3: Interactive PPPC Configuration
+## SOP 3: Interactive Scan
 
-**Use Case**: Guided selection of apps and permissions during scan.
-
-### Interactive Scan
+**Use Case**: Pick apps and permissions during the scan.
 
 ```bash
-mould scan \
+contour pppc scan \
   --path /Applications \
   --org com.yourcompany \
   --interactive \
-  --output pppc.toml
+  -o pppc.toml
 ```
 
-**Interactive Flow:**
-
-```
-PPPC Scan - Application Selection
-==================================================
-
-Select which applications to include in your PPPC policy.
-You can configure services now or edit the TOML file later.
-
-? Select applications to include:
-  [ ] 1Password for Safari (com.1password.safari)
-  [x] Google Chrome (com.google.Chrome)
-  [x] Slack (com.tinyspeck.slackmacgap)
-  [x] zoom.us (us.zoom.xos)
-  [ ] Visual Studio Code (com.microsoft.VSCode)
-  ...
-
-[Space to select, Enter to confirm]
-
-? Configure services for each app now? (Y/n)
-
-Configuring: Google Chrome
-  Bundle ID: com.google.Chrome
-? Select permissions for Google Chrome:
-  [x] Full Disk Access
-  [ ] Documents Folder
-  [ ] Desktop Folder
-  [ ] Downloads Folder
-  ...
-  [ ] Camera
-  [ ] Microphone
-  [x] Screen Recording
-  [ ] Accessibility
-
-  ✓ Selected 2 permission(s)
-
-? Enable notifications profile for Google Chrome? No
-? Enable service management (background tasks) for Google Chrome? No
-
-Configuring: Zoom
-  ...
-```
-
-### Interactive One-Shot
-
-```bash
-mould \
-  --org com.yourcompany \
-  --path /Applications \
-  --interactive \
-  --output company-pppc.mobileconfig
-```
+The scan lists the apps it found for selection, then offers to configure
+services for each selected app; anything left unset can be edited in the
+TOML afterwards.
 
 ---
 
 ## SOP 4: Configure Command (Post-Scan Walkthrough)
 
-**Use Case**: Interactively configure services in an existing pppc.toml after scanning.
-
-This is useful when you scan without `--interactive` and want to toggle services later, or when editing a TOML transferred from another machine.
-
-### Usage
+**Use Case**: Interactively set services in an existing pppc.toml — after a
+non-interactive scan, or on a TOML transferred from another machine.
 
 ```bash
-mould configure pppc.toml
+contour pppc configure pppc.toml
 ```
 
-**Interactive Flow:**
+`configure`:
+- Walks the apps one at a time, showing each app's current services
+- Pre-selects the services already enabled
+- Warns when Camera or Microphone are chosen (the profile will deny, not grant)
+- Saves the TOML in place
 
+Resume an interrupted session without revisiting finished apps:
+
+```bash
+contour pppc configure pppc.toml --skip-configured
 ```
-Loading PPPC policy from pppc.toml...
-Apps: 63 | Org: com.example
-
-App 1/63: Google Chrome
-  Bundle ID: com.google.Chrome
-  Services: (none)
-  Notifications: false
-  Service Management: false
-
-? Configure Google Chrome? (y/N) y
-
-? Select services for Google Chrome:
-  [x] Full Disk Access
-  [ ] Documents Folder
-  ...
-  [ ] Screen Recording
-
-? Enable notifications for Google Chrome? No
-? Enable service management for Google Chrome? No
-
-App 2/63: Slack
-  Bundle ID: com.tinyspeck.slackmacgap
-  Services: (none)
-  ...
-
-? Configure Slack? (y/N) n
-
-...
-
-✓ Configuration saved to pppc.toml
-```
-
-The configure command:
-- Shows current state for each app (services, notifications, service_management)
-- Defaults to "No" for the "Configure?" prompt — press Enter to skip unchanged apps
-- Pre-selects currently enabled services in the multi-select
-- Saves the updated TOML in place
 
 ---
 
-## SOP 5: CSV-Based App Selection
+## SOP 5: Batch Command (Non-Interactive Edits)
 
-**Use Case**: Scan specific apps from a predefined list, including custom paths.
+**Use Case**: Change services for many apps in one command — scripts, CI, or
+large inventories.
+
+```bash
+# Add services to every app
+contour pppc batch pppc.toml --add-services desktop,documents,downloads
+
+# Add services to selected apps only
+contour pppc batch pppc.toml --add-services fda --apps "Slack,Chrome"
+
+# Replace an app's services entirely
+contour pppc batch pppc.toml --set-services fda,camera --apps "Zoom"
+
+# Remove a service everywhere, previewing first
+contour pppc batch pppc.toml --remove-services downloads --dry-run
+```
+
+`--add-services` never duplicates a service already present.
+`--set-services` cannot be combined with `--add-services` or
+`--remove-services`. Without `--apps`, every app in the file is updated.
+
+---
+
+## SOP 6: CSV-Based App Selection
+
+**Use Case**: Scan a predefined list of apps, including custom locations.
 
 ### CSV Format
 
@@ -493,61 +418,72 @@ name,path
 ### Scan from CSV
 
 ```bash
-mould scan \
+contour pppc scan \
   --from-csv apps.csv \
   --org com.yourcompany \
-  --output pppc.toml
+  -o pppc.toml
 ```
 
 ---
 
-## SOP 6: Path-Based Binaries (Non-.app Executables)
+## SOP 7: Path-Based Binaries (Non-.app Executables)
 
-**Use Case**: Generate PPPC profiles for binaries that are not `.app` bundles (e.g., Munki, osquery, command-line daemons).
+**Use Case**: PPPC for signed binaries that are not `.app` bundles (Munki,
+osquery, command-line agents).
 
 ### Background
 
-Some tools install as standalone binaries rather than `.app` bundles. Examples:
+Some tools install as standalone binaries:
 - `/usr/local/munki/managedsoftwareupdate`
 - `/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryd`
 - `/usr/local/bin/some-agent`
 
-These require `IdentifierType: path` instead of `IdentifierType: bundleID` in the TCC profile.
+These need `IdentifierType: path` instead of `IdentifierType: bundleID` in
+the TCC profile.
 
-### Manual TOML Entry
+### Scan the Binary
 
-Add a path-based entry directly to pppc.toml:
+`scan` accepts a binary path like any other path, and writes a path-based entry:
+
+```bash
+contour pppc scan \
+  --path /Applications \
+  --path /usr/local/munki/managedsoftwareupdate \
+  --org com.yourcompany \
+  -o pppc.toml
+```
+
+The binary's entry:
 
 ```toml
 [[apps]]
 name = "managedsoftwareupdate"
-bundle_id = "/usr/local/munki/managedsoftwareupdate"
 code_requirement = 'identifier managedsoftwareupdate and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = T4SK8ZXCXG'
 identifier_type = "path"
-services = ["fda"]
-notifications = false
-service_management = false
-team_id = "T4SK8ZXCXG"
+path = "/usr/local/munki/managedsoftwareupdate"
+services = []
 ```
 
 Key differences from app bundle entries:
-- `bundle_id` contains the full filesystem path, not a reverse-DNS identifier
-- `identifier_type = "path"` must be set (defaults to `"bundleID"` if omitted)
-- `code_requirement` uses a bare identifier (no quotes) when the binary isn't a bundle
+- `identifier_type = "path"` (defaults to `"bundleID"` when omitted)
+- `path` carries the identifier; there is no `bundle_id`
+- `code_requirement` may use a bare identifier (no quotes) when the binary isn't a bundle
 
-### Extracting Code Requirements from Binaries
+Then grant services as for any app:
 
 ```bash
-# Get code requirement
-codesign -d -r - /usr/local/munki/managedsoftwareupdate
+contour pppc batch pppc.toml --add-services fda --apps managedsoftwareupdate
+```
 
-# Get Team ID
-codesign -dv /usr/local/munki/managedsoftwareupdate 2>&1 | grep TeamIdentifier
+### Entering a Binary by Hand
+
+To write the entry yourself, read the code requirement from the signature:
+
+```bash
+codesign -d -r - /usr/local/munki/managedsoftwareupdate
 ```
 
 ### Generated Profile Output
-
-The resulting mobileconfig uses `IdentifierType: path`:
 
 ```xml
 <dict>
@@ -564,19 +500,13 @@ The resulting mobileconfig uses `IdentifierType: path`:
 </dict>
 ```
 
-### Using mould-scan.sh for Automatic Binary Scanning
-
-The `mould-scan.sh` script (see [SOP 7](#sop-7-two-machine-workflow-test-computer-to-admin-workstation)) automates binary scanning with the `--binaries` flag.
-
 ---
 
-## SOP 7: Two-Machine Workflow (Test Computer to Admin Workstation)
+## SOP 8: Two-Machine Workflow (Test Computer to Admin Workstation)
 
-**Use Case**: Scan applications on test/reference computers, then transfer the TOML inventory to a central admin workstation to generate and deploy profiles.
-
-This is the recommended workflow for fleet management where you:
-1. Have one or more reference machines with the standard app set installed
-2. Want to centrally manage profile generation and MDM deployment
+**Use Case**: Scan the standard app set on test or reference computers, then
+transfer the TOML to a central admin workstation to configure, generate and
+deploy.
 
 ### Workflow Overview
 
@@ -584,320 +514,121 @@ This is the recommended workflow for fleet management where you:
 TEST COMPUTER                          ADMIN WORKSTATION
 =============                          =================
 
-1. Run mould-scan.sh                   3. Receive pppc.toml
-   - Scans /Applications               4. mould configure pppc.toml
-   - Adds path-based binaries              (interactive service selection)
-   - Records machine metadata           5. mould generate pppc.toml
-                                            --output ./profiles/
-2. Transfer ./mould-export/            6. Upload profiles to MDM
-   to admin workstation
+1. contour pppc scan                   3. Receive pppc-<host>.toml
+   - Scans /Applications               4. contour pppc configure (or batch)
+   - Adds path-based binaries          5. contour pppc generate
+                                          -o ./profiles/
+2. Transfer pppc-<host>.toml           6. Upload profiles to MDM
 ```
 
-### Script Location
+Both machines run `contour`; install the same pkg on the test computer.
 
-```
-scripts/mould-scan.sh
-```
-
-### Step 1: Run the Scan Script on a Test Computer
-
-#### Basic Scan
+### Step 1: Scan on the Test Computer
 
 ```bash
-./scripts/mould-scan.sh --org com.yourcompany
-```
-
-This scans `/Applications`, writes to `./mould-export/pppc.toml`.
-
-#### Scan with Path-Based Binaries
-
-```bash
-./scripts/mould-scan.sh \
+contour pppc scan \
+  --path /Applications \
+  --path /Applications/Utilities \
+  --path /usr/local/munki/managedsoftwareupdate \
   --org com.yourcompany \
-  --binaries "/usr/local/munki/managedsoftwareupdate"
+  -o "pppc-$(hostname -s).toml"
 ```
 
-The script:
-- Runs `mould scan` for `.app` bundles in `/Applications`
-- Extracts code requirements from each specified binary via `codesign`
-- Appends path-based entries with `identifier_type = "path"` to the TOML
+Add `--interactive` to pick apps while scanning. Naming the file after the
+host keeps scans from several machines apart.
 
-#### Scan Multiple Directories
-
-```bash
-./scripts/mould-scan.sh \
-  --org com.yourcompany \
-  --scan-paths "/Applications,/Applications/Utilities,/opt/tools" \
-  --binaries "/usr/local/munki/managedsoftwareupdate,/usr/local/bin/osqueryd"
-```
-
-#### Include Hostname in Filename
-
-Useful when scanning multiple machines:
-
-```bash
-./scripts/mould-scan.sh \
-  --org com.yourcompany \
-  --hostname
-```
-
-Output: `./mould-export/pppc-macbook-pro-01.toml`
-
-#### Interactive Mode
-
-```bash
-./scripts/mould-scan.sh \
-  --org com.yourcompany \
-  --interactive \
-  --hostname
-```
-
-### Script Options Reference
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--org <id>` | Organization identifier (required) | - |
-| `--output-dir <dir>` | Output directory | `./mould-export` |
-| `--scan-paths <paths>` | Comma-separated directories to scan | `/Applications` |
-| `--binaries <paths>` | Comma-separated non-bundled binary paths | - |
-| `--interactive` | Enable interactive app/service selection | off |
-| `--hostname` | Include hostname in output filename | off |
-
-### Output File
-
-The generated TOML includes machine metadata as comments:
-
-```toml
-# PPPC Policy Definitions
-# Generated by: mould-scan.sh
-# Hostname: macbook-pro-01
-# Serial: C02X12345
-# macOS: 15.2
-# Scan date: 2025-01-15T10:30:00Z
-#
-# Transfer this file to your admin workstation and run:
-#   mould configure pppc-macbook-pro-01.toml
-#   mould generate pppc-macbook-pro-01.toml --output ./profiles/
-
-[config]
-org = "com.yourcompany"
-
-[[apps]]
-name = "Google Chrome"
-bundle_id = "com.google.Chrome"
-code_requirement = 'identifier "com.google.Chrome" and anchor apple generic...'
-path = "/Applications/Google Chrome.app"
-services = []
-notifications = false
-service_management = false
-team_id = "EQHXZ8M8AV"
-
-[[apps]]
-name = "managedsoftwareupdate"
-bundle_id = "/usr/local/munki/managedsoftwareupdate"
-code_requirement = 'identifier managedsoftwareupdate and anchor apple generic...'
-identifier_type = "path"
-services = []
-notifications = false
-service_management = false
-team_id = "T4SK8ZXCXG"
-```
-
-### Step 2: Transfer to Admin Workstation
+### Step 2: Transfer to the Admin Workstation
 
 ```bash
 # SCP
-scp -r ./mould-export/ admin@workstation:/path/to/profiles/
+scp "pppc-$(hostname -s).toml" admin@workstation:/path/to/pppc/
 
 # rsync
-rsync -av ./mould-export/ admin@workstation:/path/to/profiles/
+rsync -av pppc-*.toml admin@workstation:/path/to/pppc/
 
-# USB / Shared drive
-cp -r ./mould-export/ /Volumes/SharedDrive/pppc-scans/
+# USB / shared drive
+cp pppc-*.toml /Volumes/SharedDrive/pppc-scans/
 ```
 
-### Step 3: Configure Services on Admin Workstation
+### Step 3: Configure Services on the Admin Workstation
 
 ```bash
 # Interactive walkthrough
-mould configure pppc-macbook-pro-01.toml
+contour pppc configure pppc-macbook-pro-01.toml
 
-# Or edit manually
+# Non-interactive
+contour pppc batch pppc-macbook-pro-01.toml --add-services fda --apps "managedsoftwareupdate"
+
+# Or edit by hand
 $EDITOR pppc-macbook-pro-01.toml
 ```
 
 ### Step 4: Generate Profiles
 
 ```bash
-mould generate pppc-macbook-pro-01.toml --output ./profiles/
+contour pppc generate pppc-macbook-pro-01.toml -o ./profiles/
 ```
 
 ### Step 5: Validate and Deploy
 
 ```bash
-# Validate
 for f in ./profiles/*.mobileconfig; do
   plutil -lint "$f"
 done
 
-# Deploy to MDM
 cp ./profiles/*.mobileconfig /path/to/mdm-repo/profiles/
 ```
 
 ### Multi-Machine Scanning
 
-For fleets with different app sets on different machine types:
+For fleets with different app sets per machine type:
 
 ```bash
 # On each test machine:
-./scripts/mould-scan.sh --org com.yourcompany --hostname
+contour pppc scan --path /Applications --org com.yourcompany -o "pppc-$(hostname -s).toml"
 
-# Produces:
-#   ./mould-export/pppc-engineering-mac.toml
-#   ./mould-export/pppc-design-mac.toml
-#   ./mould-export/pppc-exec-mac.toml
+# On the admin workstation, after transfer:
+contour pppc configure pppc-engineering-mac.toml
+contour pppc generate pppc-engineering-mac.toml -o ./profiles/engineering/
 
-# On admin workstation, after transfer:
-mould configure pppc-engineering-mac.toml
-mould generate pppc-engineering-mac.toml --output ./profiles/engineering/
-
-mould configure pppc-design-mac.toml
-mould generate pppc-design-mac.toml --output ./profiles/design/
+contour pppc configure pppc-design-mac.toml
+contour pppc generate pppc-design-mac.toml -o ./profiles/design/
 ```
 
 ---
 
-## SOP 8: Generating Notification Profiles
+## SOP 9: Per-App vs Combined Profile Generation
 
-**Use Case**: Pre-configure notification settings for applications.
-
-### Enable in pppc.toml
-
-```toml
-[[apps]]
-name = "Slack"
-bundle_id = "com.tinyspeck.slackmacgap"
-code_requirement = '...'
-services = []
-notifications = true
-service_management = false
-team_id = "BQR82RBBHL"
-```
-
-### Generated Profile Settings
-
-| Setting | Value | Description |
-|---------|-------|-------------|
-| `NotificationsEnabled` | `true` | Enables notifications |
-| `AlertType` | `1` | Temporary Banner style |
-| `BadgesEnabled` | `true` | Shows badge counts |
-| `CriticalAlertEnabled` | `true` | Allows critical alerts |
-| `ShowInLockScreen` | `true` | Shows on lock screen |
-| `ShowInNotificationCenter` | `true` | Shows in notification center |
-| `SoundsEnabled` | `false` | Sound disabled by default |
-
-### Output
-
-```
-./profiles/
-  slack-notifications.mobileconfig
-```
-
-### Payload Type
-
-`com.apple.notificationsettings`
-
----
-
-## SOP 9: Generating Service Management Profiles
-
-**Use Case**: Configure managed login items (background services, launch agents).
-
-### Requirements
-
-Service management profiles require a **Team ID**. This is:
-1. Automatically extracted from the code requirement (if present)
-2. Manually specified via the `team_id` field
-
-### Enable in pppc.toml
-
-```toml
-[[apps]]
-name = "Zoom"
-bundle_id = "us.zoom.xos"
-code_requirement = 'identifier "us.zoom.xos" and certificate leaf[subject.OU] = "BJ4HAAB9B3"'
-services = ["camera", "microphone"]
-notifications = false
-service_management = true
-team_id = "BJ4HAAB9B3"
-```
-
-### Team ID Extraction
-
-The Team ID is extracted from code requirements matching:
-```
-certificate leaf[subject.OU] = "TEAMID"
-certificate leaf[subject.OU] = TEAMID
-```
-
-If extraction fails and no `team_id` is specified, an error is shown:
-```
-! Skipping service management for AppName: Team ID required...
-```
-
-Find the Team ID manually:
-```bash
-codesign -dv /Applications/App.app 2>&1 | grep TeamIdentifier
-```
-
-### Output
-
-```
-./profiles/
-  zoom-service-management.mobileconfig
-```
-
-### Payload Type
-
-`com.apple.servicemanagement`
-
----
-
-## SOP 10: Per-App vs Combined Profile Generation
-
-**Use Case**: Choose between individual profiles per app (default) or a single combined profile.
+**Use Case**: One profile per app (default) or a single combined profile.
 
 ### Per-App Mode (Default)
 
 ```bash
-mould generate pppc.toml --output ./profiles/
+contour pppc generate pppc.toml -o ./profiles/
 ```
 
-Generates one TCC profile per app with unique identifiers:
+One TCC profile per app, each with its own identifiers:
 
 ```
 ./profiles/
   google-chrome-pppc.mobileconfig      # com.example.pppc.com_google_Chrome
   zoom-pppc.mobileconfig               # com.example.pppc.us_zoom_xos
-  zoom-notifications.mobileconfig
-  zoom-service-management.mobileconfig
 ```
 
-Each profile has a unique `PayloadIdentifier` and `PayloadUUID`, so they can be deployed independently.
+Each profile has a unique `PayloadIdentifier` and `PayloadUUID`, so they can
+be deployed and updated independently.
 
 ### Combined Mode
 
 ```bash
-mould generate pppc.toml --combined --output ./profiles/
+contour pppc generate pppc.toml --combined -o ./profiles/
 ```
 
-Merges all TCC entries into a single profile:
+All TCC entries in one profile:
 
 ```
 ./profiles/
   pppc-pppc.mobileconfig               # com.example.pppc (all apps)
-  zoom-notifications.mobileconfig      # still per-app
-  zoom-service-management.mobileconfig # still per-app
 ```
 
 ### When to Use Each Mode
@@ -907,125 +638,174 @@ Merges all TCC entries into a single profile:
 | **Per-app** (default) | Update one app without touching others; clear ownership | Large fleets, frequent app changes |
 | **Combined** | Fewer profiles to manage in MDM | Small deployments, simple setups |
 
-Note: Notification and service management profiles are always per-app regardless of mode.
-
 ### Dry Run Preview
 
 ```bash
-# Per-app mode
-mould generate pppc.toml --dry-run
-
-# Combined mode
-mould generate pppc.toml --combined --dry-run
+contour pppc generate pppc.toml --dry-run              # per-app
+contour pppc generate pppc.toml --combined --dry-run   # combined
 ```
 
-The dry-run output includes a **TCC Service Breakdown** bar chart showing how many apps use each service, and a **duplicate bundle ID warning** if any are detected:
+The dry run lists each profile and a **TCC Service Breakdown** of how many
+apps use each service:
 
 ```
 Dry Run - Profile Preview
 ==================================================
 
-TCC/PPPC (36 individual profiles):
+TCC/PPPC (3 individual profiles):
   • Google Chrome (com.google.Chrome)
     - Full Disk Access
     - Screen Recording
     → google-chrome-pppc.mobileconfig
   • Zoom (us.zoom.xos)
-    - Camera
-    - Microphone
+    - Screen Recording
     → zoom-pppc.mobileconfig
-  ...
-
-Notification Profiles:
-  • Zoom → zoom-notifications.mobileconfig
-  ...
-
-Service Management Profiles:
-  • Zoom [Team: BJ4HAAB9B3] → zoom-service-management.mobileconfig
-  ...
+  • managedsoftwareupdate (/usr/local/munki/managedsoftwareupdate)
+    - Full Disk Access
+    → managedsoftwareupdate-pppc.mobileconfig
 
 TCC Service Breakdown:
-      Full Disk Access    28  ██████████████████████████████
-       Screen Recording   15  ████████████████
-              Camera    12  █████████████
-          Microphone     9  ██████████
-    Accessibility     7  ████████
-       Files & Folders    5  ██████
-         Listen Event     3  ████
-    Post Event        2  ███
+        Full Disk Access     2  ██████████████████████████████
+        Screen Recording     2  ██████████████████████████████
 
 --------------------------------------------------
-Total profiles to generate: 107
+Total profiles to generate: 3
 ```
 
-The bar chart is proportionally scaled — the most-used service gets the longest bar (30 chars), with others scaled relative to it. This provides a quick visual summary of your fleet's privacy permission needs.
+The most-used service gets the longest bar (30 characters); the others scale
+to it.
 
-If duplicate `bundle_id` entries exist (e.g., from scanning Adobe CC framework symlinks), a warning appears in the summary header:
+If two entries share a `bundle_id` (for example from scanning Adobe CC
+framework symlinks), `generate` warns that they will produce colliding
+profiles:
 
 ```
 ! 6 duplicate bundle ID(s) detected (will produce colliding profiles):
     · com.adobe.Photoshop (2x)
     · com.adobe.Illustrator (2x)
-    · com.adobe.Premiere (2x)
 ```
 
-Use `mould scan --deduplicate` or re-scan to remove duplicates before generating.
+Remove the duplicate entries from pppc.toml, or re-scan with narrower
+`--path` values. `contour pppc validate` reports duplicates too.
 
 ---
 
-## Configuration Reference
+## SOP 10: Fleet GitOps Fragments and Recipes
 
-### Command Summary
+`generate` can write other shapes than plain `.mobileconfig` files:
+
+```bash
+# A Fleet GitOps fragment: a directory with a fragment.toml manifest and lib/
+# structure, for merging into a Fleet GitOps repository
+contour pppc generate pppc.toml --fragment -o ./pppc-fragment/
+
+# A single combined recipe TOML for a `contour profile library`
+contour pppc generate pppc.toml --format recipe -o pppc-recipe.toml
+```
+
+`--format` takes `mobileconfig` (the default) or `recipe`.
+
+---
+
+## Notifications and Service Management
+
+`contour pppc` writes TCC profiles only. The other two per-app profiles have
+their own tools:
+
+| Profile | Payload Type | Tool |
+|---------|--------------|------|
+| Notifications | `com.apple.notificationsettings` | `contour notifications` (scan, generate) |
+| Managed login items | `com.apple.servicemanagement` | `contour btm` (scan, generate) |
+
+```bash
+contour notifications scan --path /Applications --org com.yourcompany -o notifications.toml
+contour btm generate btm.toml -o ./profiles/
+```
+
+pppc.toml keys named `notifications`, `service_management` or `team_id` are
+not part of its format: `validate`, `generate` and every other command refuse
+the file, naming each such key and the tool that makes that profile.
+
+---
+
+## Command Reference
 
 | Command | Description |
 |---------|-------------|
-| `mould scan` | Scan apps and create pppc.toml |
-| `mould generate` | Generate mobileconfig profiles from pppc.toml |
-| `mould configure` | Interactively edit services in existing pppc.toml |
-| `mould` (no subcommand) | One-shot scan + generate |
+| `contour pppc scan` | Scan applications and create a policy file (pppc.toml) |
+| `contour pppc generate` | Generate mobileconfig profiles from a policy file |
+| `contour pppc configure` | Interactively configure services in an existing policy file |
+| `contour pppc batch` | Batch-update TCC services for apps |
+| `contour pppc validate` | Validate a pppc.toml policy file |
+| `contour pppc diff` | Compare two pppc.toml policy files |
+| `contour pppc init` | Initialize a new pppc.toml policy file |
+| `contour pppc info` | Show toolkit info, available services, and local config summary |
 
-### Scan Command Reference
+`contour <command> --help` is authoritative for every option; the summaries
+below cover the common ones.
+
+### scan
 
 ```
-mould scan [OPTIONS] --org <ORG>
+contour pppc scan [OPTIONS]
 
-Options:
-  -p, --path <PATH>           Directories or .app bundles to scan
-                              [default: /Applications]
-      --from-csv <CSV>        CSV file with app names/paths
+  -p, --path <PATH>           Directories, app bundles or binaries to scan
+                              (repeat, or comma-separate) [default: /Applications]
+      --from-csv <FROM_CSV>   CSV file with app names/paths (columns: name, path)
   -o, --output <OUTPUT>       Output TOML file [default: pppc.toml]
-      --org <ORG>             Organization identifier (required)
-  -I, --interactive           Interactive mode
+      --org <ORG>             Organization identifier
+                              (reads .contour/config.toml if not given)
+  -I, --interactive           Select apps and permissions interactively
 ```
 
-### Generate Command Reference
+### generate
 
 ```
-mould generate [OPTIONS] <INPUT>
+contour pppc generate [OPTIONS] <INPUT>
 
-Arguments:
   <INPUT>                     Input policy file (pppc.toml)
-
-Options:
-  -o, --output <OUTPUT>       Output directory or .mobileconfig path
-      --combined              Merge all TCC into one profile
+  -o, --output <OUTPUT>       Output .mobileconfig file or directory
+      --combined              One profile for all TCC entries
       --dry-run               Preview without writing
+      --fragment              Write a Fleet GitOps fragment directory
+      --format <FORMAT>       mobileconfig (default) or recipe
 ```
 
-### Configure Command Reference
+### configure
 
 ```
-mould configure <INPUT>
+contour pppc configure [OPTIONS] <INPUT>
 
-Arguments:
   <INPUT>                     Input policy file (pppc.toml)
+      --skip-configured       Skip apps that already have services
+```
+
+### batch
+
+```
+contour pppc batch [OPTIONS] <INPUT>
+
+  <INPUT>                           Input policy file (pppc.toml)
+      --add-services <SERVICES>     Append services (no duplicates)
+      --remove-services <SERVICES>  Remove services
+      --set-services <SERVICES>     Replace services entirely
+      --apps <APPS>                 Apps by name (case-insensitive substring); omit = all
+      --dry-run                     Preview without writing
+```
+
+### validate, diff, init
+
+```
+contour pppc validate [INPUT] [--strict]       # [default: pppc.toml]; --strict fails on warnings
+contour pppc diff <FILE1> <FILE2>
+contour pppc init [-o pppc.toml] [--org <ORG>] [--name <NAME>] [--force]
 ```
 
 ### Global Options
 
 ```
-  -v, --verbose               Enable verbose output
-      --json                  Output in JSON format (for CI/CD)
+  -v, --verbose               Verbose logging
+      --json                  JSON output (for CI/CD)
 ```
 
 ---
@@ -1036,36 +816,33 @@ Arguments:
 
 ```toml
 [config]
-org = "com.yourcompany"           # Required: Organization identifier
-display_name = "My PPPC Profile"  # Optional: Profile display name
+org = "com.yourcompany"           # Required: organization identifier
+display_name = "My PPPC Profile"  # Optional: profile display name
 
 [[apps]]
-name = "App Name"                 # Required: Display name
-bundle_id = "com.example.app"     # Required: Bundle identifier or binary path
-code_requirement = '...'          # Required: Code requirement string
+name = "App Name"                 # Required: display name
+bundle_id = "com.example.app"     # bundleID entries: the bundle identifier
+code_requirement = '...'          # Required: code requirement string
 identifier_type = "path"          # Optional: "bundleID" (default) or "path"
-path = "/Applications/App.app"    # Optional: Path for reference
+path = "/Applications/App.app"    # Required for "path" entries; a reference otherwise
 services = ["fda", "camera"]      # Optional: TCC services to grant
-notifications = false             # Always present: notification profile toggle
-service_management = false        # Always present: service mgmt profile toggle
-team_id = "ABCD1234EF"           # Optional: Team ID (auto-extracted if possible)
 ```
 
 ### Field Details
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `config.org` | string | Yes | Organization identifier (e.g., `com.yourcompany`) |
+| `config.org` | string | Yes | Organization identifier (e.g. `com.yourcompany`) |
 | `config.display_name` | string | No | Human-readable profile name |
 | `apps[].name` | string | Yes | Application display name |
-| `apps[].bundle_id` | string | Yes | Bundle ID or binary path for path-based entries |
+| `apps[].bundle_id` | string | bundleID entries | Reverse-DNS bundle identifier; absent for path entries |
 | `apps[].code_requirement` | string | Yes | Output of `codesign -d -r -` |
 | `apps[].identifier_type` | string | No | `"bundleID"` (default) or `"path"` |
-| `apps[].path` | string | No | Path to .app bundle (for reference) |
-| `apps[].services` | array | No | List of TCC services to grant |
-| `apps[].notifications` | bool | No | Generate notification profile (default: false) |
-| `apps[].service_management` | bool | No | Generate service mgmt profile (default: false) |
-| `apps[].team_id` | string | No | Team ID for service management |
+| `apps[].path` | string | path entries | Absolute path; the identifier for path entries |
+| `apps[].services` | array | No | TCC services to grant |
+
+A path entry that still carries the path in `bundle_id` (the older
+hand-written form) is read as before.
 
 ### Example: App Bundle Entry
 
@@ -1075,10 +852,7 @@ name = "Zoom"
 bundle_id = "us.zoom.xos"
 code_requirement = 'identifier "us.zoom.xos" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "BJ4HAAB9B3"'
 path = "/Applications/zoom.us.app"
-services = ["camera", "microphone", "screen-capture"]
-notifications = true
-service_management = true
-team_id = "BJ4HAAB9B3"
+services = ["screen-capture", "accessibility"]
 ```
 
 ### Example: Path-Based Binary Entry
@@ -1086,13 +860,10 @@ team_id = "BJ4HAAB9B3"
 ```toml
 [[apps]]
 name = "managedsoftwareupdate"
-bundle_id = "/usr/local/munki/managedsoftwareupdate"
 code_requirement = 'identifier managedsoftwareupdate and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = T4SK8ZXCXG'
 identifier_type = "path"
+path = "/usr/local/munki/managedsoftwareupdate"
 services = ["fda"]
-notifications = false
-service_management = false
-team_id = "T4SK8ZXCXG"
 ```
 
 ---
@@ -1107,13 +878,13 @@ No applications found to scan
 
 **Causes:**
 1. Path doesn't exist
-2. Path contains no .app bundles
+2. Path contains no .app bundles or signed binaries
 3. No read permission
 
 **Solutions:**
 ```bash
 ls -la /Applications
-mould scan --path /Applications --org com.test
+contour pppc scan --path /Applications --org com.test
 ```
 
 ### Problem: Skipped apps (Empty/stub bundle)
@@ -1123,34 +894,10 @@ mould scan --path /Applications --org com.test
   > Empty/stub bundle (no Contents directory) (4)
 ```
 
-**Cause:** Some apps (especially Microsoft 365 via Mac App Store) install as stub bundles that download their content on first launch.
+**Cause:** Some apps (especially Microsoft 365 via the Mac App Store)
+install as stub bundles that download their content on first launch.
 
 **Solution:** Launch the app once so it downloads its full bundle, then re-scan.
-
-### Problem: "Team ID required for service management profile"
-
-```
-! Skipping service management for AppName: Team ID required...
-```
-
-**Solutions:**
-
-Add `team_id` manually:
-```toml
-[[apps]]
-name = "App"
-service_management = true
-team_id = "ABCD1234EF"
-```
-
-Find Team ID:
-```bash
-codesign -dv /Applications/App.app 2>&1 | grep TeamIdentifier
-```
-
-### Problem: Per-app profiles have identical UUIDs
-
-This was fixed in the current version. Per-app mode generates unique `PayloadIdentifier` and `PayloadUUID` values using a suffix derived from each app's bundle ID.
 
 ### Problem: Permissions not applied after MDM deployment
 
@@ -1158,35 +905,37 @@ This was fixed in the current version. Per-app mode generates unique `PayloadIde
 1. Profile not installed (check System Settings > Profiles)
 2. Code requirement mismatch (app updated, new signature)
 3. Bundle ID mismatch
+4. The service is deny-only (Camera, Microphone) or standard-user-settable
+   (Screen Recording) — see [TCC Authorization Behavior](#tcc-authorization-behavior-macos-11)
 
 **Solutions:**
 ```bash
 # Verify installed profiles
 sudo profiles list
 
-# Check app's current code requirement
+# Check the app's current code requirement
 codesign -d -r - /Applications/App.app
 
-# Regenerate with updated code requirement
-mould scan --path /Applications/App.app --org com.test --output updated.toml
+# Re-scan to pick up the updated code requirement
+contour pppc scan --path /Applications/App.app --org com.test -o updated.toml
 ```
 
-### Debug: View Generated Profile
+### Debug: View a Generated Profile
 
 ```bash
-# Pretty-print profile
+# Pretty-print
 plutil -p profile.mobileconfig
 
 # Validate XML structure
 plutil -lint profile.mobileconfig
 
-# Extract Services dictionary
+# Extract the Services dictionary
 plutil -extract PayloadContent.0.Services xml1 -o - profile.mobileconfig
 ```
 
 ---
 
-## Appendix: Profile Payload Types
+## Appendix: Profile Payload
 
 ### PPPC/TCC Profile
 
@@ -1229,55 +978,5 @@ plutil -extract PayloadContent.0.Services xml1 -o - profile.mobileconfig
   <false/>
   <key>Authorization</key>
   <string>Allow</string>
-</dict>
-```
-
-### Notification Profile
-
-**Payload Type:** `com.apple.notificationsettings`
-
-```xml
-<dict>
-  <key>NotificationSettings</key>
-  <array>
-    <dict>
-      <key>BundleIdentifier</key>
-      <string>com.example.app</string>
-      <key>NotificationsEnabled</key>
-      <true/>
-      <key>AlertType</key>
-      <integer>1</integer>
-      <key>BadgesEnabled</key>
-      <true/>
-      <key>CriticalAlertEnabled</key>
-      <true/>
-      <key>ShowInLockScreen</key>
-      <true/>
-      <key>ShowInNotificationCenter</key>
-      <true/>
-      <key>SoundsEnabled</key>
-      <false/>
-    </dict>
-  </array>
-</dict>
-```
-
-### Service Management Profile
-
-**Payload Type:** `com.apple.servicemanagement`
-
-```xml
-<dict>
-  <key>Rules</key>
-  <array>
-    <dict>
-      <key>RuleType</key>
-      <string>TeamIdentifier</string>
-      <key>RuleValue</key>
-      <string>ABCD1234EF</string>
-      <key>Comment</key>
-      <string>com.example.app</string>
-    </dict>
-  </array>
 </dict>
 ```

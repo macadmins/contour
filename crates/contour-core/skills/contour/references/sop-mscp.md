@@ -10,31 +10,22 @@ policies, labels) for baselines like CIS Level 1, 800-53, STIG, CMMC.
 > `--sop beta`. Note `mscp recipe` reads a repo checkout, not the embedded
 > dataset — `--beta` does not apply to it.
 
-## Layout: 1.x vs 2.0 (auto-detected)
+## Layout: mSCP 2.0 only (verified, 1.x refused)
 
-mSCP ships in two coexisting shapes; contour auto-detects which one a
-`--mscp-repo` path holds by sniffing one rule YAML.
+contour reads the mSCP 2.0 schema — the `main` branch. It verifies a
+`--mscp-repo` path by sniffing one rule YAML:
 
-| Signal | Layout | Notes |
-|---|---|---|
-| Top-level `platforms:` key on a rule | **2.0** | multi-OS (`macOS`/`iOS`/`visionOS`) under one rule file |
-| Top-level `id:` without `platforms:` | **1.x** | flat schema with top-level `tags`/`check`/`fix` |
-| Neither | error | "could not detect mSCP layout" with the offending file |
+| Signal | Result |
+|---|---|
+| Top-level `platforms:` key on a rule | **2.0** — proceed |
+| Top-level `id:` without `platforms:` | **1.x** — refused with the fix: `git -C <repo> checkout main`; custom 1.x baselines migrate with mSCP's own `--migrate` |
+| Neither | error: "could not detect mSCP layout" with the offending file |
 
-**1.x rule (legacy):**
-
-```yaml
-id: system_settings_screensaver_password_enforce
-title: Enforce Screensaver Password
-check: '/usr/bin/osascript -l JavaScript ...'
-fix: '/usr/bin/defaults write ...'
-result: { string: 'true' }
-tags: [cis_lvl1, cis_lvl2, disa_stig]
-mobileconfig: true
-mobileconfig_info:
-  com.apple.screensaver:
-    askForPassword: true
-```
+1.x (flat `tags`/`check`/`fix`, `baselines/<name>.yaml`, the `tahoe` /
+`sequoia` release branches) is deprecated upstream. `main` already carries
+the older OS releases under their own version keys (macOS 15.0 and 26.0,
+iOS 17.0 and 18.0), so nothing is lost by refusing it. An agent that hits
+the refusal should switch the checkout, not look for a flag — there is none.
 
 **2.0 rule (multi-OS):**
 
@@ -62,16 +53,20 @@ mobileconfig_info:
       - askForPassword: true
 ```
 
+Baselines live at `baselines/<os>/<name>_<os>_<version>.yaml`; the bare
+name (`cis_lvl1`, `800-53r5_high`) is what every flag takes. Seven
+baselines (`indigo_*`, `ios_*`, `nlmapgov_*`, `mscp`) exist only as
+benchmark tags on rules and have no file; membership falls back to tags
+for those. A name that neither a file nor any rule knows is an error.
+
 **Operator flags** (on `mscp recipe` and friends):
 
-- `--mscp-version <auto|1.x|2.0>` — default `auto`
-- `--os <macos|ios|visionos>` — default `macos`; ignored for 1.x
+- `--os <macos|ios|visionos>` — default `macos`
 - `--os-version <X.Y>` — default: highest version present in the rule set
 
-Internally the 2.0 deserializer flattens to the same `MscpRule` struct
-1.x produces, parameterized on `(os, os_version)`. Downstream extractors,
-recipe aggregators, and ODV resolvers don't know or care which layout
-the input came from.
+Internally the 2.0 deserializer flattens to one `MscpRule` struct
+parameterized on `(os, os_version)`. Downstream extractors, recipe
+aggregators, and ODV resolvers work on that struct.
 
 ---
 
@@ -334,7 +329,7 @@ contour mscp schema search <keyword> --json
 ### Compare embedded data vs an mSCP repo
 
 ```
-contour mscp schema compare <mscp_repo_path> --baseline <name> --json
+contour mscp schema compare <mscp_repo_path> <baseline> --json
 # Diffs the schema embedded in contour against an external repo.
 # Useful when contour's embedded data is older than the repo.
 ```

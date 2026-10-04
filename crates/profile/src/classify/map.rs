@@ -1,7 +1,8 @@
 //! The editable naming reference map: payload type → friendly Kind/Subject.
 //!
 //! Loaded from an embedded default (`reference/naming.yaml`), overridable at
-//! runtime via an explicit path or a repo-local `.contour/naming.yaml`.
+//! runtime via an explicit path or a repo-local `.contour/name.toml`, then
+//! `.contour/naming.yaml`.
 
 use std::path::Path;
 

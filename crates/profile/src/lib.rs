@@ -31,3 +31,4 @@ pub mod schema;
 pub mod signing;
 pub mod uuid;
 pub mod validation;
+pub mod windows;

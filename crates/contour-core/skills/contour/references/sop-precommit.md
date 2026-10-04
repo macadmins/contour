@@ -1,6 +1,6 @@
 # SOP: Contour as a Git Pre-Commit Validator
 
-Wire `contour validate` into a Git pre-commit hook so a malformed profile
+Wire `contour profile validate` into a Git pre-commit hook so a malformed profile
 in a staged change blocks the commit before it lands. Cheap insurance
 that catches schema regressions, dangling DDM references, and broken
 TOML configs at the developer's keyboard rather than in CI 20 minutes

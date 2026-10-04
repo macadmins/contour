@@ -30,7 +30,8 @@ pub struct Bundle {
     pub description: Option<String>,
 
     /// CEL expression to match applications
-    /// Available context: app.team_id, app.signing_id, app.app_name, app.sha256, app.version
+    /// Available context: app.team_id, app.signing_id, app.app_name, app.sha256,
+    /// app.version, app.bundle_id, app.vendor, app.path, app.device_count
     #[serde(rename = "cel")]
     pub cel_expression: String,
 

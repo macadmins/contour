@@ -14,7 +14,7 @@
 
 [recipe]
 name = "skip-setup-assistant"
-description = "Skip macOS Setup Assistant screens — Diagnostics, FileVault, Apple Intelligence, Siri, Screen Time, Touch ID, iCloud, appearance, True Tone, and more"
+description = "Skip macOS Setup Assistant screens — Diagnostics, FileVault, Apple Intelligence, Liquid Glass, Siri, Screen Time, Touch ID, iCloud, appearance, True Tone, and more"
 
 [[profile]]
 filename = "skip-setup-assistant-items.mobileconfig"
@@ -29,6 +29,7 @@ SkipSetupItems = [
     "Diagnostics",
     "FileVault",
     "Intelligence",
+    "LiquidGlass",
     "OSShowcase",
     "SoftwareUpdate",
     "UpdateCompleted",

@@ -139,8 +139,8 @@ pub struct LibraryNewOptions<'a> {
     pub force: bool,
 }
 
-/// Scaffold a preset/recipe library at `opts.path`. Returns the list of
-/// files written so the JSON emitter can advertise them.
+/// Scaffold a preset/recipe library at `opts.path`. Collects the files
+/// written so the JSON/human emitters can advertise them.
 pub fn handle_library_new(opts: LibraryNewOptions<'_>, output_mode: OutputMode) -> Result<()> {
     let root = opts.path;
 

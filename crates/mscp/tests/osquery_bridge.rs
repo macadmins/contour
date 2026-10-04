@@ -3,29 +3,27 @@
 //! The `mscp` binary exposes `generate` as a top-level subcommand, so this
 //! test drives `CARGO_BIN_EXE_mscp` directly (no `mscp` subcommand prefix).
 //!
-//! `--osquery` requires a resolvable org (`--org`). The whole test self-skips
-//! when the `macos_security` repo or a Python toolchain is absent, so CI never
-//! fails on a missing environment.
+//! `--osquery` requires a resolvable org (`--org`). The tests are `#[ignore]`,
+//! declaring what they need, and they PANIC rather than return when asked to
+//! run without it: a test that returns early passes, which looks the same as
+//! a test that ran.
 //!
-//! The baseline keyword (`cis_lvl1`) is chosen because its `baselines/` YAML
-//! filename matches the keyword on the local repo; mSCP 1.x layout resolution
-//! is filename-based.
+//! Needs an mSCP 2.0 checkout named by `CONTOUR_MSCP_REPO`, as the other
+//! checkout-backed tests do. (mSCP 1.x is not supported: contour refuses a
+//! 1.x tree, so a 1.x checkout cannot exercise this.)
 
 use std::path::Path;
 use std::process::Command;
 
-/// The baseline this test generates. Its `baselines/<BASELINE>.yaml` must exist
-/// in the local `macos_security` checkout for the test to run (else it skips).
+/// The baseline this test generates.
 const BASELINE: &str = "cis_lvl1";
 
-/// Path to the local `macos_security` repo (repo root), relative to this
-/// crate's manifest dir (`crates/mscp/`). Returns `None` when the baseline YAML
-/// this test needs is not present.
-fn repo() -> Option<&'static str> {
-    let candidate = "../../macos_security";
-    Path::new(candidate)
-        .join(format!("baselines/{BASELINE}.yaml"))
-        .exists()
+/// The mSCP 2.0 checkout named by `CONTOUR_MSCP_REPO`, when it has `rules/`.
+fn repo() -> Option<String> {
+    let candidate = std::env::var("CONTOUR_MSCP_REPO").ok()?;
+    Path::new(&candidate)
+        .join("rules")
+        .is_dir()
         .then_some(candidate)
 }
 
@@ -40,15 +38,20 @@ fn has_python() -> bool {
 }
 
 #[test]
+#[ignore = "needs an mSCP 2.0 checkout — set CONTOUR_MSCP_REPO — and python3; run with \
+            --include-ignored"]
 fn osquery_slim_fleet_emits_queries_audit_and_coverage() {
-    let Some(repo) = repo() else {
-        eprintln!("skipped: macos_security repo absent");
-        return;
-    };
-    if !has_python() {
-        eprintln!("skipped: python3 toolchain absent (mscp generate needs it)");
-        return;
-    }
+    let repo = repo().unwrap_or_else(|| {
+        panic!(
+            "asked to run (--include-ignored) but CONTOUR_MSCP_REPO does not name an \
+             mSCP 2.0 checkout with a rules/ directory"
+        )
+    });
+    assert!(
+        has_python(),
+        "asked to run (--include-ignored) but python3 is not on PATH — \
+         `mscp generate` shells out to mSCP's Python script"
+    );
 
     let out = tempfile::tempdir().unwrap();
     let out_path = out.path().to_str().unwrap();
@@ -57,7 +60,7 @@ fn osquery_slim_fleet_emits_queries_audit_and_coverage() {
         .args([
             "generate",
             "-m",
-            repo,
+            &repo,
             "-k",
             BASELINE,
             "-o",
@@ -72,17 +75,18 @@ fn osquery_slim_fleet_emits_queries_audit_and_coverage() {
         .output()
         .expect("failed to spawn mscp");
 
-    if !output.status.success() {
-        // A failure here is most likely an environment limitation (missing
-        // Python deps for the mSCP generation script), not a code defect.
-        // Skip rather than fail so CI stays green.
-        eprintln!(
-            "skipped: `mscp generate` did not succeed (likely Python toolchain limitation)\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-        return;
-    }
+    // A failing command fails the test and shows the output: a broken
+    // generator and a missing dependency are indistinguishable from the
+    // outside, and treating either as a skip would pass a test whose code
+    // ran and did not work.
+    assert!(
+        output.status.success(),
+        "`mscp generate` failed. If this is a missing Python dependency for the \
+         mSCP generation script, install it — do not read a failure here as \
+         environmental without checking.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 
     let oq = out.path().join("osquery").join(BASELINE);
     assert!(

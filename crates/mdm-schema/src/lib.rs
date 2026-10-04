@@ -1,14 +1,30 @@
 //! Shared MDM payload type schemas and embedded Parquet data.
 //!
-//! Three datasets:
+//! Four datasets:
 //! - `capabilities` — Apple device-management (MDM profiles + DDM declarations)
-//! - `profiles` — ProfileCreator/PayloadSchemas (community-maintained)
 //! - `skip_keys` — Setup Assistant skip keys with platform gating
+//! - `examples` — Apple's example configurations
+//! - `app_schema` — for domains described from an App Schema v1
+//!   document: the keys a profile must not set, keys read from another
+//!   domain, and the document's rules
+//!
+//! `profiles` is a reader for a ProfileCreator/PayloadSchemas table that is
+//! not shipped; no parquet backs it.
 
+pub mod app_schema;
 pub mod capabilities;
 pub mod examples;
+pub mod mdm_errors;
+/// MDM payload type → DDM declaration migration registry. Lives here rather
+/// than in the profile crate so read-only consumers (schema lookups, the MCP
+/// server) can answer "what supersedes this deprecated payload?" without
+/// linking a crate that writes MDM artifacts.
+pub mod migration;
 pub mod profiles;
+pub mod service_config;
 pub mod skip_keys;
+pub mod source_versions;
+pub mod status_items;
 pub mod types;
 
 pub use types::*;
@@ -23,25 +39,61 @@ pub fn embedded_examples() -> &'static [u8] {
     include_bytes!("../data/examples.parquet")
 }
 
-/// Embedded **beta** examples Parquet data (Apple device-management seed).
+// ── The beta channel is dormant ─────────────────────────────────────────────
+//
+// Every `*_beta` accessor below returns the STABLE bytes. With no OS seed
+// open there is no pre-release schema to serve, so `--beta` refuses rather
+// than answer with the released schema under another name. What 27.0
+// introduced as seed-only — app.settings, LiquidGlass,
+// AccessibilityAppearance, package UninstallBehavior — is in the stable set.
+//
+// When Apple opens the next seed and a seed dataset is published again,
+// point these accessors back at `include_bytes!` of
+// `data/beta/…`, and restore the seed-additions test that
+// `beta_accessors_currently_mirror_stable` replaced. [`beta_is_retired`] then
+// turns false on its own, and the CLI stops telling users `--beta` is a no-op.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Embedded **beta** examples. Retired — returns the stable bytes (see above).
 pub fn embedded_examples_beta() -> &'static [u8] {
-    include_bytes!("../data/beta/examples.parquet")
+    embedded_examples()
 }
 
-/// Embedded **beta** capabilities Parquet data (Apple device-management seed).
-///
-/// Built from Apple's pre-release OS seed (e.g. `seed_OS_27_0`) and published
-/// to `data/beta/` by the posture pipeline. Carries the same shape as
-/// [`embedded_capabilities`] plus seed-only declarations and keys (for example
-/// `com.apple.configuration.app.settings` and `package`'s `UninstallBehavior`).
-/// Consumers opt in explicitly so the stable channel is never affected.
+/// Embedded **beta** capabilities. Retired — returns the stable bytes; see the
+/// banner above for why, and what to change when the next seed opens.
 pub fn embedded_capabilities_beta() -> &'static [u8] {
-    include_bytes!("../data/beta/capabilities.parquet")
+    embedded_capabilities()
 }
 
-/// Embedded profile manifests Parquet data (ProfileCreator).
-pub fn embedded_profile_manifests() -> &'static [u8] {
-    include_bytes!("../data/profilecreator.parquet")
+/// Whether the beta channel is retired: its accessors serve the stable bytes,
+/// so `--beta` changes nothing.
+///
+/// Pointer equality rather than a key diff, because it reflects the switch
+/// itself — the same comparison `beta_accessors_currently_mirror_stable` pins.
+/// Re-point the accessors at a real seed and this turns false with no other
+/// change, so anything warning about a retired channel falls silent by itself.
+/// Both must mirror stable: a half-finished re-pointing is not "retired".
+pub fn beta_is_retired() -> bool {
+    std::ptr::eq(embedded_capabilities_beta(), embedded_capabilities())
+        && std::ptr::eq(embedded_skip_keys_beta(), embedded_skip_keys())
+}
+
+/// Embedded source provenance: which upstream commit each table came from.
+/// Zero bytes when the dataset predates the table; the reader treats that as
+/// empty and FormSpec's `source.upstream_ref` stays null.
+pub fn embedded_source_versions() -> &'static [u8] {
+    include_bytes!("../data/source_versions.parquet")
+}
+
+/// Embedded DDM status item types — the other half of DDM: what a device
+/// reports back. Zero bytes on a dataset that predates the table.
+pub fn embedded_status_items() -> &'static [u8] {
+    include_bytes!("../data/status_items.parquet")
+}
+
+/// Embedded MDM error codes Apple documents, per platform.
+pub fn embedded_mdm_errors() -> &'static [u8] {
+    include_bytes!("../data/mdm_errors.parquet")
 }
 
 /// Embedded Windows CSP capabilities Parquet data.
@@ -56,19 +108,31 @@ pub fn embedded_windows_capabilities() -> &'static [u8] {
     include_bytes!("../data/windows_capabilities.parquet")
 }
 
+/// Embedded App Schema key facts Parquet data.
+///
+/// Read with [`app_schema::keys::read`]; joins `capabilities` on
+/// `domain = payload_type`.
+pub fn embedded_app_schema_keys() -> &'static [u8] {
+    include_bytes!("../data/app_schema_keys.parquet")
+}
+
+/// Embedded App Schema rules Parquet data.
+///
+/// Read with [`app_schema::rules::read`].
+pub fn embedded_app_schema_rules() -> &'static [u8] {
+    include_bytes!("../data/app_schema_rules.parquet")
+}
+
 /// Embedded skip keys Parquet data (Setup Assistant skip keys).
 pub fn embedded_skip_keys() -> &'static [u8] {
     include_bytes!("../data/skip_keys.parquet")
 }
 
-/// Embedded **beta** skip keys Parquet data (Apple device-management seed).
-///
-/// Mirrors [`embedded_capabilities_beta`] for skip keys: built from the OS seed
-/// and published to `data/beta/` by the posture pipeline. Carries the stable set
-/// plus seed-only keys (for example `AccessibilityAppearance` and `LiquidGlass`
-/// introduced in OS 27.0). Consumers opt in explicitly via `--beta`.
+/// Embedded **beta** skip keys. Retired — returns the stable bytes; see the
+/// banner above [`embedded_examples_beta`]. `LiquidGlass` and
+/// `AccessibilityAppearance`, once seed-only, are in the stable set.
 pub fn embedded_skip_keys_beta() -> &'static [u8] {
-    include_bytes!("../data/beta/skip_keys.parquet")
+    embedded_skip_keys()
 }
 
 /// Embedded schema version metadata (upstream SHAs, generation date).
@@ -81,14 +145,18 @@ pub fn schema_versions_toml() -> &'static str {
 pub struct SchemaVersionInfo {
     pub apple_device_management_commit: String,
     pub apple_device_management_date: String,
-    /// Beta seed pin (empty when no seed channel is recorded). Provenance for the
-    /// `data/beta/` parquet exposed via the `*_beta` accessors and `--beta`.
+    /// Beta seed pin (empty when no seed channel is recorded). Provenance for a
+    /// seed-channel parquet; none is shipped today — the `*_beta` accessors
+    /// return the stable bytes (see the banner above them).
     pub apple_device_management_seed_commit: String,
     pub apple_device_management_seed_date: String,
     pub apple_device_management_seed_release: String,
     pub profile_manifests_commit: String,
     pub profile_manifests_date: String,
     pub generation_date: String,
+    /// What produced the dataset — the pipeline revision it was built at — so
+    /// a test that needs a newer build can say which build it got.
+    pub generation_source: String,
 }
 
 /// Parse the embedded schema-versions.toml into structured version info.
@@ -110,6 +178,7 @@ fn parse_schema_versions(toml_str: &str) -> SchemaVersionInfo {
             profile_manifests_commit: String::new(),
             profile_manifests_date: String::new(),
             generation_date: String::new(),
+            generation_source: String::new(),
         };
     };
 
@@ -130,6 +199,7 @@ fn parse_schema_versions(toml_str: &str) -> SchemaVersionInfo {
         profile_manifests_commit: get("profile_manifests", "commit"),
         profile_manifests_date: get("profile_manifests", "date"),
         generation_date: get("generation", "date"),
+        generation_source: get("generation", "source"),
     }
 }
 
@@ -137,22 +207,113 @@ fn parse_schema_versions(toml_str: &str) -> SchemaVersionInfo {
 mod tests {
     use super::*;
 
+    /// Keys a profile must not set, for domains described from an app's own
+    /// source. ProfileManifests has no way to say any of this.
     #[test]
-    fn test_read_embedded_profile_manifests() {
-        let manifests = profiles::read(embedded_profile_manifests())
-            .expect("Failed to read embedded profile manifests");
+    fn app_schema_keys_read_with_their_kinds() {
+        let keys =
+            app_schema::keys::read(embedded_app_schema_keys()).expect("read app_schema_keys");
+        assert!(!keys.is_empty(), "expected App Schema key facts");
+
+        let kinds: std::collections::HashSet<&str> = keys.iter().map(|k| k.kind.as_str()).collect();
+        for expected in ["runtime", "dynamic", "removed", "external"] {
+            assert!(
+                kinds.contains(expected),
+                "missing kind {expected}: {kinds:?}"
+            );
+        }
         assert!(
-            manifests.len() > 200,
-            "Expected 200+ manifests, got {}",
-            manifests.len()
-        );
-        assert!(
-            manifests
+            kinds
                 .iter()
-                .any(|m| m.payload_type == "com.apple.wifi.managed")
+                .all(|k| ["runtime", "dynamic", "removed", "external", "deprecated"].contains(k)),
+            "unknown kind in {kinds:?}"
         );
-        assert!(manifests.iter().any(|m| m.category == "apps"));
-        assert!(manifests.iter().any(|m| m.category == "prefs"));
+
+        // Setting a runtime, dynamic or removed key in a profile is wrong;
+        // an external key belongs to another payload and is not.
+        assert!(keys.iter().filter(|k| k.is_profile_mistake()).count() > 0);
+        assert!(
+            keys.iter()
+                .filter(|k| k.kind == "external")
+                .all(|k| !k.is_profile_mistake() && k.replacement_domain.is_some())
+        );
+
+        // A dynamic key carries the template and where its placeholder comes from.
+        let dynamic = keys.iter().find(|k| k.kind == "dynamic").unwrap();
+        assert!(dynamic.template.is_some());
+        assert!(dynamic.placeholders.as_deref().unwrap().contains('/'));
+
+        // Removed keys exist, and where one names a replacement that
+        // replacement is a real name.
+        //
+        // NOT "every removed key names a replacement". A key can be withdrawn
+        // with nothing put in its place, and a document is right to say so:
+        // SAP's EnableTCP is gone from the 2.x RemoteLogging block, which
+        // carries UseTLS, and SAP does not state whether that is a rename.
+        // Requiring a replacement here would push every converter to invent
+        // one, which is the opposite of what these documents are for.
+        let removed: Vec<_> = keys.iter().filter(|k| k.kind == "removed").collect();
+        assert!(!removed.is_empty(), "no removed keys in the dataset");
+        for k in &removed {
+            assert!(!k.key.is_empty(), "a removed key with no name: {k:?}");
+            if let Some(r) = k.replacement_key.as_deref() {
+                assert!(!r.trim().is_empty(), "{} names an empty replacement", k.key);
+            }
+            if let Some(d) = k.replacement_domain.as_deref() {
+                assert!(!d.trim().is_empty(), "{} names an empty domain", k.key);
+            }
+        }
+    }
+
+    /// Every App Schema fact names a domain the capability data describes.
+    #[test]
+    fn app_schema_facts_join_the_capabilities() {
+        let capabilities = capabilities::read(embedded_capabilities()).expect("read capabilities");
+        let described: std::collections::HashSet<&str> = capabilities
+            .iter()
+            .map(|c| c.payload_type.as_str())
+            .collect();
+
+        let keys = app_schema::keys::read(embedded_app_schema_keys()).unwrap();
+        let rules = app_schema::rules::read(embedded_app_schema_rules()).unwrap();
+        for domain in keys
+            .iter()
+            .map(|k| k.domain.as_str())
+            .chain(rules.iter().map(|r| r.domain.as_str()))
+        {
+            assert!(
+                described.contains(domain),
+                "{domain} has facts but no capability"
+            );
+        }
+    }
+
+    /// Rules keep their predicates as JSON in the format's grammar.
+    #[test]
+    fn app_schema_rules_read_with_evaluable_predicates() {
+        let rules =
+            app_schema::rules::read(embedded_app_schema_rules()).expect("read app_schema_rules");
+        assert!(!rules.is_empty());
+        for rule in &rules {
+            assert!(
+                ["error", "warning", "info"].contains(&rule.severity.as_str()),
+                "{rule:?}"
+            );
+            assert!(!rule.message.is_empty());
+            // A rule either asserts something or records an effect.
+            assert!(
+                rule.assert_predicate.is_some() ^ rule.effect.is_some(),
+                "{}: needs exactly one of assert/effect",
+                rule.rule_id
+            );
+            for json in [&rule.when_predicate, &rule.assert_predicate, &rule.effect]
+                .into_iter()
+                .flatten()
+            {
+                serde_json::from_str::<serde_json::Value>(json)
+                    .unwrap_or_else(|e| panic!("{}: {e}", rule.rule_id));
+            }
+        }
     }
 
     #[test]
@@ -200,9 +361,9 @@ mod tests {
         );
     }
 
-    /// Build a one-row capabilities parquet in memory. With
-    /// `with_rangelist`, the `key_rangelist` column (posture-ingest ≥ 41
-    /// cols) is appended, carrying `["Allowed","AlwaysOn"]`.
+    /// Build a one-row capabilities parquet in memory from the base
+    /// `schema()` columns. With `with_rangelist`, the `key_rangelist` column
+    /// is appended, carrying `["Allowed","AlwaysOn"]`.
     fn one_row_capabilities_parquet(with_rangelist: bool) -> Vec<u8> {
         use arrow::array::{ArrayRef, StringArray, UInt32Array, new_null_array};
         use arrow::datatypes::{DataType, Field, Schema};
@@ -258,8 +419,8 @@ mod tests {
         );
     }
 
-    /// A 40-column parquet (pre-key_rangelist) must keep reading, with
-    /// `range_list: None` on every key.
+    /// A parquet with only the base `schema()` columns (no `key_rangelist`)
+    /// must keep reading, with `range_list: None` on every key.
     #[test]
     fn read_tolerates_missing_range_list_column() {
         let buf = one_row_capabilities_parquet(false);
@@ -267,7 +428,7 @@ mod tests {
         assert_eq!(caps[0].keys[0].range_list, None);
     }
 
-    /// The shipped stable parquet (posture-ingest 41 cols) carries Apple's
+    /// The shipped stable parquet carries Apple's
     /// rangelists — the data behind offline enum validation. Pin the
     /// canonical example end-to-end.
     #[test]
@@ -369,7 +530,7 @@ mod tests {
     #[test]
     fn parse_schema_versions_extracts_seed_pin() {
         // Deterministic: tests the parser, not the pipeline-fetched (gitignored)
-        // schema-versions.toml, whose seed section is supplied by posture-ingest.
+        // schema-versions.toml, whose seed section the dataset pipeline supplies.
         let toml = r#"
 [apple_device_management]
 commit = "67045e2"
@@ -422,56 +583,35 @@ release = "seed_OS_27_0"
     }
 
     #[test]
-    fn beta_has_seed_additions_when_pinned() {
-        // GA-proof: when a seed is pinned, beta must STRICTLY exceed stable (a seed
-        // adds declarations and/or skip keys — historically app.settings, the
-        // network.vpn.* family, AccessibilityAppearance, LiquidGlass for OS 27).
-        // In the empty-beta window (post-GA, before the next seed), there is no pin
-        // and beta == stable. Driven entirely by the seed pin — no OS-version literals.
-        use std::collections::BTreeSet;
-        let pinned = !schema_versions()
-            .apple_device_management_seed_commit
-            .is_empty();
-
-        let stable_caps: BTreeSet<String> = capabilities::read(embedded_capabilities())
-            .expect("stable caps")
-            .into_iter()
-            .map(|c| c.payload_type)
-            .collect();
-        let beta_caps: BTreeSet<String> = capabilities::read(embedded_capabilities_beta())
-            .expect("beta caps")
-            .into_iter()
-            .map(|c| c.payload_type)
-            .collect();
-        let stable_keys: BTreeSet<String> = skip_keys::read(embedded_skip_keys())
-            .expect("stable skip_keys")
-            .into_iter()
-            .map(|k| k.key)
-            .collect();
-        let beta_keys: BTreeSet<String> = skip_keys::read(embedded_skip_keys_beta())
-            .expect("beta skip_keys")
-            .into_iter()
-            .map(|k| k.key)
-            .collect();
-
-        if pinned {
-            let cap_added = beta_caps.difference(&stable_caps).count();
-            let key_added = beta_keys.difference(&stable_keys).count();
-            assert!(
-                cap_added + key_added > 0,
-                "a pinned seed must add declarations or skip keys to beta \
-                 (caps +{cap_added}, keys +{key_added})"
-            );
-        } else {
-            assert_eq!(
-                beta_caps, stable_caps,
-                "with no seed pinned, beta capabilities must equal stable"
-            );
-            assert_eq!(
-                beta_keys, stable_keys,
-                "with no seed pinned, beta skip keys must equal stable"
-            );
-        }
+    fn beta_accessors_currently_mirror_stable() {
+        // With no seed dataset, every `*_beta` accessor returns the stable
+        // bytes (see the banner above them). This asserts that mapping
+        // directly: byte equality, not set equality, so a half-finished
+        // re-pointing at `data/beta/` cannot pass.
+        //
+        // While a seed is carried, the right invariant is that beta strictly
+        // exceeds stable; restore that test together with the `data/beta/`
+        // includes when a seed dataset is published again.
+        assert_eq!(
+            embedded_capabilities_beta().as_ptr(),
+            embedded_capabilities().as_ptr(),
+            "beta capabilities must be the stable bytes while beta is retired"
+        );
+        assert_eq!(
+            embedded_skip_keys_beta().as_ptr(),
+            embedded_skip_keys().as_ptr(),
+            "beta skip keys must be the stable bytes while beta is retired"
+        );
+        assert_eq!(
+            embedded_examples_beta().as_ptr(),
+            embedded_examples().as_ptr(),
+            "beta examples must be the stable bytes while beta is retired"
+        );
+        // The function the CLI asks must agree with the mapping pinned here.
+        assert!(
+            beta_is_retired(),
+            "beta_is_retired must report the retired mapping"
+        );
     }
 
     #[test]
@@ -532,3 +672,37 @@ release = "seed_OS_27_0"
         assert!(passcode.keys.iter().any(|k| k.name == "RequirePasscode"));
     }
 }
+
+/// Is a distinct pre-release seed dataset compiled in?
+///
+/// Beta is dormant, not abolished. The dataset pipeline builds it from
+/// Apple's seed schema when a seed holds additions over the release branch;
+/// a future seed brings it back.
+///
+/// This asks the bytes rather than a constant. The `*_beta` accessors above
+/// currently delegate to the stable ones, which makes the two slices the
+/// same memory; a real seed table would be a separate `include_bytes!` at a
+/// different address. So the answer follows the dataset, and every surface
+/// that reads it re-enables itself when beta returns.
+pub fn beta_dataset_is_carried() -> bool {
+    let stable = embedded_capabilities();
+    let beta = embedded_capabilities_beta();
+    !std::ptr::eq(stable.as_ptr(), beta.as_ptr()) || stable.len() != beta.len()
+}
+
+/// What to tell someone who asked for beta when no seed dataset is carried.
+///
+/// One copy, because two surfaces describing one channel is how this went
+/// wrong in the first place: `--help` promised seed-only keys, the SOP
+/// promised a superset, and the dataset had neither. Every refusal — the
+/// Apple schema registry and mSCP's rule queries alike — prints this.
+pub const BETA_DISABLED_MESSAGE: &str = "the beta channel is disabled in this build: no pre-release seed dataset is \
+     compiled in.\n\n\
+     It is dormant rather than removed. The dataset pipeline builds beta from Apple's OS seed \
+     schema when a seed holds additions over the release branch. When a future seed carries seed-only declarations, keys or \
+     rules, they are published and this flag starts working again with no change \
+     here.\n\n\
+     Until then `--beta` and `--channel beta` refuse rather than return the stable \
+     dataset under a different name: a command that silently answers a question you \
+     did not ask is worse than one that declines. Re-run without the flag for the \
+     stable dataset, which is what this binary carries.";

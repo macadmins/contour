@@ -1,9 +1,12 @@
 //! Generate machine-readable CLI reference for AI agents.
 //!
-//! Three output modes for progressive discovery:
+//! Output modes for progressive discovery:
 //! - **Index** (default): Agent guide + command index (~120 lines)
 //! - **Command**: Full detail for a single command by dotted path
 //! - **Full**: Complete CLI reference (all commands, all flags)
+//! - **Search**: Commands, flags, and SOP sections matching a query
+//! - **SOP** / **SOP section**: A whole SOP by name, or one heading of it
+//! - **JSON**: Machine-readable command tree
 
 use std::fmt::Write as _;
 use std::io::Write;
@@ -409,6 +412,10 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     )?;
     writeln!(
         buf,
+        "- Platform SSO, PSSO, Touch ID at login, guest mode, Tap to Login, extensible-sso → `--sop platform-sso`"
+    )?;
+    writeln!(
+        buf,
         "- GitHub Actions, CI, env vars, CONTOUR_ORG, workflow setup → `--sop ci`"
     )?;
     writeln!(
@@ -437,11 +444,15 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     writeln!(buf, "- `--sop ddm` — generate DDM declarations")?;
     writeln!(
         buf,
+        "- `--sop platform-sso` — Platform SSO on macOS 27: IdP login policies, Touch ID, Authenticated Guest Mode, Tap to Login; four presets"
+    )?;
+    writeln!(
+        buf,
         "- `--sop beta` — `--beta` pre-release OS seed schema (OS 27): scope, channel isolation, provenance"
     )?;
     writeln!(
         buf,
-        "- `--sop generative` — OS 27 Apple Intelligence / app-control payloads (seed-only)"
+        "- `--sop generative` — Apple Intelligence DDM payloads (intelligence.settings, external-intelligence, app.settings). NOT AI coding tools — that is `--sop app-policy`"
     )?;
     writeln!(
         buf,
@@ -465,12 +476,12 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
          - `--sop ci` — GitHub Actions setup, env vars (CONTOUR_ORG, CONTOUR_NAME), workflow config\n\
          - `--sop precommit` — wire contour validators into a Git pre-commit hook (uvx pre-commit)\n\
          - `--sop windows` — Windows CSP schema exploration (--windows on profile search/info)\n\
-         - `--sop app-policy` — AI-tool managed configuration (Claude Code, Codex, Cursor)\n\
+         - `--sop app-policy` — managed configuration of AI coding tools (Claude Code, OpenAI Codex, Cursor, Gemini Enterprise mobile). NOT Apple Intelligence — that is `--sop generative`\n\
          - `--sop beta-enrollment` — AppleSeed for IT beta declarations (offer/always-on/require/block)\n\
          - `--sop mcx` — inspect/rename managed-preference (MCX) domains, incl. guided --interactive"
     )?;
     // schema-data is intentionally NOT advertised — it's a contour-developer
-    // SOP about refreshing embedded parquet data from the upstream `posture`
+    // SOP about refreshing embedded parquet data from the upstream dataset
     // pipeline. Reachable via `generate_sop("schema-data", ...)` for devs
     // who know about it; agents shouldn't be routing through it.
     writeln!(buf)?;
@@ -494,43 +505,83 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
 
 /// Generate standard operating procedures for a specific tool.
 pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
-    let sop = match tool.to_lowercase().as_str() {
-        "profile" => SOP_PROFILE,
-        "mscp" => SOP_MSCP,
-        "ddm" => SOP_DDM,
-        "santa" => SOP_SANTA,
-        "pppc" => SOP_PPPC,
-        "btm" => SOP_BTM,
-        "notifications" => SOP_NOTIFICATIONS,
-        "support" => SOP_SUPPORT,
-        "fleet-migrate" | "migrate" | "fleet" => SOP_FLEET_MIGRATE,
-        "ci" | "github-actions" | "actions" | "env" | "workflow" => SOP_CI,
-        "schema-data" | "schema" | "data" | "parquet" => SOP_SCHEMA_DATA,
-        "enrollment" | "dep" | "ade" | "setup-assistant" => SOP_ENROLLMENT,
-        "osquery" => SOP_OSQUERY,
-        "beta" | "seed" | "seed-os" | "os27" | "os-27" => SOP_BETA,
-        "generative" | "intelligence" | "apple-intelligence" | "ai" | "genai" => SOP_GENERATIVE,
-        "precommit" | "pre-commit" | "hook" | "git-hook" | "githook" => SOP_PRECOMMIT,
-        "profile-changes" | "plan" | "rollback" | "change-impact" | "review" => SOP_PROFILE_CHANGES,
-        "profile-naming" | "naming" | "classify" | "rename" | "display-name" => SOP_PROFILE_NAMING,
-        "mcx" | "managed-preference" | "managed-preferences" | "mcx-domain" | "domain" => SOP_MCX,
-        "maintain" | "maintenance" | "hygiene" | "collisions" | "collision" | "consolidate"
-        | "audit" => SOP_MAINTAIN,
-        "windows" | "windows-csp" | "csp" | "ddf" | "admx" | "syncml" => SOP_WINDOWS_CSP,
-        "beta-enrollment" | "appleseed" | "seeding" | "beta-program" | "beta-programs" => {
-            SOP_BETA_ENROLLMENT
-        }
-        "app-policy" | "app-policies" | "ai-tools" | "claude-code" | "claudecode" | "codex"
-        | "cursor" => SOP_APP_POLICY,
-        _ => bail!(
-            "Unknown SOP tool: '{tool}'. Available: profile, profile-naming, mcx, maintain, mscp, ddm, santa, pppc, btm, notifications, support, osquery, beta, generative, precommit, profile-changes, windows, app-policy, beta-enrollment"
-        ),
-    };
+    // Two SOPs could answer "ai", and guessing sends an agent to the wrong
+    // one silently. Name both and let the caller pick.
+    if matches!(tool.to_lowercase().as_str(), "ai" | "genai") {
+        anyhow::bail!(
+            "'{tool}' is ambiguous. Use `--sop generative` for Apple Intelligence DDM payloads \
+             (intelligence.settings, external-intelligence.settings, app.settings), or \
+             `--sop app-policy` for managed configuration of AI coding tools (Claude Code, \
+             OpenAI Codex, Cursor, Gemini Enterprise mobile)."
+        );
+    }
+    let sop = SOPS
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(canonical_sop_name(tool)))
+        .map(|(_, content)| *content)
+        .ok_or_else(|| {
+            let mut names: Vec<&str> = SOPS.iter().map(|(n, _)| *n).collect();
+            names.sort_unstable();
+            anyhow::anyhow!(
+                "Unknown SOP tool: '{tool}'. Available: {}",
+                names.join(", ")
+            )
+        })?;
     writer.write_all(sop.as_bytes())?;
     Ok(())
 }
 
-/// SOP_PROFILE — first SOP migrated to the procedural format for piloted ops
+/// Resolve an alias to the canonical SOP name, or return it unchanged.
+///
+/// This maps names only, and `SOPS` alone says what exists — so a SOP that
+/// resolves is in the catalog by construction, and the "Available:" list is
+/// that catalog rather than a hand-kept copy that could drift from it.
+fn canonical_sop_name(tool: &str) -> &str {
+    let lower = tool.to_lowercase();
+    match lower.as_str() {
+        "fleet-migrate" | "migrate" | "fleet" => "fleet-migrate",
+        "ci" | "github-actions" | "actions" | "env" | "workflow" => "ci",
+        "schema-data" | "schema" | "data" | "parquet" => "schema-data",
+        "enrollment" | "dep" | "ade" | "setup-assistant" => "enrollment",
+        "app-privacy" | "app-settings" | "privacy" | "permission-defaults" => "app-privacy",
+        "composed-identifiers"
+        | "composed-identifier"
+        | "designated-requirement"
+        | "code-requirement"
+        | "composed" => "composed-identifiers",
+        "service-config" | "service-configuration-files" | "scf" => "service-config",
+        "beta" | "seed" | "seed-os" | "os27" | "os-27" => "beta",
+        "generative" | "intelligence" | "apple-intelligence" | "writing-tools" | "genmoji" => {
+            "generative"
+        }
+        "precommit" | "pre-commit" | "hook" | "git-hook" | "githook" => "precommit",
+        "profile-changes" | "plan" | "rollback" | "change-impact" | "review" => "profile-changes",
+        "profile-naming" | "naming" | "classify" | "rename" | "display-name" => "profile-naming",
+        "mcx" | "managed-preference" | "managed-preferences" | "mcx-domain" | "domain" => "mcx",
+        "mcp" | "mcp-server" | "model-context-protocol" | "agent-server" => "mcp",
+        "platform-sso" | "platformsso" | "psso" | "extensible-sso" | "sso" | "tap-to-login"
+        | "guest-mode" | "authenticated-guest" | "touch-id" | "touchid" => "platform-sso",
+        "maintain" | "maintenance" | "hygiene" | "collisions" | "collision" | "consolidate"
+        | "audit" => "maintain",
+        "windows" | "windows-csp" | "csp" | "ddf" | "admx" | "syncml" => "windows",
+        "beta-enrollment" | "appleseed" | "seeding" | "beta-program" | "beta-programs" => {
+            "beta-enrollment"
+        }
+        "app-policy" | "app-policies" | "ai-tool" | "ai-tools" | "ai-coding-tools"
+        | "coding-tools" | "claude-code" | "claudecode" | "codex" | "cursor" | "gemini" => {
+            "app-policy"
+        }
+        "mscp-osquery" | "osquery-bridge" | "mscp-fleet" | "tier1" | "tier2" => "mscp-osquery",
+        // Everything else is already canonical, or is not a SOP at all — the
+        // catalog lookup decides which, and reports the list when it is not.
+        // The original spelling is returned rather than the lowercased copy
+        // because that copy is a temporary; the lookup is case-insensitive,
+        // so `--sop MSCP` still resolves.
+        _ => tool,
+    }
+}
+
+/// SOP_PROFILE — procedural format for piloted ops
 /// (generate, normalize, jamf import). Other ops remain prose pending trace.
 ///
 /// Sourced from the markdown file rather than embedded as a raw string so the
@@ -549,16 +600,28 @@ const SOP_MAINTAIN: &str = include_str!("../skills/contour/references/sop-mainta
 /// nests its settings under, which the reference-rewriting cannot reach.
 const SOP_MCX: &str = include_str!("../skills/contour/references/sop-mcx.md");
 
-/// SOP_MSCP — third SOP migrated to the procedural format. Same external-
+/// SOP_MCP — the `contour-mcp` read-only MCP server: build, register with an
+/// agent client, the seven lookup tools, and why read-only is a property of
+/// the dependency tree rather than of runtime dispatch.
+const SOP_MCP: &str = include_str!("../skills/contour/references/sop-mcp.md");
+
+/// SOP_MSCP — procedural format. Same external-
 /// markdown pattern as SOP_PROFILE and SOP_DDM.
 const SOP_MSCP: &str = include_str!("../skills/contour/references/sop-mscp.md");
 
-/// SOP_DDM — second SOP migrated to the procedural format.
+/// SOP_DDM — procedural format.
 ///
 /// Sourced from the markdown file via include_str! (same pattern as
 /// SOP_PROFILE and SOP_ROUTING_TEMPLATE) so the procedure blocks (which
 /// contain nested backticks and quotes) are easier to author and review.
 const SOP_DDM: &str = include_str!("../skills/contour/references/sop-ddm.md");
+
+/// SOP_PLATFORM_SSO — Platform SSO on macOS 27 as the extensible-sso
+/// declaration: the key map, the four scenarios that ship as presets
+/// (baseline, Touch ID, Authenticated Guest Mode, Tap to Login), and the
+/// cross-key rules contour enforces from Apple's prose. Builds on SOP_DDM.
+const SOP_PLATFORM_SSO: &str =
+    include_str!("../skills/contour/references/sop-platform-sso.md");
 
 /// SOP_BETA — the `--beta` (pre-release OS seed) channel: scope, channel
 /// isolation, the short-name resolver gotcha, provenance, and safety.
@@ -572,21 +635,26 @@ const SOP_BETA_ENROLLMENT: &str =
     include_str!("../skills/contour/references/sop-beta-enrollment.md");
 
 /// SOP_WINDOWS_CSP — exploration of the embedded Windows CSP dataset
-/// (`--windows` on `profile search`/`info`). Recipe/cookbook format;
-/// explicitly scoped to lookup — contour emits no SyncML yet.
+/// (`--windows` on `profile search`/`info`) and SyncML emission via
+/// `profile windows generate`. Recipe/cookbook format.
 const SOP_WINDOWS_CSP: &str = include_str!("../skills/contour/references/sop-windows-csp.md");
 
-/// SOP_APP_POLICY — AI-tool managed configuration (Claude Code, Codex,
-/// Cursor, Gemini). Starter SOP: documents the embedded app-policy
+/// SOP_APP_POLICY — managed configuration of AI coding tools (Claude Code,
+/// OpenAI Codex, Cursor, Gemini Enterprise mobile): vendor preference
+/// domains delivered as managed-preferences profiles. Not Apple Intelligence
+/// (that is SOP_GENERATIVE). Starter SOP: documents the embedded app-policy
 /// dataset and the working mcx_domain recipe path; a query CLI is the
 /// documented roadmap, not yet implemented.
 const SOP_APP_POLICY: &str = include_str!("../skills/contour/references/sop-app-policy.md");
 
-/// SOP_GENERATIVE — OS 27 generative-AI / app-control payloads (Apple
-/// Intelligence, external intelligence, app.settings). Seed-only; builds on SOP_BETA.
+/// SOP_GENERATIVE — Apple Intelligence DDM payloads (intelligence.settings,
+/// external-intelligence.settings, app.settings, safari.settings). Apple's
+/// own on-device AI features and the ChatGPT-style external-intelligence
+/// hook, all in the released schema (26.4 / 27.0). Not the AI coding tools'
+/// managed configuration (that is SOP_APP_POLICY).
 const SOP_GENERATIVE: &str = include_str!("../skills/contour/references/sop-generative.md");
 
-/// SOP_SANTA — 11th SOP. Different format from procedural: a decision
+/// SOP_SANTA — different format from procedural: a decision
 /// tree at the top + 6 named recipes (cookbook). Procedural would
 /// produce worse output for a fan-out command surface like Santa where
 /// multiple goals each have a different end-to-end pipeline. Verified
@@ -594,32 +662,32 @@ const SOP_GENERATIVE: &str = include_str!("../skills/contour/references/sop-gene
 /// for the CEL `target.*` field surface.
 const SOP_SANTA: &str = include_str!("../skills/contour/references/sop-santa.md");
 
-/// SOP_PPPC — sixth SOP migrated to the procedural format. Same external-
+/// SOP_PPPC — procedural format. Same external-
 /// markdown pattern as SOP_PROFILE / SOP_DDM / SOP_MSCP / SOP_OSQUERY /
 /// SOP_ENROLLMENT.
 const SOP_PPPC: &str = include_str!("../skills/contour/references/sop-pppc.md");
 
-/// SOP_BTM — seventh SOP migrated to the procedural format. The killer
+/// SOP_BTM — procedural format. The killer
 /// decision pinned by the procedure is mobileconfig-vs-DDM target
 /// selection on macOS 15+.
 const SOP_BTM: &str = include_str!("../skills/contour/references/sop-btm.md");
 
-/// SOP_NOTIFICATIONS — eighth SOP migrated to the procedural format.
+/// SOP_NOTIFICATIONS — procedural format.
 const SOP_NOTIFICATIONS: &str = include_str!("../skills/contour/references/sop-notifications.md");
 
-/// SOP_SUPPORT — ninth SOP migrated to the procedural format. Includes
+/// SOP_SUPPORT — procedural format. Includes
 /// an INVARIANT that pins the `nl.root3.support` PayloadType so a CLI
 /// regression cannot silently emit profiles the Support app won't read.
 const SOP_SUPPORT: &str = include_str!("../skills/contour/references/sop-support.md");
 
-/// SOP_PRECOMMIT — tenth SOP. Documents wiring contour's validators
+/// SOP_PRECOMMIT — documents wiring contour's validators
 /// into a Git pre-commit hook (canonical path: `uvx pre-commit`) so
 /// malformed profiles, dangling DDM references, and broken TOML
 /// configs block the commit at the developer's keyboard rather than
 /// failing in CI 20+ minutes later.
 const SOP_PRECOMMIT: &str = include_str!("../skills/contour/references/sop-precommit.md");
 
-/// SOP_PROFILE_CHANGES — 15th SOP. Procedural format. Covers the
+/// SOP_PROFILE_CHANGES — procedural format. Covers the
 /// risk model behind bulk `.mobileconfig` edits (PayloadUUID churn,
 /// orphaned cross-references, plist type-shape errors, scope
 /// broadening) and the `profile plan` / `profile rollback` workflow.
@@ -629,42 +697,60 @@ const SOP_PROFILE_CHANGES: &str =
     include_str!("../skills/contour/references/sop-profile-changes.md");
 const SOP_PROFILE_NAMING: &str = include_str!("../skills/contour/references/sop-profile-naming.md");
 
-/// SOP_FLEET_MIGRATE — 12th SOP. Numbered migration playbook (NOT a
+/// SOP_FLEET_MIGRATE — numbered migration playbook (NOT a
 /// callable procedure). Validated against fleetctl v4.84.2 scaffold +
 /// fleet/docs/Configuration/yaml-files.md. Keeps human diff-checkpoints
 /// at each step because YAML migrations have meaningful semantic deltas.
 const SOP_FLEET_MIGRATE: &str = include_str!("../skills/contour/references/sop-fleet-migrate.md");
 
-/// SOP_ENROLLMENT — fifth SOP migrated to the procedural format. The killer
-/// trap it catches: `--skip-all` includes FileVault and SoftwareUpdate, both
-/// of which should almost never be skipped in production. The procedural
-/// format's INVARIANTS block enforces this at the agent layer.
+/// SOP_ENROLLMENT — procedural format. The killer trap it catches:
+/// FileVault and SoftwareUpdate should almost never be skipped in
+/// production. `--skip-all` leaves both out; an explicit `--skip` naming
+/// either is refused, and the SOP's INVARIANTS block enforces the same at
+/// the agent layer.
 const SOP_ENROLLMENT: &str = include_str!("../skills/contour/references/sop-enrollment.md");
 
-/// SOP_CI — 13th SOP. Hybrid: bootstrap procedure (`configure_ci`) plus
+/// SOP_CI — hybrid: bootstrap procedure (`configure_ci`) plus
 /// a workflow-recipe reference. The procedural part has typed
 /// preconditions on `gh variable set` / `gh secret set`; the recipes
 /// are configuration patterns that don't fit a procedure shape.
 const SOP_CI: &str = include_str!("../skills/contour/references/sop-ci.md");
 
-/// SOP_SCHEMA_DATA — 14th (final) SOP. Hybrid: developer reference
-/// (data inventory, three-layer versioning) + thin update_schema_data
-/// PROCEDURE for the happy-path refresh flow. Internal contour-dev
-/// documentation, not user-facing.
+/// SOP_SCHEMA_DATA — developer reference (what is
+/// embedded, how a build resolves `data/`) + the update_schema_data
+/// PROCEDURE for a pin bump. Internal contour-dev documentation, not
+/// user-facing.
 const SOP_SCHEMA_DATA: &str = include_str!("../skills/contour/references/sop-schema-data.md");
 
-/// SOP_OSQUERY — fourth SOP migrated to the procedural format. Combines
+/// SOP_OSQUERY — procedural format. Combines
 /// procedural lookup (find_query_table → write_policy_query) with a
 /// reference cookbook of battle-tested SQL patterns.
 const SOP_OSQUERY: &str = include_str!("../skills/contour/references/sop-osquery.md");
+const SOP_APP_PRIVACY: &str = include_str!("../skills/contour/references/sop-app-privacy.md");
+/// Composed identifiers: the two spellings, the nine keys, and which
+/// platform each applies to.
+const SOP_COMPOSED_IDENTIFIERS: &str =
+    include_str!("../skills/contour/references/sop-composed-identifiers.md");
+const SOP_SERVICE_CONFIG: &str = include_str!("../skills/contour/references/sop-service-config.md");
+
+/// SOP_MSCP_OSQUERY — the Tier-1/Tier-2 bridge from mSCP rules to osquery.
+///
+/// `sop-routing.md` has pointed agents at `--sop mscp-osquery` since the file
+/// was written, and the name resolved to nothing: the command printed
+/// "Unknown SOP tool" and exited 0, so the routing table sent agents to a
+/// dead end that did not even look like a failure. The file was also absent
+/// from `SOPS`, which is what section search reads, so it could not be found
+/// by name or by content.
+const SOP_MSCP_OSQUERY: &str = include_str!("../skills/contour/references/sop-mscp-osquery.md");
 
 /// Canonical (tool-name, content) catalog of every SOP — for section search and
-/// `--at` extraction. (Alias resolution still lives in `generate_sop`.)
+/// `--at` extraction. (Alias resolution lives in `canonical_sop_name`.)
 const SOPS: &[(&str, &str)] = &[
     ("profile", SOP_PROFILE),
     ("maintain", SOP_MAINTAIN),
     ("mscp", SOP_MSCP),
     ("ddm", SOP_DDM),
+    ("platform-sso", SOP_PLATFORM_SSO),
     ("beta", SOP_BETA),
     ("generative", SOP_GENERATIVE),
     ("santa", SOP_SANTA),
@@ -675,11 +761,20 @@ const SOPS: &[(&str, &str)] = &[
     ("precommit", SOP_PRECOMMIT),
     ("profile-naming", SOP_PROFILE_NAMING),
     ("mcx", SOP_MCX),
+    ("mcp", SOP_MCP),
+    ("app-privacy", SOP_APP_PRIVACY),
+    ("composed-identifiers", SOP_COMPOSED_IDENTIFIERS),
+    ("service-config", SOP_SERVICE_CONFIG),
     ("fleet-migrate", SOP_FLEET_MIGRATE),
     ("enrollment", SOP_ENROLLMENT),
     ("ci", SOP_CI),
     ("schema-data", SOP_SCHEMA_DATA),
     ("osquery", SOP_OSQUERY),
+    ("mscp-osquery", SOP_MSCP_OSQUERY),
+    ("windows", SOP_WINDOWS_CSP),
+    ("app-policy", SOP_APP_POLICY),
+    ("beta-enrollment", SOP_BETA_ENROLLMENT),
+    ("profile-changes", SOP_PROFILE_CHANGES),
 ];
 
 /// One `##`/`###` section of a SOP, with its body text (for search).
@@ -1263,18 +1358,16 @@ fn arg_to_json(arg: &clap::Arg) -> serde_json::Value {
 
 // ── Skill file installation ─────────────────────────────────────────
 
-/// Install a Claude Code / Kilo Code skill file for contour.
-///
-/// Creates `.claude/skills/contour.md` in the current working directory so
-/// AI agents automatically discover contour capabilities.
-/// Embedded skill file templates.
+/// Embedded skill file templates, written by [`install_skill_with`] to
+/// `.claude/skills/contour/` so AI agents automatically discover contour.
 const SKILL_TEMPLATE: &str = include_str!("../skills/contour/SKILL.md");
 const SOP_ROUTING_TEMPLATE: &str = include_str!("../skills/contour/references/sop-routing.md");
 
 /// Install contour skill files for AI agents.
 ///
 /// Creates:
-/// - `.claude/skills/contour.md` — skill file (for local Claude Code sessions)
+/// - `.claude/skills/contour/SKILL.md` + `references/sop-routing.md` — skill
+///   files (for local Claude Code sessions)
 /// - Appends full contour instructions to `CLAUDE.md` (for CI/GitHub Actions)
 /// - Appends full contour instructions to `AGENTS.md` (for Kilo Code and others)
 ///
@@ -1313,13 +1406,19 @@ impl SkillInstallOptions<'_> {
 }
 
 /// Install contour skill files with the default options (see [`install_skill_with`]).
-pub fn install_skill(version: &str) -> Result<()> {
-    install_skill_with(version, &SkillInstallOptions::all())
+pub fn install_skill(version: &str, census: &str) -> Result<()> {
+    install_skill_with(version, census, &SkillInstallOptions::all())
 }
 
 /// Render the skill markdown from the template — substitutes the version and,
 /// when `org` is set, pins a default org domain so agents avoid `com.example`.
-fn render_skill(version: &str, org: Option<&str>) -> String {
+/// Fill the skill template.
+///
+/// `census` is passed in rather than computed here: contour-core deliberately
+/// depends on no schema crate, and the counts have to come from the same
+/// embedded bytes the CLI answers out of. The binary owns that (see
+/// `contour::census`), exactly as it already owns `version`.
+fn render_skill(version: &str, org: Option<&str>, census: &str) -> String {
     let org_line = match org {
         Some(org) => format!(
             "\n\nDefault org domain for this project: `{org}` — pass `--org {org}` \
@@ -1330,6 +1429,7 @@ fn render_skill(version: &str, org: Option<&str>) -> String {
     SKILL_TEMPLATE
         .replace("{{VERSION}}", version)
         .replace("{{ORG_LINE}}", &org_line)
+        .replace("{{CENSUS}}", census)
 }
 
 /// Marker wrapping the contour block embedded in agent files. A markered
@@ -1428,11 +1528,15 @@ fn merge_skill_into(existing: &str, skill: &str, force: bool) -> (Option<String>
 /// Always writes `.claude/skills/contour/SKILL.md` (+ references); writes
 /// `CLAUDE.md` / `AGENTS.md` per the options. When `opts.org` is set, the
 /// skill pins that org domain so agents never fall back to `com.example`.
-pub fn install_skill_with(version: &str, opts: &SkillInstallOptions<'_>) -> Result<()> {
+pub fn install_skill_with(
+    version: &str,
+    census: &str,
+    opts: &SkillInstallOptions<'_>,
+) -> Result<()> {
     use std::fs;
     use std::path::Path;
 
-    let skill_content = render_skill(version, opts.org);
+    let skill_content = render_skill(version, opts.org, census);
 
     // 1. Install .claude/skills/contour/ directory (for local sessions)
     let skill_dir = Path::new(".claude/skills/contour");
@@ -1560,11 +1664,43 @@ mod skill_tests {
     fn template_carries_version_and_org_placeholders() {
         assert!(SKILL_TEMPLATE.contains("{{VERSION}}"));
         assert!(SKILL_TEMPLATE.contains("{{ORG_LINE}}"));
+        assert!(SKILL_TEMPLATE.contains("{{CENSUS}}"));
+    }
+
+    /// No figure about the dataset is written into the skill by hand.
+    ///
+    /// `SKILL.md` is the first thing an agent reads and the last thing anyone
+    /// re-checks. Every count in it comes from `{{CENSUS}}`, which the binary
+    /// fills from the embedded bytes at install time. A comma-grouped number
+    /// in the template means someone typed a count back in.
+    ///
+    /// Comma-grouping is the test because that is what these figures look
+    /// like, and because version strings, OS numbers and flag names do not
+    /// use it — so this catches the defect without forbidding ordinary prose.
+    #[test]
+    fn the_skill_template_states_no_dataset_count_by_hand() {
+        let offenders: Vec<&str> = SKILL_TEMPLATE
+            .lines()
+            .filter(|l| {
+                let b: Vec<char> = l.chars().collect();
+                b.windows(5).any(|w| {
+                    w[0].is_ascii_digit()
+                        && w[1] == ','
+                        && w[2..5].iter().all(|c| c.is_ascii_digit())
+                })
+            })
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "SKILL.md carries hand-written dataset counts. Every figure must come \
+             from {{{{CENSUS}}}}, which is counted at install time:\n{}",
+            offenders.join("\n")
+        );
     }
 
     #[test]
     fn render_skill_substitutes_version_and_drops_placeholders() {
-        let out = render_skill("9.9.9-test", None);
+        let out = render_skill("9.9.9-test", None, "1 table");
         assert!(out.contains("9.9.9-test"));
         assert!(!out.contains("{{VERSION}}"));
         assert!(!out.contains("{{ORG_LINE}}"));
@@ -1572,16 +1708,142 @@ mod skill_tests {
 
     #[test]
     fn render_skill_pins_org_when_given() {
-        let out = render_skill("1.0.0", Some("com.acme"));
+        let out = render_skill("1.0.0", Some("com.acme"), "1 table");
         assert!(out.contains("Default org domain for this project: `com.acme`"));
         assert!(out.contains("CONTOUR_ORG=com.acme"));
         // Org-agnostic render must not leak an org line.
-        assert!(!render_skill("1.0.0", None).contains("Default org domain for this project"));
+        assert!(
+            !render_skill("1.0.0", None, "1 table").contains("Default org domain for this project")
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// Every SOP file on disk is in the catalog.
+    ///
+    /// `sop-mscp-osquery.md` sat in `references/` unreferenced by `SOPS` and
+    /// unresolvable by `generate_sop`, while `sop-routing.md` sent agents to
+    /// `--sop mscp-osquery` — which printed "Unknown SOP tool" and exited 0.
+    /// A file nobody registered is invisible three ways at once: not servable,
+    /// not searchable, and not obviously missing, because the routing table
+    /// that names it is prose.
+    #[test]
+    fn every_sop_file_is_in_the_catalog() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/contour/references");
+        let mut orphans = Vec::new();
+        for entry in std::fs::read_dir(&dir)
+            .expect("references/ exists")
+            .flatten()
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Some(stem) = name
+                .strip_prefix("sop-")
+                .and_then(|n| n.strip_suffix(".md"))
+            else {
+                continue;
+            };
+            /// Files under `references/` named `sop-*` that are not SOPs,
+            /// with why. Both say so in their own first paragraph; the
+            /// `sop-` prefix is historical and they are referenced by path
+            /// from a dozen places, so the name stays and the exception is
+            /// written down instead.
+            const NOT_A_SOP: &[(&str, &str)] = &[
+                (
+                    "routing",
+                    "the dispatcher that decides which SOP an agent is handed",
+                ),
+                (
+                    "format-spec",
+                    "the procedural-SOP format specification — \"It is the \
+                     format spec, not an SOP itself\"",
+                ),
+            ];
+            if NOT_A_SOP.iter().any(|(n, _)| *n == stem) {
+                continue;
+            }
+            let content = std::fs::read_to_string(entry.path()).expect("readable");
+            if !SOPS.iter().any(|(_, c)| *c == content) {
+                orphans.push(format!("  sop-{stem}.md"));
+            }
+        }
+        assert!(
+            orphans.is_empty(),
+            "these SOP files are not in SOPS, so `--sop` cannot serve them and \
+             section search cannot find them:\n{}\n\n\
+             Add an entry to SOPS (and an alias in canonical_sop_name if the \
+             name agents will type differs from the file's).",
+            orphans.join("\n")
+        );
+    }
+
+    /// Every `--sop <name>` the skill files advertise actually resolves.
+    ///
+    /// This is the half that bit: the routing table is the first thing an
+    /// agent reads, and it promised a SOP the binary did not have. The
+    /// promise and the thing promised live in different files, so only a test
+    /// holds them together.
+    #[test]
+    fn every_sop_the_skill_files_advertise_resolves() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/contour");
+        let mut broken = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("skill dir").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "md") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("readable");
+                for (i, line) in text.lines().enumerate() {
+                    for frag in line.split("--sop ").skip(1) {
+                        let name: String = frag
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                            .collect();
+                        if name.is_empty() || name == "windows-csp" {
+                            continue;
+                        }
+                        let mut sink = Vec::new();
+                        if generate_sop(&name, &mut sink).is_err() {
+                            broken.push(format!(
+                                "  {}:{} — `--sop {name}`",
+                                path.file_name().unwrap_or_default().to_string_lossy(),
+                                i + 1
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        broken.sort_unstable();
+        broken.dedup();
+        assert!(
+            broken.is_empty(),
+            "the skill files route agents to SOPs that do not resolve:\n{}",
+            broken.join("\n")
+        );
+    }
+
+    /// The catalog's own names all resolve, aliases included.
+    #[test]
+    fn every_catalogued_name_resolves_to_its_own_content() {
+        for (name, content) in SOPS {
+            let mut sink = Vec::new();
+            generate_sop(name, &mut sink).unwrap_or_else(|e| panic!("--sop {name}: {e}"));
+            assert_eq!(
+                String::from_utf8(sink).expect("utf8"),
+                *content,
+                "--sop {name} served a different SOP's content"
+            );
+        }
+    }
     use super::*;
     use clap::{Arg, Command};
 
@@ -1734,11 +1996,11 @@ mod tests {
         assert!(text.contains("[SOP] enrollment"), "got: {text}");
     }
 
-    /// Every SOP registered for search must also resolve through the alias
-    /// map in `generate_sop`. The two lists are hand-edited in different
-    /// places, so a SOP added to one and not the other is the drift this
-    /// catches — the symptom is a SOP that `find` surfaces but that
-    /// `--sop <name>` then rejects as unknown.
+    /// Every SOP in the `SOPS` catalog must resolve through `--sop <name>`
+    /// under its own name. `canonical_sop_name` falls through to the catalog
+    /// for non-aliases, so this guards against an alias arm that shadows a
+    /// catalog name (mapping it somewhere else) — the symptom is a SOP that
+    /// `find` surfaces but that `--sop <name>` then serves wrongly or rejects.
     #[test]
     fn every_registered_sop_resolves_by_name() {
         for (name, _) in SOPS {

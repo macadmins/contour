@@ -216,10 +216,12 @@ pub fn print_error(msg: &str) {
 /// Print an error as a JSON object on stderr.
 ///
 /// Used when `--json` is set so agents/CI receive a parseable failure shape
-/// instead of plain `Error: ...` text. Mirrors the BatchResult error_code
-/// enum from `profile/cli/glob_utils.rs::error_code_for` (INVALID_IDENTIFIER,
-/// INVALID_FORMAT, MISSING_PAYLOAD_TYPE, SCHEMA_VIOLATION, IO_ERROR,
-/// INVALID_ORG, UNKNOWN). When `error_code` is `None`, emits `"UNKNOWN"`.
+/// instead of plain `Error: ...` text. Codes come from [`classify_error`]
+/// (INVALID_IDENTIFIER, INVALID_FORMAT, MISSING_PAYLOAD_TYPE,
+/// SCHEMA_VIOLATION, IO_ERROR, INVALID_ORG, UNSUPPORTED_FORMAT,
+/// ARCHIVE_LAYOUT, UNKNOWN_SERVICE_TYPE, CONTENT_MOVED, UNKNOWN), a superset
+/// of the BatchResult codes in `profile/cli/glob_utils.rs::error_code_for`.
+/// When `error_code` is `None`, emits `"UNKNOWN"`.
 ///
 /// **Stability:** the JSON shape is part of the agent contract documented in
 /// the procedural SOP format spec. Don't rename fields without updating the spec.
@@ -227,6 +229,62 @@ pub fn print_error_json(msg: &str, error_code: Option<&str>) {
     let mut err = std::io::stderr();
     let _ = write_error_json(&mut err, msg, error_code);
 }
+
+/// One suggested next command. Printed after a result as `why → command`
+/// in human mode (see [`print_next_steps`]) and carried as
+/// `next: [{why, command}]` in JSON, so an operator and an agent get the
+/// same path. At most three per result; each a runnable command with the
+/// operator's real values where they are known; only while its
+/// precondition holds; after a failure, only the fix.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NextStep {
+    pub why: String,
+    pub command: String,
+}
+
+impl NextStep {
+    pub fn new(why: impl Into<String>, command: impl Into<String>) -> Self {
+        Self {
+            why: why.into(),
+            command: command.into(),
+        }
+    }
+}
+
+/// The `Next` block: one aligned `why → command` line per step. Empty when
+/// there is nothing to suggest, so callers can print it unconditionally.
+pub fn render_next_steps(steps: &[NextStep]) -> String {
+    if steps.is_empty() {
+        return String::new();
+    }
+    let width = steps.iter().map(|s| s.why.chars().count()).max().unwrap_or(0);
+    let mut out = String::from("\nNext\n");
+    for s in steps {
+        out.push_str(&format!("  {:<width$}  → {}\n", s.why, s.command));
+    }
+    out
+}
+
+/// Print the `Next` block to stdout (human mode only; JSON carries `next`).
+pub fn print_next_steps(steps: &[NextStep]) {
+    print!("{}", render_next_steps(steps));
+}
+
+/// A failure whose JSON envelope the handler has already printed, because
+/// it knew the exact `error_code` where `main`'s classifier would only
+/// guess. Handlers return this instead of a bare `anyhow` error so `main`
+/// prints the message in human mode and prints nothing in JSON mode — one
+/// envelope per failure, never two with different codes.
+#[derive(Debug)]
+pub struct Reported(pub String);
+
+impl std::fmt::Display for Reported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Reported {}
 
 /// Render the error envelope to `writer`.
 ///
@@ -260,9 +318,12 @@ pub fn write_error_json(
 /// Classify a freeform error message into one of the typed codes used by
 /// [`print_error_json`] and the BatchResult JSON contract.
 ///
-/// Substring-based; should stay in sync with `profile::cli::glob_utils::error_code_for`.
-/// We duplicate the mapping here (rather than depend on the profile crate) because
-/// `contour-core` is upstream of `profile` in the dependency graph.
+/// Substring-based. Superset of `profile::cli::glob_utils::error_code_for`:
+/// every code that function returns is returned here for the same inputs, and
+/// this adds UNSUPPORTED_FORMAT, ARCHIVE_LAYOUT, UNKNOWN_SERVICE_TYPE and
+/// CONTENT_MOVED. The shared part is duplicated here (rather than depending on
+/// the profile crate) because `contour-core` is upstream of `profile` in the
+/// dependency graph.
 #[must_use]
 pub fn classify_error(error: &str) -> &'static str {
     // Format refusals are classified before the parser-error patterns below:
@@ -294,6 +355,20 @@ pub fn classify_error(error: &str) -> &'static str {
     }
     if error.contains("Validation failed") || error.contains("schema validation") {
         return "SCHEMA_VIOLATION";
+    }
+    // Service-configuration-files refusals. Each is a declaration that would
+    // deploy cleanly and manage nothing, so an agent must be able to switch on
+    // them rather than substring-match the prose.
+    if error.contains("must contain")
+        && (error.contains("archive for") || error.contains("mirrors the filesystem"))
+    {
+        return "ARCHIVE_LAYOUT";
+    }
+    if error.contains("is not a service Apple documents") || error.contains("must be reverse-DNS") {
+        return "UNKNOWN_SERVICE_TYPE";
+    }
+    if error.contains("Re-hosting moves a URL") || error.contains("refusing to re-point") {
+        return "CONTENT_MOVED";
     }
     if error.contains("No such file")
         || error.contains("Permission denied")
@@ -506,6 +581,36 @@ mod error_json_tests {
         let value: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(value["error_code"], "UNKNOWN");
     }
+
+    #[test]
+    fn service_config_refusals_get_stable_codes() {
+        // These three are the whole point of the service-config guard rails:
+        // each names a declaration that deploys cleanly and manages nothing.
+        // An agent switches on the code, so a reworded message must not
+        // silently demote them to UNKNOWN.
+        assert_eq!(
+            classify_error(
+                "archive for `com.apple.sshd` must contain etc/ssh — the archive mirrors \
+                 the filesystem starting at `/`"
+            ),
+            "ARCHIVE_LAYOUT"
+        );
+        assert_eq!(
+            classify_error("`com.apple.sshdd` is not a service Apple documents"),
+            "UNKNOWN_SERVICE_TYPE"
+        );
+        assert_eq!(
+            classify_error("ServiceType `sshd` must be reverse-DNS"),
+            "UNKNOWN_SERVICE_TYPE"
+        );
+        assert_eq!(
+            classify_error(
+                "`com.acme.asset.sshd`: the archive's hash is ab, but the index recorded cd. \
+                 Re-hosting moves a URL, it does not republish content"
+            ),
+            "CONTENT_MOVED"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -533,5 +638,24 @@ mod classify_format_tests {
             classify_error("Failed to parse plist: UnexpectedEof"),
             "INVALID_FORMAT"
         );
+    }
+}
+
+#[cfg(test)]
+mod next_step_tests {
+    use super::*;
+
+    #[test]
+    fn next_block_aligns_arrows_and_is_empty_when_nothing_to_say() {
+        assert_eq!(render_next_steps(&[]), "");
+        let out = render_next_steps(&[
+            NextStep::new("Short", "contour a"),
+            NextStep::new("A longer reason", "contour b --json"),
+        ]);
+        assert!(out.starts_with("\nNext\n"));
+        let lines: Vec<&str> = out.lines().filter(|l| l.contains('→')).collect();
+        assert_eq!(lines.len(), 2);
+        let col = |l: &str| l.find('→').unwrap();
+        assert_eq!(col(lines[0]), col(lines[1]), "arrows align: {out}");
     }
 }

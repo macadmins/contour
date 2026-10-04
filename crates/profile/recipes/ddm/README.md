@@ -22,6 +22,11 @@ or `--org` decides the prefix.
 | `keyboard-settings.toml` | Managed `com.apple.configuration.keyboard.settings` — turns dictation off and leaves the other typing aids on; all eight keys stated explicitly for easy adjustment |
 | `managed-migration-assistant.toml` | Runs Migration Assistant under managed control via `com.apple.configuration.migration-assistant.settings`, carrying over Security & Privacy settings |
 | `siri-settings.toml` | Managed `com.apple.configuration.siri.settings` — keeps Siri enabled but off the lock screen, profanity filter forced, no user-generated content; set `Enabled = false` to disable Siri entirely |
+| `softwareupdate-settings.toml` | Managed `com.apple.configuration.softwareupdate.settings` — security updates and background download forced on (`AlwaysOn`), Apple beta enrolment blocked (`AlwaysOff`), OS updates left operator-driven, standard users barred from self-updating |
+| `softwareupdate-enforcement.toml` | Deadline-enforced OS update via `com.apple.configuration.softwareupdate.enforcement.specific`. **Not deploy-as-is** — `TargetOSVersion` and `TargetLocalDateTime` are schema-required placeholders; a past deadline enforces immediately |
+| `passcode-settings.toml` | Baseline `com.apple.configuration.passcode.settings` — passcode required, 8-character minimum, 15-minute inactivity lock, 10 failed attempts; deliberately omits forced rotation and alphanumeric complexity |
+| `diskmanagement-settings.toml` | `com.apple.configuration.diskmanagement.settings` — external and network volumes mount `ReadOnly`, so devices can read removable media but not copy data onto it |
+| `safari-settings.toml` | Hardened `com.apple.configuration.safari.settings` — fraud warning locked on, private browsing removed, pop-ups blocked; JavaScript deliberately left enabled |
 
 All bundles use a simple activation (no predicate) — scope to platform
 via your MDM's group/team assignment.

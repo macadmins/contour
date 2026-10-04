@@ -1,9 +1,10 @@
 //! `profile collisions` — detect cross-profile payload-domain collisions.
 //!
-//! Recursively scans `.mobileconfig` profiles and DDM `.json` declarations, groups
-//! every managed payload by `(scope, domain)` where the scope is the file's parent
-//! directory (or the whole tree with `--flat`), and reports any domain managed by
-//! 2+ files — with a per-key verdict (conflict / redundant / complementary).
+//! Scans `.mobileconfig` profiles and DDM `.json` declarations (one level deep
+//! unless `--recursive`), groups every managed payload by `(scope, domain)` where
+//! the scope is the file's parent directory (or the whole tree with `--flat`), and
+//! reports any domain managed by 2+ files — with a per-key verdict (conflict /
+//! redundant / complementary).
 
 use std::fs;
 use std::path::{Path, PathBuf};

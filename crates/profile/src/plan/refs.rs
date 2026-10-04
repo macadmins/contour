@@ -3,7 +3,7 @@
 //! Maps every `link::LinkValidationError` on the *proposed* profile to a
 //! `PayloadChange` with `tier = RefBroken`. This is the slice that
 //! catches the Okta SCEP / `PayloadCertificateUUID` orphan pattern
-//! flagged by CodeRabbit on the Fleet GitOps PR.
+//! found in review on a Fleet GitOps PR.
 //!
 //! The lib already has the heavy machinery in `crate::link`; this
 //! module just adapts the result into the plan vocabulary.
@@ -120,9 +120,8 @@ mod tests {
 
     #[test]
     fn fleet_okta_orphaned_payload_certificate_uuid_is_ref_broken() {
-        // Reproduce the exact CodeRabbit finding: the SCEP payload UUID
-        // was regenerated to E42B…, but the identity-preference payload
-        // still points at the old 478f… UUID. plan must report
+        // The SCEP payload UUID was regenerated to E42B…, but the
+        // identity-preference payload still points at the old 478f… UUID. plan must report
         // RefBroken on that payload.
         let scep = payload(
             "com.apple.security.scep",

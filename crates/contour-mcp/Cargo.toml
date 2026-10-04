@@ -1,0 +1,33 @@
+[package]
+name = "contour-mcp"
+version = "0.5.0-beta.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Read-only MCP server exposing contour's embedded Apple MDM, osquery and mSCP schema to AI agents"
+
+[[bin]]
+name = "contour-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# Schema data + readers. The three *-schema crates have no fs::write,
+# File::create or OpenOptions anywhere. contour-core does (config.rs,
+# fragment.rs, help_agents.rs) but no MCP tool calls into those paths —
+# the read-only guarantee is that the handlers in tools.rs never call a
+# writer, not that none is linked. Deliberately absent: profile, mscp,
+# santa, pppc, btm, notifications, support.
+mdm-schema = { path = "../mdm-schema" }
+osquery-schema = { path = "../osquery-schema" }
+mscp-schema = { path = "../mscp-schema" }
+contour-core = { path = "../contour-core" }
+
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true

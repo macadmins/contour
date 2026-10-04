@@ -1,7 +1,6 @@
 use crate::models::{Policy, Rule, RuleSet, RuleType};
 use anyhow::{Context, Result};
 use plist::Value;
-use std::collections::HashMap;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -90,7 +89,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     let payload_content_dict = build_santa_payload(rules);
 
     // Build payload
-    let mut payload: HashMap<String, Value> = HashMap::new();
+    let mut payload = plist::Dictionary::new();
     payload.insert(
         "PayloadType".to_string(),
         Value::String("com.northpolesec.santa".to_string()),
@@ -114,7 +113,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     );
 
     // Build profile
-    let mut profile: HashMap<String, Value> = HashMap::new();
+    let mut profile = plist::Dictionary::new();
     profile.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
     profile.insert(
         "PayloadType".to_string(),
@@ -204,11 +203,11 @@ pub fn generate_payload_plist(rules: &RuleSet, options: &GeneratorOptions) -> Re
     let santa_rules: Vec<Value> = rules.rules().iter().map(rule_to_plist).collect();
 
     // Build payload content
-    let mut payload_content: HashMap<String, Value> = HashMap::new();
+    let mut payload_content = plist::Dictionary::new();
     payload_content.insert("Rules".to_string(), Value::Array(santa_rules));
 
     // Build payload
-    let mut payload: HashMap<String, Value> = HashMap::new();
+    let mut payload = plist::Dictionary::new();
     payload.insert(
         "PayloadType".to_string(),
         Value::String("com.northpolesec.santa".to_string()),
@@ -272,7 +271,7 @@ pub fn write_to_file_format(
 }
 
 fn rule_to_plist(rule: &Rule) -> Value {
-    let mut dict: HashMap<String, Value> = HashMap::new();
+    let mut dict = plist::Dictionary::new();
 
     dict.insert(
         "rule_type".to_string(),

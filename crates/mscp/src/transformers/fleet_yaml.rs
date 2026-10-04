@@ -21,7 +21,7 @@ impl FleetYamlGenerator {
         }
     }
 
-    /// Generate a composable baseline component (lib/mscp/{baseline}/baseline.yml)
+    /// Generate a composable baseline component (written to mscp/{baseline}/baseline.toml)
     /// This creates a reusable baseline definition that fleets can reference
     pub fn generate_baseline_component(
         &self,
@@ -62,29 +62,17 @@ impl FleetYamlGenerator {
             }
         }
 
-        // Use appropriate settings field based on platform
-        let (macos_settings, ios_settings) = match baseline.platform {
-            Platform::MacOS => (
-                Some(PlatformSettings {
-                    custom_settings: if custom_settings.is_empty() {
-                        None
-                    } else {
-                        Some(custom_settings)
-                    },
-                }),
-                None,
-            ),
-            Platform::Ios | Platform::VisionOS => (
-                None,
-                Some(PlatformSettings {
-                    custom_settings: if custom_settings.is_empty() {
-                        None
-                    } else {
-                        Some(custom_settings)
-                    },
-                }),
-            ),
-        };
+        // Every Apple platform's profiles go in `apple_settings`: Fleet has no
+        // per-platform settings key (its schema closes `controls`), and tells
+        // the platforms apart by the profile, not by where it is listed.
+        let macos_settings = Some(PlatformSettings {
+            custom_settings: if custom_settings.is_empty() {
+                None
+            } else {
+                Some(custom_settings)
+            },
+        });
+        let ios_settings = None;
 
         let config = FleetConfig {
             name: None, // No fleet name in baseline component
@@ -248,8 +236,8 @@ settings:
 software:
 
 controls:
-  macos_settings:
-    custom_settings:
+  apple_settings:
+    configuration_profiles:
       # Add profile paths here after generating the baseline
       # Example:
       # - path: ../{profiles_dir}/{baseline_name}/com.apple.applicationaccess.mobileconfig
@@ -270,7 +258,8 @@ controls:
     /// Write fleet YAML to fleets/{baseline}.yml
     ///
     /// Places the fleet file directly in fleets/ directory (not fleets/examples/)
-    /// with proper relative paths to ../lib/mscp/{baseline}/
+    /// with example relative paths under ../platforms/macos/configuration-profiles/{baseline}/
+    /// and ../platforms/macos/scripts/{baseline}/
     pub fn write_fleet_yml(&self, baseline_name: &str) -> Result<PathBuf> {
         let fleets_dir = self.output_base.join("fleets");
         std::fs::create_dir_all(&fleets_dir)?;
@@ -332,6 +321,30 @@ controls:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// iOS profiles are listed in `apple_settings`: Fleet has no
+    /// `ios_settings` (its schema closes `controls`).
+    #[test]
+    fn an_ios_baseline_lists_its_profiles_under_apple_settings() {
+        let generator = FleetYamlGenerator::new("/tmp/test");
+        let baseline = MscpBaseline {
+            name: "ios_cis_lvl1".into(),
+            build_path: "/tmp/test/build".into(),
+            platform: Platform::Ios,
+            mobileconfigs: Vec::new(),
+            ddm_artifacts: Vec::new(),
+            compliance_script: None,
+            mscp_git_hash: None,
+            mscp_git_tag: None,
+        };
+        let config = generator
+            .generate_baseline_component(&baseline, &[], &[])
+            .unwrap();
+        let yaml = yaml_serde::to_string(&config).unwrap();
+        assert!(yaml.contains("apple_settings"), "{yaml}");
+        assert!(!yaml.contains("ios_settings"), "{yaml}");
+        assert!(!yaml.contains("macos_settings"), "{yaml}");
+    }
 
     #[test]
     fn test_fleet_yaml_generator() {

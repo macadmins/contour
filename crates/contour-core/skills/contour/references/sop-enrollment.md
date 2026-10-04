@@ -5,12 +5,12 @@ experience for devices enrolling via Apple Business Manager (ABM) / Apple
 Device Enrollment (ADE).
 
 This SOP exists primarily to prevent **one specific agent trap**:
-`--skip-all` includes `FileVault` and `SoftwareUpdate` in the generated
-skip set, but those screens should almost never be skipped in production
-(FileVault is required for disk encryption setup, and skipping
-SoftwareUpdate during onboarding leaves devices on stale OS versions
-during their first connected hour). The procedural format catches this
-at PRECONDITIONS time so it can't slip through.
+skipping `FileVault` or `SoftwareUpdate`. Those screens should almost
+never be skipped in production (FileVault is required for disk encryption
+setup, and skipping SoftwareUpdate during onboarding leaves devices on
+stale OS versions during their first connected hour). The procedural
+format catches this at PRECONDITIONS time so it can't slip through, and
+the CLI refuses it at generation time.
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Drift detector: `crates/contour/tests/sop_traps_osquery.rs` (mscp/profile companions)
@@ -48,8 +48,10 @@ NEVER_SKIP = ["FileVault", "SoftwareUpdate"]
   Combined with macOS Tahoe's deprecation of legacy software-update
   payloads, this gap can stretch from hours to weeks.
 
-The `--skip-all` CLI flag DOES include both. Procedural SOP MUST filter
-them out before generating, or document an explicit override decision.
+`--skip-all` means every pane that MAY be skipped: it leaves both out.
+(Through contour 0.5.0-beta.4 it listed them, and the guardrail below then
+refused every `--skip-all` on macOS and iOS.) An explicit `--skip` or
+`--skip-list` naming either is still refused.
 
 As of contour ≥0.3.0-beta.5, the NEVER_SKIP guardrail is also enforced
 in code: `contour profile enrollment generate` refuses to write a profile
@@ -136,9 +138,9 @@ STEP 2 — Resolve skip set per intent:
       flag = "--skip {comma-joined skip_keys}"
 
     CASE "skip_all_with_overrides":
-      # Use --skip-all but then drop the NEVER_SKIP set.
+      # Every pane except the NEVER_SKIP set — exactly what --skip-all emits.
       skip_keys = available.map(k -> k.key) - NEVER_SKIP
-      flag = "--skip {comma-joined skip_keys}"
+      flag = "--skip-all"
 
 INVARIANTS (apply to every intent except "interactive"):
   ASSERT NEVER_SKIP set is disjoint from skip_keys

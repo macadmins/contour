@@ -16,7 +16,7 @@ Generate from a baseline keyword. Apply your ODV customizations. Deduplicate acr
 
 ```bash
 # Initialize a project with Fleet mode
-contour mscp init --org com.yourorg --name "Your Org" --fleet --sync
+contour mscp init --org com.yourorg --name "Your Org" --fleet-gitops --sync
 
 # Generate a baseline - for Fleet with DDM declarations
 contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output --fleet-mode --generate-ddm --remove-consent-text 
@@ -94,7 +94,7 @@ script_nopkg = false
 [[baselines]]
 name = "cis_lvl1"
 enabled = true
-branch = "main"               # mSCP branch (main = 2.0 layout; tahoe = legacy 1.x)
+branch = "main"               # mSCP branch (main = 2.0; the 1.x release branches are refused)
 
 [[baselines]]
 name = "800-53r5_moderate"
@@ -102,17 +102,13 @@ enabled = true
 branch = "main"
 excluded_rules = []
 [baselines.labels]
-include_any = ["compliance-moderate"]
+include_all = ["compliance-moderate"]   # narrows the baseline's profiles to these hosts
 
 [output]
 structure = "pluggable"          # pluggable (Fleet) | flat (Jamf) | nested (Munki)
-separate_baselines = true
-generate_diffs = true
-versions_to_keep = 5
 
 [validation]
 strict = false
-check_conflicts = true
 ```
 
 #### `[settings]`
@@ -182,10 +178,9 @@ One table per baseline to generate. Repeat the `[[baselines]]` header for each.
 |-----|------|---------|-------------|
 | `name` | string | **required** | Baseline name (e.g. `cis_lvl1`, `800-53r5_high`). |
 | `enabled` | bool | `true` | Whether `generate-all` processes this baseline. |
-| `branch` | string | current branch | Git branch to check out — determines platform and OS version (e.g. `origin/sequoia`, `origin/ios_18`). |
+| `branch` | string | current branch | Git branch to build from — the rule SOURCE, not the target. `main` carries every platform; an OS-preview branch such as `dev_28` carries the next release early. Use `os` / `os_version` to choose the target. |
 | `fleet` | string | — | Fleet name override for this baseline. |
 | `excluded_rules` | string[] | `[]` | Rule IDs to drop from this baseline. |
-| `metadata` | table | `{}` | Free-form key/value metadata. |
 
 #### `[baselines.labels]`
 
@@ -193,9 +188,9 @@ Fleet label targeting for a baseline (one `[baselines.labels]` per `[[baselines]
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `include_all` | string[] | Host must carry **all** of these labels. |
-| `include_any` | string[] | Host must carry **at least one** of these labels. |
-| `exclude_any` | string[] | Host must carry **none** of these labels. |
+| `include_all` | string[] | Host must carry **all** of these labels, in addition to the baseline's own `mscp-<baseline>` label. |
+| `include_any` | string[] | **Refused.** Fleet allows one label field per entry and the baseline label holds `labels_include_all`; widening would target other hosts. |
+| `exclude_any` | string[] | **Refused**, for the same reason. Set it on the entries in the generated fleet YAML if that is really what you want. |
 
 #### `[baselines.gitops_glob]`
 
@@ -213,9 +208,13 @@ Directory layout of the generated output.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `structure` | string | `pluggable` | `pluggable` (Fleet GitOps), `flat` (Jamf), or `nested` (Munki) — see [Output Structure](#output-structure). |
-| `separate_baselines` | bool | `true` | Give each baseline its own subdirectory. |
-| `generate_diffs` | bool | `false` | Write diff reports against the previous generation. |
-| `versions_to_keep` | int | `5` | How many prior versions to retain for version tracking. |
+
+**Refused:** `separate_baselines = false`, `generate_diffs = true` and any
+`versions_to_keep`. They were parsed and read by nothing — earlier `mscp init`
+templates wrote `generate_diffs = true` and `versions_to_keep = 5`, and no run
+wrote a diff or kept a version. A config that sets one fails to load and names
+the line to delete. The layout always separates baselines; compare two outputs
+with `contour mscp diff`; keep history in git.
 
 #### `[validation]`
 
@@ -223,8 +222,11 @@ Directory layout of the generated output.
 |-----|------|---------|-------------|
 | `schemas_path` | path | embedded | External JSON schema directory (overrides the embedded schemas). |
 | `strict` | bool | `false` | Treat validation warnings as errors. |
-| `check_conflicts` | bool | `true` | Check for conflicting keys across baselines. |
 | `validate_paths` | bool | `true` | Verify referenced files exist on disk. |
+
+**Refused:** `check_conflicts = true` — cross-baseline conflict detection is
+not implemented, and earlier templates turned it on. `[[baselines]] metadata`
+is refused when non-empty: nothing reads it or writes it anywhere.
 
 ### Precedence
 
@@ -314,60 +316,56 @@ Cross-platform baselines (`800-53r5_*`, `cisv8`, `all_rules`) have different rul
 
 ---
 
-## mSCP repository layout — 1.x vs 2.0
+## mSCP repository layout (2.0 only)
 
-The macOS Security Compliance Project currently ships in **two coexisting
-shapes**, and contour detects which one `--mscp-repo` points at:
+contour reads the mSCP 2.0 layout: the `main` branch of macos_security,
+where every rule carries a `platforms.{macOS,iOS,visionOS}.<version>`
+block with nested `enforcement_info` and array-shaped `mobileconfig_info`,
+and baselines live at `baselines/<os>/<name>_<os>_<version>.yaml`.
 
-| Layout | Branch | Rule schema |
-|--------|--------|-------------|
-| **2.0** — current | `main` | Multi-OS — `platforms.{macOS,iOS,visionOS}.<version>`, nested `enforcement_info`, array-shaped `mobileconfig_info`, `references.{vendor}…`; baselines are derived from rule metadata. |
-| **1.x** — legacy | `tahoe` and earlier release branches | Flat — top-level `tags`, `check`, `fix`, `result`; dict-shaped `mobileconfig_info`; baselines are explicit files under `baselines/`. |
+The 1.x layout — flat rules with top-level `tags`/`check`/`fix`, baselines
+at `baselines/<name>.yaml`, the `tahoe` / `sequoia` / `sonoma` release
+branches — is deprecated upstream and is **refused, not parsed**. The
+embedded dataset, the recipe pipeline and the build all assume 2.0, and
+`main` already carries the older OS releases (macOS 15.0 and 26.0, iOS
+17.0 and 18.0) under their own version keys, so nothing 1.x provided is
+missing.
 
-> **Branch note:** mSCP merged the 2.0 layout into `main`, so `main` is now
-> the default contour clones/checks out. The older `dev_2.0` branch still
-> exists as a legacy alias of `main` and continues to work.
+**Verification.** Every command that reads mSCP rule YAML directly sniffs
+the first rule file: a top-level `platforms:` key verifies 2.0. An `id:`
+without `platforms:` is the 1.x shape and fails fast:
 
-contour treats **2.0 as the standard layout**. 1.x repositories remain
-fully supported — detection is automatic, so existing 1.x workflows keep
-working unchanged — but 1.x is the older schema and the focus of new
-work is 2.0.
-
-**Auto-detection.** For commands that read mSCP rule YAML *directly*,
-contour sniffs the first rule file: a top-level `platforms:` key ⇒ 2.0;
-an `id:` without `platforms:` ⇒ 1.x. The `main` branch keeps the
-`rules/` and `baselines/` symlinks in place, so path-based access still
-works — only the schema underneath differs. A 2.0 rule can describe
-several OSes at once, and contour adapts it to the normalized internal
-rule model per selected platform.
+```
+mSCP 1.x layout detected at <repo>/rules/…/<rule>.yaml: rules carry
+top-level `tags`/`check` and no `platforms:` block. contour reads mSCP 2.0
+only; … Switch the checkout to `main`:
+  git -C <repo> fetch origin main && git -C <repo> checkout main
+Custom 1.x baselines migrate with mSCP's own `--migrate` flag.
+```
 
 **`generate` / `generate-all`.** These shell out to the mSCP project's
-own Python toolchain to *build* the baseline. `generate` resolves the
-baseline file for whichever layout the repo uses —
-`baselines/<name>.yaml` (1.x) or
-`baselines/<os>/<name>_<os>_<version>.yaml` (2.0) — and reads the build
-output from `build/<name>` or `build/<name>_<os>_<version>` accordingly.
-`generate-all` always auto-detects the layout and targets macOS.
+own Python toolchain to *build* the baseline. `generate` resolves
+`baselines/<os>/<name>_<os>_<version>.yaml` — the newest version present
+when `--os-version` is not given — and reads the build output from
+`build/<name>_<os>_<version>`. `generate-all` targets macOS.
 
 mSCP 2.0 is verified on both build paths and produces an identical
 Fleet GitOps structure either way:
 - a local `main` checkout built with `--use-uv` / `--use-python3` —
   point `--mscp-repo` at it and run `generate`;
-- the `--use-container` route against the default mSCP 2.0 image
+- the `--use-container` route against the mSCP 2.0 image
   `ghcr.io/brodjieski/mscp_2.0:latest` (the image checks the project
   out at `/mscp`, which contour mounts the host `build/` directory
-  into).
+  into). Without a local checkout the container has no tree to pick
+  the newest version from, so `--os-version` is required there.
 
-**Layout flags.** `generate` and `recipe` both accept:
+**Target flags.** `generate` and `recipe` both accept:
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--mscp-version <VER>` | Repository layout: `auto`, `1.x`, or `2.0` | `auto` (sniff the rule schema) |
-| `--os <OS>` | OS target for 2.0 layouts: `macos`, `ios`, `visionos` (ignored for 1.x) | `macos` |
-| `--os-version <VER>` | OS version for 2.0 layouts (e.g. `26.0`, `15.0`) | highest version available |
+| `--os <OS>` | OS target: `macos`, `ios`, `visionos` | `macos` |
+| `--os-version <VER>` | OS version (e.g. `26.0`, `15.0`) | highest version available |
 
-Pass `--mscp-version 1.x` or `2.0` to skip detection when the heuristic
-cannot decide (e.g. an empty or non-standard checkout). With a 2.0 repo,
 `generate -k 800-53r5_high --os macos` builds
 `baselines/macos/800-53r5_high_macos_26.0.yaml` (newest version) — no
 need to know the exact filename.
@@ -377,7 +375,7 @@ need to know the exact filename.
 > `pyproject.toml` + `uv.lock` (mSCP 2.0), `--use-uv` installs from the
 > **lockfile** and pins **Python 3.14** — the locked deps (e.g.
 > `pillow 11.3.0`) all have cp314 wheels, so the install stays
-> prebuilt-only. For legacy repos without a lockfile (mSCP 1.x),
+> prebuilt-only. For a checkout without a lockfile,
 > `--use-uv` falls back to `requirements.txt` and pins **3.13** (that
 > export's `pillow==11.2.1` has no cp314 wheel). Override the interpreter
 > for a single run by exporting `UV_PYTHON`.
@@ -421,13 +419,13 @@ contour mscp init [flags]
 | `--jamf` | Enable Jamf Pro mode (sets `output.structure = "flat"`) | `false` |
 | `--munki` | Enable Munki integration (sets `output.structure = "nested"`) | `false` |
 | `--sync` | Clone/sync mSCP repository | `false` |
-| `--branch <BRANCH>` | mSCP branch to clone (`main` = mSCP 2.0 layout; `tahoe` and macOS-version branches = legacy 1.x) | `main` |
+| `--branch <BRANCH>` | mSCP branch to clone (`main` = mSCP 2.0; the `tahoe` / macOS-version branches are the deprecated 1.x layout and are refused) | `main` |
 | `--keywords <BASELINES>` | Baselines to enable (comma-separated, used with `--sync`) | none |
 | `--force` | Overwrite existing configuration | `false` |
 
 ```bash
 # Full setup: init config, clone mSCP, enable baselines
-contour mscp init --org com.acme --name "Acme Corp" --fleet --sync --keywords cis_lvl1,cis_lvl2
+contour mscp init --org com.acme --name "Acme Corp" --fleet-gitops --sync --keywords cis_lvl1,cis_lvl2
 ```
 
 #### `mscp list-baselines`
@@ -464,9 +462,8 @@ contour mscp generate [flags]
 | `-k, --keyword <NAME>` | Baseline name (e.g., `cis_lvl1`) | **required** |
 | `-o, --output <DIR>` | Output directory | **required** |
 | `--branch <BRANCH>` | Git branch (determines platform/OS) | repo default |
-| `--mscp-version <VER>` | mSCP layout: `auto`, `1.x`, or `2.0` (see [mSCP repository layout](#mscp-repository-layout--1x-vs-20)) | `auto` |
-| `--os <OS>` | OS target for 2.0 layouts: `macos`, `ios`, `visionos` (ignored for 1.x) | `macos` |
-| `--os-version <VER>` | OS version for 2.0 layouts (e.g. `26.0`); highest available if unset | auto |
+| `--os <OS>` | OS target: `macos`, `ios`, `visionos` (see [mSCP repository layout](#mscp-repository-layout-20-only)) | `macos` |
+| `--os-version <VER>` | OS version (e.g. `26.0`); highest available if unset | auto |
 | `--dry-run` | Preview without writing files | `false` |
 
 **Organization options:**
@@ -514,6 +511,17 @@ contour mscp generate [flags]
 | `--glob` | With `--fleets`, attach the baseline as one `*.mobileconfig` glob entry instead of one entry per profile | `false` |
 | `--script-mode <MODE>` | `combined`, `granular`, `bundled`, or `both` | `bundled` |
 | `--fragment` | Generate Fleet fragment directory | `false` |
+| `--osquery` | Emit osquery detection for the baseline: native-table policies for rules a table can answer, an audit script plus launchd job for the rest, and a per-baseline compliance report. Needs the Fleet layout and an org domain | `false` |
+| `--osquery-format <FMT>` | `fleet` (`osquery/<baseline>/<baseline>.policies.yml`) or `pack` (`<baseline>.pack.json`) | `fleet` |
+| `--osquery-audit <SCOPE>` | Audit-script scope: `slim` (residual rules only) or `full` | `slim` |
+| `--verify-queries` | After generating, write every emitted query as `osqueryi` and `orbit shell` commands to `<output>/osquery/verify-commands.md`. Nothing is executed | `false` |
+
+Every query `generate` writes — bridge policies, the compliance report, the
+security-posture pack (including a `.contour/security-posture.toml` override),
+and `managed_policies` detections — is checked against the embedded osquery
+and Fleet schemas before the file is written. A typo'd table or column, a
+platform the table does not exist on, or a required column left unconstrained
+fails the run naming the query; a Fleet-only table is logged as a warning.
 
 `--fleets` appends the baseline into each named fleet file: profiles go
 into `controls.apple_settings.configuration_profiles` (current Fleet
@@ -651,9 +659,8 @@ contour mscp recipe -r <MSCP_REPO> -k <KEYWORD> [flags]
 | `--org <VENDOR>` | Organization vendor string written to the recipe header | none |
 | `--odv <PATH>` | ODV override file — operator `custom_value`s seed the `[odv]` table (or inline values) over the rule defaults, keyed by `rule_id`. Auto-detected as `odv_<keyword>.yaml` in the working directory when omitted | auto-detected |
 | `--odv-mode <MODE>` | How to render `$ODV` placeholders: `variable` or `inline` | `variable` |
-| `--mscp-version <VER>` | Repository layout: `auto`, `1.x`, or `2.0` | `auto` |
-| `--os <OS>` | OS target for 2.0 layouts: `macos`, `ios`, `visionos` (ignored for 1.x) | `macos` |
-| `--os-version <VER>` | OS version for 2.0 layouts (e.g. `26.0`); highest available if unset | auto |
+| `--os <OS>` | OS target: `macos`, `ios`, `visionos` | `macos` |
+| `--os-version <VER>` | OS version (e.g. `26.0`); highest available if unset | auto |
 
 `--odv-mode variable` (default) keeps the literal `"$ODV"` placeholder
 in each field and emits the resolved per-baseline defaults into a
@@ -687,7 +694,13 @@ contour mscp list -o ./output --json
 
 #### `mscp validate`
 
-Validate Fleet GitOps output against schemas.
+Validate Fleet GitOps output: `fleets/*.yml` against Fleet's GitOps JSON
+Schema (the copy this build embeds, or `--schemas <DIR>`), then every query
+file contour wrote — `*.policies.yml`, `*.reports.yml`, `*.labels.yml` under
+`platforms/` and `labels/` — against the matching Fleet definition and every
+osquery query in the repo against the embedded osquery and Fleet schemas.
+Problems in files contour wrote are errors; in other files (a hand-edited
+`default.yml`) they are warnings unless `--strict`.
 
 ```
 contour mscp validate [flags]
@@ -810,7 +823,7 @@ contour mscp migrate [flags]
 
 ```bash
 # Migrate a fleet from CIS Level 1 to Level 2
-contour mscp migrate --from cis_lvl1 --to cis_lvl2 -f engineering -o ./output
+contour mscp migrate --from cis_lvl1 --to cis_lvl2 --fleet engineering -o ./output
 ```
 
 ---
@@ -1001,7 +1014,7 @@ contour mscp container init [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | `./macos_security` |
-| `--branch <BRANCH>` | Git branch to use (`main` = mSCP 2.0 layout; `tahoe` / `sequoia` / `sonoma` = legacy 1.x) | `main` |
+| `--branch <BRANCH>` | Git branch to use (`main` = mSCP 2.0; `tahoe` / `sequoia` / `sonoma` are the deprecated 1.x layout and are refused) | `main` |
 | `-t, --tag <TAG>` | Custom image name/tag | `mscp:local` |
 | `--no-build` | Only create Dockerfile, don't build | `false` |
 | `--docker` | Force Docker runtime | auto-detect |
@@ -1133,7 +1146,7 @@ contour mscp schema rule os_airdrop_disable --json
 Generate one baseline, add it to a fleet, and verify:
 
 ```bash
-contour mscp init --org com.acme --fleet --sync
+contour mscp init --org com.acme --fleet-gitops --sync
 contour mscp generate -m ./macos_security -k cis_lvl1 -o ./output \
   --fleet-mode --fleets "Engineering" --org com.acme
 contour mscp verify -o ./output
@@ -1167,7 +1180,7 @@ Or set `output.structure = "flat"` and `[settings.jamf]` in `mscp.toml` to avoid
 Define everything in `mscp.toml` and generate all at once. The `output.structure` setting drives the layout — no need for `--fleet-mode` or `--jamf-mode` flags:
 
 ```bash
-contour mscp init --org com.acme --fleet --sync --keywords cis_lvl1,cis_lvl2,stig
+contour mscp init --org com.acme --fleet-gitops --sync --keywords cis_lvl1,cis_lvl2,stig
 # Edit mscp.toml to customize settings (output.structure = "pluggable" set by --fleet)
 contour mscp generate-all -c mscp.toml
 contour mscp deduplicate -o ./output
@@ -1237,7 +1250,7 @@ contour mscp diff -o ./output -k cis_lvl1 -f markdown
 Move a fleet from one baseline to another:
 
 ```bash
-contour mscp migrate --from cis_lvl1 --to cis_lvl2 -f engineering -o ./output
+contour mscp migrate --from cis_lvl1 --to cis_lvl2 --fleet engineering -o ./output
 contour mscp verify -o ./output
 ```
 
@@ -1254,7 +1267,7 @@ form; substitute `--baseline` if you prefer the alias.
 
 ```bash
 # Clone the mSCP 2.0 layout and scaffold the project
-contour mscp init --org com.acme --name "Acme Corp" --fleet --sync
+contour mscp init --org com.acme --name "Acme Corp" --fleet-gitops --sync
 
 # Build cis_lvl1 with profiles, scripts, AND declarative-management
 # artifacts. --use-uv installs from the repo's uv.lock and pins Python
@@ -1319,10 +1332,10 @@ contour mscp generate \
   --generate-ddm
 ```
 
-If your checkout is still on the legacy 1.x layout, this fails fast with
-a message telling you to `git checkout main` (the 2.0 image can't read
-1.x rules) or to drop `--use-container` and use `--use-uv` /
-`--use-python3` instead, which work with either layout.
+If your checkout is still on the deprecated 1.x layout, this fails fast
+before the container starts, with a message telling you to
+`git checkout main`. Every other mSCP command refuses a 1.x tree the same
+way.
 
 ### Recipe pipeline: aggregate a baseline, then render it
 
@@ -1348,7 +1361,7 @@ up) unless you pass `--odv-mode inline`.
 ```bash
 # init writes mscp.toml (output.structure = "pluggable" from --fleet) and,
 # when a baseline references a fleet, scaffolds output/fleets/<name>.yml.
-contour mscp init --org com.acme --fleet --sync --keywords cis_lvl1,cis_lvl2,stig
+contour mscp init --org com.acme --fleet-gitops --sync --keywords cis_lvl1,cis_lvl2,stig
 
 # Enable [settings] generate_ddm = true in mscp.toml for DDM across all,
 # then generate every enabled baseline:

@@ -1,16 +1,16 @@
 //! Contour CLI - Unified macOS MDM configuration toolkit.
 //!
-//! Contour consolidates five domain-specific tools into a single CLI:
-//! - `profile` - Apple configuration profile toolkit
-//! - `pppc` - Privacy/TCC profile toolkit
-//! - `santa` - Santa allowlist/blocklist toolkit
-//! - `mscp` - mSCP baseline transformation toolkit
+//! Contour consolidates several domain-specific tools into a single CLI —
+//! `profile`, `pppc`, `santa`, `mscp`, `support`, `btm`, `notifications`,
+//! `osquery`, `app` and the agent/setup helpers. [`Commands`] is the
+//! authoritative list.
 
 use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+mod census;
 mod completions;
 mod dispatch;
 mod init;
@@ -42,7 +42,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Schema channel: stable (released) or beta (pre-release OS seed)
+    /// Schema channel: stable (released), or beta (pre-release OS seed — currently disabled)
     #[arg(
         long,
         global = true,
@@ -214,6 +214,12 @@ pub enum Commands {
         action: osquery::OsqueryAction,
     },
 
+    /// App code identities — bundle id, signing id, team id, CDHash, designated requirement
+    App {
+        #[command(subcommand)]
+        action: app_manifest::cli::AppAction,
+    },
+
     /// Initialize contour configuration for this repository
     ///
     /// Creates .contour/config.toml with organization identity and defaults.
@@ -278,7 +284,7 @@ pub enum Commands {
         #[arg(long, value_delimiter = ',')]
         section: Option<Vec<String>>,
 
-        /// Show standard operating procedures for a tool (profile, profile-naming, mscp, osquery, fleet-migrate, enrollment, ddm, santa, pppc, btm, notifications, support, ci, precommit)
+        /// Show standard operating procedures for a tool (profile, profile-naming, mscp, osquery, fleet-migrate, enrollment, ddm, santa, pppc, btm, notifications, support, ci, precommit, mcp)
         #[arg(long)]
         sop: Option<String>,
 
@@ -365,6 +371,12 @@ pub enum Commands {
         #[arg(long, conflicts_with = "install")]
         script: bool,
     },
+
+    /// What this binary has embedded — counted now, not when the skill was installed
+    #[command(
+        long_about = "Count the embedded datasets and print the figures.\n\n                      An installed SKILL.md states the census as it was at install time.                       Upgrade the binary and that sentence describes the old dataset, with                       nothing to say so. This command reads the bytes this binary actually                       carries, so it is never stale.\n\n                      Use --json when a number is going to be compared or reported; the                       human form is for reading."
+    )]
+    Census,
 }
 
 /// Tools available in trainer mode
@@ -393,9 +405,14 @@ fn main() {
             // Phase B3: emit a parseable JSON error envelope on stderr so agents
             // and CI receive a structured failure shape, matching the BatchResult
             // error_code enum documented in the procedural SOP format spec.
-            let msg = format!("{e:#}");
-            let code = contour_core::classify_error(&msg);
-            contour_core::print_error_json(&msg, Some(code));
+            // A handler that knew the exact code has already printed the
+            // envelope (`output::Reported`); printing again would put two
+            // envelopes with different codes on stderr.
+            if e.downcast_ref::<contour_core::output::Reported>().is_none() {
+                let msg = format!("{e:#}");
+                let code = contour_core::classify_error(&msg);
+                contour_core::print_error_json(&msg, Some(code));
+            }
         } else {
             eprintln!("Error: {e:#}");
         }

@@ -1,6 +1,6 @@
 //! Interactive builder for the `[gitops_glob]` section of a baseline in `mscp.toml`.
 //!
-//! Invoked by `mscp process --interactive` / `mscp generate --interactive` to
+//! Invoked by `mscp generate --interactive` to
 //! let the user collapse long sections (profiles, scripts) into a single
 //! `paths:` glob, while keeping a small set of items as literal `path:`
 //! exceptions (optionally moved into subfolders so the flat glob does not

@@ -6,17 +6,154 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Where the schema a validation run checks against came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaOrigin {
+    /// `--schemas <dir>` or `[validation] schemas_path`: this file.
+    Dir(PathBuf),
+    /// The pinned schema, embedded through `mscp-schema`.
+    Embedded {
+        /// SHA-256 of the embedded bytes — the pin, so a reader can match it
+        /// against the dataset's record.
+        sha256: String,
+    },
+    /// No directory was given and this build embeds no schema: its
+    /// `mscp-schema` dataset does not carry one.
+    Absent,
+}
+
+impl std::fmt::Display for SchemaOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dir(p) => write!(f, "{}", p.display()),
+            Self::Embedded { sha256 } => write!(
+                f,
+                "Fleet GitOps schema embedded in this build (sha256 {})",
+                &sha256[..12.min(sha256.len())]
+            ),
+            Self::Absent => f.write_str("none — this build embeds no Fleet GitOps schema"),
+        }
+    }
+}
+
 /// Schema validator for `FleetDM` YAML files
-#[derive(Debug)]
 pub struct SchemaValidator {
-    schemas_dir: Option<PathBuf>,
+    schema: Option<jsonschema::Validator>,
+    /// The parsed root document, kept so one `$defs` entry can be compiled
+    /// into a list validator for Fleet's separate-file shapes.
+    root: Option<Value>,
+}
+
+impl std::fmt::Debug for SchemaValidator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SchemaValidator")
+            .field("schema", &self.schema.as_ref().map(|_| "compiled"))
+            .field("root", &self.root.as_ref().map(|_| "parsed"))
+            .finish()
+    }
 }
 
 impl SchemaValidator {
-    pub fn new<P: AsRef<Path>>(schemas_dir: Option<P>) -> Self {
-        Self {
-            schemas_dir: schemas_dir.map(|p| p.as_ref().to_path_buf()),
+    /// Find Fleet's GitOps schema in `schemas_dir`, or say why not.
+    ///
+    /// Fleet publishes it as `generated-schema.json` (fleetdm/fleet,
+    /// tools/gitops-auto-complete/).
+    ///
+    /// A missing schema means the requested check never ran, which is a
+    /// configuration error rather than a per-file finding, so `resolve`
+    /// fails on it once, before any file is read.
+    pub fn resolve_schema_path(schemas_dir: &Path) -> Result<PathBuf> {
+        const SCHEMA_NAMES: &[&str] = &["generated-schema.json", "team.schema.json"];
+        SCHEMA_NAMES
+            .iter()
+            .map(|n| schemas_dir.join(n))
+            .find(|p| p.exists())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no Fleet GitOps schema in {}. Looked for {}.\n\
+                     Fleet publishes one at tools/gitops-auto-complete/generated-schema.json \
+                     in fleetdm/fleet — point --schemas at a directory holding it, or drop \
+                     the flag to use the schema this build embeds.",
+                    schemas_dir.display(),
+                    SCHEMA_NAMES.join(" or ")
+                )
+            })
+    }
+
+    /// Pick the schema for one run, compile it once, and say where it came from.
+    ///
+    /// A directory wins, and a directory without a schema is an error. With
+    /// none, the pinned schema this build embeds is used — so `mscp validate` checks
+    /// against Fleet's definition by default, not only when someone knows to
+    /// fetch it. A build that embeds none says so through `SchemaOrigin::Absent`
+    /// and runs the structural checks; it does not pretend to have checked.
+    pub fn resolve(schemas_dir: Option<&Path>) -> Result<(Self, SchemaOrigin)> {
+        let (bytes, origin): (std::borrow::Cow<'static, [u8]>, SchemaOrigin) = match schemas_dir {
+            Some(dir) => {
+                let path = Self::resolve_schema_path(dir)?;
+                let bytes = fs::read(&path)
+                    .with_context(|| format!("Failed to read schema file {}", path.display()))?;
+                (bytes.into(), SchemaOrigin::Dir(path))
+            }
+            None => match mscp_schema::embedded_fleet_gitops_schema() {
+                Some(bytes) => (
+                    bytes.into(),
+                    SchemaOrigin::Embedded {
+                        sha256: sha256_hex(bytes),
+                    },
+                ),
+                None => {
+                    return Ok((
+                        Self {
+                            schema: None,
+                            root: None,
+                        },
+                        SchemaOrigin::Absent,
+                    ));
+                }
+            },
+        };
+        let value: Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("Failed to parse schema JSON ({origin})"))?;
+        let compiled = jsonschema::validator_for(&value)
+            .map_err(|e| anyhow::anyhow!("Failed to compile schema ({origin}): {e}"))?;
+        Ok((
+            Self {
+                schema: Some(compiled),
+                root: Some(value),
+            },
+            origin,
+        ))
+    }
+
+    /// Validate a flat YAML list against one `$defs` entry of Fleet's schema —
+    /// `GitOpsPolicySpec` for `*.policies.yml`, `Query` for `*.reports.yml`,
+    /// `LabelSpec` for `*.labels.yml`. These separate files have no root
+    /// object, so the root validator cannot read them.
+    ///
+    /// `Ok(None)` when this build embeds no schema (nothing to check against).
+    pub fn validate_list<P: AsRef<Path>>(&self, yaml_path: P, def: &str) -> Result<Option<ValidationResult>> {
+        let Some(root) = &self.root else {
+            return Ok(None);
+        };
+        let yaml_path = yaml_path.as_ref();
+        let content = fs::read_to_string(yaml_path)
+            .context(format!("Failed to read YAML file: {}", yaml_path.display()))?;
+        let yaml_value: yaml_serde::Value =
+            yaml_serde::from_str(&content).context("Failed to parse YAML")?;
+        let json_value: Value =
+            serde_json::to_value(&yaml_value).context("Failed to convert YAML to JSON")?;
+        if root.pointer(&format!("/$defs/{def}")).is_none() {
+            anyhow::bail!("Fleet's schema has no $defs/{def}");
         }
+        let list_schema = serde_json::json!({
+            "$defs": root["$defs"],
+            "type": "array",
+            "items": {"$ref": format!("#/$defs/{def}")},
+        });
+        let compiled = jsonschema::validator_for(&list_schema)
+            .map_err(|e| anyhow::anyhow!("Failed to compile $defs/{def}: {e}"))?;
+        Ok(Some(Self::validate_with_schema(&compiled, &json_value)))
     }
 
     /// Validate a YAML file against a JSON schema
@@ -34,54 +171,24 @@ impl SchemaValidator {
         let json_value: Value =
             serde_json::to_value(&yaml_value).context("Failed to convert YAML to JSON")?;
 
-        // If schemas_dir is provided, try to load and validate
-        if let Some(ref schemas_dir) = self.schemas_dir {
-            self.validate_with_schema(&json_value, schemas_dir)
-        } else {
-            // Basic validation without schema
-            self.basic_validation(&json_value)
+        match self.schema {
+            Some(ref schema) => Ok(Self::validate_with_schema(schema, &json_value)),
+            None => self.basic_validation(&json_value),
         }
     }
 
-    /// Validate against JSON schema
-    fn validate_with_schema(&self, value: &Value, schemas_dir: &Path) -> Result<ValidationResult> {
-        // Look for team schema file
-        let schema_path = schemas_dir.join("team.schema.json");
-
-        if !schema_path.exists() {
-            tracing::warn!(
-                "Schema file not found: {}. Falling back to basic validation.",
-                schema_path.display()
-            );
-            return self.basic_validation(value);
-        }
-
-        // Load schema
-        let schema_content =
-            fs::read_to_string(&schema_path).context("Failed to read schema file")?;
-        let schema_value: Value =
-            serde_json::from_str(&schema_content).context("Failed to parse schema JSON")?;
-
-        // Compile schema
-        let compiled_schema = jsonschema::validator_for(&schema_value)
-            .map_err(|e| anyhow::anyhow!("Failed to compile schema: {e}"))?;
-
-        // Validate using is_valid() and iter_errors() for detailed info
-        if compiled_schema.is_valid(value) {
-            Ok(ValidationResult {
-                valid: true,
-                errors: Vec::new(),
+    /// Validate against the compiled schema.
+    fn validate_with_schema(schema: &jsonschema::Validator, value: &Value) -> ValidationResult {
+        let errors: Vec<String> = schema
+            .iter_errors(value)
+            .map(|e| {
+                let at = e.instance_path().to_string();
+                format!("{e} at {}", if at.is_empty() { "the root" } else { &at })
             })
-        } else {
-            let error_messages: Vec<String> = compiled_schema
-                .iter_errors(value)
-                .map(|e| format!("{e}"))
-                .collect();
-
-            Ok(ValidationResult {
-                valid: false,
-                errors: error_messages,
-            })
+            .collect();
+        ValidationResult {
+            valid: errors.is_empty(),
+            errors,
         }
     }
 
@@ -108,21 +215,22 @@ impl SchemaValidator {
             if controls.is_null() {
                 // Empty `controls:` key — same as absent. No further checks.
             } else if controls.is_object() {
-                // Validate controls.macos_settings if exists
-                if let Some(macos_settings) = controls.get("macos_settings")
-                    && let Some(custom_settings) = macos_settings.get("custom_settings")
-                {
-                    if custom_settings.is_array() {
-                        // Validate each custom setting has a path
-                        for (i, setting) in custom_settings.as_array().unwrap().iter().enumerate() {
+                // Every Apple profile list, under any spelling
+                // (contour_core::fleet_keys) — current `apple_settings.
+                // configuration_profiles` and the deprecated aliases.
+                for (key, list) in apple_profile_lists(controls) {
+                    if let Some(items) = list.as_array() {
+                        for (i, setting) in items.iter().enumerate() {
                             if !setting.is_object() {
-                                errors.push(format!("custom_settings[{i}] must be an object"));
-                            } else if setting.get("path").is_none() {
-                                errors.push(format!("custom_settings[{i}] missing 'path' field"));
+                                errors.push(format!("{key}[{i}] must be an object"));
+                            } else if setting.get("path").is_none()
+                                && setting.get("paths").is_none()
+                            {
+                                errors.push(format!("{key}[{i}] needs a 'path' or 'paths' field"));
                             }
                         }
                     } else {
-                        errors.push("'custom_settings' must be an array".to_string());
+                        errors.push(format!("'{key}' must be an array"));
                     }
                 }
             } else {
@@ -169,12 +277,9 @@ impl SchemaValidator {
         };
 
         if let Some(controls) = json_value.get("controls") {
-            // Extract paths from custom_settings
-            if let Some(macos_settings) = controls.get("macos_settings")
-                && let Some(custom_settings) = macos_settings.get("custom_settings")
-                && let Some(settings_array) = custom_settings.as_array()
-            {
-                for setting in settings_array {
+            // Paths from every Apple profile list, under any spelling.
+            for (_, list) in apple_profile_lists(controls) {
+                for setting in list.as_array().into_iter().flatten() {
                     if let Some(path_str) = setting.get("path").and_then(|p| p.as_str()) {
                         check_path(path_str);
                     }
@@ -216,13 +321,73 @@ pub struct PathValidationResult {
     pub missing_paths: Vec<String>,
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
+
+/// `(settings.list, list)` for every Apple profile list under `controls`.
+fn apple_profile_lists(controls: &Value) -> Vec<(String, &Value)> {
+    use contour_core::fleet_keys::{LEGACY_SETTINGS_KEYS, LIST_KEYS, SETTINGS_KEYS};
+    SETTINGS_KEYS
+        .iter()
+        .chain(LEGACY_SETTINGS_KEYS)
+        .filter_map(|s| controls.get(*s).map(|v| (*s, v)))
+        .flat_map(|(s, v)| {
+            LIST_KEYS
+                .iter()
+                .filter_map(move |l| v.get(*l).map(|list| (format!("{s}.{l}"), list)))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_schema_validator_creation() {
-        let validator = SchemaValidator::new(Some("/tmp/schemas"));
-        assert!(validator.schemas_dir.is_some());
+    fn a_directory_without_a_schema_is_an_error_not_a_fallback() {
+        let empty = tempfile::tempdir().expect("tempdir");
+        let err = SchemaValidator::resolve(Some(empty.path()))
+            .expect_err("a --schemas dir holding no schema must not resolve");
+        assert!(err.to_string().contains("no Fleet GitOps schema"), "{err}");
+    }
+
+    #[test]
+    fn a_directory_schema_wins_over_the_embedded_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("generated-schema.json"),
+            r#"{"type":"object","required":["name"]}"#,
+        )
+        .expect("write");
+        let (v, origin) = SchemaValidator::resolve(Some(dir.path())).expect("resolves");
+        assert_eq!(
+            origin,
+            SchemaOrigin::Dir(dir.path().join("generated-schema.json"))
+        );
+        let yaml = dir.path().join("t.yml");
+        std::fs::write(&yaml, "controls: {}\n").expect("write");
+        assert!(!v.validate_fleet_yaml(&yaml).expect("validates").valid);
+    }
+
+    #[test]
+    fn without_a_directory_the_embedded_schema_is_used() {
+        let (_, origin) = SchemaValidator::resolve(None).expect("resolves");
+        match mscp_schema::embedded_fleet_gitops_schema() {
+            Some(bytes) => assert_eq!(
+                origin,
+                SchemaOrigin::Embedded {
+                    sha256: sha256_hex(bytes)
+                }
+            ),
+            None => assert_eq!(origin, SchemaOrigin::Absent),
+        }
     }
 }

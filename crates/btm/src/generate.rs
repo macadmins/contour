@@ -125,79 +125,14 @@ pub fn generate_combined_service_management_profile(
         .build("com.apple.servicemanagement", payload_content)
 }
 
-/// Apple DDM configuration type for BTM background-tasks declarations.
-pub const BTM_DDM_CONFIGURATION_TYPE: &str = "com.apple.configuration.services.background-tasks";
-
-/// Build the inner `Payload` of a `com.apple.configuration.services.background-tasks`
-/// DDM declaration for one app.
+/// Refuses: BTM has no DDM equivalent.
 ///
-/// Shared by [`generate_btm_declaration`] (which wraps it in the
-/// `Type`/`Identifier`/`Payload` envelope and serializes to JSON) and
-/// the recipe-TOML emitter (which feeds it straight into a `[[ddm]]`
-/// block as `[ddm.configuration.payload]`). `Label`-type BTM rules
-/// become `LaunchdConfigurations` entries.
-pub fn build_btm_ddm_payload(app: &BtmAppEntry, org: &str) -> Dictionary {
-    // Build LaunchdConfigurations from Label-type BTM rules.
-    let launchd_configs: Vec<Value> = app
-        .rules
-        .iter()
-        .filter(|r| r.rule_type == "Label")
-        .map(|r| {
-            // Use comment to override context; default to "daemon".
-            let context = r
-                .comment
-                .as_deref()
-                .filter(|c| c.eq_ignore_ascii_case("agent"))
-                .map_or("daemon", |_| "agent");
-
-            let mut entry = Dictionary::new();
-            entry.insert(
-                "FileAssetReference".to_string(),
-                Value::String(format!(
-                    "{org}.asset.launchd.{}",
-                    sanitize_id(&r.rule_value)
-                )),
-            );
-            entry.insert("Context".to_string(), Value::String(context.to_string()));
-            Value::Dictionary(entry)
-        })
-        .collect();
-
-    let mut payload = Dictionary::new();
-    payload.insert("TaskType".to_string(), Value::String(app.bundle_id.clone()));
-    payload.insert(
-        "TaskDescription".to_string(),
-        Value::String(format!("Background tasks for {}", app.name)),
-    );
-    if !launchd_configs.is_empty() {
-        payload.insert(
-            "LaunchdConfigurations".to_string(),
-            Value::Array(launchd_configs),
-        );
-    }
-    payload
-}
-
-/// Compute the DDM declaration identifier for an app's background-tasks
-/// declaration.
-pub fn btm_ddm_identifier(app: &BtmAppEntry, org: &str) -> String {
-    format!("{org}.btm.{}", sanitize_id(&app.bundle_id))
-}
-
-/// Generate a DDM declaration for background tasks (macOS 15+).
-pub fn generate_btm_declaration(app: &BtmAppEntry, org: &str) -> Result<String> {
-    let payload = build_btm_ddm_payload(app, org);
-    let payload_json = serde_json::to_value(Value::Dictionary(payload))
-        .map_err(|e| anyhow::anyhow!("Failed to serialize DDM payload: {e}"))?;
-
-    let declaration = serde_json::json!({
-        "Type": BTM_DDM_CONFIGURATION_TYPE,
-        "Identifier": btm_ddm_identifier(app, org),
-        "Payload": payload_json,
-    });
-
-    serde_json::to_string_pretty(&declaration)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize DDM declaration: {e}"))
+/// Kept as a function rather than deleted so every caller gets the
+/// explanation, and so no path can emit the wrong declaration even if it
+/// bypasses the CLI's own refusal. See
+/// [`crate::cli::generate::BTM_DDM_REFUSAL`].
+pub fn generate_btm_declaration(_app: &BtmAppEntry, _org: &str) -> Result<String> {
+    anyhow::bail!("{}", crate::cli::generate::BTM_DDM_REFUSAL)
 }
 
 // Re-export shared utilities so existing `crate::generate::sanitize_filename` paths keep working.
@@ -283,50 +218,30 @@ mod tests {
     }
 
     #[test]
-    fn test_btm_declaration_with_labels() {
+    fn btm_has_no_ddm_form_and_says_so() {
+        // BTM allow-rules pre-approve a vendor's existing login items;
+        // services.background-tasks installs launchd jobs the MDM supplies,
+        // and Apple documents that it cannot manage third-party login items.
+        // Such output would validate and do nothing, which is why this
+        // refuses rather than emits.
         let app = BtmAppEntry {
-            name: "Test".to_string(),
-            bundle_id: "com.example.test".to_string(),
-            team_id: Some("ABC123".to_string()),
+            name: "Example".to_string(),
+            bundle_id: "com.example.app".to_string(),
+            team_id: Some("ABCDE12345".to_string()),
             code_requirement: None,
-            rules: vec![
-                BtmRule {
-                    rule_type: "Label".to_string(),
-                    rule_value: "com.example.daemon".to_string(),
-                    comment: None,
-                },
-                BtmRule {
-                    rule_type: "Label".to_string(),
-                    rule_value: "com.example.agent".to_string(),
-                    comment: Some("agent".to_string()),
-                },
-            ],
+            rules: vec![],
         };
-        let result = generate_btm_declaration(&app, "com.example").unwrap();
-        assert!(result.contains("com.apple.configuration.services.background-tasks"));
-        assert!(result.contains("LaunchdConfigurations"));
-        // Labels are sanitized via sanitize_id (dots become underscores) in FileAssetReference
-        assert!(result.contains("com_example_daemon"));
-        assert!(result.contains("daemon")); // default context
-        assert!(result.contains("agent")); // overridden context
-    }
-
-    #[test]
-    fn test_btm_declaration_no_labels() {
-        let app = BtmAppEntry {
-            name: "Test".to_string(),
-            bundle_id: "com.example.test".to_string(),
-            team_id: Some("ABC123".to_string()),
-            code_requirement: None,
-            rules: vec![BtmRule {
-                rule_type: "TeamIdentifier".to_string(),
-                rule_value: "ABC123".to_string(),
-                comment: None,
-            }],
-        };
-        let result = generate_btm_declaration(&app, "com.example").unwrap();
-        assert!(result.contains("com.apple.configuration.services.background-tasks"));
-        assert!(!result.contains("LaunchdConfigurations"));
+        let err = generate_btm_declaration(&app, "com.acme")
+            .expect_err("BTM must not emit a DDM declaration")
+            .to_string();
+        assert!(
+            err.contains("no DDM equivalent"),
+            "the refusal must explain why, got: {err}"
+        );
+        assert!(
+            err.contains("ddm legacy"),
+            "the refusal must point at the wrapper that does work, got: {err}"
+        );
     }
 
     #[test]

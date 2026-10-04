@@ -44,7 +44,7 @@ pub struct BtmCli {
     #[arg(short = 'I', long)]
     pub interactive: bool,
 
-    /// Generate DDM declarations instead of mobileconfig (one-shot mode)
+    /// Refused: BTM has no DDM equivalent (one-shot mode; the error names the alternative)
     #[arg(long)]
     pub ddm: bool,
 

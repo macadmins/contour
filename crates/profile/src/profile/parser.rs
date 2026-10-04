@@ -343,8 +343,11 @@ pub struct FixupResult {
 /// Fix common issues in a raw `plist::Value` profile tree before deserialization.
 ///
 /// Handles:
+/// - Bare payload (PayloadType != "Configuration") → wrap in a Configuration envelope
 /// - Missing `PayloadVersion` in top-level or PayloadContent dicts → insert `Integer(1)`
 /// - `PayloadVersion` as `Real` → convert to `Integer`
+/// - `PayloadScope` case ("system" → "System", "user" → "User")
+/// - Missing `PayloadIdentifier` / `PayloadUUID` in PayloadContent dicts → generate
 ///
 /// Returns a list of human-readable fixup descriptions.
 fn fixup_profile_value(value: &mut plist::Value) -> Vec<String> {
@@ -1317,7 +1320,8 @@ mod tests {
 
     #[test]
     fn test_extract_xml_from_pkcs7_incomplete_xml() {
-        // Function extracts from <?xml to </plist>, if </plist> is missing it fails
+        // Function extracts from <?xml to </plist>; if </plist> is missing the
+        // end defaults to data.len() and extraction still succeeds.
         // Test with data that has no plist end tag
         let mut data = Vec::new();
         data.extend_from_slice(&[0x30, 0x82]);

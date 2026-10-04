@@ -1,109 +1,59 @@
 use std::path::Path;
-use std::process::Command;
 
 fn main() {
-    let data_dir = Path::new("data");
-
-    // Re-run only when the sentinel file changes (or is created/deleted).
-    println!("cargo:rerun-if-changed=data/windows_rules.parquet");
-
-    // Allow skipping downloads entirely for offline / CI-cached builds.
-    if std::env::var("CONTOUR_SCHEMA_SKIP_DOWNLOAD").is_ok() {
-        return;
-    }
-
-    // If the sentinel file already exists, nothing to do.
-    if data_dir.join("windows_rules.parquet").exists() {
-        return;
-    }
-
-    let url = std::env::var("CONTOUR_WINDOWS_SCHEMA_URL").unwrap_or_else(|_| {
-        panic!(
-            "CONTOUR_WINDOWS_SCHEMA_URL is not set and data/windows_rules.parquet is missing.\n\
-             Set CONTOUR_WINDOWS_SCHEMA_URL to the URL of windows-schema.zip,\n\
-             or copy parquet files into crates/windows-schema/data/ manually\n\
-             (the posture pipeline's publish-datasets.sh does this)."
-        )
+    resolve_dataset(&DatasetSpec {
+        archive: "windows-schema",
+        url_var: "CONTOUR_WINDOWS_SCHEMA_URL",
+        files: LOCAL_SCHEMA_FILES,
+        optional: OPTIONAL_FILES,
     });
+    // Whatever the dataset carries, a table it predates becomes a
+    // zero-length placeholder; see the function.
+    ensure_optional_placeholders(Path::new("data"));
 
-    download_and_extract(&url, data_dir, "windows-schema/data");
+    // The dataset stamp (`release <pin> sha256 <hex>`, or `local <path>`),
+    // for generated SyncML to name the data it was checked against.
+    // `resolve_dataset` already declares the file as a rerun input.
+    let pin = std::fs::read_to_string("data/.dataset-pin")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unstamped".to_string());
+    println!("cargo:rustc-env=CONTOUR_WINDOWS_DATASET_PIN={pin}");
 }
 
-/// Download a zip archive from `url`, extract it, and move files from the
-/// nested `inner_prefix` directory into `data_dir`.
-///
-/// The upstream zips contain the full crate layout (e.g. `windows-schema/data/*.parquet`),
-/// so we extract into a temporary directory and then relocate just the data files.
-fn download_and_extract(url: &str, data_dir: &Path, inner_prefix: &str) {
-    println!("cargo:warning=Downloading schema data from {url}");
+/// Parquet files this crate embeds, in the order the dataset release lists
+/// them for this archive.
+const LOCAL_SCHEMA_FILES: &[&str] = &[
+    "windows_rules.parquet",
+    "windows_baseline_edges.parquet",
+    "stig_registry_checks.parquet",
+    "fleet_stigs.parquet",
+    "windows_admx_policies.parquet",
+    "windows_rule_capability_links.parquet",
+    "windows_node_details.parquet",
+    "windows_app_policies.parquet",
+];
 
-    std::fs::create_dir_all(data_dir).expect("Failed to create data directory");
+/// Tables added after a dataset was published get a zero-length placeholder
+/// so a checkout pinned to an older archive still compiles. The placeholder
+/// reads as no rows — and `no_embedded_table_is_an_empty_placeholder` in
+/// contour's tests fails on it, so an old dataset is loud, not silent.
+const OPTIONAL_FILES: &[&str] = &["windows_rule_capability_links.parquet"];
 
-    let zip_path = data_dir.join("_schema.zip");
-    let tmp_dir = data_dir.join("_tmp");
-
-    // Download with curl.
-    let status = Command::new("curl")
-        .args(["-fsSL", "-o"])
-        .arg(&zip_path)
-        .arg(url)
-        .status()
-        .expect("Failed to run curl — is curl installed?");
-
-    if !status.success() {
-        panic!("Failed to download schema data from {url}");
-    }
-
-    // Extract into a temporary directory.
-    let _ = std::fs::remove_dir_all(&tmp_dir);
-    std::fs::create_dir_all(&tmp_dir).expect("Failed to create temp directory");
-
-    let status = Command::new("unzip")
-        .args(["-o", "-q"])
-        .arg(&zip_path)
-        .arg("-d")
-        .arg(&tmp_dir)
-        .status()
-        .expect("Failed to run unzip — is unzip installed?");
-
-    if !status.success() {
-        let _ = std::fs::remove_file(&zip_path);
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-        panic!("Failed to extract schema data");
-    }
-
-    // Move data files from the nested directory into the final location.
-    let nested_dir = tmp_dir.join(inner_prefix);
-    if nested_dir.is_dir() {
-        for entry in std::fs::read_dir(&nested_dir).expect("Failed to read nested data dir") {
-            let entry = entry.expect("Failed to read directory entry");
-            let dest = data_dir.join(entry.file_name());
-            let _ = std::fs::remove_file(&dest);
-            std::fs::rename(entry.path(), &dest).unwrap_or_else(|e| {
-                // rename can fail across mount points; fall back to copy+delete.
-                std::fs::copy(entry.path(), &dest)
-                    .unwrap_or_else(|_| panic!("Failed to copy {}: {e}", entry.path().display()));
-                let _ = std::fs::remove_file(entry.path());
-            });
-        }
-    } else {
-        // Fallback: maybe the zip is flat — move everything from tmp_dir directly.
-        for entry in std::fs::read_dir(&tmp_dir).expect("Failed to read temp dir") {
-            let entry = entry.expect("Failed to read directory entry");
-            if entry.path().is_file() {
-                let dest = data_dir.join(entry.file_name());
-                let _ = std::fs::remove_file(&dest);
-                let _ = std::fs::rename(entry.path(), &dest);
-            }
+fn ensure_optional_placeholders(data_dir: &Path) {
+    for f in OPTIONAL_FILES {
+        let p = data_dir.join(f);
+        if !p.exists() {
+            println!(
+                "cargo:warning=windows-schema: {f} not in this dataset — the surface it feeds \
+                 (rule annotations, third-party app policies, node details) is empty until the \
+                 schema is republished"
+            );
+            std::fs::create_dir_all(data_dir).expect("Failed to create data directory");
+            std::fs::write(&p, []).expect("Failed to write placeholder");
         }
     }
-
-    // Clean up.
-    let _ = std::fs::remove_file(&zip_path);
-    let _ = std::fs::remove_dir_all(&tmp_dir);
-
-    println!(
-        "cargo:warning=Schema data downloaded and extracted to {}",
-        data_dir.display()
-    );
 }
+
+// Shared with every schema crate: the stamp, the pinned-archive download,
+// CONTOUR_SCHEMA_SRC and the data repository. See the file.
+include!("../../build-support/schema_data.rs");

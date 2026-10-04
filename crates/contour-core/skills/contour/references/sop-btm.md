@@ -1,14 +1,33 @@
 # SOP: Background Task Management (BTM) Profiles
 
-Generate Background Task Management profiles or DDM declarations that
-control which LaunchDaemons / LaunchAgents / login items are allowed
-on managed macOS hosts.
+Generate Background Task Management profiles that control which
+LaunchDaemons / LaunchAgents / login items are allowed on managed macOS
+hosts.
 
-This SOP exists primarily to pin **one decision point**:
-mobileconfig-form (compatible with macOS 13–14) versus DDM declarations
-(macOS 15+, the supported path going forward). Agents that pick the
-wrong target ship working profiles that silently degrade once the
-target version drops the legacy payload.
+**BTM has no DDM form. mobileconfig is the only correct target**, and
+`--ddm` is refused.
+
+An earlier version of this SOP called DDM "the supported path going
+forward" and warned that mobileconfig would "silently degrade". That was
+inverted, and `btm generate --ddm` acted on it: it emitted
+`com.apple.configuration.services.background-tasks`, which installs and
+runs launchd jobs the MDM supplies from an executable asset. Apple
+documents that it cannot manage third-party login items. BTM allow-rules
+are the opposite — they pre-approve a vendor's *existing* login items so
+the user is not prompted.
+
+The output validated, deployed, and did nothing, with asset references
+naming assets contour never generated. Nothing in the chain said so.
+
+To deliver BTM over the DDM channel, wrap the mobileconfig:
+
+```bash
+contour btm generate btm.toml -o ./profiles/
+contour profile ddm legacy convert ./profiles/ --org <ORG> -o ./declarations/
+```
+
+That is DDM transport with a legacy payload — the honest answer until
+Apple ships a declaration for login-item approval.
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Drift detector: `crates/contour/tests/sop_traps_btm.rs`
@@ -114,7 +133,7 @@ INVARIANTS:
      for macOS 15+. Consider re-generating with --ddm."
   WARN if target == "ddm" AND macOS_min_version < 15
     "DDM declarations require macOS 15+. Hosts on macOS 13/14 will \
-     ignore this. Use --mobileconfig (default) for those hosts."
+     ignore this. Drop --ddm for those hosts; mobileconfig is the default."
 
 STEP 3 — Verify the output:
   if fragment:
@@ -169,7 +188,7 @@ contour btm scan --org com.acme -o btm.toml --json
 ### Merge rules from another config
 
 ```
-contour btm merge source.toml --into target.toml
+contour btm merge source.toml target.toml
 # Useful when consolidating rules from multiple machines into a single
 # managed config.
 ```

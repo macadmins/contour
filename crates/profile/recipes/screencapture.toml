@@ -1,0 +1,24 @@
+# Screenshot capture behaviour.
+#
+# com.apple.screencapture is an ordinary preference domain, delivered here
+# via the MCX com.apple.ManagedClient.preferences wrapper.
+#
+# This suppresses the floating thumbnail that appears after each capture.
+# It does NOT stop screenshots being taken — that is `allowScreenShot` in
+# the `restrictions` recipe, which is a different payload and a different
+# intent. Setting this one alone leaves capture fully available.
+
+[recipe]
+name = "screencapture"
+description = "Screenshot behaviour — suppress the floating thumbnail preview shown after each capture"
+
+[[profile]]
+filename = "screencapture.mobileconfig"
+payload_type = "com.apple.ManagedClient.preferences"
+display_name = "Screenshots — Thumbnail Preview"
+description = "Suppresses the floating thumbnail preview shown after a screenshot"
+removal_disallowed = true
+mcx_domain = "com.apple.screencapture"
+
+[profile.fields]
+show-thumbnail = false

@@ -1,6 +1,6 @@
 [package]
 name = "windows-schema"
-version = "0.4.1-beta.1"
+version = "0.5.0-beta.1"
 description = "Windows STIG compliance schemas (rules, registry checks, Fleet CSP enforcement)"
 edition.workspace = true
 authors.workspace = true
@@ -20,3 +20,8 @@ serde_json = { workspace = true }
 # windows_rules / windows_baseline_edges share the mSCP column layout;
 # their readers and types are reused rather than duplicated.
 mscp-schema = { path = "../mscp-schema" }
+
+[dev-dependencies]
+# Only for the test that every ADMX policy names a real CSP node; the
+# Windows capability data lives in mdm-schema.
+mdm-schema = { path = "../mdm-schema" }

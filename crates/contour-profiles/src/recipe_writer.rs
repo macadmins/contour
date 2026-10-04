@@ -37,8 +37,8 @@
 //! Used by `btm`, `notifications`, and `pppc` so a scan-then-author
 //! workflow can land directly in the operator's preset library
 //! without a `.mobileconfig` round-trip. A recipe can carry both
-//! `[[profile]]` and `[[ddm]]` blocks — `btm` emits both from a single
-//! scan when `--format recipe` is used.
+//! `[[profile]]` and `[[ddm]]` blocks; every current caller passes an
+//! empty `ddms` slice.
 
 use anyhow::{Context, Result};
 use plist::{Dictionary, Value};
@@ -54,7 +54,7 @@ pub struct RecipeProfile {
     /// `<filename>.mobileconfig` written when the recipe is later
     /// rendered via `contour profile generate --recipe …`.
     pub filename: String,
-    /// Apple payload type identifier (e.g. `com.apple.servicemanagement.managed`).
+    /// Apple payload type identifier (e.g. `com.apple.servicemanagement`).
     pub payload_type: String,
     /// Human-readable name shown in MDM consoles + listings.
     pub display_name: String,
@@ -67,9 +67,8 @@ pub struct RecipeProfile {
 }
 
 /// Default DDM activation type for `[[ddm]]` blocks emitted by the
-/// recipe writer. Callers that scan a host (like `btm`) always use a
-/// bare `simple` activation — operators wanting a gated activation
-/// edit the rendered TOML.
+/// recipe writer: a bare `simple` activation — operators wanting a
+/// gated activation edit the rendered TOML.
 pub const DEFAULT_DDM_ACTIVATION_TYPE: &str = "com.apple.activation.simple";
 
 /// One `[[ddm]]` block contribution to a combined recipe TOML.
@@ -90,7 +89,7 @@ pub struct RecipeDdm {
     pub configuration_payload: Dictionary,
     /// Activation declaration type — emitted as `[ddm.activation].type`.
     /// Defaults to [`DEFAULT_DDM_ACTIVATION_TYPE`] via
-    /// [`RecipeDdm::new`]; BTM never sets a predicate.
+    /// [`RecipeDdm::new`]; no predicate is emitted.
     pub activation_type: String,
 }
 

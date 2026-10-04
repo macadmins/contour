@@ -58,7 +58,7 @@ struct IdentifierChange {
     normalized: String,
 }
 
-/// Handle `form scan` command
+/// Handle `profile scan` command
 pub fn handle_scan(
     paths: &[String],
     simulate: bool,
@@ -80,6 +80,9 @@ pub fn handle_scan(
     // The beta channel surfaces seed removals (`os_support[macOS].removed`).
     let registries = if deprecations {
         let migration = MigrationRegistry::new();
+        if channel.is_beta() {
+            crate::cli::ddm::note_if_beta_is_retired();
+        }
         let schema = SchemaRegistry::embedded_channel(channel)
             .context("Failed to load embedded schema for deprecation scan")?;
         Some((migration, schema))
@@ -89,8 +92,8 @@ pub fn handle_scan(
     let registry_refs = registries.as_ref().map(|(m, s)| (m, s));
 
     // Resolve simulation domain: CLI → profile.toml → .contour/config.toml.
-    // Only required when --simulate is set (otherwise sim_domain is unused;
-    // see line ~150 where the simulation block is gated on `simulate`).
+    // Only required when --simulate is set (otherwise `sim_domain` is unused;
+    // the simulation block in `scan_single_file` is gated on `simulate`).
     let resolved_domain = domain
         .map(std::string::ToString::to_string)
         .or_else(|| config.map(|c| c.organization.domain.clone()))

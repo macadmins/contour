@@ -6,11 +6,11 @@
 //! - Values are within allowed ranges
 //! - Sensitive fields are handled appropriately
 //!
-//! Note: This module is reserved for future schema-based validation.
+//! Used by `cli/validate`, `plan`, `post_generate` and `report`.
 #![allow(dead_code, reason = "module under development")]
 
 use crate::profile::{ConfigurationProfile, PayloadContent};
-use crate::schema::{FieldType, PayloadManifest, SchemaRegistry};
+use crate::schema::{FieldPath, FieldType, PayloadManifest, SchemaRegistry};
 use std::collections::HashSet;
 
 /// Severity level for validation issues
@@ -123,17 +123,18 @@ impl SchemaValidationResult {
 /// Options for schema validation
 #[derive(Debug, Clone, Default)]
 pub struct ValidationOptions {
-    /// Treat missing required fields as errors (default: true)
+    /// Treat missing required fields as errors (true in `default_checks()`)
     pub check_required: bool,
-    /// Validate field types (default: true)
+    /// Validate field types (true in `default_checks()`)
     pub check_types: bool,
-    /// Validate allowed values (default: true)
+    /// Validate allowed values (true in `default_checks()`)
     pub check_allowed_values: bool,
-    /// Warn about sensitive fields (default: true)
+    /// Warn about sensitive fields (true in `default_checks()`)
     pub warn_sensitive: bool,
-    /// Warn about unknown payload types (default: true)
+    /// Warn about unknown payload types (true in `default_checks()`)
     pub warn_unknown_types: bool,
-    /// Strict mode: treat unknown types and warnings as errors
+    /// Strict mode: `UNKNOWN_TYPE` and `UNKNOWN_KEY` become errors
+    /// instead of warnings. Other warnings are unaffected.
     pub strict: bool,
 }
 
@@ -211,6 +212,11 @@ impl<'a> SchemaValidator<'a> {
         index: usize,
         result: &mut SchemaValidationResult,
     ) {
+        // Before the manifest lookup: the MCX wrapper has no schema and
+        // returns early below, and that wrapper is where SkipSetupItems
+        // usually lives.
+        self.check_skip_setup_items(payload, index, result);
+
         let Some(manifest) = self.registry.get(&payload.payload_type) else {
             // Check for known custom settings container types (no schema validation needed)
             if is_custom_settings_type(&payload.payload_type) {
@@ -258,6 +264,25 @@ impl<'a> SchemaValidator<'a> {
         };
 
         result.payloads_validated += 1;
+
+        // Conformance cannot catch this: DeviceLock has a schema and the keys
+        // may all be right. It is still not a profile payload, and a profile
+        // carrying it installs nothing.
+        if !manifest.is_authorable() {
+            result.issues.push(ValidationIssue::error(
+                &payload.payload_type,
+                Some(index),
+                None,
+                format!(
+                    "'{}' is an MDM {} — protocol traffic a server sends, not a profile \
+                     payload. This profile deploys and configures nothing.",
+                    payload.payload_type,
+                    manifest.kind.map_or("protocol message", |k| k.as_str())
+                ),
+                "NOT_AUTHORABLE",
+            ));
+            return;
+        }
 
         // Check required fields
         if self.options.check_required {
@@ -323,9 +348,19 @@ impl<'a> SchemaValidator<'a> {
                         "MISSING_REQUIRED",
                     ));
                 }
-            } else if field.parent_key.is_some() {
-                // Nested required field — only check if parent dict is present
-                let ancestors = resolve_ancestor_path(&field.name, manifest);
+            } else {
+                // Nested required field — only check if parent dict is present.
+                //
+                // The ancestors come from the field's own PATH. `fields` is keyed
+                // by path, so looking a nested field up by its leaf NAME finds
+                // nothing, and no nested requirement would be checked: an IKEv2
+                // dict with no RemoteAddress would validate. The fixture below is
+                // keyed by path, as real data is.
+                let path = FieldPath::parse(&field.path);
+                let ancestors: Vec<String> = path
+                    .parent()
+                    .map(|p| p.segments().to_vec())
+                    .unwrap_or_default();
                 if let Some(parent_dict) = walk_plist_path(&payload.content, &ancestors) {
                     if !parent_dict.contains_key(&field.name) {
                         let full_path = ancestors.join(".");
@@ -489,6 +524,40 @@ impl<'a> SchemaValidator<'a> {
         }
     }
 
+    /// Report `SkipSetupItems` entries that match no documented skip key.
+    ///
+    /// A warning rather than an error: the registry is versioned data that
+    /// can lag Apple, and a key too new for contour's copy is the operator's
+    /// call to make, not a reason to fail their build.
+    fn check_skip_setup_items(
+        &self,
+        payload: &PayloadContent,
+        index: usize,
+        result: &mut SchemaValidationResult,
+    ) {
+        for finding in crate::validation::skip_items::unknown_items(payload) {
+            let item = &finding.item;
+            let message = match &finding.suggestion {
+                Some(s) => format!(
+                    "SkipSetupItems entry \"{item}\" is not a documented skip key. \
+                     Did you mean \"{s}\"? An unrecognised entry is ignored, so the \
+                     pane still appears."
+                ),
+                None => format!(
+                    "SkipSetupItems entry \"{item}\" is not a documented skip key. \
+                     An unrecognised entry is ignored, so the pane still appears."
+                ),
+            };
+            result.issues.push(ValidationIssue::warning(
+                &payload.payload_type,
+                Some(index),
+                Some(crate::validation::skip_items::SKIP_SETUP_ITEMS),
+                message,
+                "UNKNOWN_SKIP_ITEM",
+            ));
+        }
+    }
+
     /// Find a similar payload type to suggest for typos
     /// Uses reverse-DNS aware matching optimized for Apple payload types
     fn find_similar_payload_type(&self, unknown_type: &str) -> Option<String> {
@@ -615,32 +684,6 @@ fn reverse_dns_similarity(_unknown: &str, unknown_parts: &[&str], known: &str) -
 
 use contour_core::levenshtein_distance;
 
-/// Resolve the ancestor path for a nested field by walking `parent_key` links.
-///
-/// Returns the chain from root to immediate parent. For example, for a field
-/// `Regex` with parent `CustomRegex`, returns `["CustomRegex"]`.
-fn resolve_ancestor_path(field_name: &str, manifest: &PayloadManifest) -> Vec<String> {
-    let mut path = Vec::new();
-    let mut current = field_name.to_string();
-
-    for _ in 0..32 {
-        let parent = manifest
-            .fields
-            .get(&current)
-            .and_then(|f| f.parent_key.as_ref());
-        match parent {
-            Some(p) => {
-                path.push(p.clone());
-                current = p.clone();
-            }
-            None => break,
-        }
-    }
-
-    path.reverse();
-    path
-}
-
 /// Walk into a plist payload along a key path.
 ///
 /// The root is a `BTreeMap<String, plist::Value>` (PayloadContent.content).
@@ -729,7 +772,6 @@ fn plist_value_to_string(value: &plist::Value) -> String {
     }
 }
 
-/// Check if this is a standard payload key or ProfileManifests metadata
 /// Check if a payload type is a known custom settings container.
 /// These types are valid but don't have fixed schemas - they're used
 /// to deploy arbitrary managed preferences.
@@ -740,6 +782,7 @@ fn is_custom_settings_type(payload_type: &str) -> bool {
     )
 }
 
+/// Check if this is a standard payload key or ProfileManifests metadata
 fn is_standard_payload_key(name: &str) -> bool {
     // Standard Apple payload keys
     if matches!(
@@ -913,7 +956,14 @@ mod tests {
             fields.insert(
                 name.to_string(),
                 FieldDefinition {
+                    allowed_scopes: std::collections::HashMap::new(),
                     name: name.to_string(),
+                    range_min: None,
+                    range_max: None,
+                    subtype: None,
+                    format: None,
+                    asset_types: Vec::new(),
+                    path: name.to_string(),
                     field_type: FieldType::String,
                     flags: FieldFlags {
                         required: false,
@@ -931,13 +981,17 @@ mod tests {
                     deprecated_in: None,
                     introduced_by_platform: std::collections::HashMap::new(),
                     deprecated_by_platform: std::collections::HashMap::new(),
+                    removed_by_platform: Default::default(),
                     combinetype: None,
                 },
             );
             field_order.push(name.to_string());
         }
         PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: payload_type.to_string(),
+            kind: None,
             title: String::new(),
             description: String::new(),
             platforms: Platforms::default(),
@@ -954,6 +1008,95 @@ mod tests {
     /// Build a registry from a single manifest.
     fn registry_from_manifest(manifest: PayloadManifest) -> SchemaRegistry {
         SchemaRegistry::from_manifests_for_test(vec![manifest])
+    }
+
+    /// A command has a schema, so every key can conform — and the profile
+    /// still installs nothing. Conformance checking cannot see this; the
+    /// kind can.
+    #[test]
+    fn a_protocol_kind_in_a_profile_is_an_error_even_when_its_keys_conform() {
+        let mut manifest = test_manifest("DeviceLock", &["PIN", "Message"]);
+        manifest.kind = Some(mdm_schema::PayloadKind::MdmCommand);
+        let registry = registry_from_manifest(manifest);
+        let validator = SchemaValidator::new(&registry);
+
+        let mut content = BTreeMap::new();
+        content.insert("PIN".to_string(), plist::Value::String("123456".into()));
+        let payload = create_test_payload("DeviceLock", content);
+        let profile = ConfigurationProfile {
+            payload_type: "Configuration".to_string(),
+            payload_version: 1,
+            payload_identifier: "test".to_string(),
+            payload_uuid: "TEST".to_string(),
+            payload_display_name: "Test".to_string(),
+            payload_content: vec![payload],
+            additional_fields: BTreeMap::new(),
+        };
+
+        let result = validator.validate(&profile);
+        let errors = result.errors();
+        assert_eq!(errors.len(), 1, "exactly one error, got {errors:?}");
+        assert_eq!(errors[0].code, "NOT_AUTHORABLE");
+        assert!(
+            errors[0].message.contains("MdmCommand"),
+            "{}",
+            errors[0].message
+        );
+
+        // The same keys under a profile kind validate clean — the kind is
+        // the whole difference.
+        let mut manifest = test_manifest("DeviceLock", &["PIN", "Message"]);
+        manifest.kind = Some(mdm_schema::PayloadKind::MdmProfile);
+        let registry = registry_from_manifest(manifest);
+        let result = SchemaValidator::new(&registry).validate(&profile);
+        assert!(result.errors().is_empty(), "{:?}", result.errors());
+    }
+
+    /// Against the REAL registry, not a fixture: the fixture keyed fields by
+    /// leaf name, real data keys them by path, and the nested check was dead
+    /// on real data while its fixture tests passed. An IKEv2 dictionary
+    /// without its required RemoteAddress validated clean.
+    #[test]
+    fn a_present_dict_missing_its_required_children_is_caught_in_real_data() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry");
+        let validator = SchemaValidator::new(&registry);
+        let mut ikev2 = plist::Dictionary::new();
+        ikev2.insert("LocalIdentifier".into(), plist::Value::String("me".into()));
+        let mut content = BTreeMap::new();
+        content.insert(
+            "UserDefinedName".into(),
+            plist::Value::String("Acme".into()),
+        );
+        content.insert("VPNType".into(), plist::Value::String("IKEv2".into()));
+        content.insert("IKEv2".into(), plist::Value::Dictionary(ikev2));
+        let profile = ConfigurationProfile {
+            payload_type: "Configuration".to_string(),
+            payload_version: 1,
+            payload_identifier: "test".to_string(),
+            payload_uuid: "TEST".to_string(),
+            payload_display_name: "Test".to_string(),
+            payload_content: vec![create_test_payload("com.apple.vpn.managed", content)],
+            additional_fields: BTreeMap::new(),
+        };
+        let missing: Vec<String> = validator
+            .validate(&profile)
+            .issues
+            .iter()
+            .filter(|i| i.code == "MISSING_NESTED_REQUIRED")
+            .map(|i| i.message.clone())
+            .collect();
+        for key in [
+            "IKEv2.RemoteAddress",
+            "IKEv2.RemoteIdentifier",
+            "IKEv2.AuthenticationMethod",
+        ] {
+            assert!(
+                missing.iter().any(|m| m.contains(key)),
+                "{key} is required once IKEv2 is present: {missing:?}"
+            );
+        }
+        // An absent parent enforces nothing beneath it.
+        assert!(!missing.iter().any(|m| m.contains("DNS.")), "{missing:?}");
     }
 
     #[test]
@@ -1127,10 +1270,21 @@ mod tests {
                          required: bool,
                          depth: u8,
                          parent: Option<&str>| {
+            // Keyed and pathed the way the loader builds them: by the full
+            // path. This fixture keyed by leaf name, which real data stopped
+            // doing — and that is how the nested check went dead unnoticed.
+            let path = parent.map_or_else(|| name.to_string(), |p| format!("{p}.{name}"));
             fields.insert(
-                name.to_string(),
+                path.clone(),
                 FieldDefinition {
+                    allowed_scopes: std::collections::HashMap::new(),
                     name: name.to_string(),
+                    range_min: None,
+                    range_max: None,
+                    subtype: None,
+                    format: None,
+                    asset_types: Vec::new(),
+                    path: path.clone(),
                     field_type: FieldType::String,
                     flags: FieldFlags {
                         required,
@@ -1148,10 +1302,11 @@ mod tests {
                     deprecated_in: None,
                     introduced_by_platform: std::collections::HashMap::new(),
                     deprecated_by_platform: std::collections::HashMap::new(),
+                    removed_by_platform: Default::default(),
                     combinetype: None,
                 },
             );
-            order.push(name.to_string());
+            order.push(path);
         };
 
         // Top-level required
@@ -1185,7 +1340,10 @@ mod tests {
         );
 
         PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: "com.apple.configuration.passcode.settings".to_string(),
+            kind: None,
             title: "Passcode Settings".to_string(),
             description: String::new(),
             platforms: Platforms::default(),
@@ -1342,17 +1500,6 @@ mod tests {
             .collect();
 
         assert_eq!(top.len(), 1, "Should flag missing top-level required field");
-    }
-
-    #[test]
-    fn test_resolve_ancestor_path() {
-        let manifest = test_manifest_with_nesting();
-        let path = resolve_ancestor_path("Regex", &manifest);
-        assert_eq!(path, vec!["CustomRegex"]);
-
-        // Top-level field has no ancestors
-        let path = resolve_ancestor_path("RequirePasscode", &manifest);
-        assert!(path.is_empty());
     }
 
     #[test]

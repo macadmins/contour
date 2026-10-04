@@ -137,9 +137,8 @@ impl DiscoveryEngine {
 
     /// Analyze apps and discover patterns for bundle suggestions.
     ///
-    /// Discovers both:
-    /// - TeamID-based patterns (vendor level - one rule per vendor)
-    /// - SigningID-based patterns (app level - one rule per app)
+    /// Discovers TeamID-based patterns (vendor level - one rule per vendor).
+    /// For SigningID-based patterns (app level) see [`Self::discover_signing_ids`].
     pub fn discover(&mut self, apps: &AppRecordSet) -> DiscoveryResult {
         // Calculate total unique devices
         let all_devices: std::collections::HashSet<_> =

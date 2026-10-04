@@ -16,12 +16,10 @@
 //!
 //! ## Tiers
 //!
-//! **Tier 1 (Apple-spec-adjacent, always on)**: `duplicate-payload-uuid`,
-//! `payload-version-type`, `placeholder-payload-uuid`,
-//! `deprecated-payload-type`. Fired by `lint_profile_with_options` and
-//! surfaced through `profile validate`. These hurt any Apple-profile
-//! authoring workflow,
-//! regardless of vendor.
+//! **Tier 1 (Apple-spec-adjacent, default)**: the seven names in
+//! [`TIER_1_CHECKS`]. Fired by `lint_profile_with_options` when
+//! `selected_checks` is `None` and surfaced through `profile validate`.
+//! These hurt any Apple-profile authoring workflow, regardless of vendor.
 //!
 //! **Tier 2 (org-policy, opt-in)**: `payload-identifier-reverse-dns`,
 //! `payload-organization-required`, `payload-scope-consistency`,
@@ -88,8 +86,10 @@ impl LintFinding {
     }
 }
 
-/// Tier-1 (Apple-spec-adjacent) check names — always fired by
-/// `lint_profile_with_options` regardless of `selected_checks`.
+/// Tier-1 (Apple-spec-adjacent) check names — the set
+/// `lint_profile_with_options` runs when `selected_checks` is `None`.
+/// `Some(set)` is exact: Tier-1 runs only if named in the set (the CLI's
+/// `resolve_lint_options` re-adds these when `--lint-policy` is passed).
 pub const TIER_1_CHECKS: &[&str] = &[
     "duplicate-payload-uuid",
     "payload-version-type",
@@ -110,8 +110,9 @@ pub const TIER_2_CHECKS: &[&str] = &[
     "nested-payload-identifier-prefix",
 ];
 
-/// Selection knobs for the lint pass. Tier-1 always fires; Tier-2
-/// (org-policy) is opt-in via `selected_checks`.
+/// Selection knobs for the lint pass. `selected_checks: None` runs
+/// Tier-1; `Some(set)` runs exactly the named checks, Tier-1 included
+/// only if listed. Tier-2 (org-policy) is opt-in via `selected_checks`.
 ///
 /// `validate` (without `--lint-policy`) constructs a `LintOptions`
 /// with `selected_checks: None` and gets Tier-1 only. Callers that
@@ -211,7 +212,7 @@ pub fn lint_profile_with_options(
         all.extend(check_placeholder_uuids(value));
     }
     if options.includes("deprecated-payload-type") {
-        all.extend(check_deprecated_payload_types(value, registry));
+        all.extend(check_deprecated_payload_types(value, registry, schema));
     }
     if options.includes("deprecated-key")
         && let Some(sch) = schema
@@ -453,16 +454,28 @@ fn walk_check_uuid(value: &Value, idx: Option<usize>, findings: &mut Vec<LintFin
 
 // ── 1d. Deprecated PayloadType usage ───────────────────────────────────
 
-/// Walk every payload in the tree and warn on any PayloadType that
-/// `MigrationRegistry` knows has a DDM replacement. Cites the
-/// replacement so the agent can route the user to the supported path.
-/// Lint adapter: deprecated payload types. Delegates detection to the
-/// shared `deprecation` module and converts to `LintFinding`s.
+/// Lint adapter: payload types Apple deprecated or removed, per the
+/// schema, citing the DDM replacement when there is one. A payload that
+/// only HAS a declaration equivalent is not flagged — that is not a
+/// deprecation. Without a schema (`validate --no-schema`) the embedded one
+/// is read: deprecation versions are data, not schema validation.
 pub fn check_deprecated_payload_types(
     value: &Value,
     registry: &MigrationRegistry,
+    schema: Option<&SchemaRegistry>,
 ) -> Vec<LintFinding> {
-    deprecation::scan_payload_types(value, registry)
+    let embedded;
+    let schema = match schema {
+        Some(s) => s,
+        None => match SchemaRegistry::embedded() {
+            Ok(s) => {
+                embedded = s;
+                &embedded
+            }
+            Err(_) => return Vec::new(),
+        },
+    };
+    deprecation::scan_payload_deprecations(value, registry, schema)
         .into_iter()
         .map(|f| {
             let lf = LintFinding::warn("deprecated-payload-type", f.detail);
@@ -557,7 +570,7 @@ pub fn check_single_instance_payload_repeated<S: ::std::hash::BuildHasher>(
 /// will collide in any GitOps repo with multiple profiles. Default
 /// severity: warning. Strict severity: error (promoted by the caller).
 ///
-/// Tier-2 (org-policy). Library-only — not wired into `validate`.
+/// Tier-2 (org-policy). Opt-in via `validate --lint-policy`.
 pub fn check_payload_identifier_reverse_dns(value: &Value) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     walk_check_identifier(value, None, &mut findings);
@@ -612,9 +625,10 @@ fn is_reverse_dns(s: &str) -> bool {
 
 /// PayloadOrganization is optional per Apple's spec, but required by
 /// audit conventions — without it, profiles can't be attributed to a
-/// vendor in GitOps logs. Off by default; fires in strict.
+/// vendor in GitOps logs. Off by default; fires only when selected
+/// (`strict` promotes severity, it does not enable the check).
 ///
-/// Tier-2 (org-policy). Library-only — not wired into `validate`.
+/// Tier-2 (org-policy). Opt-in via `validate --lint-policy`.
 pub fn check_payload_organization_required(value: &Value) -> Vec<LintFinding> {
     let Value::Dictionary(dict) = value else {
         return Vec::new();
@@ -652,7 +666,7 @@ const SYSTEM_ONLY_PAYLOAD_TYPES: &[&str] = &[
     "com.apple.servicemanagement.managed",
 ];
 
-/// Tier-2 (org-policy). Library-only — not wired into `validate`.
+/// Tier-2 (org-policy). Opt-in via `validate --lint-policy`.
 pub fn check_payload_scope_consistency(value: &Value) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     let Value::Dictionary(top) = value else {
@@ -701,7 +715,7 @@ pub fn check_payload_scope_consistency(value: &Value) -> Vec<LintFinding> {
 /// collisions across profiles authored by different teams. Default
 /// warning; strict error.
 ///
-/// Tier-2 (org-policy). Library-only — not wired into `validate`.
+/// Tier-2 (org-policy). Opt-in via `validate --lint-policy`.
 pub fn check_nested_payload_identifier_prefix(value: &Value) -> Vec<LintFinding> {
     let Value::Dictionary(top) = value else {
         return Vec::new();
@@ -931,10 +945,27 @@ mod tests {
                 "B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E",
             )],
         );
-        let findings = check_deprecated_payload_types(&profile, &registry);
+        let findings = check_deprecated_payload_types(&profile, &registry, None);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].check, "deprecated-payload-type");
         assert!(findings[0].message.contains("softwareupdate"));
+    }
+
+    /// A payload that merely has a DDM equivalent is not deprecated: CalDAV
+    /// accounts map to account.caldav, and Apple has not deprecated
+    /// com.apple.caldav.account.
+    #[test]
+    fn a_payload_with_a_ddm_equivalent_is_not_flagged_deprecated() {
+        let registry = MigrationRegistry::new();
+        let profile = build_profile(
+            "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D",
+            vec![nested(
+                "com.apple.caldav.account",
+                "B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E",
+            )],
+        );
+        let findings = check_deprecated_payload_types(&profile, &registry, None);
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     #[test]
@@ -947,7 +978,7 @@ mod tests {
                 "B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E",
             )],
         );
-        assert!(check_deprecated_payload_types(&profile, &registry).is_empty());
+        assert!(check_deprecated_payload_types(&profile, &registry, None).is_empty());
     }
 
     #[test]
@@ -1347,7 +1378,7 @@ mod tests {
         let mut top = Dictionary::new();
         top.insert("PayloadType".into(), s("Configuration"));
         top.insert("PayloadVersion".into(), Value::Real(1.0)); // tier-1 fires
-        top.insert("PayloadIdentifier".into(), s("bare")); // tier-2 fires (default)
+        top.insert("PayloadIdentifier".into(), s("bare")); // tier-2 defect, not selected below
         top.insert(
             "PayloadUUID".into(),
             s("00000000-0000-0000-0000-000000000000"),

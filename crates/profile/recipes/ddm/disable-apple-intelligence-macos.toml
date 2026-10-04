@@ -1,9 +1,9 @@
 # Disable Apple Intelligence on macOS.
 #
 # DDM bundle that flips every Apple Intelligence toggle to false in
-# `com.apple.configuration.intelligence.settings` plus the nested
-# Mail/Notes summary toggles. Apple's defaults are all `true`, so
-# this declaration has to set each one explicitly.
+# `com.apple.configuration.intelligence.settings` plus the per-app
+# toggles under Apps (Mail, Notes, Safari, Calendar). Apple's defaults
+# are all `true`, so this declaration has to set each one explicitly.
 #
 # Compose with:
 #   contour profile ddm compose \
@@ -20,6 +20,8 @@
 # `contour profile info com.apple.configuration.intelligence.settings --full`.
 
 intent_name = "disable-apple-intelligence-macos"
+# Compose refuses any key Apple does not offer on this platform.
+platforms = ["macOS"]
 
 [configuration]
 type = "com.apple.configuration.intelligence.settings"
@@ -29,20 +31,28 @@ type = "com.apple.configuration.intelligence.settings"
   AllowAppleIntelligenceReport = false
   AllowGenmoji = false
   AllowImagePlayground = false
-  AllowImageWand = false                       # Apple Pencil hover; macOS-irrelevant but harmless
-  AllowPersonalizedHandwritingResults = false  # iPad / Pencil; harmless on macOS
-  AllowVisualIntelligenceSummary = false
+  AllowVisualIntelligence = false              # 27.0+
   AllowWritingTools = false
+  # Not set here: AllowImageWand, AllowPersonalizedHandwritingResults and
+  # AllowVisualIntelligenceSummary: Apple's schema does not offer them on
+  # macOS.
 
-  # Nested Mail summary controls. Default: true.
-  [configuration.payload.Mail]
+  # Per-app controls live under `Apps`, not at the payload root: Apple
+  # ignores a `Mail` or `Notes` key placed beside the top-level toggles.
+  # Default: true.
+  [configuration.payload.Apps.Mail]
   AllowSmartReplies = false
   AllowSummary = false
 
-  # Nested Notes transcription controls. Default: true.
-  [configuration.payload.Notes]
+  [configuration.payload.Apps.Notes]
   AllowTranscription = false
   AllowTranscriptionSummary = false
+
+  [configuration.payload.Apps.Safari]
+  AllowSummary = false
+
+  [configuration.payload.Apps.Calendar]        # introduced in 27.0
+  AllowNaturalLanguageEditing = false
 
 [activation]
 # Simple activation, no predicate. Target by Fleet team / MDM group.

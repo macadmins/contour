@@ -27,7 +27,7 @@ pub fn fill_app_settings(
     let apps = read_scan_csvs(scan)?;
     let raw: Vec<_> = apps
         .iter()
-        .filter_map(|a| map::from_scanned_app(a, ScanRuleType::Auto, policy))
+        .flat_map(|a| map::from_scanned_app(a, ScanRuleType::Auto, policy))
         .collect();
     let (binaries, _violations) = partition_binaries(raw);
     let privacy = match permissions {
@@ -39,6 +39,8 @@ pub fn fill_app_settings(
         apps: Vec::new(),
         privacy,
         always_allow_managed: false,
+        // Filling an allow list from a scan: the same exclusivity applies.
+        omit_apple: false,
     };
     let built = settings.to_declaration("placeholder", "x");
 
@@ -79,9 +81,14 @@ mod tests {
             "Payload": { "Allowed": { "AllowedBinaries": [ {"TeamID": "OLD0000000"} ] } }
         });
         fill_app_settings(&mut base, &[f.path().to_path_buf()], None, false).unwrap();
-        assert_eq!(
-            base["Payload"]["Allowed"]["AllowedBinaries"][0]["TeamID"],
-            "ABCDE12345"
-        );
+        let teams: Vec<&str> = base["Payload"]["Allowed"]["AllowedBinaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["TeamID"].as_str())
+            .collect();
+        // The scanned vendor replaces the old list, and Apple's software is
+        // kept: an allow list is exclusive.
+        assert_eq!(teams, ["*APPLE*", "ABCDE12345"]);
     }
 }

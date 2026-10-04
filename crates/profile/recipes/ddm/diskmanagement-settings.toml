@@ -1,0 +1,44 @@
+# Managed disk mounting restrictions.
+#
+# DDM bundle for `com.apple.configuration.diskmanagement.settings`. Ships
+# the data-exfiltration posture: external and network volumes mount
+# read-only, so a device can still read a USB stick or a file share but
+# cannot copy data out onto one.
+#
+# Each restriction takes "Allowed", "ReadOnly" or "Disallowed".
+# "Disallowed" refuses the mount entirely — stricter, and more likely to
+# surprise someone holding an installer on a USB drive.
+#
+# Scope note: this is macOS-only in practice, and the restriction does
+# not apply to the system volume or to Time Machine destinations
+# configured by the user before the declaration lands.
+#
+# Compose with:
+#   contour profile ddm compose --preset diskmanagement-settings \
+#       --org com.acme -o ./declarations/diskmanagement-settings
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's
+# group/team assignment.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/diskmanagement.settings.yaml). Verified
+# against contour's embedded schema: `contour profile ddm info
+# com.apple.configuration.diskmanagement.settings --full`.
+
+intent_name = "diskmanagement-settings"
+
+[configuration]
+type = "com.apple.configuration.diskmanagement.settings"
+
+  [configuration.payload]
+
+    [configuration.payload.Restrictions]
+    # USB drives, SD cards, external SSDs — readable, not writable.
+    ExternalStorage = "ReadOnly"
+    # SMB/AFP/NFS shares — readable, not writable.
+    NetworkStorage = "ReadOnly"
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

@@ -1,8 +1,9 @@
 //! Post-generation validation for profile generators.
 //!
-//! Every `.mobileconfig` generator calls `validate_generated_profile`
-//! after writing output so invalid output is caught immediately rather
-//! than after deployment. DDM generation does its own stricter check
+//! The `profile generate` `.mobileconfig` paths call
+//! `validate_generated_profile` after writing output so invalid output is
+//! caught immediately rather than after deployment. `form emit` validates
+//! before emitting instead, and DDM generation does its own stricter check
 //! inline (see `crate::cli::ddm::handle_ddm_generate`).
 
 use crate::output::OutputMode;
@@ -27,13 +28,11 @@ use std::path::Path;
 ///     that never sets the required `moduleName`, an Exchange restriction
 ///     that doesn't provision the Mail account it rides on. mSCP itself never
 ///     enforces required fields.
-///   * **Type mismatches on Apple payloads.** The embedded schema's base
-///     layer is ProfileManifests/ProfileCreator (`profilecreator.parquet`),
-///     whose data quality for `com.apple.*` payloads is unreliable wherever
-///     Apple's authoritative `capabilities.parquet` doesn't override it — e.g.
-///     legacy MCX payloads like `com.apple.MCX.FileVault2`, which types
-///     `Enable` as String though Boolean is the standard MDM-deployed shape
-///     mSCP emits. For Apple payloads we trust the rule over ProfileManifests.
+///   * **Type mismatches on Apple payloads.** Apple's own schema types some
+///     legacy keys differently from the shape MDMs actually deploy — e.g.
+///     `com.apple.MCX.FileVault2` documents `Enable` as String ("On"/"Off")
+///     while mSCP emits Boolean. For Apple payloads we trust the rule over
+///     the documented type.
 ///
 /// Type mismatches on third-party payloads, and every other error, stay fatal.
 pub fn validate_generated_profile(
@@ -56,11 +55,11 @@ pub fn validate_generated_profile(
     let result = validator.validate(&profile);
 
     // Apple payloads: `com.apple.*` or the dot-prefixed pseudo-domains
-    // (`.GlobalPreferences`). Their ProfileManifests-sourced type constraints
-    // are the ones we treat as advisory.
+    // (`.GlobalPreferences`). Their type constraints are the ones we treat
+    // as advisory.
     let is_apple = |pt: &str| pt.starts_with("com.apple.") || pt.starts_with('.');
 
-    // On the recipe path, demote ProfileManifests-driven errors to warnings
+    // On the recipe path, demote the two unreliable error classes to warnings
     // (see the doc comment); everywhere else they stay errors.
     let demoted = |i: &&ValidationIssue| {
         lenient

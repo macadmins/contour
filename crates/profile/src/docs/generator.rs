@@ -319,8 +319,7 @@ fn get_ddm_github_url(declaration_type: &str, category: &str) -> Option<String> 
 
     let filename = declaration_type.strip_prefix(prefix)?;
 
-    // Convert dots to dashes for multi-part names (e.g., credential.acme -> credential.acme)
-    // But the file uses dots as-is (e.g., credential.acme.yaml)
+    // Apple's files keep the dotted name as-is (e.g., credential.acme.yaml).
     Some(format!("{GITHUB_BASE}/{dir}/{filename}.yaml"))
 }
 

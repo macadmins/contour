@@ -27,6 +27,7 @@ mod schema;
 mod signing;
 mod uuid;
 mod validation;
+mod windows;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -47,9 +48,14 @@ fn main() {
             // Phase B3: emit a parseable JSON error envelope on stderr so agents
             // and CI receive a structured failure shape, matching the BatchResult
             // error_code enum documented in the procedural SOP format spec.
-            let msg = format!("{e:#}");
-            let code = contour_core::classify_error(&msg);
-            contour_core::print_error_json(&msg, Some(code));
+            // A handler that knew the exact code has already printed the
+            // envelope (`output::Reported`); printing again would put two
+            // envelopes with different codes on stderr.
+            if e.downcast_ref::<contour_core::output::Reported>().is_none() {
+                let msg = format!("{e:#}");
+                let code = contour_core::classify_error(&msg);
+                contour_core::print_error_json(&msg, Some(code));
+            }
         } else {
             eprintln!("Error: {e:#}");
         }
@@ -74,7 +80,7 @@ fn run(cli: Cli) -> Result<()> {
 
     // Wrap the standalone profile tree under a synthetic `contour` root so
     // `find` results and help-ai hints match the unified `contour profile …`
-    // surface (the standalone binary has no top-level `find`/`help-ai`).
+    // surface (the standalone binary has `find` but no top-level `help-ai`).
     let clap_root = || clap::Command::new("contour").subcommand(Cli::command().name("profile"));
 
     // One dispatcher, shared with `contour profile …`.

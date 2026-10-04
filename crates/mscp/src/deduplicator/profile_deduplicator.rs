@@ -33,12 +33,12 @@ pub struct ProfileGroup {
     /// All profiles with this content hash
     pub profiles: Vec<ProfileEntry>,
 
-    /// Representative filename (shortest/most common)
+    /// Representative filename (shortest)
     pub canonical_filename: String,
 }
 
 impl ProfileGroup {
-    /// Check if this is a duplicate (used by multiple baselines)
+    /// Check if this content hash has more than one instance (across or within baselines)
     pub fn is_duplicate(&self) -> bool {
         self.profiles.len() > 1
     }
@@ -112,12 +112,12 @@ impl DeduplicationReport {
         }
     }
 
-    /// Get all shared profiles (used by multiple baselines)
+    /// Get all groups with more than one instance (across or within baselines)
     pub fn get_shared_profiles(&self) -> Vec<&ProfileGroup> {
         self.groups.iter().filter(|g| g.is_duplicate()).collect()
     }
 
-    /// Get all single-use profiles (used by only one baseline)
+    /// Get all groups with exactly one instance
     #[allow(dead_code, reason = "reserved for future use")]
     pub fn get_single_use_profiles(&self) -> Vec<&ProfileGroup> {
         self.groups.iter().filter(|g| !g.is_duplicate()).collect()

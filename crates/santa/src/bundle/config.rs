@@ -20,8 +20,7 @@ pub enum DedupLevel {
     SigningId,
     /// Group by SHA256 hash - binary-level rules (most specific, high churn)
     Binary,
-    /// Use highest available identifier (adaptive)
-    /// Prefers TeamID > SigningID > Binary
+    /// Adaptive: currently identical to `SigningId` (groups by SigningID)
     Adaptive,
 }
 

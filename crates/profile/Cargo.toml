@@ -1,6 +1,6 @@
 [package]
 name = "profile"
-version = "0.4.1-beta.1"
+version = "0.5.0-beta.1"
 description = "Apple configuration profile toolkit for MDM deployments"
 edition.workspace = true
 authors.workspace = true
@@ -72,10 +72,16 @@ dirs.workspace = true
 # Memory allocator
 mimalloc.workspace = true
 
+# Schema registry and form contract
+contour-form.workspace = true
 # MDM schema data
 mdm-schema.workspace = true
+# ADMX element schema behind ADMX-backed Windows CSP nodes, shown by
+# `profile info --windows`.
+windows-schema.workspace = true
 
 [dev-dependencies]
+osquery-schema.workspace = true
 tempfile.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true

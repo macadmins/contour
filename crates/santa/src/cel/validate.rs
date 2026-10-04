@@ -1,7 +1,7 @@
 //! Semantic validation for Santa CEL expressions.
 //!
-//! Checks field existence, type correctness, and V1/V2 gating beyond
-//! what the CEL compiler's syntax check provides.
+//! Checks field existence and V1/V2 gating beyond what the CEL compiler's
+//! syntax check provides. Field types are catalogued but not yet checked.
 
 use regex::Regex;
 use std::sync::LazyLock;

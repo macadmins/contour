@@ -361,7 +361,7 @@ pub fn handle_import(
     // Create output directory
     fs::create_dir_all(effective_output)?;
 
-    // Build renamer if config has renaming rules
+    // Build renamer whenever a config is present
     let renamer = config.map(ProfileRenamer::new);
 
     // Phase 5: Execute pipeline

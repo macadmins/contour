@@ -12,9 +12,13 @@
 //! Module layout:
 //! - [`change`] — `ChangeTier` enum and `PayloadChange` struct.
 //! - [`classifier`] — pair payloads across baseline/proposed and emit
-//!   `PayloadChange` records. Compares NOOP / IN_PLACE_UPDATE / ADD /
-//!   REMOVE / REPLACE in this skeleton; REF_BROKEN, TYPE_INVALID,
-//!   SCOPE_BROADENED, DEPRECATED layer on top in subsequent slices.
+//!   NOOP / IN_PLACE_UPDATE / ADD / REMOVE / REPLACE records.
+//! - [`refs`] — REF_BROKEN: dangling cross-references in the proposed profile.
+//! - [`types`] — TYPE_INVALID: values that fail their payload schema.
+//! - [`scope`] — SCOPE_BROADENED: TCC ACL / PayloadScope widening vs baseline.
+//! - [`deprecated`] — DEPRECATED: newly introduced deprecated payload types.
+//!
+//! `cli::plan` runs each detector and merges the results into one `Plan`.
 
 pub mod change;
 pub mod classifier;

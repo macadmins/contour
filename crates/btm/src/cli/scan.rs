@@ -209,8 +209,9 @@ fn scan_result_to_app_entry(scan_result: &scan::BtmScanResult) -> BtmAppEntry {
 ///
 /// Combines scan + generate in a single step, skipping the intermediate
 /// btm.toml file. Launch items are scanned, optionally filtered
-/// interactively, and service management profiles (or DDM declarations)
-/// are generated directly.
+/// interactively, and a combined service management profile is
+/// generated directly. `ddm` is refused per app by
+/// `generate_btm_declaration`, so nothing is written on that path.
 #[expect(
     clippy::too_many_arguments,
     reason = "CLI handler requires many parameters"
@@ -362,7 +363,7 @@ pub fn run_oneshot(
         .with_context(|| format!("Failed to create output directory {}", output_dir.display()))?;
 
     if ddm {
-        // DDM: still per-app (each declaration is per-task-type)
+        // Dead path: `generate_btm_declaration` refuses every app (BTM_DDM_REFUSAL).
         let mut profiles_written = Vec::new();
         for app in &apps {
             let filename = format!("{}-btm.json", sanitize_filename(&app.name));

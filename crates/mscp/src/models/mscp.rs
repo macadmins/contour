@@ -42,6 +42,21 @@ pub enum Platform {
 }
 
 impl Platform {
+    /// The `baselines/<os>/` directory name mSCP 2.0 uses for this platform,
+    /// and the `_<os>_` token inside its baseline file names
+    /// (`cis_lvl1_macos_27.0.yaml`).
+    ///
+    /// Distinct from [`Self::to_fleet_label_platform`] on purpose: Fleet says
+    /// `darwin`, mSCP's tree says `macos`, and conflating them is how a lookup
+    /// lands on a path that does not exist.
+    pub fn mscp_dir_name(self) -> &'static str {
+        match self {
+            Platform::MacOS => "macos",
+            Platform::Ios => "ios",
+            Platform::VisionOS => "visionos",
+        }
+    }
+
     /// Convert to Fleet label platform value
     ///
     /// Fleet uses osquery platform conventions:

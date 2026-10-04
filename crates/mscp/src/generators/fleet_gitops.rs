@@ -23,6 +23,16 @@ use std::path::{Path, PathBuf};
 pub struct GlobPlan<'a> {
     pub profiles: Option<&'a GlobSection>,
     pub scripts: Option<&'a GlobSection>,
+    /// Extra labels every profile in this baseline must also carry, from
+    /// `[baselines.labels] include_all` in mscp.toml.
+    ///
+    /// They join the generated `mscp-<baseline>` label in the same
+    /// `labels_include_all` list rather than getting a field of their own:
+    /// Fleet allows exactly one label field per entry, and narrowing is what
+    /// include_all means, so `[mscp-cis_lvl1, pilot-ring-1]` reads as "hosts
+    /// in this baseline AND in the pilot ring" — which is what progressive
+    /// rollout is asking for.
+    pub extra_include_all: &'a [String],
 }
 
 /// Generator for complete Fleet `GitOps` directory structure
@@ -54,8 +64,7 @@ impl FleetGitOpsGenerator {
 
         // Generate global files. Agent options are intentionally NOT emitted —
         // the canonical `fleetctl new` scaffold ships no agent-options.yml (agent
-        // config is left to Fleet defaults / the target repo). `generate_agent_options`
-        // remains available as opt-in API for callers that want it.
+        // config is left to Fleet defaults / the target repo).
         self.generate_default_yml()?;
         self.generate_unassigned_yml()?;
 
@@ -218,6 +227,7 @@ software:
             &label_name,
             profile_paths,
             glob_plan.profiles,
+            glob_plan.extra_include_all,
         )?;
         let scripts = self.emit_scripts_section(baseline_name, script_paths, glob_plan.scripts)?;
 
@@ -320,6 +330,7 @@ software:
         label_name: &str,
         profile_paths: &[PathBuf],
         section: Option<&GlobSection>,
+        extra_include_all: &[String],
     ) -> Result<Vec<CustomSetting>> {
         // Fleet v4.83+: profiles live at platforms/macos/configuration-profiles/{baseline}/.
         let base_dir = format!("../{}/{baseline_name}", self.layout.macos_profiles_subdir);
@@ -333,7 +344,11 @@ software:
                     let cs = CustomSetting {
                         path: Some(format!("{base_dir}/{filename}")),
                         paths: None,
-                        labels_include_all: Some(vec![label_name.to_string()]),
+                        labels_include_all: Some(
+                            std::iter::once(label_name.to_string())
+                                .chain(extra_include_all.iter().cloned())
+                                .collect(),
+                        ),
                         labels_include_any: None,
                         labels_exclude_any: None,
                     };
@@ -558,6 +573,7 @@ software:
                 reports: Vec::new(),
                 policies: policy_entries.to_vec(),
                 software: Vec::new(),
+                assets: Vec::new(),
             },
             lib_files: contour_core::fragment::LibFiles {
                 copy: lib_files.to_vec(),
@@ -613,13 +629,13 @@ fn non_empty_vec(v: &[String]) -> Option<Vec<String>> {
 fn insert_label_entry(content: &str, entry_line: &str) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find the `labels:` line (top-level, no indentation)
+    // Find the first `labels:` line (trimmed, so an indented nested `labels:` matches too)
     let labels_idx = lines.iter().position(|l| {
         let trimmed = l.trim();
         trimmed == "labels:" || trimmed.starts_with("labels:")
     })?;
 
-    // Find the indentation to use (look at existing entries under labels:)
+    // Entry indentation is fixed at two spaces
     let indent = "  ";
 
     // Find insertion point: after last `- path:` entry under labels, or right after `labels:`
@@ -762,7 +778,7 @@ mod tests {
         ];
 
         let out = generator
-            .emit_profiles_section("cis_lvl1", "mscp-cis_lvl1", &profiles, None)
+            .emit_profiles_section("cis_lvl1", "mscp-cis_lvl1", &profiles, None, &[])
             .unwrap();
         assert_eq!(out.len(), 2);
         for cs in &out {
@@ -796,7 +812,7 @@ mod tests {
         };
 
         let out = generator
-            .emit_profiles_section("cis_lvl1", "mscp-cis_lvl1", &profiles, Some(&section))
+            .emit_profiles_section("cis_lvl1", "mscp-cis_lvl1", &profiles, Some(&section), &[])
             .unwrap();
         assert_eq!(out.len(), 2);
 
@@ -847,7 +863,7 @@ mod tests {
         };
 
         let err = generator
-            .emit_profiles_section("cis_lvl1", "mscp-cis_lvl1", &profiles, Some(&section))
+            .emit_profiles_section("cis_lvl1", "mscp-cis_lvl1", &profiles, Some(&section), &[])
             .unwrap_err();
         assert!(err.to_string().contains("drop_labels"));
     }
@@ -906,5 +922,95 @@ mod tests {
 
         let content = std::fs::read_to_string(temp_dir.path().join("fleets/no-team.yml")).unwrap();
         assert!(content.contains("name: No team"));
+    }
+}
+
+#[cfg(test)]
+mod baseline_label_tests {
+    use super::*;
+
+    fn generator() -> FleetGitOpsGenerator {
+        FleetGitOpsGenerator::new_default("/tmp/does-not-need-to-exist")
+    }
+
+    /// `[baselines.labels] include_all` narrows within the baseline.
+    ///
+    /// The generated `mscp-<baseline>` label is what scopes a profile to the
+    /// baseline's hosts. Configured labels join it in the same list, so every
+    /// one must match — "in this baseline AND in the pilot ring", which is
+    /// what progressive rollout means. Replacing the baseline label would
+    /// send security profiles to a different set of machines.
+    #[test]
+    fn configured_labels_join_the_baseline_label() {
+        let extra = vec!["pilot-ring-1".to_string(), "has-t2".to_string()];
+        let out = generator()
+            .emit_profiles_section(
+                "cis_lvl1",
+                "mscp-cis_lvl1",
+                &[PathBuf::from("com.apple.dock.mobileconfig")],
+                None,
+                &extra,
+            )
+            .expect("emit");
+        assert_eq!(out.len(), 1);
+        let labels = out[0]
+            .labels_include_all
+            .as_ref()
+            .expect("the baseline label is always present");
+        assert_eq!(
+            labels,
+            &vec![
+                "mscp-cis_lvl1".to_string(),
+                "pilot-ring-1".to_string(),
+                "has-t2".to_string()
+            ],
+            "the baseline label must come first and survive"
+        );
+        assert!(out[0].labels_include_any.is_none());
+        assert!(out[0].labels_exclude_any.is_none());
+        out[0].validate().expect("one label field only");
+    }
+
+    /// No configured labels leaves the emission exactly as it was.
+    #[test]
+    fn no_configured_labels_changes_nothing() {
+        let out = generator()
+            .emit_profiles_section(
+                "cis_lvl1",
+                "mscp-cis_lvl1",
+                &[PathBuf::from("com.apple.dock.mobileconfig")],
+                None,
+                &[],
+            )
+            .expect("emit");
+        assert_eq!(
+            out[0].labels_include_all.as_deref(),
+            Some(["mscp-cis_lvl1".to_string()].as_slice())
+        );
+    }
+
+    /// A glob entry still carries no labels, configured or not.
+    ///
+    /// Fleet refuses labels on `paths:` entries. Configured labels must not
+    /// become the thing that starts violating that.
+    #[test]
+    fn a_glob_entry_takes_no_configured_labels() {
+        let section = GlobSection {
+            enabled: true,
+            drop_labels: true,
+            exceptions: Vec::new(),
+        };
+        let out = generator()
+            .emit_profiles_section(
+                "cis_lvl1",
+                "mscp-cis_lvl1",
+                &[PathBuf::from("com.apple.dock.mobileconfig")],
+                Some(&section),
+                &["pilot-ring-1".to_string()],
+            )
+            .expect("emit");
+        let glob = out.iter().find(|c| c.paths.is_some()).expect("glob entry");
+        assert!(glob.labels_include_all.is_none());
+        glob.validate().expect("no labels on a paths entry");
     }
 }

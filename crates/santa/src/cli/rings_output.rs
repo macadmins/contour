@@ -86,8 +86,9 @@ fn format_baseline_conflict(conflict: &Conflict) -> String {
 }
 
 /// Walk rules and return one warning per `rule.rings` entry that doesn't
-/// match a ring name in the active config. Today these rules are silently
-/// dropped from every edition — surfacing them prevents typo data loss.
+/// match a ring name in the active config. A rule whose rings are *all*
+/// unknown is silently dropped from every edition (one known ring is enough
+/// to land in that edition) — surfacing them prevents typo data loss.
 pub fn collect_unknown_ring_warnings(rules: &RuleSet, ring_config: &RingConfig) -> Vec<String> {
     let valid: HashSet<&str> = ring_config.rings.iter().map(|r| r.name.as_str()).collect();
     let mut warnings = Vec::new();

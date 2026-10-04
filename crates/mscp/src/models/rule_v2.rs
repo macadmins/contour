@@ -16,7 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap}
 use std::collections::{BTreeMap, HashMap};
 use yaml_serde::Value;
 
-/// 2.0 raw rule, deserialized from `config/default/rules/<cat>/<id>.yaml`.
+/// 2.0 raw rule, deserialized from `<mscp_repo>/rules/**/*.yaml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MscpRuleV2x {
     pub id: String,
@@ -163,8 +163,9 @@ impl MscpRuleV2x {
     /// conflicts, etc.) consumes [`MscpRule`] regardless of source layout.
     ///
     /// If the rule doesn't target the requested `(os, os_version)`, the
-    /// returned `MscpRule` will have empty `tags` (i.e. won't match any
-    /// baseline). Callers can filter by `tags.contains(baseline)`.
+    /// returned `MscpRule` carries no benchmark names in `tags` (so no
+    /// baseline filter matches); the rule's free-form top-level `tags` are
+    /// still unioned in. Callers can filter by `tags.contains(baseline)`.
     pub fn into_normalized(self, os: Platform, os_version: &str) -> MscpRule {
         let platform_os = match os {
             Platform::MacOS => self.platforms.macos.as_ref(),
@@ -174,7 +175,8 @@ impl MscpRuleV2x {
 
         // Benchmarks for this (os, version): the set of baseline names
         // this rule belongs to. If the requested version isn't listed,
-        // tags are empty and no baseline filter will match.
+        // benchmarks are empty and no baseline filter will match (the
+        // free-form tags below are still added).
         let (benchmarks, severity) = platform_os
             .and_then(|p| p.versions.get(os_version))
             .map(|v| {
@@ -316,11 +318,9 @@ fn flatten_references_for(refs: &Value, os: Platform, os_version: &str) -> HashM
 }
 
 fn os_short_key(os: Platform) -> &'static str {
-    match os {
-        Platform::MacOS => "macos",
-        Platform::Ios => "ios",
-        Platform::VisionOS => "visionos",
-    }
+    // Single owner of the mapping lives on Platform; a second copy here is
+    // how the tree's `macos` and Fleet's `darwin` drift apart.
+    os.mscp_dir_name()
 }
 
 /// Strip a SemVer-ish version like `"26.0"` to its major component `"26"`.

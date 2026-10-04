@@ -1,0 +1,183 @@
+# Microsoft Defender for Endpoint (wdav) — managed deployment bundle.
+#
+# Six profiles that approve, permit and configure Defender for Endpoint on a
+# managed Mac: system-extension approval, Full Disk Access, the network content
+# filter, background service management, notifications, and the
+# `com.microsoft.wdav` preference domain itself.
+#
+# Team identifier UBF8T346G9 is Microsoft Corporation.
+#
+# Every identifier, designated requirement and label prefix below is copied
+# verbatim from Microsoft's own published profiles at
+# github.com/microsoft/mdatp-xplat/tree/master/macos/mobileconfig/profiles
+# (sysext, fulldisk, netfilter, background_services, notif). A guessed
+# CodeRequirement produces a profile that installs cleanly and grants nothing,
+# so none of these strings are reconstructed from documentation prose.
+#
+# Preference values come from Microsoft's "Recommended configuration profile"
+# (learn.microsoft.com/defender-endpoint/mac-preferences) plus the documented
+# network protection enforcement level
+# (learn.microsoft.com/defender-endpoint/network-protection-macos).
+#
+# Deliberately not included:
+#   - accessibility.mobileconfig — grants Accessibility to com.microsoft.dlp.daemon,
+#     needed only for Microsoft Purview Endpoint DLP.
+#   - bluetooth.mobileconfig — needed only when Device Control manages Bluetooth.
+#   - com.microsoft.wdav.atp — the onboarding blob is tenant-specific and is
+#     downloaded from the Defender portal, not authored.
+#   - com.microsoft.autoupdate2 — see Microsoft AutoUpdate preferences.
+#
+# Deploy every profile here *before* installing wdav.pkg. Microsoft is explicit
+# that a late profile leaves the device unhealthy or prompts the user for
+# consent the profile was supposed to grant silently.
+
+[recipe]
+name = "microsoft-defender"
+description = "Microsoft Defender for Endpoint — system extension, Full Disk Access, network filter, background services, notifications, and antivirus/EDR preferences"
+vendor = "Microsoft"
+variables = []
+
+[[profile]]
+filename = "microsoft-defender-system-extension.mobileconfig"
+payload_type = "com.apple.system-extension-policy"
+display_name = "Microsoft Defender System Extensions"
+description = "Approves the Defender endpoint security and network system extensions"
+removal_disallowed = true
+
+# Microsoft's shipped sysext.mobileconfig leaves user overrides enabled. To
+# harden further, set this to false and add a NonRemovableFromUISystemExtensions
+# table mirroring AllowedSystemExtensions.
+[profile.fields]
+AllowUserOverrides = true
+
+[profile.fields.AllowedSystemExtensions]
+UBF8T346G9 = ["com.microsoft.wdav.epsext", "com.microsoft.wdav.netext"]
+
+[[profile]]
+filename = "microsoft-defender-full-disk-access.mobileconfig"
+payload_type = "com.apple.TCC.configuration-profile-policy"
+display_name = "Microsoft Defender Full Disk Access"
+description = "Grants Full Disk Access (SystemPolicyAllFiles) to the Defender app, its endpoint security extension, and the DLP daemon"
+removal_disallowed = true
+
+# Microsoft's fulldisk.mobileconfig uses the `Allowed` key, which Apple
+# deprecated in macOS 11 in favour of `Authorization`. Same effect; the modern
+# spelling is used here.
+[[profile.fields.Services.SystemPolicyAllFiles]]
+Authorization = "Allow"
+CodeRequirement = 'identifier "com.microsoft.wdav" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UBF8T346G9'
+Identifier = "com.microsoft.wdav"
+IdentifierType = "bundleID"
+StaticCode = false
+
+[[profile.fields.Services.SystemPolicyAllFiles]]
+Authorization = "Allow"
+CodeRequirement = 'identifier "com.microsoft.wdav.epsext" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UBF8T346G9'
+Identifier = "com.microsoft.wdav.epsext"
+IdentifierType = "bundleID"
+StaticCode = false
+
+[[profile.fields.Services.SystemPolicyAllFiles]]
+Authorization = "Allow"
+CodeRequirement = 'identifier "com.microsoft.dlp.daemon" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UBF8T346G9'
+Identifier = "com.microsoft.dlp.daemon"
+IdentifierType = "bundleID"
+StaticCode = false
+
+[[profile]]
+filename = "microsoft-defender-web-filter.mobileconfig"
+payload_type = "com.apple.webcontent-filter"
+display_name = "Microsoft Defender Content Filter"
+description = "Enables the Defender network content filter (socket-level inspection) for network protection, web content filtering, and custom indicators"
+removal_disallowed = true
+
+# macOS honours exactly one network filter profile. Installing a second one —
+# from any vendor — breaks connectivity. Check for a conflicting filter before
+# deploying this.
+[profile.fields]
+FilterType = "Plugin"
+FilterGrade = "inspector"
+FilterSockets = true
+FilterPackets = false
+FilterDataProviderBundleIdentifier = "com.microsoft.wdav.netext"
+FilterDataProviderDesignatedRequirement = 'identifier "com.microsoft.wdav.netext" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UBF8T346G9'
+PluginBundleID = "com.microsoft.wdav"
+UserDefinedName = "Microsoft Defender Content Filter"
+
+[[profile]]
+filename = "microsoft-defender-background-services.mobileconfig"
+payload_type = "com.apple.servicemanagement"
+display_name = "Microsoft Defender Background Services"
+description = "Allows the Defender daemons to run as managed login items (required from macOS 13 Ventura onward)"
+removal_disallowed = true
+
+# Label prefixes, not bundle identifiers: Defender registers several launch
+# daemons per prefix and Microsoft approves them by family.
+[[profile.fields.Rules]]
+RuleType = "LabelPrefix"
+RuleValue = "com.microsoft.fresno"
+
+[[profile.fields.Rules]]
+RuleType = "LabelPrefix"
+RuleValue = "com.microsoft.dlp"
+
+[[profile.fields.Rules]]
+RuleType = "LabelPrefix"
+RuleValue = "com.microsoft.wdav"
+
+[[profile]]
+filename = "microsoft-defender-notifications.mobileconfig"
+payload_type = "com.apple.notificationsettings"
+display_name = "Microsoft Defender Notifications"
+description = "Permits notifications from the Defender status menu agent and Microsoft AutoUpdate"
+removal_disallowed = true
+
+# Set ShowInNotificationCenter = false to keep Defender silent for end users.
+[[profile.fields.NotificationSettings]]
+BundleIdentifier = "com.microsoft.wdav.tray"
+NotificationsEnabled = true
+ShowInNotificationCenter = true
+ShowInLockScreen = false
+AlertType = 1
+BadgesEnabled = true
+SoundsEnabled = true
+CriticalAlertEnabled = false
+
+[[profile.fields.NotificationSettings]]
+BundleIdentifier = "com.microsoft.autoupdate2"
+NotificationsEnabled = true
+ShowInNotificationCenter = true
+ShowInLockScreen = false
+AlertType = 1
+BadgesEnabled = true
+SoundsEnabled = true
+CriticalAlertEnabled = false
+
+[[profile]]
+filename = "microsoft-defender-preferences.mobileconfig"
+payload_type = "com.microsoft.wdav"
+display_name = "Microsoft Defender Preferences"
+description = "Antivirus, cloud-delivered protection, tamper protection, and network protection settings for Defender for Endpoint"
+removal_disallowed = true
+
+# Microsoft's recommended configuration profile: real-time protection on, PUA
+# blocked, archive bombs audited, cloud protection and sample submission on,
+# tamper protection enforcing.
+[profile.fields.antivirusEngine]
+enforcementLevel = "real_time"
+threatTypeSettings = [
+    {key = "potentially_unwanted_application", value = "block"},
+    {key = "archive_bomb", value = "audit"},
+]
+
+[profile.fields.cloudService]
+enabled = true
+automaticSampleSubmission = true
+automaticDefinitionUpdateEnabled = true
+
+[profile.fields.tamperProtection]
+enforcementLevel = "block"
+
+# Requires the network filter profile above to be installed.
+[profile.fields.networkProtection]
+enforcementLevel = "block"

@@ -1,10 +1,9 @@
 # Diagnostic & usage reporting settings.
 #
-# DEPRECATION NOTE: the second profile uses com.apple.applicationaccess,
-# which Apple deprecated as of macOS 26 — it still applies on macOS 25
-# and earlier but stops working on macOS 26+. The partial DDM
-# replacement is com.apple.configuration.screentime. The SubmitDiagInfo
-# profile is unaffected.
+# The second profile uses com.apple.applicationaccess, which Apple has not
+# deprecated; allowDiagnosticSubmission has no declaration equivalent.
+# `contour profile ddm map com.apple.applicationaccess` lists the
+# restriction keys Apple has moved to declarations.
 
 [recipe]
 name = "setdiagnosticandusagereportsettings"

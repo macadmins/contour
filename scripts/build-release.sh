@@ -14,17 +14,45 @@ set -euo pipefail
 #   ./scripts/build-release.sh --op --skip-pkg
 #   ./scripts/build-release.sh --op --skip-build --install
 
+# Captured at top level: inside a zsh function `$0` is the function's name,
+# not the script's, so --help printed "Usage: parse_args".
+SCRIPT_PATH="${0:A}"
 SCRIPT_DIR="${0:A:h}"
 PROJECT_ROOT="${SCRIPT_DIR:h}"
 DIST_DIR="$PROJECT_ROOT/dist"
 ENV_FILE="$SCRIPT_DIR/.env"
+# Release targets. Each ships as its own signed binary, its own zip and its
+# own pkg — contour-mcp is a separate product with a separate dependency tree
+# (read-only, no MDM-artifact writers linked), so it gets a separate installer
+# rather than riding along inside contour's.
+#
+# BINARY and PKG_IDENTIFIER are reassigned per target inside main()'s loop;
+# every function below reads them as globals, which is why the loop can reuse
+# them unchanged.
+ALL_BINARIES=(contour contour-mcp)
+# Every target this script can produce, whatever `--only` narrowed
+# ALL_BINARIES to. Checksums and Gatekeeper cover the current version of each
+# one present in dist/, so an --only run keeps the other target's pkg listed.
+KNOWN_BINARIES=(contour contour-mcp)
 BINARY="contour"
 PKG_IDENTIFIER="io.macadmins.contour.pkg"
 
+# Reverse-DNS installer identifier for a target.
+pkg_identifier_for() {
+    case "$1" in
+        contour)     echo "io.macadmins.contour.pkg" ;;
+        contour-mcp) echo "io.macadmins.contour-mcp.pkg" ;;
+        *)           log_error "No pkg identifier defined for '$1'"; exit 1 ;;
+    esac
+}
+
 # 1Password default references
-OP_APPLE_ID="${OP_APPLE_ID:-op://dev-credentials/NOTARIZATION_APPLE_ID/credential}"
-OP_PASSWORD="${OP_PASSWORD:-op://dev-credentials/NOTARIZATION_PASSWORD/credential}"
-OP_TEAM_ID="${OP_TEAM_ID:-op://dev-credentials/NOTARIZATION_TEAM_ID/credential}"
+# 1Password references for --op, e.g. op://<vault>/<item>/<field>. No
+# defaults: each account names its own vault. Set them in the environment
+# or in scripts/.env.
+OP_APPLE_ID="${OP_APPLE_ID:-}"
+OP_PASSWORD="${OP_PASSWORD:-}"
+OP_TEAM_ID="${OP_TEAM_ID:-}"
 
 # Colors
 RED='\033[0;31m'
@@ -62,11 +90,23 @@ parse_args() {
             --skip-notarize)  SKIP_NOTARIZE=true; shift ;;
             --skip-build)     SKIP_BUILD=true; shift ;;
             --install)        INSTALL_LOCAL=true; shift ;;
+            --only)
+                shift
+                [[ $# -gt 0 ]] || { log_error "--only needs a binary name"; exit 1; }
+                pkg_identifier_for "$1" >/dev/null   # validates the name
+                ALL_BINARIES=("$1")
+                shift
+                ;;
             --help|-h)
-                echo "Usage: $0 [OPTIONS]"
+                echo "Usage: ${SCRIPT_PATH:t} [OPTIONS]"
+                echo ""
+                echo "Builds, signs, notarizes and packages every release target:"
+                echo "  ${ALL_BINARIES[*]}"
+                echo "Each gets its own binary, zip and pkg in dist/."
                 echo ""
                 echo "Options:"
                 echo "  --op               Use 1Password CLI for notarization credentials"
+                echo "  --only <binary>    Build just one target (contour | contour-mcp)"
                 echo "  --skip-pkg         Skip PKG installer creation"
                 echo "  --skip-notarize    Skip notarization (binaries still signed)"
                 echo "  --skip-build       Reuse existing binaries in target/"
@@ -163,6 +203,22 @@ load_credentials() {
 
     if [[ "$USE_1PASSWORD" == "true" ]]; then
         command -v op >/dev/null 2>&1 || { log_error "1Password CLI (op) not found"; exit 1; }
+        if [[ -z "$OP_APPLE_ID" || -z "$OP_PASSWORD" || -z "$OP_TEAM_ID" ]] && [[ -f "$ENV_FILE" ]]; then
+            log_info "Sourcing 1Password references from $ENV_FILE"
+            set -a
+            source "$ENV_FILE"
+            set +a
+        fi
+        # Checked before anything is built, not at the first notarization.
+        local missing=()
+        [[ -n "${OP_APPLE_ID:-}" ]] || missing+=(OP_APPLE_ID)
+        [[ -n "${OP_PASSWORD:-}" ]] || missing+=(OP_PASSWORD)
+        [[ -n "${OP_TEAM_ID:-}" ]] || missing+=(OP_TEAM_ID)
+        if (( ${#missing[@]} > 0 )); then
+            log_error "--op needs 1Password references (op://<vault>/<item>/<field>) in: ${missing[*]}"
+            log_error "Set them in the environment or in $ENV_FILE"
+            exit 1
+        fi
         log_info "Using 1Password for notarization credentials"
     else
         # Try .env file fallback
@@ -243,10 +299,45 @@ build_binary() {
     log_info "Build complete"
 }
 
+# The artifacts one target produces at the current version.
+artifacts_for() {
+    local version
+    version=$(get_version)
+    echo "$1" "$1-${version}-macos-arm64.zip" "$1-${version}.pkg"
+}
+
+# Remove this target's current-version artifacts, and nothing else.
+#
+# dist/ is not wiped: `--only contour-mcp` keeps the contour pkg beside it,
+# and earlier releases survive a rebuild. Only what this run replaces goes.
+clean_target_artifacts() {
+    local f
+    for f in $(artifacts_for "$BINARY"); do
+        rm -f "$DIST_DIR/$f"
+    done
+}
+
+# Refuse a binary that is not the version being released.
+#
+# --skip-build packages whatever sits in target/. After a run that failed
+# before compiling a target, that can be an earlier version's binary, which
+# would otherwise go out inside a pkg named for this one.
+check_binary_version() {
+    local version reported
+    version=$(get_version)
+    reported=$("$DIST_DIR/$BINARY" --version 2>/dev/null | head -1)
+    if [[ "$reported" != "$BINARY $version"* ]]; then
+        log_error "$BINARY reports '${reported:-nothing}', expected $version — stale target/ binary? Rebuild without --skip-build"
+        exit 1
+    fi
+    log_info "$BINARY reports $version"
+}
+
 strip_binary() {
     log_step "Stripping debug symbols"
 
     cp "$PROJECT_ROOT/target/aarch64-apple-darwin/release/$BINARY" "$DIST_DIR/$BINARY"
+    check_binary_version
 
     local before_size=$(ls -lh "$DIST_DIR/$BINARY" | awk '{print $5}')
     strip "$DIST_DIR/$BINARY"
@@ -345,10 +436,13 @@ build_pkg() {
 notarize_pkg() {
     log_step "Notarizing PKG installer"
 
-    local pkg_file
-    pkg_file=$(ls "$DIST_DIR"/*.pkg 2>/dev/null | head -1)
-    if [[ -z "$pkg_file" ]]; then
-        log_error "No .pkg file found in $DIST_DIR"
+    # Name the file for the target being processed, not the first *.pkg:
+    # with two targets that would pick the wrong pkg on the second pass.
+    local version
+    version=$(get_version)
+    local pkg_file="$DIST_DIR/${BINARY}-${version}.pkg"
+    if [[ ! -f "$pkg_file" ]]; then
+        log_error "Expected pkg not found: $pkg_file"
         exit 1
     fi
 
@@ -376,9 +470,17 @@ create_checksums() {
     cd "$DIST_DIR"
     rm -f checksums.txt
 
-    shasum -a 256 *.zip  >> checksums.txt 2>/dev/null || true
-    shasum -a 256 *.pkg  >> checksums.txt 2>/dev/null || true
-    shasum -a 256 "$BINARY" >> checksums.txt 2>/dev/null || true
+    # The current version of every known target present, not a glob:
+    # dist/ now keeps earlier releases, whose files are not this release.
+    # Each target by name, not $BINARY — after the build loop that global
+    # holds the last target only.
+    local bin f
+    for bin in "${KNOWN_BINARIES[@]}"; do
+        BINARY="$bin"
+        for f in $(artifacts_for "$bin"); do
+            [[ -f "$f" ]] && shasum -a 256 "$f" >> checksums.txt
+        done
+    done
 
     log_info "Checksums:"
     cat checksums.txt
@@ -387,14 +489,22 @@ create_checksums() {
 verify_artifacts() {
     log_step "Verification"
 
-    echo ""
-    echo "=== Binary Signature ==="
-    codesign -dvv "$DIST_DIR/$BINARY" 2>&1 | grep -E "(Identifier|Authority|Timestamp|Flags)" || true
+    for bin in "${ALL_BINARIES[@]}"; do
+        echo ""
+        echo "=== Binary Signature: $bin ==="
+        codesign -dvv "$DIST_DIR/$bin" 2>&1 | grep -E "(Identifier|Authority|Timestamp|flags=)" || true
+    done
 
     if [[ "$SKIP_PKG" != true ]]; then
         echo ""
         echo "=== Package Signature ==="
-        for pkg in "$DIST_DIR"/*.pkg; do
+        local gatekeeper_failures=0
+        local pkgs=() bin
+        for bin in "${KNOWN_BINARIES[@]}"; do
+            BINARY="$bin"
+            pkgs+=("$DIST_DIR/${bin}-$(get_version).pkg")
+        done
+        for pkg in "${pkgs[@]}"; do
             if [[ -f "$pkg" ]]; then
                 echo "$(basename "$pkg"):"
                 pkgutil --check-signature "$pkg" 2>&1 | head -10
@@ -402,20 +512,33 @@ verify_artifacts() {
                     echo "  Gatekeeper: PASS"
                 else
                     echo "  Gatekeeper: FAIL (not notarized/stapled)"
+                    # Not `((gatekeeper_failures++))`: post-increment from 0
+                    # evaluates to 0, exit status 1, and `set -e` would end
+                    # the run here before the guard below decides whether
+                    # the failure is tolerable (it is under --skip-notarize).
+                    gatekeeper_failures=$((gatekeeper_failures + 1))
                 fi
             fi
         done
+
+        # A pkg that Gatekeeper rejects is not shippable, so refuse to exit 0
+        # on one.
+        if [[ "$SKIP_NOTARIZE" != true && $gatekeeper_failures -gt 0 ]]; then
+            log_error "$gatekeeper_failures package(s) failed Gatekeeper — not shippable"
+            exit 1
+        fi
     fi
 }
 
 install_local() {
     log_step "Installing to /usr/local/bin"
 
-    sudo cp "$DIST_DIR/$BINARY" "/usr/local/bin/$BINARY"
-    sudo chmod +x "/usr/local/bin/$BINARY"
-    log_info "Installed $BINARY to /usr/local/bin/"
-
-    "/usr/local/bin/$BINARY" --version 2>/dev/null || true
+    for bin in "${ALL_BINARIES[@]}"; do
+        sudo cp "$DIST_DIR/$bin" "/usr/local/bin/$bin"
+        sudo chmod +x "/usr/local/bin/$bin"
+        log_info "Installed $bin to /usr/local/bin/"
+        "/usr/local/bin/$bin" --version 2>/dev/null || true
+    done
 }
 
 show_summary() {
@@ -429,7 +552,9 @@ show_summary() {
     if [[ "$INSTALL_LOCAL" != true ]]; then
         echo ""
         log_info "To install locally:"
-        log_info "  sudo cp $DIST_DIR/$BINARY /usr/local/bin/"
+        for bin in "${ALL_BINARIES[@]}"; do
+            log_info "  sudo cp $DIST_DIR/$bin /usr/local/bin/"
+        done
         log_info "Or re-run with --install"
     fi
 }
@@ -438,37 +563,41 @@ main() {
     parse_args "$@"
     banner
 
-    log_info "Binary: $BINARY"
+    log_info "Targets: ${ALL_BINARIES[*]}"
 
+    # Credentials and prerequisites are resolved once, before any target is
+    # built. Every notarization in the loop reuses them, so 1Password is
+    # unlocked once per run rather than once per target.
     load_credentials
     check_prerequisites
 
-    # Clean dist/
-    rm -rf "$DIST_DIR"
     mkdir -p "$DIST_DIR"
 
-    # Build
-    build_binary
-    strip_binary
-    sign_binary
-    create_zip
+    for BINARY in "${ALL_BINARIES[@]}"; do
+        PKG_IDENTIFIER=$(pkg_identifier_for "$BINARY")
+        log_step "── $BINARY ($PKG_IDENTIFIER) ──"
+        clean_target_artifacts
 
-    # Notarize
-    if [[ "$SKIP_NOTARIZE" == true ]]; then
-        log_warn "Skipping notarization (--skip-notarize)"
-    else
-        notarize_zip
-    fi
+        build_binary
+        strip_binary
+        sign_binary
+        create_zip
 
-    # PKG
-    if [[ "$SKIP_PKG" == true ]]; then
-        log_warn "Skipping PKG creation (--skip-pkg)"
-    else
-        build_pkg
-        if [[ "$SKIP_NOTARIZE" != true ]]; then
-            notarize_pkg
+        if [[ "$SKIP_NOTARIZE" == true ]]; then
+            log_warn "Skipping notarization (--skip-notarize)"
+        else
+            notarize_zip
         fi
-    fi
+
+        if [[ "$SKIP_PKG" == true ]]; then
+            log_warn "Skipping PKG creation (--skip-pkg)"
+        else
+            build_pkg
+            if [[ "$SKIP_NOTARIZE" != true ]]; then
+                notarize_pkg
+            fi
+        fi
+    done
 
     # Checksums and verification
     create_checksums

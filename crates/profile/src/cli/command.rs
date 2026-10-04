@@ -1,7 +1,7 @@
 //! MDM Command CLI handlers
 //!
 //! Commands for generating Apple MDM command plist payloads.
-//! Uses embedded capabilities (65 unique MDM command types) from the
+//! Uses the embedded MDM command capabilities from the
 //! `capabilities.parquet` dataset.
 
 use crate::cli::unsign::{is_signed_profile, unsign_bytes};

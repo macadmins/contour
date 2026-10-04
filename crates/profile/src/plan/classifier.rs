@@ -9,11 +9,12 @@
 //!      [`ChangeTier::Replace`] accordingly.
 //!    - baseline only → emit [`ChangeTier::Remove`].
 //!    - proposed only → emit [`ChangeTier::Add`].
-//! 3. Sort changes by `(payload_index, tier)` for stable, reviewable output.
+//! 3. Emit in sorted `(PayloadType, PayloadIdentifier)` key order for
+//!    stable, reviewable output.
 //!
 //! REF_BROKEN, TYPE_INVALID, SCOPE_BROADENED, and DEPRECATED tiers are
 //! computed by sibling modules and folded into the same `Vec<PayloadChange>`
-//! by the higher-level orchestrator (added in subsequent slices).
+//! by the orchestrator in `cli::plan`.
 
 use super::change::{ChangeTier, PayloadChange, Plan};
 use crate::profile::{ConfigurationProfile, PayloadContent};
@@ -69,9 +70,9 @@ fn payload_key(p: &PayloadContent) -> PayloadKey {
 fn index_payloads(payloads: &[PayloadContent]) -> BTreeMap<PayloadKey, usize> {
     let mut idx = BTreeMap::new();
     for (i, p) in payloads.iter().enumerate() {
-        // Last-wins on duplicate keys; the duplicate-PayloadIdentifier
-        // case is already a lint Tier-1 error (see lint.rs), so this
-        // tolerance only matters when the lint is bypassed.
+        // Last-wins on duplicate keys. Duplicate PayloadIdentifiers are
+        // not detected here; lint Tier 1 only checks `duplicate-payload-uuid`,
+        // and `validation` flags them only when `unique_identifiers` is on.
         idx.insert(payload_key(p), i);
     }
     idx
@@ -155,29 +156,16 @@ fn compare_change(
     }
 }
 
-/// Return the union-symmetric-difference of keys that differ in value.
-/// Both maps are `BTreeMap<String, plist::Value>` so iteration is
-/// deterministic; output is sorted by key.
+/// Top-level keys whose value differs, sorted.
+///
+/// Delegates to the structural walker and collapses each leaf to its first
+/// segment, so `plan` and `diff --structural` cannot disagree about whether
+/// two payloads differ.
 fn diff_content_keys(
     baseline: &BTreeMap<String, plist::Value>,
     proposed: &BTreeMap<String, plist::Value>,
 ) -> Vec<String> {
-    let mut out = Vec::new();
-    for (k, b_val) in baseline {
-        match proposed.get(k) {
-            None => out.push(k.clone()),
-            Some(p_val) if p_val != b_val => out.push(k.clone()),
-            _ => {}
-        }
-    }
-    for k in proposed.keys() {
-        if !baseline.contains_key(k) {
-            out.push(k.clone());
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
+    crate::diff::structural::changed_top_level_keys(baseline, proposed)
 }
 
 #[cfg(test)]
@@ -306,7 +294,7 @@ mod tests {
 
     #[test]
     fn fleet_okta_scep_pattern_is_replace() {
-        // The exact CodeRabbit finding: regenerated SCEP PayloadUUID,
+        // The review finding: regenerated SCEP PayloadUUID,
         // identical content. Plan must report REPLACE.
         let baseline = profile_with(vec![payload(
             "com.apple.security.scep",

@@ -72,7 +72,7 @@ pub struct MscpRule {
 }
 
 impl MscpRule {
-    /// Check if this rule has both check and fix scripts (eligible for Munki nopkg)
+    /// Check if this rule has both check and fix scripts and no mobileconfig (eligible for Munki nopkg)
     pub fn has_script_remediation(&self) -> bool {
         self.check.is_some() && self.fix.is_some() && !self.mobileconfig
     }

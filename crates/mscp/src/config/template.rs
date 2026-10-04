@@ -3,7 +3,8 @@
 use crate::cli::init::InitOptions;
 use crate::config::{
     BaselineConfig, Config, FleetSettings, GitopsGlobConfig, JamfSettings, LabelConfig,
-    MunkiSettings, OrganizationSettings, OutputConfig, OutputStructure, Settings, ValidationConfig,
+    MunkiSettings, OrganizationSettings, OsquerySettings, OutputConfig, OutputStructure, Settings,
+    ValidationConfig,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -63,13 +64,11 @@ pub fn referenced_fleet_names(config: &Config) -> Vec<String> {
     names
 }
 
-/// Build a label name from domain and baseline name.
-///
-/// Replaces `_` with `-` in the baseline name:
-///   `("com.acme", "cis_lvl1")` → `"com.acme.mscp.cis-lvl1"`
-fn baseline_label(domain: &str, baseline_name: &str) -> String {
-    format!("{domain}.mscp.{}", baseline_name.replace('_', "-"))
-}
+// `baseline_label(domain, name)` built `com.acme.mscp.cis-lvl1` for the
+// template's `[baselines.labels] include_all`. It is gone with its only
+// caller: contour generates `mscp-<baseline>` labels, never org-prefixed
+// ones, so the name it produced matched nothing in Fleet. That was invisible
+// while the section was never read.
 
 /// Create a template configuration with examples
 fn create_template_config(options: &InitOptions) -> Config {
@@ -92,7 +91,12 @@ fn create_template_config(options: &InitOptions) -> Config {
                 branch: None,
                 fleet: None,
                 labels: LabelConfig {
-                    include_all: vec![baseline_label(&domain, baseline_name)],
+                    // Empty, deliberately. contour creates `mscp-<baseline>` and
+                    // `mscp-<baseline>-remediate`, and a static template cannot
+                    // know the other labels in someone's Fleet instance: a label
+                    // that does not exist would make every profile reach no
+                    // hosts at all.
+                    include_all: vec![],
                     include_any: vec![],
                     exclude_any: vec![],
                 },
@@ -115,19 +119,16 @@ fn create_template_config(options: &InitOptions) -> Config {
                 // scaffolded in `output/fleets/`.
                 fleet: None,
                 labels: LabelConfig {
-                    include_all: vec![format!("{domain}.mscp.cis-lvl1")],
+                    include_all: vec![],
                     include_any: vec![],
-                    exclude_any: vec!["cis-exemption".to_string()],
+                    // Was `vec!["cis-exemption"]`, which the run now refuses:
+                    // Fleet allows one label field per entry and the baseline
+                    // label holds it. Nothing surfaced that while the section
+                    // was never read.
+                    exclude_any: vec![],
                 },
                 excluded_rules: vec![],
-                metadata: {
-                    let mut map = HashMap::new();
-                    map.insert(
-                        "description".to_string(),
-                        "CIS Level 1 for workstations".to_string(),
-                    );
-                    map
-                },
+                metadata: HashMap::new(),
                 gitops_glob: GitopsGlobConfig::default(),
             },
             BaselineConfig {
@@ -136,11 +137,15 @@ fn create_template_config(options: &InitOptions) -> Config {
                 branch: None,
                 fleet: None,
                 labels: LabelConfig {
-                    include_all: vec![format!("{domain}.mscp.800-53-moderate")],
+                    include_all: vec![],
                     include_any: vec![],
                     exclude_any: vec![],
                 },
-                excluded_rules: vec!["os_sshd_permit_root_login".to_string()],
+                // Empty, deliberately. An unknown id fails the run, and a
+                // static template cannot keep a rule id correct across mSCP
+                // releases, where ids are renamed and retagged. The comment
+                // block below says how to find real ones.
+                excluded_rules: vec![],
                 metadata: HashMap::new(),
                 gitops_glob: GitopsGlobConfig::default(),
             },
@@ -172,6 +177,7 @@ fn create_template_config(options: &InitOptions) -> Config {
                 enabled: options.fleet,
                 no_labels: false,
             },
+            osquery: OsquerySettings::default(),
             munki: MunkiSettings {
                 compliance_flags: options.munki,
                 compliance_path:
@@ -192,14 +198,21 @@ fn create_template_config(options: &InitOptions) -> Config {
             } else {
                 OutputStructure::Pluggable
             },
-            separate_baselines: true,
-            generate_diffs: true,
-            versions_to_keep: 5,
+            separate_baselines: None,
+            generate_diffs: None,
+            versions_to_keep: None,
         },
         validation: ValidationConfig {
-            schemas_path: Some(PathBuf::from("./schemas")),
+            // None, deliberately. This shipped `Some("./schemas")`, a
+            // directory nothing creates. It was harmless while `[validation]`
+            // was unreachable; now `mscp validate --config` reads it, and a
+            // schema path with no schema in it fails the run — so every
+            // freshly generated config would have failed its first validate.
+            // Fleet's schema has to be fetched deliberately; the comment
+            // block says from where.
+            schemas_path: None,
             strict: false,
-            check_conflicts: true,
+            check_conflicts: None,
             validate_paths: true,
         },
     }
@@ -221,7 +234,7 @@ fn add_comments(toml_str: &str) -> String {
 #
 # settings.mscp_repo: Path to a local macos_security checkout.
 #   `contour mscp init --sync` clones the mSCP 2.0 layout (the `main`
-#   branch) here; `mscp generate` auto-detects 1.x vs 2.0 from the repo.
+#   branch) here; `mscp generate` reads 2.0 only and refuses a 1.x checkout.
 #
 # settings.python_method: "auto" | "uv" | "python3"
 #   - auto: Automatically detect (prefers uv if available)
@@ -235,6 +248,17 @@ fn add_comments(toml_str: &str) -> String {
 #   [settings.fleet] enabled = true — Enable Fleet GitOps mode
 #   [settings.jamf]  enabled = true — Enable Jamf Pro mode
 #   [settings.munki] compliance_flags = true — Enable Munki integration
+#   [settings.osquery] enabled = true — Emit osquery detection
+#
+# osquery detection ([settings.osquery]):
+#   enabled: false (default) | true — the config form of `--osquery`.
+#     Config-driven runs read no CLI flags, so this is the only way to ask for
+#     osquery output from `generate-all --config`. A `--osquery` flag on a
+#     `generate --config` run wins over this setting.
+#   format: "fleet" (default) | "pack" — same values as --osquery-format
+#   audit: "slim" (default) | "full" — same values as --osquery-audit
+#   Requires [output] structure = "pluggable" and a non-empty
+#   settings.organization.domain; the run refuses rather than emitting nothing.
 #
 # Jamf Pro Profile Customization:
 #   settings.jamf.remove_consent_text: Remove ConsentText from profiles
@@ -245,17 +269,41 @@ fn add_comments(toml_str: &str) -> String {
 # [[baselines]]
 #   name: Baseline name from mSCP baselines/ directory
 #   enabled: true | false
-#   branch: Optional git branch (e.g., "sequoia", "ios_18")
+#   branch: Optional git branch — the rule source. "main" (default) carries
+#     every platform; an OS-preview branch such as "dev_28" carries the next
+#     release early. Not the target platform: use os/os_version for that.
 #   fleet: Optional fleet name. When set, `mscp generate` appends this
 #     baseline's profiles + scripts to `output/fleets/<name>.yml`. The
 #     stub file is scaffolded by `contour mscp init` (or `init --sync`)
 #     when [settings.fleet] is enabled — fill in agent_options, secrets,
 #     and host labels before running `fleetctl gitops`.
 #   [baselines.labels]: Label targeting for progressive rollout
-#     include_all: All these labels must be present
-#     include_any: At least one of these labels must be present
-#     exclude_any: None of these labels can be present
-#   excluded_rules: List of rule IDs to skip
+#     include_all: extra labels every profile in this baseline must ALSO
+#       carry. They join the generated `mscp-<baseline>` label in Fleet's
+#       labels_include_all, so the profile reaches hosts in this baseline AND
+#       in every listed label — which is what a staged rollout wants.
+#     include_any / exclude_any: NOT emitted, and the run fails if set. Fleet
+#       allows one label field per profile entry, and the baseline label
+#       already occupies labels_include_all; honouring these would mean
+#       dropping it and targeting a different set of hosts. Set them on the
+#       entries in the generated team YAML if that is really what you want.
+#   excluded_rules: List of rule IDs to skip. Exact ids, as `mscp schema
+#     search <term>` prints them — an id that is not in the baseline fails
+#     the run rather than being ignored. A profile is dropped only when every
+#     rule feeding it is excluded; a partial exclusion keeps the profile and
+#     warns. Needs the mSCP repo, which config-driven runs already have.
+#
+# [validation] — read by `contour mscp validate --config mscp.toml`
+#   schemas_path: directory holding Fleet's GitOps JSON Schema,
+#     `generated-schema.json` from fleetdm/fleet at
+#     tools/gitops-auto-complete/. Unset uses the pinned copy that
+#     this build embeds; a build without one says so, and --strict fails.
+#     Set to a directory with no schema in it, validate FAILS rather than
+#     quietly skipping the check you asked for. Relative paths resolve
+#     against this file, not the shell's working directory.
+#   strict: fail on warnings. `--strict` turns it on too; neither can turn
+#     off what the other asked for.
+#   validate_paths: check that every path a team YAML references exists.
 #
 # [output]
 #   structure: "pluggable" | "flat" | "nested"

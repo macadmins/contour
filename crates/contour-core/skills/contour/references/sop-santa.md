@@ -2,13 +2,29 @@
 
 Santa is allowlist-driven endpoint security for macOS. The CLI surface
 fans out across discovery (scan, fetch), classification (CEL, bundles),
-generation (allow, rings, fleet), and rule management (add, remove,
+generation (allow, pipeline), and rule management (add, remove,
 filter, validate). This SOP is **not** a single procedure — it's a
 **decision tree** that points you at the right recipe for the goal,
 plus six cookbook recipes that work end-to-end.
 
 If you came here to migrate a profile or wire a DDM declaration, this
 isn't your SOP. Try `--sop profile`, `--sop ddm`, or `--sop precommit`.
+
+## Rule: Santa is `com.northpolesec.santa`
+
+One domain, no exceptions. Santa's daemon names its own preference domain —
+`kMobileConfigDomain` in `SNTConfigurator.mm` — and it is North Pole
+Security's. **A Google-signed Santa is not supported anywhere in contour.**
+
+- Never author, suggest or accept `com.google.santa`. Reading a profile that
+  carries it is refused by name, telling the operator what to change it to.
+- The embedded schema is derived from Santa's own source, so it describes
+  `com.northpolesec.santa` and nothing else. `com.google.santa` is not in
+  the dataset — not gated, not present.
+- If you find a legacy profile, the fix is the PayloadType, not a flag.
+
+This is not a preference. Do not offer the old domain as a compatibility
+option, and do not restore it to a schema, an allow list or a fixture.
 
 ---
 
@@ -22,15 +38,6 @@ What are you trying to do?
 │
 ├─ I have a Fleet software CSV and want a single allowlist profile
 │  → Recipe 2: Fleet CSV → mobileconfig
-│
-├─ I want staged rollouts (Ring 1 canary → Ring 5 production)
-│  → Recipe 3: Ring-based deployment
-│
-├─ I want a curated, security-owned baseline file (separate from rules.yaml)
-│  → Recipe 3.5: Curating a baseline
-│
-├─ I want a complete Fleet GitOps directory with rings + labels
-│  → Recipe 4: Fleet GitOps fragment
 │
 ├─ I have rules from osquery / mobileconfig / santactl / Installomator
 │  → Recipe 5: Fetch from external sources
@@ -46,7 +53,7 @@ What are you trying to do?
 
 ## Recipe 1: Local scan → mobileconfig
 
-Single-machine workflow — no Fleet, no rings, just "what's on this Mac
+Single-machine workflow — no Fleet, just "what's on this Mac
 right now → allowlist profile":
 
 ```bash
@@ -76,174 +83,6 @@ contour santa allow -i fleet-export.csv --org com.yourco --rule-type team-id
 Default `--conflict-policy` is `most-specific` — when the same identifier
 appears across multiple rule types, the narrowest rule wins.
 
-## Recipe 3: Ring-based deployment (editions)
-
-Each ring profile is a self-contained **edition** — core rules merged with
-that ring's specialized rules into one complete allowlist. Hosts receive
-exactly one edition, scoped by Fleet labels. Santa does not layer overlapping
-mobileconfigs cleanly on a single host, so editions ship whole and are never
-stacked. The primary workflow: scaffold a ring config, customize it, then
-generate editions.
-
-```bash
-# 1. Scaffold the ring shape (names, priorities, fleet labels)
-contour santa rings init --num-rings 5 -o rings.yaml
-
-# 2. (Optional) edit rings.yaml to customize descriptions / labels
-$EDITOR rings.yaml
-
-# 3. Generate the editions from your rules + the ring config
-contour santa rings generate <rules> \
-    --org com.yourco --prefix santa --rings-config rings.yaml -o rings/
-```
-
-If you don't need to customize, the shorthand skips `rings.yaml`:
-
-```bash
-contour santa rings generate <rules> \
-    --org com.yourco --prefix santa --num-rings 5 -o rings/
-```
-
-`--num-rings` accepts `1..=16` (5 and 7 use built-in templates).
-
-Output filenames follow `{prefix}{ring}{category}`:
-
-| Ring | Software | CEL | FAA |
-|---|---|---|---|
-| 1 (canary) | `santa1a.mobileconfig` | `santa1b.mobileconfig` | `santa1c.mobileconfig` |
-| 2 | `santa2a.mobileconfig` | `santa2b.mobileconfig` | `santa2c.mobileconfig` |
-| ... | | | |
-| 5 (production) | `santa5a.mobileconfig` | `santa5b.mobileconfig` | `santa5c.mobileconfig` |
-
-Categories are auto-detected from rule type:
-- **`a`** — Software rules (TeamID, SigningID, Binary, Certificate)
-- **`b`** — CEL rules (Common Expression Language, Santa 2024.x+)
-- **`c`** — FAA rules (File Access Authorization)
-
-Pass `--max-rules N` to split large editions: `santa1a-001`, `santa1a-002`, …
-Without it, editions are not split.
-
-**Assigning content to editions.** Each rule's `rings:` field declares which
-editions include it. An empty (or omitted) `rings:` means the rule is **core**
-— it ships in every edition.
-
-```yaml
-- rule_type: TEAMID
-  identifier: EQHXZ8M8AV
-  policy: ALLOWLIST
-  # core (no `rings:` field)
-
-- rule_type: TEAMID
-  identifier: ABC1234567
-  policy: ALLOWLIST
-  rings: [ring0]          # canary only
-
-- rule_type: SIGNINGID
-  identifier: team:com.example.tool
-  policy: ALLOWLIST
-  rings: [ring0, ring1]   # canary + pilot
-```
-
-A rule that references a ring name not in the active config triggers a
-warning so typos don't silently vanish from every edition. Add `--strict` to
-turn that warning into a hard error in CI:
-
-```bash
-contour santa rings generate <rules> --rings-config rings.yaml --strict -o rings/
-```
-
-## Recipe 3.5: Curating a baseline
-
-When a security/IT team wants to maintain a separate, curated "must-ship"
-rule list — independent of the day-to-day `rules.yaml` owned by ops — use
-the optional `baseline.toml`:
-
-```toml
-# baseline.toml
-version = 1
-
-[[rules]]
-rule_type = "TEAMID"
-identifier = "EQHXZ8M8AV"
-policy = "ALLOWLIST"
-description = "Google"
-
-[[rules]]
-rule_type = "TEAMID"
-identifier = "MALICIOUS00"
-policy = "BLOCKLIST"
-```
-
-Pass it to `rings generate` (or `fleet`):
-
-```bash
-contour santa rings generate rules.yaml \
-    --baseline baseline.toml \
-    --rings-config rings.yaml \
-    --org com.yourco \
-    -o rings/
-```
-
-Semantics:
-- Baseline rules are applied to **every edition** (treated as `rings: []`).
-- On any `(rule_type, identifier)` conflict between baseline and input
-  rules, the **most-restrictive policy wins**: `Remove > Blocklist/
-  SilentBlocklist > Allowlist/AllowlistCompiler`. This is the security
-  guarantee: a baseline `BLOCKLIST` cannot be silently un-blocked by an
-  `ALLOWLIST` in a regular rule file.
-- Conflicts are reported as warnings (human mode) or in the JSON envelope.
-- Declaring `rings:` on any baseline rule is rejected at parse time.
-
-To author a baseline from real machine inventory and grow it across hosts:
-
-```bash
-contour santa scan --output-format baseline -o baseline.toml          # first machine
-contour santa scan --output-format baseline -o baseline.toml          # second machine: merges
-```
-
-Re-running on the same machine doesn't duplicate rules. Running across
-machines accumulates the union, deny-wins on policy collisions.
-
-## Recipe 4: Fleet GitOps fragment
-
-The full pipeline: rules → ring editions → labels → fleet YAML, all
-laid out as a Fleet v4.83 directory tree. `santa fleet` accepts the same
-ring-config flags as `rings generate` (`--rings-config`, `--max-rules`,
-`--strict`) — same edition model, same rule-side `rings:` annotations.
-
-```bash
-contour santa fleet <rules> \
-    --org com.yourco \
-    --team Workstations \
-    --rings-config rings.yaml \
-    --prefix santa \
-    -o fleet-output/
-```
-
-Output layout:
-
-```
-fleet-output/
-├── fleets/
-│   └── Workstations.yml         # fleet YAML with profile references
-├── platforms/
-│   └── macos/
-│       └── configuration-profiles/
-│           ├── santa1a.mobileconfig
-│           └── ...
-└── labels/
-    ├── santa-ring-0.labels.yml   # ring-targeting labels
-    └── santa-ring-1.labels.yml
-```
-
-For adding to an existing Fleet repo without overwriting `default.yml`,
-use **fragment mode**:
-
-```bash
-contour santa fleet <rules> --fragment --org com.yourco -o fragment/
-# Output: fragment.toml + platforms/ subtree, ready to merge into v4.83
-```
-
 ## Recipe 5: Fetch rules from external sources
 
 ```bash
@@ -255,7 +94,7 @@ contour santa fetch fleet-csv <csv>         # Fleet software CSV export
 contour santa fetch fleet-apps <json>       # fleet-maintained-apps catalog → Santa + DDM
 ```
 
-The first five emit a normalized rules CSV/JSON you can hand to Recipes 2–4.
+The first five emit a normalized rules CSV/JSON you can hand to Recipe 2.
 
 ## Recipe 5.5: fleet-maintained-apps catalog → Santa rules + DDM app.settings
 
@@ -286,8 +125,44 @@ contour santa fetch fleet-apps app_security_info.json --org com.yourco -o out/
 #   --emit santa,ddm,rules            pick artifacts (default santa,ddm)
 ```
 
-Validate the emitted declaration against the **beta** seed schema (app.settings is
-a seed type — see `--sop beta`): `contour profile ddm validate out/app-settings.json --beta`.
+Validate the emitted declaration: `contour profile ddm validate out/app-settings.json`.
+app.settings shipped in OS 27.0, so the released schema covers it — no `--beta`.
+
+## Recipe 5.6: keep Santa and app.settings in agreement (`santa parity`)
+
+Santa and a `com.apple.configuration.app.settings` declaration are **independent
+gates** — a binary runs only when neither blocks it. `AllowedBinaries` is a
+lockdown ("the device only allows binaries that match"), so Santa in lockdown
+plus an app.settings allowlist means **every app must be admitted twice**, and
+any drift between the two blocks it through whichever gate nobody was watching.
+
+Prefer one gate owning the allowlist: Santa lockdown + app.settings
+`DeniedBinaries` only, or app.settings `AllowedBinaries` + Santa in monitor
+mode. When both must be allowlists, check them before every deploy:
+
+```bash
+contour santa parity rules.yaml --declaration app-settings.json
+contour santa parity rules.yaml --declaration app-settings.json --santa-mode monitor
+contour santa parity rules.yaml --declaration app-settings.json --json   # CI
+```
+
+Reports, and exits non-zero on any of:
+
+| Finding | Meaning |
+|---|---|
+| Allowed by Santa, blocked by app.settings | only when app.settings is an allowlist |
+| Allowed by app.settings, blocked by Santa | only when Santa is in lockdown/standalone |
+| Cancelled by a deny on the other gate | a deny covering the *whole* allow |
+| Santa rules app.settings cannot express | `BINARY` (SHA-256), `CERTIFICATE`, CEL |
+
+Matching is **coverage, not equality**: a `{TeamID: X}` allow admits every
+`SIGNINGID X:app` allow, so that is not drift. A narrow deny inside a broad
+allow (deny one app from a team the other gate allows) is a carve-out, not a
+contradiction. A CDHash is never assumed to belong to a TeamID — that needs
+the binary.
+
+`--santa-mode` defaults to `lockdown`, the strict case: in monitor mode Santa
+blocks nothing, so an app.settings-only allow is harmless and is not reported.
 
 ## Recipe 6: CEL classification (Santa 2024.x+)
 
@@ -346,12 +221,12 @@ Once you have a rules CSV, contour ships small subcommands for routine
 edits — meant to be scripted, idempotent, and CI-friendly:
 
 ```bash
-contour santa add --file rules.csv <rule>           # add one rule
+contour santa add --file rules.csv --teamid <TEAM_ID>  # add one rule
 contour santa remove --file rules.csv <rule>        # remove one rule
-contour santa filter rules.csv --type team-id       # filter by type
+contour santa filter rules.csv --rule-type team-id  # filter by type
 contour santa validate rules.csv --json             # validate (CI gate)
 contour santa stats rules.csv                       # rule counts per category
-contour santa snip rules.csv -o extracted.csv --match <pattern>
+contour santa snip --source rules.csv --dest extracted.csv --identifier <pattern>
 ```
 
 `validate --json` is the canonical pre-commit check (see `--sop precommit`

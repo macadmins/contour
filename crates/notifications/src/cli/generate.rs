@@ -383,6 +383,7 @@ fn run_fragment(
                     labels_include_any: None,
                     labels_include_all: None,
                     labels_exclude_any: None,
+                    activation: None,
                 });
                 profiles_written += 1;
             }
@@ -408,8 +409,8 @@ fn run_fragment(
              \n\
              name: notifications-reference\n\
              controls:\n\
-             \x20 macos_settings:\n\
-             \x20   custom_settings:\n",
+             \x20 apple_settings:\n\
+             \x20   configuration_profiles:\n",
         );
 
         for entry in &profile_entries {
@@ -442,6 +443,7 @@ fn run_fragment(
                 reports: Vec::new(),
                 policies: Vec::new(),
                 software: Vec::new(),
+                assets: Vec::new(),
             },
             lib_files: LibFiles {
                 copy: lib_files.clone(),

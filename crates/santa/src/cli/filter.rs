@@ -1,4 +1,4 @@
-use crate::models::{Policy, RuleSet, RuleType};
+use crate::models::{Policy, Rule, RuleSet, RuleType};
 use crate::output::{CommandResult, OutputMode, print_json, print_success};
 use crate::parser::parse_files;
 use anyhow::Result;
@@ -10,6 +10,10 @@ struct FilterOutput {
     matched: usize,
     total: usize,
     output_path: Option<String>,
+    /// The matched rules, when they were not written to `output_path` —
+    /// what human mode prints in the same case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rules: Option<Vec<Rule>>,
 }
 
 /// Filter rules by various criteria
@@ -137,10 +141,12 @@ pub fn run(
             print_success(&format!("Found {} of {} rules", matched, total));
         }
     } else {
+        let rules = output_path.is_none().then(|| result_set.rules().to_vec());
         print_json(&CommandResult::success(FilterOutput {
             matched,
             total,
             output_path,
+            rules,
         }))?;
     }
 

@@ -60,7 +60,8 @@ pub enum BtmCommands {
         #[arg(long, value_enum, default_value = "launch-items")]
         mode: BtmScanMode,
 
-        /// Directories to scan (defaults to /Library/LaunchDaemons + /Library/LaunchAgents)
+        /// Directories to scan (default: /Library/LaunchDaemons + /Library/LaunchAgents
+    /// for `--mode launch-items`, /Applications for `--mode apps`)
         #[arg(short, long)]
         path: Vec<PathBuf>,
 
@@ -87,14 +88,13 @@ pub enum BtmCommands {
         target: PathBuf,
     },
 
-    /// Generate service management profiles or DDM declarations
+    /// Generate service management profiles
     ///
-    /// Reads a btm.toml and generates mobileconfig or DDM JSON for apps
-    /// that have BTM rules configured.
+    /// Reads a btm.toml and generates com.apple.servicemanagement
+    /// mobileconfig profiles for apps that have BTM rules configured.
     ///
     /// Examples:
     ///   contour btm generate btm.toml --output ./profiles/
-    ///   contour btm generate btm.toml --ddm --output ./ddm/
     ///   contour btm generate btm.toml --fragment
     Generate {
         /// Input policy file (btm.toml)
@@ -112,10 +112,11 @@ pub enum BtmCommands {
         #[arg(long)]
         fragment: bool,
 
-        /// Generate DDM declarations (JSON) instead of mobileconfig
+        /// Refused: BTM has no DDM equivalent
         ///
-        /// Outputs com.apple.configuration.services.background-tasks declarations
-        /// (macOS 15+) instead of com.apple.servicemanagement mobileconfig profiles.
+        /// com.apple.configuration.services.background-tasks is not the
+        /// declarative form of com.apple.servicemanagement. The error names
+        /// the alternative.
         #[arg(long)]
         ddm: bool,
 
@@ -126,10 +127,9 @@ pub enum BtmCommands {
         /// Output format. `mobileconfig` (default) writes one or more
         /// .mobileconfig files. `recipe` writes a single combined
         /// recipe TOML that drops into a `contour profile library`
-        /// (recipes/ subdir) for later `generate --recipe …` use. A
-        /// recipe always carries both `[[profile]]` (mobileconfig) and
-        /// `[[ddm]]` (background-tasks declaration) blocks, so `--ddm`
-        /// is ignored when `--format recipe` is set.
+        /// (recipes/ subdir) for later `generate --recipe …` use. The
+        /// recipe carries `[[profile]]` blocks only; `--ddm` is refused
+        /// before the format is considered.
         #[arg(
             long,
             value_parser = ["mobileconfig", "recipe"],

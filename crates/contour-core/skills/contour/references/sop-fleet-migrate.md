@@ -322,7 +322,15 @@ catches schema regressions that the Fleet-side dry-run won't:
 contour profile validate platforms/macos/configuration-profiles/ --recursive --json
 contour profile ddm validate platforms/macos/declaration-profiles/ --json
 contour profile ddm verify platforms/macos/declaration-profiles --json
+contour osquery validate . --recursive --json     # every policy, report and label query, both schemas
 ```
+
+`osquery validate` reads `default.yml`, the team files, and every
+`*.policies.yml` / `*.reports.yml` / `*.labels.yml` under `platforms/`,
+and fails on a table or column the embedded osquery and Fleet schemas do
+not have. For a repo `contour mscp generate` produced, `contour mscp
+validate -o .` runs the same check plus Fleet's own schema over those
+files.
 
 If you have an active `pre-commit` hook (see `--sop precommit`), this
 is the same check the hook runs — clean here means clean for every
@@ -386,8 +394,12 @@ always preserved.
 - **Every fleet YAML has a unique `name:`** — gitops.sh blocks duplicates.
 - **Every label referenced in policies/reports/software** must appear in
   the `labels:` section of `default.yml` or the relevant fleet YAML.
-- **`apple_settings`** replaces `macos_settings` (which itself replaced
-  `controls.macos_settings.custom_settings` from earlier eras).
+- **`apple_settings.configuration_profiles`** replaces
+  `macos_settings.custom_settings` — renamed in Fleet v4.83.0, with the old
+  names kept as deprecated aliases. A file may use either spelling, never
+  both in one place: Fleet rejects `apple_settings` beside `macos_settings`
+  as conflicting field names. contour writes the new names in files it
+  creates and keeps a file's existing spelling when it edits one.
 
 ---
 

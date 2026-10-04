@@ -8,7 +8,6 @@ pub use santa_config::{
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use plist::Value;
-use std::collections::HashMap;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -64,7 +63,7 @@ pub fn generate_config(config: &SantaConfig) -> Result<Vec<u8>> {
     let payload_uuid = Uuid::new_v4();
 
     // Build Santa configuration payload content
-    let mut santa_config: HashMap<String, Value> = HashMap::new();
+    let mut santa_config = plist::Dictionary::new();
     santa_config.insert(
         "ClientMode".to_string(),
         Value::Integer(config.mode.as_int().into()),
@@ -86,7 +85,7 @@ pub fn generate_config(config: &SantaConfig) -> Result<Vec<u8>> {
     }
 
     // Build payload
-    let mut payload: HashMap<String, Value> = HashMap::new();
+    let mut payload = plist::Dictionary::new();
     payload.insert(
         "PayloadType".to_string(),
         Value::String("com.northpolesec.santa".to_string()),
@@ -111,7 +110,7 @@ pub fn generate_config(config: &SantaConfig) -> Result<Vec<u8>> {
     }
 
     // Build profile
-    let mut profile: HashMap<String, Value> = HashMap::new();
+    let mut profile = plist::Dictionary::new();
     profile.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
     profile.insert(
         "PayloadType".to_string(),

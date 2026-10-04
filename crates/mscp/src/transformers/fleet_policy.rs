@@ -40,7 +40,8 @@ impl FleetPolicyGenerator {
     ///
     /// Thin wrapper over [`Self::generate_policy_for_rule`] used by the mSCP →
     /// osquery bridge so it reuses this generator instead of duplicating the SQL
-    /// builder. The generated SQL does not depend on the baseline name.
+    /// builder. `$ODV` literals resolve via `rule.odv.{baseline_name}` first, so
+    /// the SQL can differ per baseline.
     pub fn managed_policies_query(&self, rule: &MscpRule) -> Option<String> {
         self.generate_policy_for_rule(rule, &self.baseline_name, None)
             .map(|p| p.query)
@@ -48,7 +49,7 @@ impl FleetPolicyGenerator {
 
     /// Generate Fleet policies for all eligible rules in a baseline.
     ///
-    /// Writes a YAML array to `{output_dir}/{baseline}_policies.yml` and returns
+    /// Writes a YAML array to `{output_dir}/{baseline}.policies.yml` and returns
     /// the generated policies plus the path to the written file.
     pub fn generate_for_baseline(
         &self,
@@ -65,9 +66,15 @@ impl FleetPolicyGenerator {
             }
         }
 
-        let file_path = output_dir.join(format!("{baseline_name}_policies.yml"));
+        let file_path = output_dir.join(format!("{baseline_name}.policies.yml"));
 
         if !policies.is_empty() {
+            crate::osquery::check_emitted(
+                &file_path.display().to_string(),
+                policies
+                    .iter()
+                    .map(|p| (p.name.as_str(), p.query.as_str(), p.platform.as_str())),
+            )?;
             std::fs::create_dir_all(output_dir).with_context(|| {
                 format!("Failed to create policies dir: {}", output_dir.display())
             })?;
@@ -262,7 +269,8 @@ impl FleetPolicyGenerator {
 
     /// Build a SQL WHERE clause for `managed_policies` from a single key-value pair.
     ///
-    /// Returns `None` for values that can't be expressed (arrays, mappings).
+    /// Always `Some`: unexpressible values (arrays, mappings) are already
+    /// filtered out in `resolve_value`.
     fn build_where_clause(&self, domain: &str, key: &str, value: &ResolvedValue) -> Option<String> {
         let value_expr = match value {
             ResolvedValue::Bool(b) => {

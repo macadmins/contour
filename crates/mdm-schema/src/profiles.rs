@@ -1,4 +1,7 @@
 //! Arrow schema and Parquet reader for ProfileCreator/PayloadSchemas data.
+//!
+//! No such table is shipped with this crate; the reader is kept for a
+//! `profilecreator.parquet` produced elsewhere.
 
 use anyhow::{Context, Result};
 use arrow::array::{Array, AsArray};
@@ -32,9 +35,8 @@ pub fn schema() -> Schema {
     Schema::new(vec![
         // Manifest identity
         Field::new("payload_type", DataType::Utf8, false),
-        // `kind` is 100% populated in current data ("MdmProfile" /
-        // "MdmConfig") but kept nullable for compat-check tolerance
-        // when consumers pin to older schemas.
+        // `kind` is nullable so a parquet without the column still passes
+        // compat-check; readers treat null as unclassified.
         Field::new("kind", DataType::Utf8, true),
         Field::new("manifest_source", DataType::Utf8, true),
         Field::new("apply_mode", DataType::Utf8, true),

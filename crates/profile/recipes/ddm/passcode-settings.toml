@@ -1,0 +1,52 @@
+# Managed passcode policy.
+#
+# DDM bundle for `com.apple.configuration.passcode.settings`. Ships a
+# baseline that most compliance frameworks accept as a starting point:
+# a passcode is required, at least eight characters, with a short
+# inactivity lock and a bounded number of failed attempts.
+#
+# Deliberately NOT set here:
+#
+#   * RequireAlphanumericPasscode / RequireComplexPasscode — these make
+#     the policy considerably harsher on iOS, where the passcode is
+#     typed on a touch keyboard many times a day.
+#   * MaximumPasscodeAgeInDays / PasscodeReuseLimit — forced rotation is
+#     no longer recommended by NIST SP 800-63B; add it only if your
+#     framework demands it.
+#
+# Platform note: on macOS this governs the login password; on iOS and
+# iPadOS the device passcode. `MaximumFailedAttempts` on iOS ERASES the
+# device when exceeded — 10 is Apple's own conventional value, but
+# confirm it is what you want before deploying to shared devices.
+#
+# Compose with:
+#   contour profile ddm compose --preset passcode-settings \
+#       --org com.acme -o ./declarations/passcode-settings
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's
+# group/team assignment.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/passcode.settings.yaml). Verified against
+# contour's embedded schema: `contour profile ddm info
+# com.apple.configuration.passcode.settings --full`.
+
+intent_name = "passcode-settings"
+
+[configuration]
+type = "com.apple.configuration.passcode.settings"
+
+  [configuration.payload]
+  # A passcode is mandatory.
+  RequirePasscode = true
+  # Minimum length. Apple's default is 0 (no minimum).
+  MinimumLength = 8
+  # Lock the screen after 15 minutes of inactivity.
+  MaximumInactivityInMinutes = 15
+  # Failed attempts before the device locks out (iOS: erases).
+  MaximumFailedAttempts = 10
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

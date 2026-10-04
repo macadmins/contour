@@ -106,6 +106,7 @@ pub fn run(cli: Cli) -> Result<()> {
             cli.json,
         ),
         Commands::Osquery { action } => crate::osquery::handle(action, cli.json),
+        Commands::App { action } => app_manifest::cli::handle(action, cli.json),
         Commands::SetupAgent { org, yes, force } => {
             use contour_core::help_agents::{SkillInstallOptions, install_skill_with};
             use std::io::IsTerminal;
@@ -145,7 +146,11 @@ pub fn run(cli: Cli) -> Result<()> {
                 write_agents_md,
                 force,
             };
-            install_skill_with(env!("CARGO_PKG_VERSION"), &opts)?;
+            install_skill_with(
+                env!("CARGO_PKG_VERSION"),
+                &crate::census::census_line()?,
+                &opts,
+            )?;
             Ok(())
         }
         Commands::HelpAgents {
@@ -159,7 +164,10 @@ pub fn run(cli: Cli) -> Result<()> {
             install_skill,
         } => {
             if install_skill {
-                contour_core::help_agents::install_skill(env!("CARGO_PKG_VERSION"))?;
+                contour_core::help_agents::install_skill(
+                    env!("CARGO_PKG_VERSION"),
+                    &crate::census::census_line()?,
+                )?;
                 return Ok(());
             }
 
@@ -220,6 +228,15 @@ pub fn run(cli: Cli) -> Result<()> {
             install,
             script,
         } => crate::completions::run(shell, install, script),
+        Commands::Census => {
+            let c = crate::census::census()?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&c)?);
+            } else {
+                print!("{}", c.report());
+            }
+            Ok(())
+        }
         Commands::Init {
             path,
             name,
@@ -719,6 +736,12 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
 
         Commands::Diff { file1, file2 } => santa::cli::diff::run(&file1, &file2, output_mode),
 
+        Commands::Parity {
+            rules,
+            declaration,
+            santa_mode,
+        } => santa::cli::parity::run(&rules, &declaration, santa_mode, output_mode),
+
         Commands::Config {
             output,
             mode,
@@ -986,6 +1009,7 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
             include_unsigned,
             org,
             rule_type,
+            no_apple,
             merge,
         } => {
             let org = resolve_santa_org(org);
@@ -1002,6 +1026,7 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
                     include_unsigned,
                     &org,
                     rule_type,
+                    no_apple,
                     verbose,
                     json,
                 )
@@ -1014,6 +1039,7 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
             permissions,
             scaffold,
             always_allow_managed,
+            no_apple,
             rule_type,
             platform,
             deny,
@@ -1026,10 +1052,11 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
             permissions.as_deref(),
             scaffold,
             always_allow_managed,
+            no_apple,
             rule_type,
             platform,
             deny,
-            &org,
+            org.as_deref(),
             strict,
             output.as_deref(),
             json,
@@ -1179,7 +1206,9 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             sync,
             branch,
             keywords,
+            legacy_fleet,
         } => {
+            mscp::cli::refuse_retired_fleet_flag(legacy_fleet, "mscp init", "--fleet-gitops")?;
             mscp::cli::init_project(
                 &output, org, name, force, fleet, jamf, munki, sync, &branch, keywords, json,
             )?;
@@ -1302,6 +1331,8 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 output_mode,
                 script_mode.into(),
                 exclude,
+                None, // excluded_rules - `process` reads no mscp.toml; use `generate --config`
+                None, // baseline_labels - likewise
                 fragment,
                 mscp::config::OutputStructure::default(),
                 None,
@@ -1315,7 +1346,6 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             branch,
             keyword,
             preset,
-            mscp_version,
             os,
             os_version,
             output,
@@ -1440,14 +1470,22 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                     false, // batch_mode = false for single keyword
                     script_mode.into(),
                     exclude,
+                    Some(baseline_config.excluded_rules.clone()),
+                    Some(baseline_config.labels.clone()),
                     fragment,
                     opts.structure,
                     glob_config,
-                    "auto".to_string(), // mscp_version — config path auto-detects layout
                     "macos".to_string(), // os
-                    None,               // os_version
-                    odv.clone(),        // --odv override (else auto-detect odv_<keyword>.yaml)
-                    None,               // osquery — not exposed in config-driven generation
+                    None,                // os_version
+                    odv.clone(),         // --odv override (else auto-detect odv_<keyword>.yaml)
+                    mscp::cli::config_generate::resolve_osquery_options(
+                        &loaded_config,
+                        osquery.then(|| mscp::osquery::OsqueryGenOptions {
+                            format: osquery_format.clone(),
+                            audit: osquery_audit.clone(),
+                            org: org.clone(),
+                        }),
+                    ),
                 )?;
                 return Ok(());
             }
@@ -1595,18 +1633,20 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 false, // batch_mode = false for single keyword
                 script_mode.into(),
                 exclude,
+                None, // excluded_rules - CLI-flag mode does not carry mscp.toml
+                None, // baseline_labels - likewise
                 fragment,
                 mscp::config::OutputStructure::default(),
                 None,
-                mscp_version,
                 os.as_str().to_string(),
                 os_version,
                 odv, // --odv override (else auto-detect odv_<keyword>.yaml)
                 osquery_opts,
             )?;
 
-            // --verify-queries: run the emitted policy/report queries through a
-            // local osqueryi (or print how to verify via orbit on a Fleet host).
+            // --verify-queries: write the osqueryi / `orbit shell` commands for
+            // every emitted policy and report query to <out>/osquery/verify-commands.md.
+            // Nothing is executed.
             if let Some(out) = verify_output {
                 mscp::osquery::verify::verify_generated(&out)?;
             }
@@ -1742,8 +1782,20 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             output,
             schemas,
             strict,
+            config,
         } => {
-            mscp::cli::validate_output(output, schemas, strict, output_mode)?;
+            let opts = mscp::cli::validate::resolve_validation_options(
+                config.as_deref(),
+                schemas,
+                strict,
+            )?;
+            mscp::cli::validate_output(
+                output,
+                opts.schemas_path,
+                opts.strict,
+                opts.validate_paths,
+                output_mode,
+            )?;
         }
 
         Commands::Deduplicate {
@@ -1837,9 +1889,11 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             from,
             to,
             fleet,
+            fleet_file,
             output,
             no_backup,
         } => {
+            let fleet = mscp::cli::resolve_migrate_fleet(fleet, fleet_file)?;
             mscp::cli::migrate_fleet_file(from, to, fleet, output, !no_backup)?;
         }
 
@@ -1964,7 +2018,6 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             org,
             odv,
             odv_mode,
-            mscp_version,
             os,
             os_version,
         } => {
@@ -1974,7 +2027,6 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 output.as_deref(),
                 org.as_deref(),
                 odv_mode,
-                &mscp_version,
                 os.into(),
                 os_version,
                 odv,
@@ -1997,7 +2049,6 @@ fn dispatch_mscp_recipe(
     output: Option<&std::path::Path>,
     org: Option<&str>,
     mode: mscp::baseline_to_recipe::OdvMode,
-    mscp_version: &str,
     os: mscp::models::mscp::Platform,
     os_version: Option<String>,
     odv_path: Option<std::path::PathBuf>,
@@ -2005,8 +2056,8 @@ fn dispatch_mscp_recipe(
     use anyhow::Context;
     use colored::Colorize;
 
-    let layout = mscp::layout::MscpLayout::detect_or_from(Some(mscp_version), mscp_repo)
-        .with_context(|| format!("detecting mSCP layout in {}", mscp_repo.display()))?;
+    let layout = mscp::layout::MscpLayout::detect(mscp_repo)
+        .with_context(|| format!("verifying mSCP layout in {}", mscp_repo.display()))?;
     let extractor = mscp::extractors::RuleExtractor::new(mscp_repo)
         .with_layout(layout)
         .with_os(os, os_version);

@@ -2,8 +2,8 @@
 //! host is COMPLIANT (osquery policy convention).
 //!
 //! Note: `managed_policies` SQL is built by `transformers/fleet_policy.rs::generate_policy_for_rule`
-//! (from `mobileconfig_info`) — not duplicated here. `plist`/`nvram` rules whose
-//! fixed path/key can't be parsed cleanly fall to residual.
+//! (from `mobileconfig_info`) — not duplicated here. `plist`/`nvram` rules are
+//! not translated yet and always fall to residual.
 
 use crate::osquery::catalog::OsqueryTable;
 
@@ -24,8 +24,8 @@ pub fn build(table: OsqueryTable, rule: &crate::models::MscpRule) -> Option<Stri
             Some("SELECT 1 FROM gatekeeper WHERE assessments_enabled = 1".into())
         }
         OsqueryTable::Alf => Some("SELECT 1 FROM alf WHERE global_state >= 1".into()),
-        // managed_policies + plist + nvram queries are built from mobileconfig_info /
-        // the parsed check elsewhere; not handled by this generic entry point.
+        // managed_policies SQL is built from mobileconfig_info elsewhere; plist +
+        // nvram are not translated yet. None of them is handled here.
         _ => None,
     }
 }
@@ -139,6 +139,33 @@ mod tests {
             q,
             "SELECT 1 FROM launchd_overrides WHERE label = 'com.apple.tftpd' AND key = 'Disabled' AND value IN ('1','true')"
         );
+    }
+
+    /// Every native query the bridge can emit, checked against the embedded
+    /// schema: tables, columns, the darwin platform, and required columns.
+    #[test]
+    fn every_native_query_passes_the_schema_check() {
+        use contour_core::osquery_validate::{Severity, check_query};
+        let index = osquery_schema::index();
+        let cases = [
+            (OsqueryTable::SharingPreferences, rule("system_settings_remote_management_disable", None)),
+            (OsqueryTable::SharingPreferences, rule("system_settings_printer_sharing_disable", None)),
+            (OsqueryTable::SharingPreferences, rule("system_settings_screen_sharing_disable", None)),
+            (OsqueryTable::LaunchdOverrides, rule("os_smbd_disable", Some("grep -c '\"com.apple.smbd\" => disabled'"))),
+            (OsqueryTable::DiskEncryption, rule("filevault_enforce", None)),
+            (OsqueryTable::SipConfig, rule("os_sip_enable", None)),
+            (OsqueryTable::Gatekeeper, rule("os_gatekeeper_enable", None)),
+            (OsqueryTable::Alf, rule("os_firewall_enable", None)),
+        ];
+        for (table, r) in cases {
+            let sql = build(table, &r).expect("builder returns SQL for its own table");
+            let errors: Vec<String> = check_query(&sql, "darwin", index)
+                .into_iter()
+                .filter(|p| p.severity() == Severity::Error)
+                .map(|p| p.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{sql}: {errors:?}");
+        }
     }
 
     #[test]

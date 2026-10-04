@@ -1,0 +1,61 @@
+# The rule contour-form exists to keep: with default features off it names
+# no filesystem, no process, no environment, no network and no clock — and
+# it links for wasm32-unknown-unknown. The wasm build is the gate that
+# matters; a grep can be worked around, a linker cannot.
+name: contour-form purity
+
+permissions:
+  contents: read
+
+# mdm-schema's build script fetches its dataset from here.
+env:
+  CONTOUR_SCHEMA_ZIP_BASE: ${{ secrets.CONTOUR_SCHEMA_ZIP_BASE }}
+
+on:
+  pull_request:
+    paths:
+      - "crates/contour-form/**"
+      - "crates/contour-form-wasm/**"
+      - "crates/mdm-schema/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/contour-form-purity.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/contour-form/**"
+      - "crates/mdm-schema/**"
+
+jobs:
+  wasm:
+    name: builds for wasm32-unknown-unknown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: build without the native feature
+        run: cargo build -p contour-form --target wasm32-unknown-unknown --no-default-features
+      - name: link the cdylib wrapper (the gate an rlib cannot give)
+        run: cargo build -p contour-form-wasm --target wasm32-unknown-unknown --release
+      - name: report module size
+        run: ls -la target/wasm32-unknown-unknown/release/*.wasm
+      - name: no filesystem, process, env, net or clock outside cfg(native)/tests
+        run: |
+          set -euo pipefail
+          # Lines that name a forbidden module, minus lines inside test modules
+          # and minus the files/functions gated behind the native feature.
+          hits=$(grep -rnE 'std::(fs|process|env|net)|SystemTime|chrono::' crates/contour-form/src --include='*.rs' \
+            | grep -vE '^\S+:\s*//' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits" | while IFS= read -r line; do
+              file=$(echo "$line" | cut -d: -f1); ln=$(echo "$line" | cut -d: -f2)
+              # Allowed if the enclosing region is native-gated or a test module.
+              if ! awk -v L="$ln" 'NR<=L && (/#\[cfg\(feature = "native"\)\]/ || /#\[cfg\(test\)\]/) {ok=1} END{exit !ok}' "$file"; then
+                echo "::error file=$file,line=$ln::forbidden in pure build: $line"; fail=1
+              fi
+            done
+          fi
+          [ -z "${fail:-}" ]

@@ -296,8 +296,27 @@ pub fn build_report(declarations: &[(PathBuf, Declaration)]) -> VerifyReport {
     report
 }
 
-/// Recursively walk a JSON object and collect every key whose name ends
-/// with `AssetReference` paired with its string value.
+/// Whether a payload key names one or more asset declarations.
+///
+/// `ends_with("AssetReference")` was too narrow and missed two real fields
+/// in the shipped schema:
+///
+/// * `AnchorCertificateAssetReferences` (watch.enrollment) — **plural**, and
+///   an array of plain strings, so it was missed twice over.
+/// * `ManagementStatusCertificateReference` (content-cache.settings) — names
+///   a certificate asset but does not carry "Asset" in the suffix.
+///
+/// Matching the `Reference`/`References` suffix covers all twenty
+/// reference-bearing fields across the embedded types. The assumption is
+/// Apple's convention that such a field names a declaration; a future
+/// `*Reference` field that does not would need excluding here, and would
+/// announce itself as a dangling-reference error rather than silence.
+fn is_asset_reference_key(key: &str) -> bool {
+    key.ends_with("Reference") || key.ends_with("References")
+}
+
+/// Recursively walk a payload and collect every `(key, value)` where
+/// [`is_asset_reference_key`] matches and the value is a non-empty string.
 ///
 /// Apple's Mail account schema has nested fields like
 /// `IncomingServer.AuthenticationCredentialsAssetReference`; the embedded
@@ -311,18 +330,46 @@ fn extract_asset_refs(payload: &std::collections::HashMap<String, Value>) -> Vec
 
 fn walk_for_refs(map: &std::collections::HashMap<String, Value>, out: &mut Vec<(String, String)>) {
     for (key, value) in map {
-        if key.ends_with("AssetReference")
+        if is_asset_reference_key(key)
             && let Some(s) = value.as_str()
             && !s.is_empty()
         {
             out.push((key.clone(), s.to_string()));
         }
-        if let Some(child) = value.as_object() {
+        walk_value_for_refs(key, value, out);
+    }
+}
+
+/// Recurse into a value, descending through objects AND arrays.
+///
+/// Arrays matter: Apple nests asset references inside them.
+/// `services.background-tasks` carries
+/// `LaunchdConfigurations[].FileAssetReference`, and an object-only walk
+/// never reaches it — so a declaration referencing assets that do not exist
+/// verified clean, reporting "0 asset(s)" while naming two of them.
+fn walk_value_for_refs(key: &str, value: &Value, out: &mut Vec<(String, String)>) {
+    match value {
+        Value::Object(child) => {
             // serde_json::Map is not the same as HashMap; convert.
             let nested: std::collections::HashMap<String, Value> =
                 child.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             walk_for_refs(&nested, out);
         }
+        Value::Array(items) => {
+            for item in items {
+                // An array of plain strings under a `*AssetReference` key is
+                // a list of references, not a container.
+                if is_asset_reference_key(key)
+                    && let Some(s) = item.as_str()
+                    && !s.is_empty()
+                {
+                    out.push((key.to_string(), s.to_string()));
+                    continue;
+                }
+                walk_value_for_refs(key, item, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -377,6 +424,7 @@ mod tests {
 
     fn decl(t: &str, id: &str, payload: serde_json::Map<String, Value>) -> Declaration {
         Declaration {
+            payload_scope: None,
             declaration_type: t.to_string(),
             identifier: id.to_string(),
             server_token: None,

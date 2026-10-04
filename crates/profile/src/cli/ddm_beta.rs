@@ -12,8 +12,9 @@
 //! from Apple's DEP API with an MDM server token, which itself comes out of a
 //! manual Apple Business/School Manager round-trip. [`MANUAL_TOKEN_STEPS`]
 //! documents that; when a mode needs tokens and none are present, the command
-//! prints those steps and exits non-zero so a human — or an agent driving the
-//! workflow — knows exactly which artifact to produce before retrying.
+//! exits non-zero — printing those steps in Human mode, a `MISSING_INPUT`
+//! error object in JSON mode — so a human or an agent driving the workflow
+//! knows exactly which artifact to produce before retrying.
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -74,8 +75,8 @@ pub struct BetaToken {
 }
 
 /// The manual Apple Business/School Manager round-trip that produces the
-/// tokens. Printed verbatim when a token artifact is missing, so a human or
-/// an agent can complete the step and re-run.
+/// tokens. Printed verbatim (Human mode) when a token artifact is missing,
+/// so a human or an agent can complete the step and re-run.
 pub const MANUAL_TOKEN_STEPS: &str = "\
 Seeding tokens come from Apple and cannot be generated locally.
 
@@ -246,10 +247,11 @@ pub fn build_beta_payload(mode: BetaMode, tokens: &[BetaToken]) -> Result<serde_
             if tokens.is_empty() {
                 anyhow::bail!("mode needs at least one beta program (pass --tokens)");
             }
-            let programs: Vec<serde_json::Value> = tokens
-                .iter()
-                .map(|t| serde_json::json!({"Program": program(t)}))
-                .collect();
+            // Each element IS a program — the same {Description, Token} shape
+            // RequireProgram carries. `Program` is Apple's name for the array
+            // element, not a key to nest under; wrapping it produced an offer
+            // that listed no programs the device could read.
+            let programs: Vec<serde_json::Value> = tokens.iter().map(program).collect();
             beta.insert(
                 "OfferPrograms".to_string(),
                 serde_json::Value::Array(programs),
@@ -290,19 +292,21 @@ pub fn handle_ddm_beta(
     // --- Gate: the manual artifact ---
     let tokens = match (mode.needs_tokens(), tokens_file) {
         (true, None) => {
+            // Reported once: the envelope here in JSON mode (with the code
+            // `main`'s classifier could not guess), the message via `main`
+            // in human mode. `Reported` keeps `main` from printing a second
+            // envelope.
+            let msg = format!(
+                "--tokens is required for `--mode {}`\n\n{MANUAL_TOKEN_STEPS}",
+                format!("{mode:?}").to_lowercase()
+            );
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(
                     "beta seeding tokens are required for this mode; see manual steps",
                     Some("MISSING_INPUT"),
                 );
-            } else {
-                eprintln!(
-                    "{} --tokens is required for `--mode {}`\n\n{MANUAL_TOKEN_STEPS}",
-                    "✗".red(),
-                    format!("{mode:?}").to_lowercase()
-                );
             }
-            anyhow::bail!("missing beta seeding tokens");
+            return Err(contour_core::output::Reported(msg).into());
         }
         (true, Some(path)) => {
             let raw = std::fs::read_to_string(path)
@@ -328,6 +332,7 @@ pub fn handle_ddm_beta(
     payload.insert("Beta".to_string(), build_beta_payload(mode, &tokens)?);
 
     let decl = Declaration {
+        payload_scope: None,
         declaration_type: SWU_SETTINGS.to_string(),
         identifier: base_identifier,
         server_token: None,
@@ -375,11 +380,12 @@ pub fn handle_ddm_beta(
     Ok(())
 }
 
-/// Validate + write one declaration, returning it so callers can report.
+/// Build + validate one declaration, returning it for the caller to write.
 fn build_and_check(mode: BetaMode, tokens: &[BetaToken], identifier: &str) -> Result<Declaration> {
     let mut payload = DeclarationPayload::new();
     payload.insert("Beta".to_string(), build_beta_payload(mode, tokens)?);
     let decl = Declaration {
+        payload_scope: None,
         declaration_type: SWU_SETTINGS.to_string(),
         identifier: identifier.to_string(),
         server_token: None,
@@ -524,11 +530,12 @@ mod tests {
     fn offer_mode_builds_allowed_with_offer_programs() {
         let payload = build_beta_payload(BetaMode::Offer, &[tok("Pilot", "AAA")]).unwrap();
         assert_eq!(payload["ProgramEnrollment"], "Allowed");
-        assert_eq!(payload["OfferPrograms"][0]["Program"]["Token"], "AAA");
-        assert_eq!(
-            payload["OfferPrograms"][0]["Program"]["Description"],
-            "Pilot"
+        assert_eq!(payload["OfferPrograms"][0]["Token"], "AAA");
+        assert!(
+            payload["OfferPrograms"][0].get("Program").is_none(),
+            "a program must not be wrapped in a Program key"
         );
+        assert_eq!(payload["OfferPrograms"][0]["Description"], "Pilot");
     }
 
     #[test]
@@ -583,6 +590,7 @@ mod tests {
                 build_beta_payload(mode, &tokens).unwrap(),
             );
             let decl = Declaration {
+                payload_scope: None,
                 declaration_type: SWU_SETTINGS.to_string(),
                 identifier: "com.acme.settings".to_string(),
                 server_token: None,

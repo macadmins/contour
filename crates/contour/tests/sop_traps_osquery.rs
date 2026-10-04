@@ -180,20 +180,18 @@ fn trap_22_osquery_table_returns_columns_under_table_object() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trap 23: `profile enrollment generate --skip-all` is REFUSED by the NEVER_SKIP
-//          guardrail. --skip-all enumerates every skippable key, which includes
-//          FileVault and SoftwareUpdate; the CLI now enforces the invariant
-//          itself (see enrollment::NEVER_SKIP) and bails before writing rather
-//          than emitting an unsafe profile.
+// Trap 23: `profile enrollment generate --skip-all` skips every pane that MAY be
+//          skipped, and never FileVault or SoftwareUpdate. Naming either
+//          explicitly is refused by the NEVER_SKIP guardrail.
 //
 // SOP procedure: generate_enrollment_profile / NEVER_SKIP invariant
 //
 // Catches: regressions that weaken the guardrail (letting FileVault/
-// SoftwareUpdate into skip_setup_items) or that stop surfacing why generation
-// was refused.
+// SoftwareUpdate into skip_setup_items by any route), or that make --skip-all
+// unusable again.
 // ─────────────────────────────────────────────────────────────────────────────
 #[test]
-fn trap_23_enrollment_skip_all_rejected_by_never_skip_guardrail() {
+fn trap_23_enrollment_skip_all_honours_the_never_skip_guardrail() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("test.dep.json");
 
@@ -212,31 +210,53 @@ fn trap_23_enrollment_skip_all_rejected_by_never_skip_guardrail() {
         ])
         .output()
         .unwrap();
+    assert!(
+        result.status.success(),
+        "--skip-all must succeed; stderr: {}",
+        String::from_utf8_lossy(&result.stderr),
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&out).expect("profile written")).unwrap();
+    let items: Vec<&str> = doc["skip_setup_items"]
+        .as_array()
+        .expect("skip_setup_items")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(!items.is_empty(), "--skip-all skipped nothing");
+    for kept in ["FileVault", "SoftwareUpdate"] {
+        assert!(!items.contains(&kept), "--skip-all must never skip {kept}");
+    }
 
-    // --skip-all enumerates every skippable key, which includes the NEVER_SKIP
-    // keys (FileVault, SoftwareUpdate). The CLI enforces the guardrail itself, so
-    // generation MUST be refused rather than emitting an unsafe profile.
+    // Asked for by name, the guardrail still refuses and says why.
+    let refused = dir.path().join("refused.dep.json");
+    let result = Command::cargo_bin("contour")
+        .unwrap()
+        .args([
+            "profile",
+            "enrollment",
+            "generate",
+            "--platform",
+            "macOS",
+            "--skip",
+            "FileVault,SoftwareUpdate",
+            "-o",
+            refused.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
     assert!(
         !result.status.success(),
-        "enrollment generate --skip-all must be refused by the NEVER_SKIP guardrail; stdout: {} stderr: {}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr),
+        "naming a NEVER_SKIP pane must be refused"
     );
-
-    let msg = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr),
-    );
+    let msg = String::from_utf8_lossy(&result.stderr);
     assert!(
         msg.contains("FileVault") && msg.contains("SoftwareUpdate") && msg.contains("NEVER_SKIP"),
         "guardrail rejection must name FileVault, SoftwareUpdate and NEVER_SKIP; got: {msg}"
     );
-
-    // The guardrail bails before writing, so no profile file is produced.
     assert!(
-        !out.exists(),
-        "no enrollment profile should be written when the guardrail rejects --skip-all"
+        !refused.exists(),
+        "no profile is written when the guardrail refuses"
     );
 }
 
@@ -286,4 +306,139 @@ fn trap_24_enrollment_list_entry_shape() {
     }
     // `key` MUST be a string — that's the value agents pass to --skip.
     assert!(first["key"].is_string(), "key is a string");
+}
+
+#[test]
+fn trap_96_osquery_identifier_queries_stay_valid_against_the_schema() {
+    // --sop osquery's resolve_app_identifier procedure ships two SQL queries
+    // and one hard rule: use `signature`, never the `codesign` Fleet
+    // extension. All three are checkable offline against the embedded schema.
+    //
+    // Drift signal: osquery renames a column the queries depend on (the
+    // hash_resources / hash_executable table PARAMETERS especially), or
+    // `codesign` appears in core osquery and the rule stops being true.
+    use std::path::PathBuf;
+
+    let sop = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../contour-core/skills/contour/references/sop-osquery.md");
+    let text = std::fs::read_to_string(&sop).unwrap();
+    assert!(
+        text.contains("resolve_app_identifier"),
+        "the identifier-resolution procedure is missing from --sop osquery"
+    );
+
+    // The trust hierarchy's whole point: installer metadata is not a bundle id.
+    assert!(
+        text.contains("Not a bundle identifier at all"),
+        "SOP must warn that installer metadata is not a bundle identifier"
+    );
+    // And the reason identifier accuracy matters at all.
+    assert!(
+        text.contains("is not an error"),
+        "SOP must state that naming an uninstalled app fails silently"
+    );
+
+    // Every column the documented queries rely on must exist in the schema.
+    let signature = osquery_schema::osquery::read(osquery_schema::embedded())
+        .expect("read embedded osquery schema");
+
+    let cols = |table: &str| -> Vec<String> {
+        signature
+            .iter()
+            .filter(|c| c.table_name == table)
+            .map(|c| c.column_name.clone())
+            .collect()
+    };
+
+    let sig_cols = cols("signature");
+    assert!(
+        !sig_cols.is_empty(),
+        "the `signature` table must exist — the procedure depends on it"
+    );
+    for needed in [
+        "path",
+        "identifier",
+        "team_identifier",
+        "authority",
+        "signed",
+        "hash_resources",
+        "hash_executable",
+    ] {
+        assert!(
+            sig_cols.iter().any(|c| c == needed),
+            "signature.{needed} is referenced by --sop osquery but missing from the schema"
+        );
+    }
+
+    let app_cols = cols("apps");
+    for needed in ["name", "path", "bundle_identifier", "bundle_short_version"] {
+        assert!(
+            app_cols.iter().any(|c| c == needed),
+            "apps.{needed} is referenced by --sop osquery but missing from the schema"
+        );
+    }
+
+    // `codesign` is a Fleet extension. If it ever lands in core osquery the
+    // SOP's rule needs rewriting rather than quietly becoming wrong.
+    assert!(
+        cols("codesign").is_empty(),
+        "`codesign` is now in the embedded schema — --sop osquery still tells \
+         agents it is a Fleet extension that does not exist in vanilla osqueryd"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trap 97: every fenced ```sql block in --sop osquery passes the schema check.
+// SOP procedure: the whole cookbook (is_setting_enabled, check_software_updates,
+// check_mdm_profile, resolve_app_identifier, …)
+// Catches: a cookbook query naming a table or column the embedded osquery and
+// Fleet schemas do not have, or a required column left unconstrained. The
+// cookbook is what an agent copies; a typo there ships to every fleet that
+// trusts it.
+// ─────────────────────────────────────────────────────────────────────────────
+#[test]
+fn trap_97_cookbook_sql_names_real_tables_and_columns() {
+    use contour_core::osquery_validate::{Severity, check_query};
+    use std::path::PathBuf;
+
+    let sop = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../contour-core/skills/contour/references/sop-osquery.md");
+    let text = std::fs::read_to_string(&sop).unwrap();
+
+    // Fenced ```sql blocks only; prose and bash blocks carry no SQL contract.
+    let mut blocks: Vec<(usize, String)> = Vec::new();
+    let mut current: Option<(usize, String)> = None;
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim_start();
+        match &mut current {
+            None if t.starts_with("```sql") => current = Some((i + 1, String::new())),
+            Some((start, body)) if t.starts_with("```") => {
+                blocks.push((*start, std::mem::take(body)));
+                current = None;
+            }
+            Some((_, body)) => {
+                body.push_str(line);
+                body.push('\n');
+            }
+            None => {}
+        }
+    }
+    assert!(blocks.len() >= 8, "expected the cookbook's sql blocks, found {}", blocks.len());
+
+    let index = osquery_schema::index();
+    let mut failures = Vec::new();
+    for (line, sql) in &blocks {
+        // One block may hold several statements; check each.
+        for stmt in sql.split(';').map(str::trim).filter(|s| s.to_lowercase().contains("from")) {
+            let errors: Vec<String> = check_query(stmt, "", index)
+                .into_iter()
+                .filter(|p| p.severity() == Severity::Error)
+                .map(|p| p.to_string())
+                .collect();
+            if !errors.is_empty() {
+                failures.push(format!("sop-osquery.md:{line}: {}\n    {}", errors.join("; "), stmt.replace('\n', " ")));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "cookbook SQL fails the schema check:\n{}", failures.join("\n"));
 }

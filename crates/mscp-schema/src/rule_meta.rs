@@ -41,7 +41,11 @@ pub fn read(bytes: &[u8]) -> Result<Vec<RuleMeta>> {
         let batch = batch.context("reading record batch")?;
         let rule_ids = col(&batch, "rule_id")?.as_string::<i32>();
         let titles = col(&batch, "title")?.as_string::<i32>();
-        let discussions = col(&batch, "discussion")?.as_string::<i32>();
+        // Read optionally so a dataset without the column still loads; the
+        // shipped rule_meta always carries it.
+        let discussions = batch
+            .column_by_name("discussion")
+            .map(|c| c.as_string::<i32>());
         let severities = col(&batch, "severity")?.as_string::<i32>();
         let has_checks = col(&batch, "has_check")?.as_boolean();
         let has_fixes = col(&batch, "has_fix")?.as_boolean();
@@ -54,10 +58,9 @@ pub fn read(bytes: &[u8]) -> Result<Vec<RuleMeta>> {
             out.push(RuleMeta {
                 rule_id: rule_ids.value(row).to_string(),
                 title: titles.value(row).to_string(),
-                discussion: if discussions.is_null(row) {
-                    None
-                } else {
-                    Some(discussions.value(row).to_string())
+                discussion: match discussions {
+                    Some(col) if !col.is_null(row) => Some(col.value(row).to_string()),
+                    _ => None,
                 },
                 severity: if severities.is_null(row) {
                     None

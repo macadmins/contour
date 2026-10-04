@@ -64,6 +64,10 @@ pub struct FleetEntries {
     pub policies: Vec<SimpleEntry>,
     #[serde(default)]
     pub software: Vec<SoftwareEntry>,
+    /// Apple asset declarations (`com.apple.asset.*`), listed under
+    /// `apple_settings.assets` — Fleet takes them apart from profiles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assets: Vec<SimpleEntry>,
 }
 
 /// A configuration profile entry for a fleet file.
@@ -76,6 +80,11 @@ pub struct ProfileEntry {
     pub labels_include_all: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels_exclude_any: Option<Vec<String>>,
+    /// A custom DDM activation for this declaration (Fleet's `activation:`).
+    /// Fleet makes one when this is absent; a custom one needs Fleet Premium
+    /// and `FLEET_MDM_ALLOW_CUSTOM_ACTIVATIONS` on the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation: Option<String>,
 }
 
 /// A simple path-only entry (reports, policies).

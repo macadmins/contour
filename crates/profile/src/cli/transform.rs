@@ -137,7 +137,7 @@ pub fn handle_ddm_transform(
         match output {
             Some(p) => {
                 std::fs::write(p, pretty).with_context(|| format!("writing {p}"))?;
-                eprintln!("✓ wrote {p}  (validate: contour profile ddm validate --beta {p})");
+                eprintln!("✓ wrote {p}  (validate: contour profile ddm validate {p})");
             }
             None => println!("{pretty}"),
         }

@@ -46,9 +46,9 @@ pub fn is_valid_uuid(uuid: &str) -> bool {
 /// - All-zeros: `00000000-0000-0000-0000-000000000000`
 /// - All-Fs / all-ones / single-digit repetitions: `FFFFFFFF-...`,
 ///   `11111111-...`, `BBBBBBBB-...`
-/// - Common boilerplate placeholders like
-///   `12345678-1234-1234-1234-123456789012` whose hex chars only
-///   cover a narrow distinct set.
+/// - Narrow boilerplate like `11111111-2222-1111-2222-111111111111`
+///   whose hex chars cover fewer than 4 distinct values. Note
+///   `12345678-1234-1234-1234-123456789012` (10 distinct) is NOT caught.
 ///
 /// Heuristic: parse via `Uuid::parse_str` (so it returns false on
 /// invalid input — caller can pair this with `is_valid_uuid` for full
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn real_v5_uuid_is_not_placeholder() {
-        // Generated via NAMESPACE_DNS for "com.example.test"
+        // Predictable v5 from org_domain "com.example" + identifier "test.identifier"
         let cfg = UuidConfig {
             org_domain: Some("com.example".to_string()),
             predictable: true,

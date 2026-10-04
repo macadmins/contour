@@ -48,7 +48,6 @@ pub struct RecipeSummary {
     pub secrets: Vec<String>,
 }
 
-/// Load a recipe by name, checking external paths first, then embedded.
 /// Resolve a CLI `--recipe` value to a loaded recipe and its
 /// canonical name. Accepts either:
 ///
@@ -84,6 +83,7 @@ pub fn load_recipe_smart(selector: &str, recipe_path: Option<&str>) -> Result<(S
     Ok((selector.to_string(), recipe))
 }
 
+/// Load a recipe by name, checking external paths first, then embedded.
 pub fn load_recipe(name: &str, recipe_path: Option<&str>) -> Result<Recipe> {
     // 1. Explicit path (file or directory)
     if let Some(rp) = recipe_path {
@@ -211,6 +211,13 @@ fn parse_recipe_toml(content: &str, source: &str) -> Result<Recipe> {
     toml::from_str(content).with_context(|| format!("Failed to parse recipe from {source}"))
 }
 
+/// Walk a directory of `.toml` recipes, appending each to `recipes`.
+///
+/// Skips names already present in `recipes` (so the explicit
+/// `--recipe-path` wins over `~/.contour/recipes/`).
+///
+/// When a recipe's name matches a built-in, the source label flags
+/// the override so listings make the shadowing obvious.
 fn collect_external_recipes(
     dir: &Path,
     recipes: &mut Vec<RecipeSummary>,
@@ -253,13 +260,6 @@ fn collect_external_recipes(
     }
 }
 
-/// Walk a directory of `.toml` recipes, appending each to `recipes`.
-///
-/// Skips names already present in `recipes` (so the explicit
-/// `--recipe-path` wins over `~/.contour/recipes/`).
-///
-/// When a recipe's name matches a built-in, the source label flags
-/// the override so listings make the shadowing obvious.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,7 +286,7 @@ mod tests {
     /// North Pole Security's Team ID, duplicated here on purpose: the
     /// `santa` crate owns the constant, but embedded recipes are data,
     /// so only a test can pin them to it. Keep in sync with
-    /// `santa::cli::generate::NORTHPOLE_TEAM_ID`.
+    /// `santa::NORTHPOLE_TEAM_ID`.
     const NORTHPOLE_TEAM_ID: &str = "ZMCG7MLDV9";
 
     /// Any embedded recipe that configures Santa must name North Pole
@@ -317,6 +317,63 @@ mod tests {
                 assert!(
                     !body.contains(stale),
                     "recipe `{name}` still carries stale Santa Team ID `{stale}`"
+                );
+            }
+        }
+    }
+
+    /// Microsoft Corporation's Team ID, pinned for the same reason as
+    /// North Pole Security's above: Defender's designated requirements
+    /// all terminate in `subject.OU] = UBF8T346G9`, and a wrong value
+    /// yields a profile that installs, reports Verified, and grants
+    /// nothing at all.
+    const MICROSOFT_TEAM_ID: &str = "UBF8T346G9";
+
+    #[test]
+    fn defender_recipes_pin_microsoft_team_id() {
+        let defender_recipes: Vec<_> = embedded_recipes()
+            .into_iter()
+            .filter(|(_, body)| body.contains("com.microsoft.wdav.epsext"))
+            .collect();
+
+        assert!(
+            !defender_recipes.is_empty(),
+            "expected at least one embedded Microsoft Defender recipe"
+        );
+
+        for (name, body) in defender_recipes {
+            assert!(
+                body.contains(MICROSOFT_TEAM_ID),
+                "recipe `{name}` configures Defender but never names Team ID {MICROSOFT_TEAM_ID}"
+            );
+        }
+    }
+
+    /// Every designated requirement in every embedded recipe must anchor
+    /// on a Team ID.
+    ///
+    /// `identifier "com.vendor.thing" and anchor apple generic` alone is
+    /// satisfied by *anybody's* notarized build carrying that bundle ID.
+    /// Dropping the `subject.OU` clause therefore widens a Full Disk
+    /// Access or network-filter grant from one vendor to any developer
+    /// who can name the bundle — a silent privilege escalation that
+    /// produces no validation error and no runtime symptom.
+    #[test]
+    fn every_designated_requirement_pins_a_team_id() {
+        for (name, body) in embedded_recipes() {
+            for (lineno, line) in body.lines().enumerate() {
+                let code = line.trim_start();
+                if code.starts_with('#') {
+                    continue;
+                }
+                if !(code.contains("CodeRequirement") || code.contains("DesignatedRequirement")) {
+                    continue;
+                }
+                assert!(
+                    code.contains("subject.OU"),
+                    "recipe `{name}` line {} has a designated requirement with no \
+                     Team ID anchor, which any developer could satisfy: {code}",
+                    lineno + 1
                 );
             }
         }

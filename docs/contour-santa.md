@@ -10,7 +10,6 @@ Pull rules from wherever they live: a Fleet CSV export, `santactl` output, osque
 
 - **Rules from many sources, one canonical format.** A Fleet exported report CSV, a `santactl` dump, an osquery export, and a vendor mobileconfig all land as the same internal rule shape. Filter, dedup, and merge them with one toolset.
 - **MDM-portable output.** Identifiers under your `--org`, deterministic UUIDs, optionally signed with your Developer ID. Emit `.mobileconfig` for Jamf/Fleet, raw plist for Workspace ONE.
-- **Ring editions and baselines.** Stage rollouts by ring (canary → pilot → production), merge a curated `baseline.toml` on top, and let deny-wins resolution catch policy conflicts at build time so a `BLOCKLIST` cannot be silently un-blocked.
 
 ## Quick Start
 
@@ -354,8 +353,9 @@ contour santa add [flags]
 # Add a TeamID rule
 contour santa add --file rules.yaml --teamid EQHXZ8M8AV --description "Google"
 
-# Add from santactl output
-santactl fileinfo /path/to/app | contour santa add --file rules.yaml --from-stdin
+# Add a rule from an app's signature: read its identifiers, then add one
+contour app manifest /Applications/Theine.app
+contour santa add --file rules.yaml --signingid 276HSJ6V54:de.martinlexow.Theine --description "Theine"
 
 # Add and regenerate profile
 contour santa add --file rules.yaml --teamid EQHXZ8M8AV -d "Google" --regenerate santa.mobileconfig --org com.acme
@@ -599,159 +599,6 @@ contour santa pipeline -i fleet.csv -b bundles.toml --org com.acme -o profiles/
 
 # Layer × Stage matrix (staged rollout)
 contour santa pipeline -i fleet.csv -b bundles.toml --org com.acme --layer-stage --stages 3
-```
-
-### Deployment Rings & Fleet GitOps
-
-#### The edition model
-
-Each ring profile is a self-contained **edition** — core rules (rules with
-empty `rings:`) merged with that ring's specialized rules into one complete
-allowlist. Hosts receive exactly one edition, scoped by Fleet labels. Santa
-does not layer overlapping mobileconfigs cleanly on a single host, so editions
-ship whole and are never stacked.
-
-Content per edition is determined by each rule's `rings:` field:
-
-```yaml
-- rule_type: TEAMID
-  identifier: EQHXZ8M8AV
-  policy: ALLOWLIST
-  # no `rings:` field → core (in every edition)
-
-- rule_type: TEAMID
-  identifier: ABC1234567
-  policy: ALLOWLIST
-  rings: [ring0]          # canary only
-
-- rule_type: SIGNINGID
-  identifier: team:com.example.tool
-  policy: ALLOWLIST
-  rings: [ring0, ring1]   # canary + pilot
-```
-
-A rule whose `rings:` references a name that isn't in the active ring config
-is reported as a warning so typos don't silently drop rules from every
-edition. Use `--strict` to promote those warnings to a hard error.
-
-#### Maintaining a baseline
-
-Teams often want to separate a curated, security-owned set of "must-ship"
-rules from the day-to-day, fleet-owned `rules.yaml`. The optional
-`baseline.toml` is that separate file:
-
-```toml
-# baseline.toml — security/IT owned, version-controlled
-version = 1
-
-[[rules]]
-rule_type = "TEAMID"
-identifier = "EQHXZ8M8AV"
-policy = "ALLOWLIST"
-description = "Google"
-
-[[rules]]
-rule_type = "TEAMID"
-identifier = "MALICIOUS00"
-policy = "BLOCKLIST"
-```
-
-Pass it to `rings generate` or `fleet` with `--baseline`. Baseline rules
-ship in **every edition** (they're treated as having empty `rings:`), and
-on any `(rule_type, identifier)` collision with regular input rules the
-**most-restrictive policy wins** — `Remove > Blocklist/SilentBlocklist >
-Allowlist/AllowlistCompiler` — regardless of which file the conflicting
-rules came from. A `BLOCKLIST` in `baseline.toml` can never be silently
-un-blocked by an `ALLOWLIST` in `rules.yaml`.
-
-Conflicts are surfaced as warnings (human mode) or in the JSON envelope's
-`warnings: []` (JSON mode), so you always know which rule was overridden.
-
-A baseline file may **not** declare `rings:` on any rule — that would
-contradict its "every edition" semantic. The parser rejects such files
-with a clear error.
-
-To author or grow a baseline from real machine inventory:
-
-```bash
-contour santa scan --output-format baseline -o baseline.toml
-# Re-running merges new rules into the existing file (deny-wins).
-contour santa scan --output-format baseline -o baseline.toml
-```
-
-#### `santa rings`
-
-Generate per-ring editions for staged rollouts. Each ring can carry multiple
-categories — software rules (`<prefix>1a`), CEL rules (`<prefix>1b`), and FAA
-rules (`<prefix>1c`) for ring 1, then `2a`/`2b`/`2c` for ring 2, and so on.
-Two nested subcommands:
-
-```
-contour santa rings generate <INPUTS>... [flags]
-contour santa rings init [flags]
-```
-
-`santa rings generate` — build the per-ring editions from rule files:
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `<INPUTS>...` | Input rule files (YAML, JSON, CSV) | **required** |
-| `-o, --output-dir <DIR>` | Output directory for ring editions | — |
-| `--org <DOMAIN>` | Organization identifier prefix | `com.example` |
-| `--prefix <PREFIX>` | Profile name prefix (`santa` → `santa1a`, `santa1b`, …) | `santa` |
-| `--num-rings <N>` | Number of rings (5 or 7 built-in; 1-16 custom) | `5` |
-| `--rings-config <PATH>` | Ring config file (from `rings init`); conflicts with `--num-rings` | — |
-| `--baseline <PATH>` | Curated baseline TOML applied to every edition; conflicts resolve deny-wins | — |
-| `--max-rules <N>` | Max rules per edition (splits into `santa1a-001`, `-002`, …) | unlimited |
-| `--strict` | Treat unknown ring names in rules as a hard error | `false` |
-| `--dry-run` | Preview without writing | `false` |
-
-`santa rings init` — scaffold a ring configuration file (descriptions,
-priorities, Fleet labels). Edit it, then pass with `--rings-config`:
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `-o, --output <PATH>` | Output file path | `rings.yaml` |
-| `--num-rings <N>` | Number of rings (1-16) | `5` |
-
-```bash
-# Scaffold and customize the ring shape
-contour santa rings init --num-rings 5 -o rings.yaml
-$EDITOR rings.yaml   # tweak descriptions, fleet_labels, priorities
-
-# Use the file as the single source of truth
-contour santa rings generate rules.yaml --org com.acme --rings-config rings.yaml -o ./rings/
-
-# Or the shorthand when you don't need to customize:
-contour santa rings generate rules.yaml --org com.acme --num-rings 5 -o ./rings/
-```
-
-#### `santa fleet`
-
-Generate **Fleet GitOps-compatible** output — a directory of editions plus
-manifests, with Fleet labels used to scope each edition to its target hosts.
-
-```
-contour santa fleet <INPUTS>... [flags]
-```
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `<INPUTS>...` | Input rule files (YAML, JSON, CSV) | **required** |
-| `-o, --output-dir <DIR>` | Output directory for the Fleet GitOps structure | — |
-| `--org <DOMAIN>` | Organization identifier prefix | `com.example` |
-| `--prefix <PREFIX>` | Profile name prefix | `santa` |
-| `--team <TEAM>` | Fleet team name | `Workstations` |
-| `--num-rings <N>` | Number of rings (5 or 7 built-in; 1-16 custom) | `5` |
-| `--rings-config <PATH>` | Ring config file (from `rings init`); conflicts with `--num-rings` | — |
-| `--baseline <PATH>` | Curated baseline TOML applied to every edition; conflicts resolve deny-wins | — |
-| `--max-rules <N>` | Max rules per edition (splits into `santa1a-001`, `-002`, …) | unlimited |
-| `--strict` | Treat unknown ring names in rules as a hard error | `false` |
-| `--fragment` | Emit a Fleet GitOps fragment directory instead of the full structure | `false` |
-| `--dry-run` | Preview without writing | `false` |
-
-```bash
-contour santa fleet rules.yaml --org com.acme --team Workstations --rings-config rings.yaml -o ./gitops/
 ```
 
 ### Advanced Rule Tooling

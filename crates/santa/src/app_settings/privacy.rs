@@ -133,6 +133,7 @@ mod tests {
             sha256: None,
             cdhash: None,
             bundle_id: Some(bundle.into()),
+            cdhash_slices: Vec::new(),
         }
     }
 

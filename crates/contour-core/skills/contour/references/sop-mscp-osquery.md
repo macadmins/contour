@@ -80,6 +80,42 @@ var → `.contour/config.toml`). Without one it errors:
 results-plist path and the launchd label, so it can't default to
 `com.example`. In CI, set `CONTOUR_ORG` as a repository variable.
 
+### Config-driven runs
+
+`generate-all --config` and `generate --config` read no flags for this, so
+the config carries it:
+
+```toml
+[settings.osquery]
+enabled = true      # the config form of --osquery
+format  = "fleet"   # or "pack"
+audit   = "slim"    # or "full"
+```
+
+The org comes from `[settings.organization] domain`. A `--osquery` flag on a
+`generate --config` run wins over the section, including when the section
+says `enabled = false` — an operator adding the flag is asking for it once.
+
+Until this existed the two routes disagreed silently: `generate --config
+--osquery` accepted the flag and passed a hardcoded `None` to the generator,
+so the command succeeded and wrote nothing, and `generate-all --config` had
+no way to ask at all.
+
+### What stops it, and how you find out
+
+Three preconditions. Each one now refuses or reports; none of them is silent.
+
+| Condition | What happens |
+|---|---|
+| No resolvable org | **Error.** `--osquery requires an organization domain` |
+| Output is not the Fleet GitOps layout | **Error**, naming the layout in use. The Jamf (`flat`) and Munki (`nested`) trees have no `osquery/` directory |
+| Baseline is not macOS | **Warning**, naming the baseline and its platform. Not an error: one `--osquery` may cover a run with several baselines, and a non-macOS one among them is ordinary |
+| `--dry-run` | Classification and both adapters still run, so counts are real and bad input still fails. Only the writes are skipped, and the warning says what would have been written |
+
+All four used to be a single boolean conjunction guarding the emit block, so
+every one of them produced the same result: nothing written, nothing said,
+exit 0. `--org` was the exception and is now the pattern.
+
 ### Examples
 
 ```bash

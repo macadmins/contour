@@ -1,10 +1,12 @@
 # Friendly display-name schema for `contour profile classify`.
 #
-# Two scope-aware templates:
-#   system: "System - Certificate (Company Root)"   (Scope - Kind (detail))
-#   app:    "OneDrive (Settings)"                (AppName (aspect))
-# A profile is app-scope when all its payloads are app-config types AND an app
-# name is derivable; otherwise system-scope. The "(...)" is dropped when empty.
+# Two templates, three scope labels:
+#   system_format: "System - Certificate (Company Root)"   (Scope - Kind (detail))
+#   app_format:    "App - OneDrive (Settings)"             (Scope - AppName (aspect))
+# Scope is decided in this order: App when every payload that contributes a
+# kind is an `app_payload_types` entry AND an app name is derivable; User when
+# the envelope's PayloadScope is "User" (system_format with user_label); else
+# System. The "(...)" is dropped when empty.
 
 system_format: "{scope} - {kind} ({subject})"
 app_format: "{scope} - {subject} ({kind})"

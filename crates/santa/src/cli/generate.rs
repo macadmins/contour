@@ -441,6 +441,7 @@ fn run_generate_fragment(
         labels_include_any: None,
         labels_include_all: None,
         labels_exclude_any: None,
+        activation: None,
     };
 
     // Generate fleets/reference-fleet.yml
@@ -455,8 +456,8 @@ fn run_generate_fragment(
              \n\
              name: santa-reference\n\
              controls:\n\
-             \x20 macos_settings:\n\
-             \x20   custom_settings:\n",
+             \x20 apple_settings:\n\
+             \x20   configuration_profiles:\n",
         );
         let _ = writeln!(content, "      - path: {}", team_relative_path);
         std::fs::write(fleets_dir.join("reference-fleet.yml"), &content)?
@@ -481,6 +482,7 @@ fn run_generate_fragment(
                 reports: Vec::new(),
                 policies: Vec::new(),
                 software: Vec::new(),
+                assets: Vec::new(),
             },
             lib_files: LibFiles {
                 copy: vec![relative_path],

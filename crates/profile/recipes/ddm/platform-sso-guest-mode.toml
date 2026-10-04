@@ -1,0 +1,65 @@
+# Platform SSO — Authenticated Guest Mode.
+#
+# DDM bundle for `com.apple.configuration.extensible-sso`. A cloud user
+# with no local account signs in at the login window; the Platform SSO
+# directory node returns a stub user, the IdP authenticates them, and
+# they land in a temporary session. On logout the home folder is wiped.
+#
+# UseSharedDeviceKeys is required by Apple for EnableAtLogin: without it
+# the login window has no key to authenticate an account that does not
+# exist yet. AuthenticationMethod must be Password or SmartCard.
+#
+# TemporarySessionQuickLogin = true switches to the quicker variant for
+# shared Macs with many short sessions: only select locations are erased
+# per session, and the full home folder once every eight hours.
+#
+# Compose with:
+#   contour profile ddm compose --preset platform-sso-guest-mode \
+#       --org com.acme -o ./declarations/platform-sso-guest-mode
+#
+# Output: configuration.json (the declaration) + activation.json.
+# The activation has no predicate — scope it via your MDM's group/team
+# assignment. macOS only: the Platform SSO policies have no meaning on iOS.
+#
+# EDIT BEFORE COMPOSING: `ExtensionComposedIdentifier` and `URLs` are your
+# identity provider's, and nothing else will do. Common SSO extensions:
+#   Microsoft Company Portal  com.microsoft.CompanyPortalMac.ssoextension (UBF8T346G9)
+#   Okta Verify               com.okta.mobile.auth-service-extension (B7F62B65BN)
+# Confirm the composed identifier against your IdP's current documentation.
+#
+# Every "Only use when …" and "Required when …" sentence Apple attaches to
+# these keys is enforced by contour's cross-key rules at compose time.
+#
+# Schema source: Apple device-management
+# (declarations/configurations/extensible-sso.yaml). Verified against
+# contour's embedded schema:
+# `contour profile ddm info com.apple.configuration.extensible-sso --full`.
+
+intent_name = "platform-sso-guest-mode"
+platforms = ["macOS"]
+
+[configuration]
+type = "com.apple.configuration.extensible-sso"
+
+  [configuration.payload]
+  ExtensionComposedIdentifier = "com.example.sso.extension (ABCDE12345)"
+  Type = "Redirect"
+  URLs = ["https://login.example.com/"]
+
+  [configuration.payload.PlatformSSO]
+  AuthenticationMethod = "Password"
+  UseSharedDeviceKeys = true
+
+  [configuration.payload.PlatformSSO.UserCreation]
+  EnableAtLogin = true
+  NewUserAuthorizationMode = "Temporary"
+  TemporarySessionQuickLogin = false
+
+  [configuration.payload.PlatformSSO.Policies]
+  Login     = ["RequireAuthentication"]
+  Unlock    = ["RequireAuthentication"]
+  FileVault = ["RequireAuthentication"]
+
+[activation]
+# Simple activation, no predicate. Target by Fleet team / MDM group.
+type = "com.apple.activation.simple"

@@ -2,9 +2,9 @@
 //!
 //! These are semantic constraints Apple states in prose (not expressible as
 //! plain schema presence), plus enum/format checks. Structural validation of
-//! the assembled declaration against the embedded **beta** schema is the job of
-//! `contour profile ddm validate --beta`; this module enforces the rules that
-//! schema validation can't:
+//! the assembled declaration is the job of `contour profile ddm validate`,
+//! which also calls [`validate_binary`] on each binary entry. This module holds
+//! the rules that live in the schema's notes rather than its structure:
 //!
 //! - `AllowedBinaries` ⇒ `CDHash` or `TeamID` present.
 //! - `DeniedBinaries` ⇒ `CDHash`, `TeamID`, or `SigningID` present.
@@ -22,17 +22,15 @@ pub struct Violation {
 }
 
 /// The Apple sentinel TeamID for Apple binaries with an empty team identifier.
-const APPLE_TEAM_SENTINEL: &str = "*APPLE*";
+pub const APPLE_TEAM_ID: &str = "*APPLE*";
 
 /// Validate one binary identifier for the list its policy routes it to.
 pub fn validate_binary(bi: &BinaryIdentifier, policy: BinaryPolicy) -> Result<(), String> {
-    if bi.is_empty() {
-        return Err(
-            "no identifying field set (need CDHash, TeamID, SigningID, or PathPrefix)".into(),
-        );
-    }
-
-    // Per-list required-identifier rules from the schema notes.
+    // Per-list required-identifier rules from the schema notes. These also
+    // catch an entry with nothing identifying in it — only `SigningState`,
+    // or nothing at all — and say what THIS list needs. A generic "need
+    // CDHash, TeamID, SigningID, or PathPrefix" read as if SigningID or
+    // PathPrefix alone could make an allow entry valid; they cannot.
     match policy {
         BinaryPolicy::Allow => {
             if bi.cdhash.is_none() && bi.team_id.is_none() {
@@ -48,7 +46,7 @@ pub fn validate_binary(bi: &BinaryIdentifier, policy: BinaryPolicy) -> Result<()
 
     // Format checks for whichever fields are present.
     if let Some(team) = &bi.team_id {
-        if team != APPLE_TEAM_SENTINEL && !crate::cel::is_valid_team_id(team) {
+        if team != APPLE_TEAM_ID && !crate::cel::is_valid_team_id(team) {
             return Err(format!(
                 "invalid TeamID '{team}' (expect 10 alphanumerics or *APPLE*)"
             ));
@@ -180,7 +178,15 @@ mod tests {
             signing_state: Some(SigningState::DeveloperId),
             ..Default::default()
         };
-        assert!(validate_binary(&only_state, BinaryPolicy::Deny).is_err());
+        // Each list names only what satisfies it.
+        assert_eq!(
+            validate_binary(&only_state, BinaryPolicy::Allow).unwrap_err(),
+            "AllowedBinaries requires CDHash or TeamID"
+        );
+        assert_eq!(
+            validate_binary(&only_state, BinaryPolicy::Deny).unwrap_err(),
+            "DeniedBinaries requires CDHash, TeamID, or SigningID"
+        );
     }
 
     #[test]

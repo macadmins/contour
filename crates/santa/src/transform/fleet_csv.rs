@@ -119,7 +119,7 @@ fn extract_rule(
         // Bundle identifiers like com.apple.Safari can be used with platform: prefix
         if bundle_id.contains('.') && !seen.contains_key(bundle_id) {
             seen.insert(bundle_id.to_string(), true);
-            // Note: We create a TeamID rule placeholder - user should verify with codesign
+            // Note: We create a `platform:<bundle_id>` SigningID placeholder - user should verify with codesign
             return Some(
                 Rule::new(
                     RuleType::SigningId,

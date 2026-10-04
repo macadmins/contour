@@ -1,7 +1,6 @@
 use crate::cli::rings_output::{
     EditionInfo, RingsOutput, apply_baseline_merge, collect_unknown_ring_warnings,
 };
-use crate::fleet::{FleetOutputConfig, generate_fleet_output};
 use crate::models::{ProfileNaming, resolve_ring_config};
 use crate::output::{
     CommandResult, OutputMode, print_info, print_json, print_kv, print_success, print_warning,
@@ -30,126 +29,27 @@ pub fn run(
     mode: OutputMode,
     fragment: bool,
 ) -> Result<()> {
-    if fragment {
-        return run_fragment(
-            inputs,
-            output_dir,
-            org,
-            prefix,
-            team_name,
-            num_rings,
-            rings_config_path,
-            baseline_path,
-            max_rules,
-            strict,
-            dry_run,
-            mode,
-        );
-    }
-
-    let input_rules = parse_files(inputs)?;
-    let (rules, baseline_warnings) = apply_baseline_merge(input_rules, baseline_path)?;
-    let ring_config = resolve_ring_config(num_rings, rings_config_path)?;
-
-    let ring_warnings = collect_unknown_ring_warnings(&rules, &ring_config);
-    if strict && !ring_warnings.is_empty() {
-        for w in &ring_warnings {
-            print_warning(w);
-        }
-        anyhow::bail!(
-            "{} rule(s) reference unknown ring names; refusing to continue under --strict",
-            ring_warnings.len()
-        );
-    }
-    let mut warnings = baseline_warnings;
-    warnings.extend(ring_warnings);
-    if mode == OutputMode::Human {
-        for w in &warnings {
-            print_warning(w);
-        }
-    }
-
-    let output_dir = output_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("fleet-gitops"));
-
-    let layout = FleetLayout::default();
-    let config = FleetOutputConfig {
-        org: org.to_string(),
-        prefix: prefix.to_string(),
-        fleet_name: team_name.to_string(),
-        ring_config: ring_config.clone(),
-        profiles_base_path: format!("{}/profiles", layout.platforms_dir),
-        deterministic_uuids: true,
+    // One path: the fragment emitter — real team YAML, a real `default.yml`
+    // (the file `fleetctl gitops` reads as the global config, whose root is
+    // closed), and label files that define every label the profiles
+    // reference. `--fragment` is kept so existing invocations still work; it
+    // changes only the default output directory and what the result reports
+    // as its mode.
+    run_fragment(
+        inputs,
+        output_dir,
+        org,
+        prefix,
+        team_name,
+        num_rings,
+        rings_config_path,
+        baseline_path,
         max_rules,
-    };
-
-    if mode == OutputMode::Human {
-        print_info(&format!(
-            "Generating Fleet GitOps editions for {} rules",
-            rules.len()
-        ));
-        print_kv("Organization", org);
-        print_kv("Team", team_name);
-        print_kv("Rings", &ring_config.rings.len().to_string());
-    }
-
-    if dry_run {
-        if mode == OutputMode::Human {
-            print_info("Dry run - no files will be written");
-            print_kv("Output directory", &output_dir.display().to_string());
-        } else {
-            let payload = RingsOutput {
-                rings_count: ring_config.rings.len(),
-                editions: Vec::new(),
-                manifest_path: None,
-                fragment: false,
-                dry_run: true,
-            };
-            print_json(&CommandResult::success(payload).with_warnings(warnings))?;
-        }
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(&output_dir)?;
-
-    let result = generate_fleet_output(&rules, &config, &output_dir)?;
-
-    let editions = result
-        .editions
-        .iter()
-        .map(|e| EditionInfo {
-            ring: e.ring.clone(),
-            category: e.category.clone(),
-            filename: e.filename.clone(),
-            rules_count: e.rules_count,
-            part: e.part,
-            fleet_labels: e.fleet_labels.clone(),
-        })
-        .collect::<Vec<_>>();
-
-    if mode == OutputMode::Human {
-        print_success(&format!(
-            "Generated {} editions in {}",
-            editions.len(),
-            output_dir.display()
-        ));
-        print_kv("Manifest", &result.manifest_path);
-        for edition in &editions {
-            print_kv("  Edition", &edition.filename);
-        }
-    } else {
-        let payload = RingsOutput {
-            rings_count: ring_config.rings.len(),
-            editions,
-            manifest_path: Some(PathBuf::from(&result.manifest_path)),
-            fragment: false,
-            dry_run: false,
-        };
-        print_json(&CommandResult::success(payload).with_warnings(warnings))?;
-    }
-
-    Ok(())
+        strict,
+        dry_run,
+        mode,
+        fragment,
+    )
 }
 
 /// Generate a Fleet fragment directory.
@@ -157,7 +57,7 @@ pub fn run(
 /// Produces:
 /// - `lib/macos/configuration-profiles/` with mobileconfig files
 /// - `lib/all/labels/` with ring label YAML files
-/// - `default.yml` with labels section only
+/// - `default.yml` with a labels section plus empty `reports:`/`policies:` keys
 /// - `fleets/reference-fleet.yml` with profile entries using `../lib/` paths
 /// - `fragment.toml` manifest for merge
 #[expect(
@@ -177,6 +77,10 @@ fn run_fragment(
     strict: bool,
     dry_run: bool,
     mode: OutputMode,
+    // Whether `--fragment` was passed. The output is the same either way;
+    // this keeps the default directory and the reported mode what each
+    // spelling has always said, so a script keyed on either is not surprised.
+    requested_fragment: bool,
 ) -> Result<()> {
     use crate::fleet::ring_to_fleet_labels;
     use crate::generator::{GeneratorOptions, generate};
@@ -204,9 +108,13 @@ fn run_fragment(
         }
     }
 
-    let output_dir = output_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("fleet-fragment"));
+    let output_dir = output_dir.map(Path::to_path_buf).unwrap_or_else(|| {
+        PathBuf::from(if requested_fragment {
+            "fleet-fragment"
+        } else {
+            "fleet-gitops"
+        })
+    });
 
     if mode == OutputMode::Human {
         print_info(&format!(
@@ -216,7 +124,14 @@ fn run_fragment(
         print_kv("Organization", org);
         print_kv("Team", team_name);
         print_kv("Rings", &ring_config.rings.len().to_string());
-        print_kv("Mode", "fragment");
+        print_kv(
+            "Mode",
+            if requested_fragment {
+                "fragment"
+            } else {
+                "gitops"
+            },
+        );
     }
 
     if dry_run {
@@ -228,7 +143,7 @@ fn run_fragment(
                 rings_count: ring_config.rings.len(),
                 editions: Vec::new(),
                 manifest_path: None,
-                fragment: true,
+                fragment: requested_fragment,
                 dry_run: true,
             };
             print_json(&CommandResult::success(payload).with_warnings(warnings))?;
@@ -323,6 +238,7 @@ fn run_fragment(
                     },
                     labels_include_all: None,
                     labels_exclude_any: None,
+                    activation: None,
                 });
 
                 editions.push(EditionInfo {
@@ -386,8 +302,8 @@ fn run_fragment(
          \n\
          name: {team_slug}\n\
          controls:\n\
-         \x20 macos_settings:\n\
-         \x20   custom_settings:\n"
+         \x20 apple_settings:\n\
+         \x20   configuration_profiles:\n"
     );
     for entry in &profile_entries {
         fleet_yml.push_str(&format!("      - path: {}\n", entry.path));
@@ -418,6 +334,7 @@ fn run_fragment(
             reports: Vec::new(),
             policies: Vec::new(),
             software: Vec::new(),
+            assets: Vec::new(),
         },
         lib_files: contour_core::fragment::LibFiles {
             copy: lib_files.clone(),
@@ -440,7 +357,7 @@ fn run_fragment(
             rings_count: ring_config.rings.len(),
             editions,
             manifest_path: Some(fragment_toml_path),
-            fragment: true,
+            fragment: requested_fragment,
             dry_run: false,
         };
         print_json(&CommandResult::success(payload).with_warnings(warnings))?;

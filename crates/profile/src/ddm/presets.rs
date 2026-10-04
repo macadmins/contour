@@ -44,6 +44,11 @@ pub const EMBEDDED: &[(&str, &str, &str)] = &[
         include_str!("../../recipes/ddm/disable-apple-intelligence-macos.toml"),
     ),
     (
+        "diskmanagement-settings",
+        "Mount external and network volumes read-only (diskmanagement.settings)",
+        include_str!("../../recipes/ddm/diskmanagement-settings.toml"),
+    ),
+    (
         "external-intelligence-settings",
         "Disable or scope third-party external intelligence integrations (external-intelligence.settings)",
         include_str!("../../recipes/ddm/external-intelligence-settings.toml"),
@@ -59,9 +64,49 @@ pub const EMBEDDED: &[(&str, &str, &str)] = &[
         include_str!("../../recipes/ddm/managed-migration-assistant.toml"),
     ),
     (
+        "passcode-settings",
+        "Baseline passcode policy — required, 8+ chars, inactivity lock (passcode.settings)",
+        include_str!("../../recipes/ddm/passcode-settings.toml"),
+    ),
+    (
+        "platform-sso-baseline",
+        "Platform SSO — IdP login required at login/unlock/FileVault with offline and registration grace periods; EDIT the IdP extension first (extensible-sso)",
+        include_str!("../../recipes/ddm/platform-sso-baseline.toml"),
+    ),
+    (
+        "platform-sso-guest-mode",
+        "Platform SSO Authenticated Guest Mode — cloud users sign in without a local account into a temporary session; EDIT the IdP extension first (extensible-sso)",
+        include_str!("../../recipes/ddm/platform-sso-guest-mode.toml"),
+    ),
+    (
+        "platform-sso-tap-to-login",
+        "Platform SSO Tap to Login — NFC badge or phone opens an Authenticated Guest Mode session; EDIT the IdP extension, reader group and asset identifiers first (extensible-sso)",
+        include_str!("../../recipes/ddm/platform-sso-tap-to-login.toml"),
+    ),
+    (
+        "platform-sso-touchid",
+        "Platform SSO — Touch ID required at every login and unlock, password always required; EDIT the IdP extension first (extensible-sso)",
+        include_str!("../../recipes/ddm/platform-sso-touchid.toml"),
+    ),
+    (
+        "safari-settings",
+        "Hardened Safari — fraud warning locked on, no private browsing, pop-ups blocked (safari.settings)",
+        include_str!("../../recipes/ddm/safari-settings.toml"),
+    ),
+    (
         "siri-settings",
         "Managed Siri settings — restrict or disable Siri (siri.settings)",
         include_str!("../../recipes/ddm/siri-settings.toml"),
+    ),
+    (
+        "softwareupdate-enforcement",
+        "Enforce a specific OS version by a deadline — EDIT the version and date first (softwareupdate.enforcement.specific)",
+        include_str!("../../recipes/ddm/softwareupdate-enforcement.toml"),
+    ),
+    (
+        "softwareupdate-settings",
+        "Security updates forced on, beta enrolment blocked, OS updates operator-driven (softwareupdate.settings)",
+        include_str!("../../recipes/ddm/softwareupdate-settings.toml"),
     ),
 ];
 
@@ -249,6 +294,47 @@ mod tests {
         }
     }
 
+    /// Every shipped preset composes into declarations the schema accepts
+    /// in full — no errors and no unknown fields. A key at the wrong path
+    /// (`Mail` at the payload root, where Apple nests it under `Apps`) is
+    /// ignored on the device.
+    #[test]
+    fn embedded_presets_compose_schema_clean() {
+        let registry = crate::schema::SchemaRegistry::embedded().expect("registry");
+        for (name, _desc, body) in EMBEDDED {
+            let bundle: crate::ddm::compose::Bundle = toml::from_str(body).unwrap();
+            let composed = crate::ddm::compose::compose(
+                &bundle,
+                "com.acme",
+                &registry,
+                &crate::ddm::compose::ComposeOptions::default(),
+            )
+            .unwrap_or_else(|e| panic!("preset '{name}' does not compose: {e}"));
+            let mut decls = vec![&composed.configuration];
+            decls.extend(composed.asset.as_ref());
+            decls.extend(composed.activation.as_ref());
+            let targets = crate::cli::ddm::parse_platforms(&bundle.platforms)
+                .unwrap_or_else(|e| panic!("preset '{name}': {e}"));
+            for d in decls {
+                let (errors, warnings) = crate::cli::ddm::declaration_errors(d, &registry);
+                let mut unknown: Vec<String> = warnings
+                    .into_iter()
+                    .filter(|w| w.starts_with("Unknown field"))
+                    .collect();
+                // A preset that names its platforms may set no key Apple
+                // does not offer on them.
+                for p in &targets {
+                    unknown.extend(crate::cli::ddm::platform_findings(d, &registry, *p));
+                }
+                assert!(
+                    errors.is_empty() && unknown.is_empty(),
+                    "preset '{name}' {}: {errors:?} {unknown:?}",
+                    d.declaration_type
+                );
+            }
+        }
+    }
+
     #[test]
     fn load_returns_embedded_when_no_external() {
         assert!(load("disable-apple-intelligence-macos", None).is_some());
@@ -265,10 +351,19 @@ mod tests {
             vec![
                 "disable-apple-intelligence-ios",
                 "disable-apple-intelligence-macos",
+                "diskmanagement-settings",
                 "external-intelligence-settings",
                 "keyboard-settings",
                 "managed-migration-assistant",
-                "siri-settings"
+                "passcode-settings",
+                "platform-sso-baseline",
+                "platform-sso-guest-mode",
+                "platform-sso-tap-to-login",
+                "platform-sso-touchid",
+                "safari-settings",
+                "siri-settings",
+                "softwareupdate-enforcement",
+                "softwareupdate-settings"
             ]
         );
         for p in &presets {

@@ -126,7 +126,8 @@ pub struct FleetConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reports: Option<Vec<yaml_serde::Value>>,
 
-    /// Required by Fleet `GitOps` - path reference or inline config
+    /// Agent options — retained for reading existing repos; contour no longer
+    /// emits it (every constructor sets `None`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_options: Option<yaml_serde::Value>,
 
@@ -154,10 +155,20 @@ pub struct Software {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Controls {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Fleet's `apple_settings`: macOS, iOS and iPadOS profiles alike. Written
+    /// under the current name; the deprecated `macos_settings` is read too.
+    /// See `contour_core::fleet_keys`.
+    #[serde(
+        rename = "apple_settings",
+        alias = "macos_settings",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub macos_settings: Option<PlatformSettings>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Read, never written. Fleet has no `ios_settings` — its schema closes
+    /// `controls` and takes iOS profiles in `apple_settings` — but contour once
+    /// wrote one for iOS baselines, so files it made may still carry it.
+    #[serde(default, skip_serializing)]
     pub ios_settings: Option<PlatformSettings>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -166,7 +177,12 @@ pub struct Controls {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlatformSettings {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Fleet's `configuration_profiles`; the deprecated `custom_settings` is read too.
+    #[serde(
+        rename = "configuration_profiles",
+        alias = "custom_settings",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub custom_settings: Option<Vec<CustomSetting>>,
 }
 
@@ -196,7 +212,7 @@ pub struct CustomSetting {
     pub labels_exclude_any: Option<Vec<String>>,
 }
 
-/// Script reference - Fleet `GitOps` only supports path (`BaseItem` struct).
+/// Script reference - a single `path` or a `paths` glob (exactly one; see `validate`).
 /// NOTE: Fleet does NOT support label targeting for scripts (only for profiles),
 /// so label conflicts with `paths` cannot arise here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,8 +228,9 @@ pub struct Script {
 
 /// Policy entry — either a `path:` reference, a `paths:` glob, or an inline value.
 ///
-/// Fleet GitOps supports all three shapes; the generator picks between them
-/// based on the baseline's `gitops_glob.policies` configuration.
+/// Fleet GitOps supports all three shapes. Currently only used by this module's
+/// tests; the generator does not emit `PolicyEntry` and nothing reads
+/// `gitops_glob.policies`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PolicyEntry {
@@ -276,6 +293,30 @@ impl CustomSetting {
                  Fleet GitOps does not allow labels on glob entries"
             );
         }
+        // Fleet takes at most ONE label field per entry. `--sop fleet-migrate`
+        // has said so in prose since it was written; nothing checked it, and
+        // `mscp generate --interactive` prompts for all three in a row and
+        // stores whatever is typed. Two of them reaching one entry produces a
+        // GitOps file Fleet rejects, at apply time, far from here.
+        let set: Vec<&str> = [
+            ("labels_include_all", self.labels_include_all.is_some()),
+            ("labels_include_any", self.labels_include_any.is_some()),
+            ("labels_exclude_any", self.labels_exclude_any.is_some()),
+        ]
+        .into_iter()
+        .filter(|(_, present)| *present)
+        .map(|(name, _)| name)
+        .collect();
+        if set.len() > 1 {
+            anyhow::bail!(
+                "configuration_profiles entry for {} sets {} — Fleet allows only one \
+                 label field per entry. Pick the one that expresses the targeting: \
+                 labels_include_all narrows (every label must match), \
+                 labels_include_any widens, labels_exclude_any subtracts.",
+                self.path.as_deref().unwrap_or("<no path>"),
+                set.join(" and ")
+            );
+        }
         Ok(())
     }
 }
@@ -307,6 +348,53 @@ pub struct FleetGitOpsOutput {
 
 #[cfg(test)]
 mod tests {
+
+    /// Files contour made under every earlier spelling still read; what is
+    /// written is the current one. Both spellings in one file fail to parse —
+    /// Fleet rejects that file too.
+    #[test]
+    fn controls_read_every_spelling_and_write_the_current_one() {
+        for text in [
+            "apple_settings:\n  configuration_profiles:\n    - path: a.mobileconfig\n",
+            "macos_settings:\n  custom_settings:\n    - path: a.mobileconfig\n",
+            "apple_settings:\n  custom_settings:\n    - path: a.mobileconfig\n",
+        ] {
+            let c: Controls = yaml_serde::from_str(text).unwrap();
+            let list = c
+                .macos_settings
+                .as_ref()
+                .and_then(|m| m.custom_settings.as_ref())
+                .unwrap();
+            assert_eq!(list.len(), 1, "{text}");
+            let out = yaml_serde::to_string(&c).unwrap();
+            assert!(
+                out.contains("apple_settings:") && out.contains("configuration_profiles:"),
+                "{out}"
+            );
+            assert!(
+                !out.contains("macos_settings") && !out.contains("custom_settings"),
+                "{out}"
+            );
+        }
+        let legacy: Controls =
+            yaml_serde::from_str("ios_settings:\n  custom_settings:\n    - path: a.mobileconfig\n")
+                .unwrap();
+        assert!(
+            legacy.ios_settings.is_some(),
+            "contour's former iOS output still reads"
+        );
+        assert!(
+            !yaml_serde::to_string(&legacy)
+                .unwrap()
+                .contains("ios_settings"),
+            "and is never written"
+        );
+        assert!(
+            yaml_serde::from_str::<Controls>("apple_settings: {}\nmacos_settings: {}\n").is_err(),
+            "both spellings at once is the file Fleet rejects"
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -393,5 +481,66 @@ mod tests {
         }
         .validate()
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod label_field_tests {
+    use super::*;
+
+    fn setting(all: Option<&[&str]>, any: Option<&[&str]>, excl: Option<&[&str]>) -> CustomSetting {
+        let v = |o: Option<&[&str]>| o.map(|s| s.iter().map(|x| x.to_string()).collect());
+        CustomSetting {
+            path: Some("../profiles/cis_lvl1/com.apple.dock.mobileconfig".into()),
+            paths: None,
+            labels_include_all: v(all),
+            labels_include_any: v(any),
+            labels_exclude_any: v(excl),
+        }
+    }
+
+    /// Fleet takes at most one label field per entry.
+    ///
+    /// `--sop fleet-migrate` has said so in prose since it was written and
+    /// nothing checked it, while `mscp generate --interactive` prompts for all
+    /// three in a row and stores whatever is typed. Two of them on one entry
+    /// produces a GitOps file Fleet rejects at apply time — far from here,
+    /// and long after the generate that caused it.
+    #[test]
+    fn only_one_label_field_is_allowed_per_entry() {
+        setting(Some(&["a"]), None, None)
+            .validate()
+            .expect("one is fine");
+        setting(None, Some(&["a"]), None)
+            .validate()
+            .expect("one is fine");
+        setting(None, None, Some(&["a"]))
+            .validate()
+            .expect("one is fine");
+        setting(None, None, None).validate().expect("none is fine");
+
+        for bad in [
+            setting(Some(&["a"]), Some(&["b"]), None),
+            setting(Some(&["a"]), None, Some(&["b"])),
+            setting(None, Some(&["a"]), Some(&["b"])),
+            setting(Some(&["a"]), Some(&["b"]), Some(&["c"])),
+        ] {
+            let err = bad
+                .validate()
+                .expect_err("two label fields must be refused");
+            let msg = err.to_string();
+            assert!(msg.contains("only one label field"), "{msg}");
+            // The message has to say which ones, or the operator is left
+            // diffing a generated file against a rule they cannot see.
+            assert!(msg.contains("labels_"), "{msg}");
+        }
+    }
+
+    /// Many labels in one field is the normal case, not a violation.
+    #[test]
+    fn several_labels_in_one_field_are_fine() {
+        setting(Some(&["mscp-cis_lvl1", "pilot-ring-1"]), None, None)
+            .validate()
+            .expect("include_all with two labels is how narrowing works");
     }
 }

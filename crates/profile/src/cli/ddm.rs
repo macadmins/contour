@@ -58,6 +58,32 @@ fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
     load_registry_opts(schema_path, false)
 }
 
+/// Tell a person at a terminal, once per run, that `--beta` changes nothing.
+///
+/// While no OS seed is open the beta channel is retired and serves the
+/// released schema byte for byte ([`mdm_schema::beta_is_retired`]). Nothing
+/// said so, and help text and SOPs kept pointing people at `--beta` for keys
+/// that had long since shipped.
+///
+/// Silent unless stderr is a terminal: Wedge and CI run `--json` and read
+/// stderr for the error envelope, which an advisory line would corrupt. And it
+/// goes quiet by itself the day the accessors are re-pointed at a new seed.
+pub(crate) fn note_if_beta_is_retired() {
+    use std::io::IsTerminal;
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    if !mdm_schema::beta_is_retired() || !std::io::stderr().is_terminal() {
+        return;
+    }
+    ONCE.call_once(|| {
+        eprintln!(
+            "{} --beta changes nothing right now: no OS seed is open, so the beta \
+             channel serves the released schema. It will matter again when Apple \
+             opens the next seed.",
+            "Note:".yellow().bold()
+        );
+    });
+}
+
 /// Load the schema registry, optionally from the beta seed dataset.
 ///
 /// An explicit `schema_path` always wins (external dir); `beta` only selects
@@ -65,7 +91,10 @@ fn load_registry(schema_path: Option<&str>) -> Result<SchemaRegistry> {
 pub(crate) fn load_registry_opts(schema_path: Option<&str>, beta: bool) -> Result<SchemaRegistry> {
     match schema_path {
         Some(p) => SchemaRegistry::from_auto_detect(Path::new(p)),
-        None if beta => SchemaRegistry::embedded_beta(),
+        None if beta => {
+            note_if_beta_is_retired();
+            SchemaRegistry::embedded_beta()
+        }
         None => SchemaRegistry::embedded(),
     }
 }
@@ -250,62 +279,233 @@ struct DdmValidationResult {
     warnings: Vec<String>,
 }
 
-/// Resolve the ancestor path for a nested field by walking `parent_key` links.
+/// The ancestor chain of a nested field, as [`walk_payload_paths`] wants it.
 ///
-/// Returns the chain from root to immediate parent, e.g. for `AddSquareRoot`
-/// (parent=`BasicMode`, whose parent=`Calculator`) returns `["Calculator", "BasicMode"]`.
-fn resolve_ancestor_path(
-    field_name: &str,
-    manifest: &crate::schema::types::PayloadManifest,
-) -> Vec<String> {
-    let mut path = Vec::new();
-    let mut current = field_name.to_string();
-
-    for _ in 0..32 {
-        let parent = manifest
-            .fields
-            .get(&current)
-            .and_then(|f| f.parent_key.as_ref());
-        match parent {
-            Some(p) => {
-                path.push(p.clone());
-                current = p.clone();
-            }
-            None => break,
-        }
-    }
-
-    path.reverse();
-    path
+/// A manifest keys `fields` by full dotted path and stores each field's
+/// `parent_key` as a full dotted path too (`PlatformSSO.Policies`), so the
+/// chain is that one entry; the walker splits it on dots. Looking the field
+/// up by its leaf name instead found nothing, and every nested required-field
+/// and allowed-value check silently passed — a misspelt
+/// `PlatformSSO.AuthenticationMethod` value validated.
+fn ancestors_of(field: &crate::schema::types::FieldDefinition) -> Vec<String> {
+    field.parent_key.iter().cloned().collect()
 }
 
-/// Walk into a payload along the given key path.
+/// Every concrete object matching `path`, expanding `ANY` segments.
 ///
-/// The root is a `HashMap` (DeclarationPayload), but nested levels are
-/// `serde_json::Map` inside `Value::Object`. Returns the innermost object
-/// if every key in the path resolves, or `None` if any key is absent or
-/// not an object.
-fn walk_payload_path<'a>(
+/// Apple models a free-form dictionary as a field literally named `ANY`:
+/// `Privacy.PermissionDefaults.ANY.Camera` means "every key under
+/// PermissionDefaults has a Camera". [`walk_payload_path`] resolves a path
+/// literally, so it looks for a key named `ANY`, finds nothing, and every
+/// check below it silently passes. That is how a
+/// `com.apple.configuration.app.settings` declaration could omit
+/// `OrganizationJustification` — which this schema marks required — and
+/// still validate.
+///
+/// Returns `(label, object)` pairs where `label` is the concrete path, so an
+/// error names the app it came from rather than the word `ANY`.
+fn walk_payload_paths<'a>(
     root: &'a std::collections::HashMap<String, serde_json::Value>,
     path: &[String],
-) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
-    let (first, rest) = path.split_first()?;
-    let serde_json::Value::Object(obj) = root.get(first)? else {
-        return None;
+) -> Vec<(String, &'a serde_json::Map<String, serde_json::Value>)> {
+    // `parent_key` in a manifest is a full dotted path
+    // ("Privacy.PermissionDefaults.ANY"), so a caller's segment may itself
+    // contain dots. Flatten before walking, or the first lookup searches for
+    // a key literally named "Privacy.PermissionDefaults.ANY".
+    // As segments, so an escaped `\.` inside a key name stays inside it.
+    let flat: Vec<String> = path
+        .iter()
+        .flat_map(|seg| crate::schema::FieldPath::parse(seg).segments().to_vec())
+        .collect();
+    let Some((first, rest)) = flat.split_first() else {
+        return Vec::new();
     };
-    let mut current = obj;
+    let Some(serde_json::Value::Object(obj)) = root.get(first) else {
+        return Vec::new();
+    };
+
+    let mut current: Vec<(String, &serde_json::Map<String, serde_json::Value>)> =
+        vec![(first.clone(), obj)];
+
     for key in rest {
-        match current.get(key) {
-            Some(serde_json::Value::Object(nested)) => current = nested,
-            _ => return None,
+        let mut next = Vec::new();
+        for (label, obj) in current {
+            if key == "ANY" {
+                // Every key at this level is an instance of the ANY node.
+                for (concrete, value) in obj {
+                    if let serde_json::Value::Object(nested) = value {
+                        next.push((format!("{label}.{concrete}"), nested));
+                    }
+                }
+            } else if let Some(serde_json::Value::Object(nested)) = obj.get(key) {
+                next.push((format!("{label}.{key}"), nested));
+            }
+        }
+        current = next;
+        if current.is_empty() {
+            break;
         }
     }
-    Some(current)
+    current
 }
 
-/// Schema-validation errors + warnings for an in-memory declaration. Reused by
-/// the `validate` command and as the fail-closed gate before `generate`/`compose`
-/// write a declaration.
+/// Findings inside array elements, which [`walk_payload_paths`] cannot reach.
+///
+/// The walker follows objects only, so everything inside an array was
+/// invisible to validation: the element's shape, unknown keys, enum values.
+///
+/// Apple describes an array's element as its single child field — the
+/// element descriptor. `AllowedBinaries` → `BinaryIdentifier` (a dictionary),
+/// `AllowedApps` → `AppIdentifier` (a string). That child names the element's
+/// *type*; it is never a key. Nesting under it — `[{"BinaryIdentifier": {…}}]`
+/// or `[{"AppIdentifier": "…"}]` — is the natural misreading of the schema,
+/// and it produces a declaration that validates, deploys, and matches nothing.
+///
+/// This is also why the descriptor can't simply be walked through: the
+/// required-field check would then look for a *key* named `BinaryIdentifier`
+/// in every correct element and fail it.
+fn array_element_findings(
+    payload: &std::collections::HashMap<String, serde_json::Value>,
+    manifest: &crate::schema::PayloadManifest,
+) -> (Vec<String>, Vec<String>) {
+    use crate::schema::{FieldDefinition, FieldType};
+
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    let path_of = |f: &FieldDefinition| match &f.parent_key {
+        Some(parent) => format!("{parent}.{}", f.name),
+        None => f.name.clone(),
+    };
+    // Children of `path`, in schema order.
+    let children_of = |path: &str| -> Vec<&FieldDefinition> {
+        manifest
+            .field_order
+            .iter()
+            .filter_map(|name| manifest.fields.get(name))
+            .filter(|f| f.parent_key.as_deref() == Some(path))
+            .collect()
+    };
+
+    for array in manifest
+        .fields
+        .values()
+        .filter(|f| f.field_type == FieldType::Array)
+    {
+        let array_path = path_of(array);
+        // Exactly one child is Apple's shape. None means the schema lost the
+        // row — the loader's leaf-name dedup, or an unexpanded YAML alias —
+        // and without it there is nothing to judge the element by.
+        let [element] = children_of(&array_path)[..] else {
+            continue;
+        };
+        let element_path = format!("{array_path}.{}", element.name);
+        let fields = children_of(&element_path);
+
+        // Every place the array occurs in the payload.
+        let arrays: Vec<(String, &Vec<serde_json::Value>)> = match &array.parent_key {
+            None => payload
+                .get(&array.name)
+                .and_then(serde_json::Value::as_array)
+                .map(|items| vec![(array.name.clone(), items)])
+                .unwrap_or_default(),
+            Some(parent) => walk_payload_paths(payload, std::slice::from_ref(parent))
+                .into_iter()
+                .filter_map(|(label, obj)| {
+                    obj.get(&array.name)
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| (format!("{label}.{}", array.name), items))
+                })
+                .collect(),
+        };
+
+        for (label, items) in arrays {
+            for (i, item) in items.iter().enumerate() {
+                let at = format!("{label}[{i}]");
+                match (&element.field_type, item) {
+                    (FieldType::Dictionary, serde_json::Value::Object(obj)) => {
+                        if obj.contains_key(&element.name) {
+                            let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+                            let first = names.first().copied().unwrap_or("…");
+                            errors.push(format!(
+                                "{at} nests its fields under \"{name}\". {name} is Apple's name \
+                                 for the array element, not a key: put {} directly in the \
+                                 element — {{\"{first}\": …}}, not {{\"{name}\": {{…}}}}. As \
+                                 written it matches nothing.",
+                                names.join(", "),
+                                name = element.name,
+                            ));
+                            continue;
+                        }
+                        for (key, value) in obj {
+                            match fields.iter().find(|f| &f.name == key) {
+                                Some(field) if !field.allowed_values.is_empty() => {
+                                    if let Some(text) = value.as_str()
+                                        && !field.allowed_values.iter().any(|v| v == text)
+                                    {
+                                        errors.push(format!(
+                                            "Invalid value for {at}.{key}: \"{text}\" (allowed: {})",
+                                            field.allowed_values.join(", ")
+                                        ));
+                                    }
+                                }
+                                Some(_) => {}
+                                // A leaf name the type uses elsewhere may have been lost
+                                // here to the loader's leaf-name dedup, so it is not
+                                // reported. A name the type uses nowhere is.
+                                None if manifest.fields.contains_key(key) => {}
+                                None => warnings.push(format!(
+                                    "Unknown field: {at}.{key} (known: {})",
+                                    fields
+                                        .iter()
+                                        .map(|f| f.name.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )),
+                            }
+                        }
+                    }
+                    (FieldType::Dictionary, _) => errors.push(format!(
+                        "{at} must be a dictionary ({}), not a bare value",
+                        element.name
+                    )),
+                    (scalar, serde_json::Value::Object(obj)) => {
+                        let kind = format!("{scalar:?}").to_lowercase();
+                        let wrapped = if obj.contains_key(&element.name) {
+                            format!(
+                                " {} is Apple's name for the element, not a key.",
+                                element.name
+                            )
+                        } else {
+                            String::new()
+                        };
+                        errors.push(format!(
+                            "{at} is an object, but each element of {label} is a bare {kind}.{wrapped} \
+                             Write [\"value\"], not [{{\"{}\": \"value\"}}] — as written it matches nothing.",
+                            element.name
+                        ));
+                    }
+                    // A bare string element with a fixed vocabulary — a policy
+                    // list such as PlatformSSO.Policies.Login. Checked here
+                    // because the field walker never reaches inside arrays.
+                    (_, serde_json::Value::String(text))
+                        if !element.allowed_values.is_empty()
+                            && !element.allowed_values.iter().any(|v| v == text) =>
+                    {
+                        errors.push(format!(
+                            "Invalid value for {at}: \"{text}\" (allowed: {})",
+                            element.allowed_values.join(", ")
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    (errors, warnings)
+}
+
 /// Resolve a declaration's `Identifier`.
 ///
 /// An explicit `--identifier` is used verbatim and needs no `--org` — the org
@@ -347,6 +547,11 @@ pub(crate) fn resolve_declaration_identifier(
 /// descriptions. Violations install cleanly and then misbehave on device,
 /// which is exactly the failure class contour exists to catch. A type with
 /// no rules here returns no errors.
+///
+/// Every message starts with the keys in conflict, joined by `↔`, then the
+/// rule and what was found, then Apple's sentence where there is one — so a
+/// reader (or an agent parsing `--json`) sees which two keys to look at
+/// before reading why.
 fn cross_key_errors(decl: &Declaration) -> Vec<String> {
     let mut errors = Vec::new();
 
@@ -361,24 +566,220 @@ fn cross_key_errors(decl: &Declaration) -> Vec<String> {
         let has_require = beta.contains_key("RequireProgram");
 
         if has_offer && has_require {
-            errors.push(
-                "Beta.OfferPrograms and Beta.RequireProgram are mutually exclusive — \
-                 Apple: \"The OfferPrograms key must not be present if this key is present\""
-                    .to_string(),
-            );
+            errors.push(conflict(
+                &["Beta.OfferPrograms", "Beta.RequireProgram"],
+                "mutually exclusive — Apple: \"The OfferPrograms key must not be present if this key is present\"",
+            ));
         }
         if has_offer && enrollment == Some("AlwaysOff") {
-            errors.push(
-                "Beta.OfferPrograms requires Beta.ProgramEnrollment to be \
-                 Allowed or AlwaysOn (found AlwaysOff)"
-                    .to_string(),
-            );
+            errors.push(conflict(
+                &["Beta.OfferPrograms", "Beta.ProgramEnrollment"],
+                "OfferPrograms requires ProgramEnrollment Allowed or AlwaysOn (found AlwaysOff)",
+            ));
         }
         if has_require && enrollment != Some("AlwaysOn") {
             let found = enrollment.unwrap_or("absent (implicitly Allowed)");
-            errors.push(format!(
-                "Beta.RequireProgram requires Beta.ProgramEnrollment to be \
-                 AlwaysOn (found {found})"
+            errors.push(conflict(
+                &["Beta.RequireProgram", "Beta.ProgramEnrollment"],
+                format!("RequireProgram requires ProgramEnrollment AlwaysOn (found {found})"),
+            ));
+        }
+    }
+
+    if decl.declaration_type == "com.apple.configuration.extensible-sso" {
+        let Some(psso) = decl.payload.get("PlatformSSO").and_then(|v| v.as_object()) else {
+            return errors;
+        };
+        let method = psso.get("AuthenticationMethod").and_then(|v| v.as_str());
+        let found_method = method.unwrap_or("absent");
+        const METHOD: &str = "PlatformSSO.AuthenticationMethod";
+        const SHARED: &str = "PlatformSSO.UseSharedDeviceKeys";
+
+        // Apple, on both keys: "Requires that `UseSharedDeviceKeys` is
+        // `true`." Without shared keys the login window has no key to
+        // authenticate an account that does not exist yet, so the option is
+        // accepted and then does nothing.
+        let shared_keys = psso.get("UseSharedDeviceKeys").and_then(|v| v.as_bool()) == Some(true);
+        let flag_on = |section: &str, key: &str| {
+            psso.get(section)
+                .and_then(|v| v.as_object())
+                .and_then(|o| o.get(key))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+        };
+        for (section, key) in [
+            ("UserCreation", "EnableAtLogin"),
+            ("Authorization", "EnableIdentityProviderAccounts"),
+        ] {
+            if flag_on(section, key) && !shared_keys {
+                let found = psso
+                    .get("UseSharedDeviceKeys")
+                    .map_or("absent (default false)".to_string(), |v| v.to_string());
+                errors.push(conflict(
+                    &[&format!("PlatformSSO.{section}.{key}"), SHARED],
+                    format!(
+                        "{key} requires UseSharedDeviceKeys true (found {found}) — Apple: \
+                         \"Requires that UseSharedDeviceKeys is true\""
+                    ),
+                ));
+            }
+        }
+        // Apple, on EnableAtLogin: "with an AuthenticationMethod of either
+        // Password or SmartCard".
+        if flag_on("UserCreation", "EnableAtLogin")
+            && !matches!(method, Some("Password" | "SmartCard"))
+        {
+            errors.push(conflict(
+                &["PlatformSSO.UserCreation.EnableAtLogin", METHOD],
+                format!("EnableAtLogin requires AuthenticationMethod Password or SmartCard (found {found_method})"),
+            ));
+        }
+        // Apple: RegistrationToken "Requires that AuthenticationMethod in
+        // PlatformSSO isn't empty."
+        if psso.get("RegistrationToken").is_some() && method.is_none_or(str::is_empty) {
+            errors.push(conflict(
+                &["PlatformSSO.RegistrationToken", METHOD],
+                "RegistrationToken requires AuthenticationMethod to be set",
+            ));
+        }
+        // Apple: LoginFrequency "The minimum value is 3600 (1 hour)."
+        if let Some(f) = psso.get("LoginFrequency").and_then(serde_json::Value::as_i64)
+            && f < 3600
+        {
+            errors.push(conflict(
+                &["PlatformSSO.LoginFrequency"],
+                format!("must be at least 3600 seconds (found {f}) — Apple: \"The minimum value is 3600 (1 hour)\""),
+            ));
+        }
+
+        // Tap to Login. Apple, on each AccessKey key: "Required if
+        // UserCreation.AuthenticationMethods includes AccessKey" (the key is
+        // spelled NewUserAuthenticationMethods). And an access key can only
+        // open an Authenticated Guest Mode session — every tapped-in session
+        // is temporary — so the mode must be Temporary and creation at the
+        // login window must be on.
+        const METHODS: &str = "PlatformSSO.UserCreation.NewUserAuthenticationMethods";
+        let user_creation = psso.get("UserCreation").and_then(|v| v.as_object());
+        let new_methods: Vec<&str> = user_creation
+            .and_then(|u| u.get("NewUserAuthenticationMethods"))
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        if new_methods.contains(&"AccessKey") {
+            let access = psso.get("AccessKey").and_then(|v| v.as_object());
+            for key in [
+                "ReaderGroupIdentifier",
+                "TerminalIdentityAssetReference",
+                "ReaderIssuerCertificateAssetReference",
+            ] {
+                if access.and_then(|a| a.get(key)).is_none() {
+                    errors.push(conflict(
+                        &[METHODS, &format!("PlatformSSO.AccessKey.{key}")],
+                        format!(
+                            "AccessKey.{key} is required when the methods include AccessKey (found absent) — \
+                             Apple: \"Required if UserCreation.AuthenticationMethods includes AccessKey\""
+                        ),
+                    ));
+                }
+            }
+            let mode = user_creation
+                .and_then(|u| u.get("NewUserAuthorizationMode"))
+                .and_then(|v| v.as_str());
+            if mode != Some("Temporary") {
+                errors.push(conflict(
+                    &[METHODS, "PlatformSSO.UserCreation.NewUserAuthorizationMode"],
+                    format!(
+                        "Tap to Login works only with Authenticated Guest Mode: AccessKey needs \
+                         NewUserAuthorizationMode Temporary (found {})",
+                        mode.unwrap_or("absent")
+                    ),
+                ));
+            }
+            if !flag_on("UserCreation", "EnableAtLogin") {
+                errors.push(conflict(
+                    &[METHODS, "PlatformSSO.UserCreation.EnableAtLogin"],
+                    "AccessKey creates the guest account at the login window: EnableAtLogin must be true",
+                ));
+            }
+        }
+
+        // The three policy lists. Each value carries an "Only use when
+        // AuthenticationMethod is …" sentence, and two of them name a grace
+        // period that is "Required when" the value is set.
+        let Some(policies) = psso.get("Policies").and_then(|v| v.as_object()) else {
+            return errors;
+        };
+        let mut wants_offline_grace = Vec::new();
+        let mut wants_auth_grace = Vec::new();
+        for list_name in ["FileVault", "Login", "Unlock"] {
+            let Some(values) = policies.get(list_name).and_then(|v| v.as_array()) else {
+                continue;
+            };
+            let values: Vec<&str> = values.iter().filter_map(|v| v.as_str()).collect();
+            let has = |v: &str| values.contains(&v);
+            let at = format!("PlatformSSO.Policies.{list_name}");
+            for v in &values {
+                let ok = match *v {
+                    "AttemptAuthentication"
+                    | "RequireAuthentication"
+                    | "AllowAuthenticationGracePeriod"
+                    | "AllowTouchIDOrWatchForUnlock" => matches!(method, Some("Password")),
+                    "RequireTouchID" | "RequireTouchIDOrWatch" | "AllowOpenIDForTouchIDFallback" => {
+                        matches!(method, Some("Password" | "UserSecureEnclaveKey"))
+                    }
+                    "AllowOfflineGracePeriod" => {
+                        (matches!(method, Some("Password")) && has("RequireAuthentication"))
+                            || matches!(method, Some("OpenID"))
+                    }
+                    _ => true,
+                };
+                if !ok {
+                    let rule = match *v {
+                        "AllowOfflineGracePeriod" => {
+                            "AuthenticationMethod Password with RequireAuthentication in the same \
+                             list, or AuthenticationMethod OpenID"
+                        }
+                        "RequireTouchID" | "RequireTouchIDOrWatch" | "AllowOpenIDForTouchIDFallback" => {
+                            "AuthenticationMethod Password or UserSecureEnclaveKey"
+                        }
+                        _ => "AuthenticationMethod Password",
+                    };
+                    errors.push(conflict(
+                        &[&format!("{at}[{v}]"), METHOD],
+                        format!("{v} requires {rule} (found {found_method}) — Apple: \"Only use when …\""),
+                    ));
+                }
+            }
+            if has("AllowTouchIDOrWatchForUnlock") && !has("RequireAuthentication") {
+                errors.push(conflict(
+                    &[&format!("{at}[AllowTouchIDOrWatchForUnlock]"), &format!("{at}[RequireAuthentication]")],
+                    "AllowTouchIDOrWatchForUnlock applies only \"when RequireAuthentication is enabled\" \
+                     in the same list (found absent)",
+                ));
+            }
+            if has("AllowOfflineGracePeriod") {
+                wants_offline_grace.push(format!("{at}[AllowOfflineGracePeriod]"));
+            }
+            if has("AllowAuthenticationGracePeriod") {
+                wants_auth_grace.push(format!("{at}[AllowAuthenticationGracePeriod]"));
+            }
+        }
+        if !wants_offline_grace.is_empty() && policies.get("OfflineGracePeriod").is_none() {
+            let mut keys: Vec<&str> = wants_offline_grace.iter().map(String::as_str).collect();
+            keys.push("PlatformSSO.Policies.OfflineGracePeriod");
+            errors.push(conflict(
+                &keys,
+                "OfflineGracePeriod is required when a policy sets AllowOfflineGracePeriod (found absent) — \
+                 Apple: \"Required when setting AllowOfflineGracePeriod\"",
+            ));
+        }
+        if !wants_auth_grace.is_empty() && policies.get("AuthenticationGracePeriod").is_none() {
+            let mut keys: Vec<&str> = wants_auth_grace.iter().map(String::as_str).collect();
+            keys.push("PlatformSSO.Policies.AuthenticationGracePeriod");
+            errors.push(conflict(
+                &keys,
+                "AuthenticationGracePeriod is required when a policy sets AllowAuthenticationGracePeriod \
+                 (found absent) — Apple: \"Required when AllowAuthenticationGracePeriod is set\"",
             ));
         }
     }
@@ -386,9 +787,171 @@ fn cross_key_errors(decl: &Declaration) -> Vec<String> {
     errors
 }
 
+/// One cross-key finding: the keys in conflict first, joined by `↔`, then
+/// the rule. A single key means the value conflicts with Apple's bounds for
+/// that key alone.
+fn conflict(keys: &[&str], detail: impl std::fmt::Display) -> String {
+    format!("{}: {detail}", keys.join(" ↔ "))
+}
+
+/// Schema-validation errors + warnings for an in-memory declaration. Reused by
+/// the `validate` command and as the fail-closed gate before `generate`/`compose`
+/// write a declaration.
 pub fn declaration_errors(
     decl: &Declaration,
     registry: &SchemaRegistry,
+) -> (Vec<String>, Vec<String>) {
+    declaration_errors_scoped(decl, registry, None)
+}
+
+/// Report payload keys the schema does not define at their path.
+///
+/// Fields are keyed by full path (`Apps.Mail.AllowSummary`), so a key is
+/// known only where the schema puts it. Skipped, because another check owns
+/// them or there is nothing to compare against: a dictionary with an `ANY`
+/// child (free-form keys, checked against the ANY node's children), a
+/// dictionary the schema declares no children for, and arrays (checked
+/// element by element in `array_element_findings`).
+fn unknown_fields<'a>(
+    obj: impl IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+    prefix: Option<&str>,
+    manifest: &crate::schema::PayloadManifest,
+    warnings: &mut Vec<String>,
+) {
+    use crate::schema::FieldType;
+    let any = prefix.map_or_else(|| "ANY".to_string(), |p| format!("{p}.ANY"));
+    if manifest.fields.contains_key(&any) {
+        return;
+    }
+    let siblings: Vec<&str> = manifest
+        .field_order
+        .iter()
+        .filter_map(|path| manifest.fields.get(path))
+        .filter(|f| f.parent_key.as_deref() == prefix)
+        .map(|f| f.name.as_str())
+        .collect();
+    if prefix.is_some() && siblings.is_empty() {
+        return;
+    }
+    for (key, value) in obj {
+        let path = prefix.map_or_else(|| key.clone(), |p| format!("{p}.{key}"));
+        match manifest.fields.get(&path) {
+            None if prefix.is_none() => warnings.push(format!("Unknown field: {key}")),
+            None => warnings.push(format!(
+                "Unknown field: {path} (known under {}: {})",
+                prefix.unwrap_or_default(),
+                siblings.join(", ")
+            )),
+            Some(f) if f.field_type == FieldType::Dictionary => {
+                if let serde_json::Value::Object(child) = value {
+                    unknown_fields(child, Some(&path), manifest, warnings);
+                }
+            }
+            Some(_) => {}
+        }
+    }
+}
+
+/// Keys in `decl` that Apple does not offer on `platform`, and the type
+/// itself when it is not available there.
+///
+/// Apple marks a key unavailable per platform (`introduced: n/a`); the
+/// loader keeps that as the key's `platforms` list, empty when the key
+/// inherits the payload's. A declaration carries no platform of its own, so
+/// this runs only when the caller names one — `--platform`, or a bundle's
+/// `platforms`. A key the device's OS does not have is ignored there.
+pub fn platform_findings(
+    decl: &Declaration,
+    registry: &SchemaRegistry,
+    platform: crate::schema::Platform,
+) -> Vec<String> {
+    use crate::schema::Platform;
+    let Some(manifest) = registry.get(&decl.declaration_type) else {
+        return Vec::new();
+    };
+    let p = &manifest.platforms;
+    let type_has = match platform {
+        Platform::MacOS => p.macos,
+        Platform::Ios => p.ios,
+        Platform::TvOS => p.tvos,
+        Platform::WatchOS => p.watchos,
+        Platform::VisionOS => p.visionos,
+        Platform::Windows => p.windows,
+    };
+    if !type_has {
+        return vec![format!(
+            "{} is not available on {} (Apple lists: {})",
+            decl.declaration_type,
+            platform.as_str(),
+            p.to_vec().join(", ")
+        )];
+    }
+    fn walk(
+        obj: &serde_json::Map<String, serde_json::Value>,
+        prefix: Option<&str>,
+        manifest: &crate::schema::PayloadManifest,
+        platform: crate::schema::Platform,
+        out: &mut Vec<String>,
+    ) {
+        for (key, value) in obj {
+            let path = prefix.map_or_else(|| key.clone(), |pre| format!("{pre}.{key}"));
+            let Some(field) = manifest.fields.get(&path) else {
+                continue; // unknown keys are the unknown-field check's to report
+            };
+            if !field.platforms.is_empty() && !field.platforms.contains(&platform) {
+                out.push(format!(
+                    "{path} is not available on {} (Apple offers it on: {})",
+                    platform.as_str(),
+                    field
+                        .platforms
+                        .iter()
+                        .map(|p| p.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if let serde_json::Value::Object(child) = value {
+                walk(child, Some(&path), manifest, platform, out);
+            }
+        }
+    }
+    let root: serde_json::Map<String, serde_json::Value> = decl
+        .payload
+        .0
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let mut out = Vec::new();
+    walk(&root, None, manifest, platform, &mut out);
+    out.sort();
+    out
+}
+
+/// Parse `--platform` / bundle `platforms` names, refusing an unknown one.
+pub fn parse_platforms(names: &[String]) -> Result<Vec<crate::schema::Platform>> {
+    names
+        .iter()
+        .map(|n| {
+            crate::schema::Platform::from_cli_str(n).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown platform '{n}' (expected macOS, iOS, tvOS, watchOS or visionOS)"
+                )
+            })
+        })
+        .collect()
+}
+
+/// As [`declaration_errors`], with the delivery scope the MDM will use.
+///
+/// A DDM declaration does not state its own scope — the channel is the MDM's
+/// choice at delivery time — so scope-dependent checks run only when the
+/// caller supplies it. With `None`, only the scope-INDEPENDENT check runs:
+/// a declaration whose keys demand opposite scopes is broken under any
+/// channel, and saying so requires no assumption.
+pub fn declaration_errors_scoped(
+    decl: &Declaration,
+    registry: &SchemaRegistry,
+    scope: Option<crate::ddm::scope::Scope>,
 ) -> (Vec<String>, Vec<String>) {
     let mut errors = cross_key_errors(decl);
     let mut warnings = Vec::new();
@@ -401,31 +964,65 @@ pub fn declaration_errors(
                 if decl.payload.get(&field.name).is_none() {
                     errors.push(format!("Missing required field: {}", field.name));
                 }
-            } else if field.parent_key.is_some() {
-                let ancestors = resolve_ancestor_path(&field.name, manifest);
-                if let Some(parent_obj) = walk_payload_path(&decl.payload.0, &ancestors) {
+            } else if field.parent_key.is_some() && field.name != "ANY" {
+                // `ANY` is Apple's placeholder for "every key of this
+                // dictionary", not a key a payload can carry; a required
+                // `ANY` says the entries are required, not that one is named
+                // so. The walker expands it for the checks that apply.
+                let ancestors = ancestors_of(field);
+                for (label, parent_obj) in walk_payload_paths(&decl.payload.0, &ancestors) {
                     if !parent_obj.contains_key(&field.name) {
-                        let full_path = ancestors.join(".");
-                        errors.push(format!(
-                            "Missing required field: {full_path}.{}",
-                            field.name
+                        errors.push(format!("Missing required field: {label}.{}", field.name));
+                    }
+                }
+            }
+        }
+
+        // Check for unknown fields, at the top level and inside every
+        // dictionary the schema declares children for. The top level alone
+        // let `Mail` written at the payload root — Apple nests it under
+        // `Apps` — pass as a known field, since `Mail` exists by name.
+        unknown_fields(&decl.payload.0, None, manifest, &mut warnings);
+
+        // ...and inside every free-form (`ANY`) dictionary. Without this a
+        // typo'd or foreign key — a PPPC service name in an app.settings
+        // privacy block, say — is accepted in silence, because the check
+        // above only sees the payload's top level.
+        for any_field in manifest.fields.values().filter(|f| f.name == "ANY") {
+            // The ANY node's own full path, e.g. Privacy.PermissionDefaults.ANY.
+            let any_path = match &any_field.parent_key {
+                Some(parent) => format!("{parent}.ANY"),
+                None => "ANY".to_string(),
+            };
+            let legal: std::collections::BTreeSet<&str> = manifest
+                .fields
+                .values()
+                .filter(|f| f.parent_key.as_deref() == Some(any_path.as_str()))
+                .map(|f| f.name.as_str())
+                .collect();
+            if legal.is_empty() {
+                continue;
+            }
+            for (label, obj) in walk_payload_paths(&decl.payload.0, std::slice::from_ref(&any_path))
+            {
+                for key in obj.keys() {
+                    if !legal.contains(key.as_str()) {
+                        warnings.push(format!(
+                            "Unknown field: {label}.{key} (known: {})",
+                            legal.iter().copied().collect::<Vec<_>>().join(", ")
                         ));
                     }
                 }
             }
         }
 
-        // Check for unknown fields
-        for key in decl.payload.keys() {
-            if !manifest.fields.contains_key(key) {
-                warnings.push(format!("Unknown field: {key}"));
-            }
-        }
+        // ...and inside array elements, which the path walker cannot reach.
+        let (element_errors, element_warnings) = array_element_findings(&decl.payload.0, manifest);
+        errors.extend(element_errors);
+        warnings.extend(element_warnings);
 
         // Check enum membership for fields that declare a rangelist.
         // Only fields with allowed_values are checked — no data, no opinion.
-        // (The embedded parquet doesn't carry rangelists yet; --schema-path
-        // against Apple's device-management repo does.)
         for field_name in &manifest.field_order {
             let Some(field) = manifest.fields.get(field_name) else {
                 continue;
@@ -433,31 +1030,40 @@ pub fn declaration_errors(
             if field.allowed_values.is_empty() {
                 continue;
             }
-            let value = if field.parent_key.is_none() {
-                decl.payload.get(&field.name)
+            let sites: Vec<(String, &serde_json::Value)> = if field.parent_key.is_none() {
+                decl.payload
+                    .get(&field.name)
+                    .map(|v| vec![(field.name.clone(), v)])
+                    .unwrap_or_default()
             } else {
-                let ancestors = resolve_ancestor_path(&field.name, manifest);
-                walk_payload_path(&decl.payload.0, &ancestors).and_then(|obj| obj.get(&field.name))
+                let ancestors = ancestors_of(field);
+                walk_payload_paths(&decl.payload.0, &ancestors)
+                    .into_iter()
+                    .filter_map(|(label, obj)| {
+                        obj.get(&field.name)
+                            .map(|v| (format!("{label}.{}", field.name), v))
+                    })
+                    .collect()
             };
-            let Some(value) = value else { continue };
-            // A rangelist on an Array field constrains its elements.
-            let candidates: Vec<&serde_json::Value> = match value {
-                serde_json::Value::Array(items) => items.iter().collect(),
-                other => vec![other],
-            };
-            for candidate in candidates {
-                let text = match candidate {
-                    serde_json::Value::String(s) => s.clone(),
-                    serde_json::Value::Number(n) => n.to_string(),
-                    // Rangelists only ever constrain strings and numbers.
-                    _ => continue,
+            for (label, value) in sites {
+                // A rangelist on an Array field constrains its elements.
+                let candidates: Vec<&serde_json::Value> = match value {
+                    serde_json::Value::Array(items) => items.iter().collect(),
+                    other => vec![other],
                 };
-                if !field.allowed_values.contains(&text) {
-                    errors.push(format!(
-                        "Invalid value for {}: \"{text}\" (allowed: {})",
-                        field.name,
-                        field.allowed_values.join(", ")
-                    ));
+                for candidate in candidates {
+                    let text = match candidate {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        // Rangelists only ever constrain strings and numbers.
+                        _ => continue,
+                    };
+                    if !field.allowed_values.contains(&text) {
+                        errors.push(format!(
+                            "Invalid value for {label}: \"{text}\" (allowed: {})",
+                            field.allowed_values.join(", ")
+                        ));
+                    }
                 }
             }
         }
@@ -474,6 +1080,187 @@ pub fn declaration_errors(
         ));
     }
 
+    // Delivery scope. Two failures, reported differently.
+    if let Some(manifest_cap) = registry.get(&decl.declaration_type) {
+        // Which keys the declaration actually sets, by schema name. Nested
+        // keys count: app.settings' scope split is Privacy (user) against
+        // Allowed.DeniedBinaries (system), and the latter is a subkey. A
+        // field is "present" when the declaration sets it anywhere its path
+        // resolves — walk_payload_paths already expands ANY nodes.
+        let present: std::collections::BTreeSet<String> = manifest_cap
+            .fields
+            .values()
+            .filter(|f| {
+                if f.parent_key.is_none() {
+                    decl.payload.get(&f.name).is_some()
+                } else {
+                    let ancestors = ancestors_of(f);
+                    walk_payload_paths(&decl.payload.0, &ancestors)
+                        .into_iter()
+                        .any(|(_, obj)| obj.contains_key(&f.name))
+                }
+            })
+            .map(|f| f.name.clone())
+            .collect();
+
+        // Scope-independent, so it needs no --scope and cannot false-positive
+        // on a guessed channel. This is the check that earns the feature.
+        for pair in crate::ddm::scope::unsatisfiable_pairs(
+            manifest_cap,
+            crate::schema::Platform::MacOS,
+            &present,
+        ) {
+            errors.push(pair.to_string());
+        }
+
+        // Scope, in order: what the declaration itself carries, then what
+        // the caller supplied — a Fleet-targeted declaration states it, so
+        // the check needs no flag there.
+        //
+        // `PayloadScope` is Fleet-specific: it is not in Apple's DDM spec
+        // (the key lives in mdm/profiles/TopLevel.yaml and appears nowhere
+        // under declarative/). Fleet reads it to choose the channel; every
+        // other MDM ignores it. Say so, so nobody reads its presence as a
+        // guarantee — and validate the value, since a typo reverts to
+        // Fleet's "System" default silently.
+        if let Some(raw) = decl.payload_scope.as_deref() {
+            match crate::ddm::scope::Scope::parse(raw) {
+                Some(crate::ddm::scope::Scope::User) => warnings.push(format!(
+                    "PayloadScope \"{raw}\" is a Fleet-specific key, not part of \
+                     Apple's DDM spec — Fleet delivers this on the user channel, \
+                     other MDMs ignore the key and use their own default"
+                )),
+                Some(crate::ddm::scope::Scope::System) => warnings.push(format!(
+                    "PayloadScope \"{raw}\" is a Fleet-specific key, not part of \
+                     Apple's DDM spec. System is Fleet's default, so this states \
+                     the existing behaviour"
+                )),
+                None => errors.push(format!(
+                    "PayloadScope \"{raw}\" is not a valid value: Fleet accepts \
+                     \"System\" or \"User\" (User is macOS only). An unrecognised \
+                     value falls back to System, so the declaration would be \
+                     delivered on the device channel"
+                )),
+            }
+        }
+
+        let delivered = decl
+            .payload_scope
+            .as_deref()
+            .and_then(crate::ddm::scope::Scope::parse)
+            .or(scope);
+
+        if let Some(delivered_in) = delivered {
+            for conflict in crate::ddm::scope::key_conflicts(
+                manifest_cap,
+                crate::schema::Platform::MacOS,
+                &present,
+                delivered_in,
+            ) {
+                errors.push(conflict.to_string());
+            }
+            if let Some(allowed) = crate::ddm::scope::payload_out_of_scope(
+                manifest_cap,
+                crate::schema::Platform::MacOS,
+                delivered_in,
+            ) {
+                warnings.push(format!(
+                    "{} is {}-scope only on macOS; delivered in {delivered_in} scope the \
+                     whole declaration is accepted and ignored",
+                    decl.declaration_type,
+                    allowed
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("/"),
+                ));
+            }
+        }
+    }
+
+    // app.settings privacy keys are "<bundle id> {<designated requirement>}".
+    // Apple types the key as a free-form string, so a bare bundle identifier
+    // is schema-valid and matches no app: the declaration deploys, reports
+    // Verified and manages nothing. A warning rather than an error — the key
+    // format is documented behaviour rather than something Apple's schema
+    // states, so this flags it without failing a deployment outright.
+    if decl.declaration_type == "com.apple.configuration.app.settings" {
+        let defaults = decl
+            .payload
+            .get("Privacy")
+            .and_then(|p| p.get("PermissionDefaults"))
+            .and_then(serde_json::Value::as_object);
+        for key in defaults.into_iter().flat_map(serde_json::Map::keys) {
+            let trimmed = key.trim();
+            let braced = trimmed.contains('{') && trimmed.ends_with('}');
+
+            // Parentheses are the near-miss worth naming on its own: the
+            // requirement IS there, so "carries no designated requirement"
+            // would send the operator looking for the wrong thing.
+            if !braced && trimmed.contains('(') && trimmed.ends_with(')') {
+                warnings.push(format!(
+                    "Privacy.PermissionDefaults key \"{key}\" wraps its designated \
+                     requirement in parentheses. It must be curly braces — \
+                     \"<bundle id> {{<requirement>}}\" — or the entry matches no app."
+                ));
+                continue;
+            }
+
+            if !braced {
+                warnings.push(format!(
+                    "Privacy.PermissionDefaults key \"{key}\" carries no designated \
+                     requirement. The key must be \"<bundle id> {{<requirement>}}\"; \
+                     without it the entry matches no app. `contour profile ddm \
+                     app-privacy scan` reads the requirement from the installed app."
+                ));
+                continue;
+            }
+
+            // Only the identifier, not the requirement: the requirement's own
+            // body legitimately quotes things (`identifier "us.zoom.xos"`).
+            let identifier = trimmed.split('{').next().unwrap_or_default().trim();
+            if identifier.starts_with('"') || identifier.ends_with('"') {
+                warnings.push(format!(
+                    "Privacy.PermissionDefaults key \"{key}\" wraps its app identifier \
+                     in double quotes. The identifier is bare — \
+                     \"<bundle id> {{<requirement>}}\" — and quoting it makes the \
+                     declaration invalid."
+                ));
+            }
+        }
+    }
+
+    // app.settings binary entries: Apple's per-list identifier rules. These
+    // live in the schema's notes rather than its structure, so no generic
+    // check can see them — an entry of only PathPrefix is schema-shaped and
+    // rejected on the device. Santa's validator already encodes them.
+    if decl.declaration_type == "com.apple.configuration.app.settings" {
+        use santa::app_settings::{BinaryIdentifier, BinaryPolicy, validate_binary};
+        for (key, policy) in [
+            ("AllowedBinaries", BinaryPolicy::Allow),
+            ("DeniedBinaries", BinaryPolicy::Deny),
+        ] {
+            let items = decl
+                .payload
+                .get("Allowed")
+                .and_then(|a| a.get(key))
+                .and_then(serde_json::Value::as_array);
+            for (i, item) in items.into_iter().flatten().enumerate() {
+                // A wrapped element is already reported, and would only
+                // re-surface here as a missing identifier.
+                if item.get("BinaryIdentifier").is_some() {
+                    continue;
+                }
+                let Ok(entry) = serde_json::from_value::<BinaryIdentifier>(item.clone()) else {
+                    continue; // a bad SigningState is reported as an enum value
+                };
+                if let Err(reason) = validate_binary(&entry, policy) {
+                    errors.push(format!("Allowed.{key}[{i}]: {reason}"));
+                }
+            }
+        }
+    }
+
     // Basic structural validation
     if decl.identifier.is_empty() {
         errors.push("Identifier is empty".to_string());
@@ -486,9 +1273,60 @@ pub fn declaration_errors(
 }
 
 /// Validate a single DDM declaration file.
-fn validate_single_ddm(path: &Path, registry: &SchemaRegistry) -> Result<DdmValidationResult> {
+/// The SOP that explains a declaration type's cross-key rules, and the
+/// section to open at when one exists.
+fn sop_for_type(declaration_type: &str) -> (&'static str, Option<&'static str>) {
+    match declaration_type {
+        "com.apple.configuration.extensible-sso" => ("platform-sso", Some("platform_sso_custom")),
+        "com.apple.configuration.softwareupdate.settings" => ("beta-enrollment", None),
+        "com.apple.configuration.app.settings" => ("app-privacy", None),
+        t if t.contains("intelligence") => ("generative", None),
+        _ => ("ddm", None),
+    }
+}
+
+/// After `ddm validate`: a clean file goes to `verify`; a cross-key error
+/// (`A ↔ B: …`) points at the SOP section that states the rule; a bad
+/// value points at the schema listing of allowed values.
+fn validate_next_steps(r: &DdmValidationResult) -> Vec<contour_core::output::NextStep> {
+    use contour_core::output::NextStep;
+    let mut steps = Vec::new();
+    if r.valid {
+        let dir = r.file.parent().filter(|p| !p.as_os_str().is_empty());
+        let dir = dir.map_or(".".to_string(), |p| p.display().to_string());
+        steps.push(NextStep::new(
+            "Check cross-references across the directory",
+            format!("contour profile ddm verify {dir} --json"),
+        ));
+        return steps;
+    }
+    if r.errors.iter().any(|e| e.contains(" ↔ ")) {
+        let (sop, at) = sop_for_type(&r.declaration_type);
+        let at = at.map_or(String::new(), |a| format!(" --at \"{a}\""));
+        steps.push(NextStep::new(
+            "The rule behind the ↔ error, in Apple's words",
+            format!("contour help-ai --sop {sop}{at}"),
+        ));
+    }
+    if r.errors.iter().any(|e| e.starts_with("Invalid value for") || e.contains("Unknown field")) {
+        steps.push(NextStep::new(
+            "Allowed values and required keys for this type",
+            format!("contour profile ddm info {} --full", r.declaration_type),
+        ));
+    }
+    steps
+}
+
+fn validate_single_ddm(
+    path: &Path,
+    registry: &SchemaRegistry,
+    platforms: &[crate::schema::Platform],
+) -> Result<DdmValidationResult> {
     let decl = parse_declaration_file(path)?;
-    let (errors, warnings) = declaration_errors(&decl, registry);
+    let (errors, mut warnings) = declaration_errors(&decl, registry);
+    for p in platforms {
+        warnings.extend(platform_findings(&decl, registry, *p));
+    }
     Ok(DdmValidationResult {
         file: path.to_path_buf(),
         declaration_type: decl.declaration_type.clone(),
@@ -507,8 +1345,10 @@ pub fn handle_ddm_validate(
     max_depth: Option<usize>,
     parallel: bool,
     beta: bool,
+    platforms: &[String],
     output_mode: OutputMode,
 ) -> Result<()> {
+    let platforms = parse_platforms(platforms)?;
     let files = collect_ddm_files(paths, recursive, max_depth);
 
     if files.is_empty() {
@@ -526,12 +1366,12 @@ pub fn handle_ddm_validate(
     let results: Vec<DdmValidationResult> = if parallel && files.len() > 1 {
         files
             .par_iter()
-            .filter_map(|f| validate_single_ddm(f, &registry).ok())
+            .filter_map(|f| validate_single_ddm(f, &registry, &platforms).ok())
             .collect()
     } else {
         files
             .iter()
-            .filter_map(|f| validate_single_ddm(f, &registry).ok())
+            .filter_map(|f| validate_single_ddm(f, &registry, &platforms).ok())
             .collect()
     };
 
@@ -547,7 +1387,8 @@ pub fn handle_ddm_validate(
                     "file": r.file.to_string_lossy(),
                     "type": r.declaration_type,
                     "errors": r.errors,
-                    "warnings": r.warnings
+                    "warnings": r.warnings,
+                    "next": validate_next_steps(r),
                 })
             })
             .collect();
@@ -594,6 +1435,18 @@ pub fn handle_ddm_validate(
         );
     }
 
+    // One merged block: the same fix for several files is said once.
+    let mut next: Vec<contour_core::output::NextStep> = Vec::new();
+    for r in &results {
+        for step in validate_next_steps(r) {
+            if !next.iter().any(|s| s.command == step.command) {
+                next.push(step);
+            }
+        }
+    }
+    next.truncate(3);
+    contour_core::output::print_next_steps(&next);
+
     if invalid_count > 0 {
         anyhow::bail!("Validation failed for {invalid_count} file(s)");
     }
@@ -601,7 +1454,6 @@ pub fn handle_ddm_validate(
     Ok(())
 }
 
-/// List available DDM declaration types from embedded schema
 /// Substring search across DDM declaration types. Mirrors `profile search`
 /// but scoped to `ddm-*` categories so callers don't have to filter
 /// `ddm list | grep` themselves.
@@ -627,6 +1479,7 @@ pub fn handle_ddm_search(
                     "type": m.payload_type,
                     "title": m.title,
                     "category": m.category.strip_prefix("ddm-").unwrap_or(&m.category),
+                    "kind": m.kind.map(|k| k.as_str()),
                     "platforms": m.platforms.to_vec(),
                 })
             })
@@ -659,6 +1512,7 @@ pub fn handle_ddm_search(
     Ok(())
 }
 
+/// List available DDM declaration types from embedded schema
 pub fn handle_ddm_list(
     category: Option<&str>,
     schema_path: Option<&str>,
@@ -697,6 +1551,7 @@ pub fn handle_ddm_list(
                     "type": m.payload_type,
                     "title": m.title,
                     "category": m.category.strip_prefix("ddm-").unwrap_or(&m.category),
+                    "kind": m.kind.map(|k| k.as_str()),
                     "platforms": m.platforms.to_vec()
                 })
             })
@@ -793,36 +1648,90 @@ pub fn handle_ddm_info(
     }
 
     if output_mode == OutputMode::Json {
+        // A projection of the schema, not a curated subset: titles,
+        // descriptions, bounds, validator hints, asset types and merge
+        // semantics all reach the surface. A field absent from the schema
+        // emits null — never a default, because "unspecified" and "none"
+        // differ.
         let fields: Vec<_> = manifest
-            .field_order
-            .iter()
-            .filter_map(|name| manifest.fields.get(name))
+            .fields_in_order()
             .map(|f| {
-                serde_json::json!({
+                let mut entry = serde_json::json!({
                     "name": f.name,
+                    // Identity. Not the leaf name: a payload may carry the
+                    // same name under two parents.
+                    "path": f.path,
                     "type": f.field_type.as_str(),
+                    "plist_tag": crate::cli::info::plist_tag_for(&f.field_type),
+                    "title": (!f.title.is_empty()).then(|| f.title.clone()),
+                    "description": (!f.description.is_empty())
+                        .then(|| f.description.clone()),
                     "required": f.flags.required,
+                    "supervised": f.flags.supervised,
+                    "sensitive": f.flags.sensitive,
                     "default": f.default,
                     "allowed_values": f.allowed_values,
-                    // Hierarchy: depth, immediate parent, and full dotted path so
-                    // consumers can reconstruct the nested dictionary structure.
+                    "range": match (f.range_min, f.range_max) {
+                        (None, None) => serde_json::Value::Null,
+                        (min, max) => serde_json::json!({ "min": min, "max": max }),
+                    },
+                    "subtype": f.subtype,
+                    "format": f.format,
+                    "asset_types": (!f.asset_types.is_empty())
+                        .then(|| f.asset_types.clone()),
+                    "combinetype": f.combinetype,
+                    // Per platform, never unioned: Apple states these per
+                    // platform and the platforms disagree.
+                    "allowed_scopes": (!f.allowed_scopes.is_empty()).then(|| {
+                        f.allowed_scopes
+                            .iter()
+                            .map(|(p, v)| (p.as_str().to_string(), v.clone()))
+                            .collect::<std::collections::BTreeMap<_, _>>()
+                    }),
+                    "introduced_by_platform": (!f.introduced_by_platform.is_empty())
+                        .then(|| {
+                            f.introduced_by_platform
+                                .iter()
+                                .map(|(p, v)| (p.as_str().to_string(), v.clone()))
+                                .collect::<std::collections::BTreeMap<_, _>>()
+                        }),
+                    "deprecated_in": f.deprecated_in,
+                    // Hierarchy: depth and immediate parent, so consumers can
+                    // reconstruct the nested dictionary structure.
                     "depth": f.depth,
                     "parent": f.parent_key,
-                    "path": manifest.field_path(&f.name),
-                })
+                });
+                entry
+                    .as_object_mut()
+                    .expect("json! object")
+                    .extend(crate::cli::info::dynamic_keys_json(manifest, f));
+                entry
             })
             .collect();
 
-        let info = serde_json::json!({
+        let mut info = serde_json::json!({
             "type": manifest.payload_type,
             "title": manifest.title,
             "description": manifest.description,
             "category": manifest.category.strip_prefix("ddm-").unwrap_or(&manifest.category),
+            "kind": manifest.kind.map(|k| k.as_str()),
+            "authorable": manifest.is_authorable(),
+            // Declarations have no .mobileconfig envelope; present as null so
+            // the key is always there.
+            "nesting": crate::schema::form::default_nesting(crate::schema::form::kind_of(manifest)),
             "platforms": manifest.platforms.to_vec(),
+            // Per platform, never unioned. `profile info` has emitted this
+            // since 0.4.1; this surface lagged behind it. A consumer that
+            // unions these gets `["system","user"]` for safari.settings — a
+            // value true on no platform.
+            "os_support": crate::cli::info::os_support_json_map(manifest, None),
             "fields": fields,
             "beta_only": crate::ddm::notes::is_beta_only(&manifest.payload_type),
             "deployment_notes": crate::ddm::notes::notes_for(&manifest.payload_type),
         });
+        info.as_object_mut()
+            .expect("json! object")
+            .extend(crate::cli::info::root_dynamic_keys_json(manifest));
         println!("{}", serde_json::to_string_pretty(&info)?);
         return Ok(());
     }
@@ -844,6 +1753,7 @@ pub fn handle_ddm_info(
         "Platforms".cyan(),
         manifest.platforms.to_vec().join(", ")
     );
+    crate::cli::info::print_os_support(manifest, None);
     println!("\n{}", "Description:".cyan());
     println!("  {}", manifest.description);
 
@@ -874,7 +1784,10 @@ pub fn handle_ddm_info(
     let mut required: Vec<String> = manifest
         .required_fields()
         .iter()
-        .map(|f| manifest.field_path(&f.name))
+        // The field's own path. This looked the field up by its leaf name,
+        // which matches nothing nested in a path-keyed map, so it printed
+        // `Identifier` six times for six different fields.
+        .map(|f| f.path.clone())
         .collect();
     required.sort();
     if !required.is_empty() {
@@ -916,7 +1829,7 @@ fn print_ddm_field(
     recurse: bool,
 ) {
     let pad = "  ".repeat(indent);
-    let children = manifest.children_of(&manifest.field_path(&field.name));
+    let children = manifest.children_of(&field.path);
     let type_label = if children.is_empty() {
         field.field_type.as_str().to_string()
     } else {
@@ -1018,8 +1931,22 @@ pub fn handle_ddm_map(name: Option<&str>, output_mode: OutputMode) -> Result<()>
         anyhow::bail!("'{query}' is ambiguous. Did you mean: {}", names.join(", "));
     };
 
+    let moved = moved_keys(m.mdm_type);
+
     if output_mode == OutputMode::Json {
-        println!("{}", serde_json::to_string_pretty(m)?);
+        let mut v = serde_json::to_value(m)?;
+        v["moved_to"] = serde_json::json!(
+            moved
+                .iter()
+                .map(|(decl, keys)| (
+                    decl.clone(),
+                    keys.iter()
+                        .map(|(k, to)| serde_json::json!({"key": k, "ddm_key": to}))
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        );
+        println!("{}", serde_json::to_string_pretty(&v)?);
         return Ok(());
     }
 
@@ -1068,7 +1995,92 @@ pub fn handle_ddm_map(name: Option<&str>, output_mode: OutputMode) -> Result<()>
         );
         println!("  {}", m.unsupported_keys.join(", "));
     }
+    if !moved.is_empty() {
+        let n: usize = moved.values().map(Vec::len).sum();
+        println!(
+            "\n{} ({n}) {}",
+            "Moved to other declarations".green().bold(),
+            "— Apple's notes on each key name the replacement:".dimmed()
+        );
+        for (decl, keys) in &moved {
+            println!("  {}", decl.cyan());
+            for (k, to) in keys {
+                match to {
+                    Some(t) => println!("    {} {} {}", k.yellow(), "→".dimmed(), t),
+                    None => println!("    {}", k.yellow()),
+                }
+            }
+        }
+    }
     Ok(())
+}
+
+/// Keys of a profile payload that Apple deprecated in favour of a named
+/// declaration, grouped by that declaration, each with its matching key
+/// there when one is found.
+///
+/// The source is Apple's own note on the key — "Deprecated: use the
+/// declarative management `…` configuration." — so a new move in the data
+/// shows up here without a hand-kept list going stale.
+fn moved_keys(mdm_type: &str) -> std::collections::BTreeMap<String, Vec<(String, Option<String>)>> {
+    let mut out: std::collections::BTreeMap<String, Vec<(String, Option<String>)>> =
+        std::collections::BTreeMap::new();
+    let Ok(registry) = SchemaRegistry::embedded() else {
+        return out;
+    };
+    let Some(manifest) = registry.get(mdm_type) else {
+        return out;
+    };
+    const MARK: &str = "Deprecated: use the declarative management `";
+    for path in &manifest.field_order {
+        let Some(field) = manifest.fields.get(path) else {
+            continue;
+        };
+        let Some(rest) = field.description.split(MARK).nth(1) else {
+            continue;
+        };
+        let Some(decl) = rest
+            .split('`')
+            .next()
+            .filter(|d| d.starts_with("com.apple."))
+        else {
+            continue;
+        };
+        let to = registry
+            .get(decl)
+            .and_then(|target| matching_key(&field.name, target));
+        out.entry(decl.to_string())
+            .or_default()
+            .push((field.name.clone(), to));
+    }
+    out
+}
+
+/// The key in `target` a restriction key corresponds to, by name alone:
+/// `allowGenmoji` → `AllowGenmoji`, `allowMailSummary` →
+/// `Apps.Mail.AllowSummary`. Exact after normalising, never fuzzy — a key
+/// that matches nothing is reported without a partner rather than paired
+/// with a guess.
+fn matching_key(restriction: &str, target: &contour_form::PayloadManifest) -> Option<String> {
+    let norm = |s: &str| s.to_ascii_lowercase();
+    let bare = |s: &str| {
+        let l = norm(s);
+        l.strip_prefix("allow").map(str::to_string).unwrap_or(l)
+    };
+    let want_full = norm(restriction);
+    let want_bare = bare(restriction);
+    let mut hits = target.field_order.iter().filter(|path| {
+        let segments: Vec<&str> = path.split('.').filter(|s| *s != "Apps").collect();
+        let Some((leaf, parents)) = segments.split_last() else {
+            return false;
+        };
+        let full: String = parents.iter().map(|p| norm(p)).collect::<String>() + &norm(leaf);
+        let stripped: String = parents.iter().map(|p| norm(p)).collect::<String>() + &bare(leaf);
+        full == want_full || stripped == want_bare
+    });
+    let first = hits.next()?.clone();
+    // Two candidates is no answer.
+    hits.next().is_none().then_some(first)
 }
 
 /// `ddm coverage` — how much of the legacy MDM surface has a declarative
@@ -1080,6 +2092,9 @@ pub fn handle_ddm_coverage(channel: crate::schema::Channel, output_mode: OutputM
     use crate::migrate::mapping::{MigrationRegistry, MigrationStatus};
     let migration = MigrationRegistry::new();
     let stats = migration.stats();
+    if channel.is_beta() {
+        note_if_beta_is_retired();
+    }
     let registry = SchemaRegistry::embedded_channel(channel)?;
     let schema = registry.stats();
 
@@ -1187,17 +2202,131 @@ pub fn handle_ddm_coverage(channel: crate::schema::Channel, output_mode: OutputM
     Ok(())
 }
 
-/// Sibling keys that cannot coexist under the same parent, per Apple's prose
-/// cross-key rules (see `cross_key_errors`). The `--full` scaffold emits only
-/// the first member it reaches, so contour never produces a document its own
+/// `parent` value for keys that sit directly in a declaration's Payload and
+/// so have no parent field to name.
+const TOP_LEVEL: &str = "";
+
+/// Sibling keys that cannot coexist, per Apple's prose cross-key rules (see
+/// `cross_key_errors`), so contour never produces a document its own
 /// validator rejects.
+///
+/// `parent` is the immediate parent's leaf name, or [`TOP_LEVEL`].
+///
+/// The slice is in PREFERENCE order: `--full` emits the first member the
+/// manifest actually carries and skips the rest. Preference rather than
+/// encounter order, because `field_order` would otherwise decide — and for
+/// app.managed it reaches AppComposedIdentifier first, the one member that
+/// is unavailable on iOS.
 fn exclusive_siblings(payload_type: &str, parent: &str) -> &'static [&'static str] {
     match (payload_type, parent) {
         ("com.apple.configuration.softwareupdate.settings", "Beta") => {
             &["OfferPrograms", "RequireProgram"]
         }
+        // app.managed.yaml repeats this under all four keys: "Only one of
+        // `AppStoreID`, `BundleID`, `ManifestURL`, or `AppComposedIdentifier`
+        // needs to be present."
+        //
+        // BundleID leads because it is the only member valid on both macOS
+        // and iOS — ManifestURL is `introduced: n/a` on macOS, and
+        // AppComposedIdentifier is `n/a` on iOS. AppStoreID follows: it is
+        // the App Store and VPP case, and what Apple's own example1.json uses.
+        ("com.apple.configuration.app.managed", TOP_LEVEL) => &[
+            "BundleID",
+            "AppStoreID",
+            "ManifestURL",
+            "AppComposedIdentifier",
+        ],
         _ => &[],
     }
+}
+
+/// Which alternatives the scaffold dropped, and what it kept instead.
+struct ExclusiveChoice {
+    chosen: String,
+    omitted: Vec<String>,
+}
+
+/// The member of an exclusive `group` that `--full` should emit: the first
+/// listed that this manifest actually carries, so a platform-filtered schema
+/// still illustrates one of them rather than none.
+fn preferred_exclusive(
+    group: &[&'static str],
+    parent_path: &str,
+    manifest: &crate::schema::PayloadManifest,
+) -> Option<&'static str> {
+    // `group` holds bare leaf names, because that is how Apple's prose names
+    // them. Fields are addressed by path, so compose one: the `Beta` group's
+    // members live at `Beta.OfferPrograms`, not `OfferPrograms`.
+    group.iter().copied().find(|k| {
+        let path = crate::schema::FieldDefinition::compose_path(
+            (!parent_path.is_empty()).then_some(parent_path),
+            k,
+        );
+        manifest.field_by_path(&path).is_some()
+    })
+}
+
+/// A per-type sentence naming when to reach for one of the omitted keys.
+fn exclusive_hint(payload_type: &str) -> Option<&'static str> {
+    match payload_type {
+        "com.apple.configuration.app.managed" => Some(
+            "Use AppStoreID instead for an App Store or VPP app, or ManifestURL \
+             for a self-hosted iOS app (macOS: n/a).",
+        ),
+        _ => None,
+    }
+}
+
+/// Scaffold the declaration's top-level Payload.
+///
+/// Top-level fields only — nested children are emitted by the Dictionary arm
+/// of `generate_field_value`, driven by each field's `parent_key`. Emitting
+/// nested fields at the top level would flatten the structure and (for
+/// required children of optional parents) create invalid docs that fail
+/// `ddm validate`.
+fn build_top_level_payload(
+    manifest: &crate::schema::PayloadManifest,
+    full: bool,
+) -> (DeclarationPayload, Option<ExclusiveChoice>) {
+    let exclusive = exclusive_siblings(&manifest.payload_type, TOP_LEVEL);
+    let preferred = preferred_exclusive(exclusive, TOP_LEVEL, manifest);
+    let mut payload = DeclarationPayload::new();
+    let mut omitted = Vec::new();
+
+    for field_name in &manifest.field_order {
+        let Some(field) = manifest.fields.get(field_name) else {
+            continue;
+        };
+        if field.parent_key.is_some() {
+            continue;
+        }
+        if !field.flags.required && !full {
+            continue;
+        }
+        // A root-level marker means the declaration itself is keyed by the
+        // operator; there is nothing to emit for it.
+        if field.is_placeholder() {
+            continue;
+        }
+        // Mutually exclusive: emit the preferred member, record the rest.
+        if exclusive.contains(&field_name.as_str()) && preferred != Some(field_name.as_str()) {
+            omitted.push(field_name.clone());
+            continue;
+        }
+        payload.insert(
+            field_name.clone(),
+            generate_field_value(field_name, field, manifest, full),
+        );
+    }
+
+    let choice = match (preferred, omitted.is_empty()) {
+        (Some(chosen), false) => Some(ExclusiveChoice {
+            chosen: chosen.to_string(),
+            omitted,
+        }),
+        _ => None,
+    };
+    (payload, choice)
 }
 
 /// Generate a default JSON value for a field, recursively populating Dictionary children.
@@ -1206,7 +2335,7 @@ fn exclusive_siblings(payload_type: &str, parent: &str) -> &'static [&'static st
 /// included (matches the validator's rule: "if parent is present, required children
 /// must be present"). When `full` is true, optional children are included as well.
 fn generate_field_value(
-    field_name: &str,
+    field_path: &str,
     field: &crate::schema::FieldDefinition,
     manifest: &crate::schema::PayloadManifest,
     full: bool,
@@ -1251,29 +2380,46 @@ fn generate_field_value(
         FieldType::Array => serde_json::Value::Array(vec![]),
         FieldType::Dictionary => {
             // Walk field_order (not fields map) to preserve declaration order.
-            let exclusive = exclusive_siblings(&manifest.payload_type, field_name);
-            let mut emitted_exclusive = false;
+            // `parent_key` is a FULL dotted path ("Calculator.BasicMode"), not
+            // an immediate name, so children are matched against the path this
+            // field was reached by. Comparing against the bare field name
+            // matched only depth-1 children, and everything deeper was dropped
+            // — including required ones, which is how `--full` emitted a parent
+            // object without the children its schema demands.
+            let parsed = crate::schema::FieldPath::parse(field_path);
+            let leaf = parsed.leaf().unwrap_or(field_path);
+            let exclusive = exclusive_siblings(&manifest.payload_type, leaf);
+            let preferred = preferred_exclusive(exclusive, field_path, manifest);
             let mut obj = serde_json::Map::new();
             for child_name in &manifest.field_order {
                 let Some(child) = manifest.fields.get(child_name) else {
                     continue;
                 };
-                if child.parent_key.as_deref() != Some(field_name) {
+                if child.parent_key.as_deref() != Some(field_path) {
+                    continue;
+                }
+                // `ANY` / `{{key}}` / `{{value}}` describe the operator's
+                // keys; they are not keys. The dictionary is left for the
+                // operator to fill — `ddm info` reports its value_shape.
+                if child.is_placeholder() {
                     continue;
                 }
                 if !child.flags.required && !full {
                     continue;
                 }
-                // Mutually exclusive siblings: take the first, skip the rest.
-                if exclusive.contains(&child_name.as_str()) {
-                    if emitted_exclusive {
-                        continue;
-                    }
-                    emitted_exclusive = true;
+                // `child_name` walks field_order, which holds PATHS. The
+                // exclusive groups are bare leaf names and the emitted JSON
+                // key must be the leaf too — a document keyed
+                // `Beta.OfferPrograms` is not the document Apple's schema
+                // describes.
+                if exclusive.contains(&child.name.as_str())
+                    && preferred != Some(child.name.as_str())
+                {
+                    continue;
                 }
                 obj.insert(
-                    child_name.clone(),
-                    generate_field_value(child_name, child, manifest, full),
+                    child.name.clone(),
+                    generate_field_value(&child.path, child, manifest, full),
                 );
             }
             serde_json::Value::Object(obj)
@@ -1320,24 +2466,7 @@ pub fn handle_ddm_generate(
     }
 
     // Build the declaration
-    let mut payload = DeclarationPayload::new();
-
-    // Top-level fields only — nested children are emitted by the Dictionary arm of
-    // `generate_field_value`, driven by each field's `parent_key`. Emitting nested
-    // fields at the top level would flatten the structure and (for required children
-    // of optional parents) create invalid docs that fail `ddm validate`.
-    for field_name in &manifest.field_order {
-        if let Some(field) = manifest.fields.get(field_name) {
-            if field.parent_key.is_some() {
-                continue;
-            }
-            if !field.flags.required && !full {
-                continue;
-            }
-            let value = generate_field_value(field_name, field, manifest, full);
-            payload.insert(field_name.clone(), value);
-        }
-    }
+    let (mut payload, exclusive_choice) = build_top_level_payload(manifest, full);
 
     // Merge an explicit payload file (JSON or TOML) over the schema skeleton —
     // e.g. {"hello":"world"} fills a `com.apple.management.properties` Payload.
@@ -1363,7 +2492,8 @@ pub fn handle_ddm_generate(
     }
 
     // Build identifier.
-    // Resolve domain: profile.toml → .contour/config.toml → error.
+    // --identifier is used verbatim; otherwise domain: --org → profile.toml →
+    // CONTOUR_ORG → .contour/config.toml → error.
     // Refuse silent "com.example" defaulting — DDM declarations are deployable
     // and an example-domain identifier collides across orgs.
     let short_name = manifest
@@ -1374,6 +2504,7 @@ pub fn handle_ddm_generate(
     let identifier = resolve_declaration_identifier(identifier, org, config, short_name)?;
 
     let decl = Declaration {
+        payload_scope: None,
         declaration_type: manifest.payload_type.clone(),
         identifier,
         server_token: None,
@@ -1391,7 +2522,7 @@ pub fn handle_ddm_generate(
         if output_mode == OutputMode::Json {
             contour_core::output::print_error_json(&msg, Some("SCHEMA_VIOLATION"));
         }
-        anyhow::bail!(msg);
+        return Err(contour_core::output::Reported(msg).into());
     }
 
     let json = write_declaration(&decl)?;
@@ -1417,12 +2548,11 @@ pub fn handle_ddm_generate(
 
     std::fs::write(&output_path, &json)?;
 
-    // Double-validate the generated file using the SAME validator that
-    // `profile ddm validate` uses. This catches nested-required-field bugs
-    // that the shallow post-generate check would miss, and turns round-trip
-    // failures into a hard error at generate time rather than leaving the
-    // user holding an invalid file.
-    let result = validate_single_ddm(std::path::Path::new(&output_path), &registry)?;
+    // Re-validate the written file through the same path `profile ddm
+    // validate` uses. The in-memory check above already ran the schema
+    // rules; this guards the serialize/parse round-trip, so a file that
+    // would fail `validate` is a hard error here rather than left on disk.
+    let result = validate_single_ddm(std::path::Path::new(&output_path), &registry, &[])?;
     if !result.valid {
         if output_mode == OutputMode::Human {
             eprintln!(
@@ -1472,6 +2602,34 @@ pub fn handle_ddm_generate(
             if full { "all" } else { "required only" }
         );
         print_deployment_notes(&manifest.payload_type);
+        // "required only" means required TOP-LEVEL fields. A type whose
+        // top-level keys are all optional — app.settings is one — therefore
+        // scaffolds as `{}`, which reads as "contour knows nothing about
+        // this type" rather than "ask for all fields". Say which it is.
+        if !full && decl.payload.is_empty() {
+            println!(
+                "\n{} every top-level field of this type is optional, so \
+                 \"required only\" produced an empty payload. Re-run with --full \
+                 to scaffold the whole structure.",
+                "Note:".yellow().bold()
+            );
+        }
+
+        // The scaffold picked one of a mutually exclusive group. Name what it
+        // left out, so the omission reads as Apple's constraint rather than a
+        // hole in contour's schema.
+        if let Some(choice) = &exclusive_choice {
+            let hint = exclusive_hint(&manifest.payload_type)
+                .map(|h| format!(" {h}"))
+                .unwrap_or_default();
+            println!(
+                "\n{} Apple allows only one of these per declaration, so the \
+                 scaffold set {} and omitted {}.{hint}",
+                "Note:".yellow().bold(),
+                choice.chosen,
+                choice.omitted.join(", ")
+            );
+        }
         println!(
             "\n{}",
             "Edit the JSON file to set your values, then deploy via your MDM.".dimmed()
@@ -1481,14 +2639,6 @@ pub fn handle_ddm_generate(
     Ok(())
 }
 
-/// Compose a DDM bundle into asset / configuration / activation declarations
-/// in one shot. Mirror of `handle_ddm_generate` but driven by a TOML bundle
-/// describing the full intent rather than a single declaration type.
-///
-/// The org domain is resolved from `profile.toml` or `.contour/config.toml`
-/// (same fallback chain `handle_ddm_generate` uses) and threaded into
-/// [`compose`]. Failures emit the standard `{success:false, error, error_code}`
-/// envelope on stderr when `--json` is set.
 /// Print available DDM presets (embedded + external from `--preset-path`
 /// and `~/.contour/presets/`). JSON for agents, table for humans.
 fn list_presets_action(preset_path: Option<&str>, output_mode: OutputMode) -> Result<()> {
@@ -1525,6 +2675,15 @@ fn list_presets_action(preset_path: Option<&str>, output_mode: OutputMode) -> Re
     clippy::too_many_arguments,
     reason = "ddm compose threads many CLI flags including --preset / --preset-path / --list-presets"
 )]
+/// Compose a DDM bundle into asset / configuration / activation declarations
+/// in one shot. Mirror of `handle_ddm_generate` but driven by a TOML bundle
+/// describing the full intent rather than a single declaration type.
+///
+/// The org domain is resolved with the same fallback chain
+/// `handle_ddm_generate` uses (`--org` → `profile.toml` → `CONTOUR_ORG` →
+/// `.contour/config.toml`) and threaded into [`compose`]. Failures emit the
+/// standard `{success:false, error, error_code}` envelope on stderr when
+/// `--json` is set.
 pub fn handle_ddm_compose(
     bundle_path: Option<&str>,
     output_dir: Option<&str>,
@@ -1534,6 +2693,7 @@ pub fn handle_ddm_compose(
     preset: Option<&str>,
     preset_path: Option<&str>,
     list_presets: bool,
+    platforms: &[String],
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -1559,7 +2719,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&msg, Some("UNKNOWN"));
             }
-            anyhow::anyhow!(msg)
+            anyhow::Error::from(contour_core::output::Reported(msg))
         })?;
         (body, format!("preset:{name}"))
     } else {
@@ -1572,7 +2732,7 @@ pub fn handle_ddm_compose(
                 if output_mode == OutputMode::Json {
                     contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
                 }
-                anyhow::bail!(msg);
+                return Err(contour_core::output::Reported(msg).into());
             }
         }
     };
@@ -1583,7 +2743,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&msg, Some("INVALID_FORMAT"));
             }
-            anyhow::bail!(msg);
+            return Err(contour_core::output::Reported(msg).into());
         }
     };
 
@@ -1598,7 +2758,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
             }
-            anyhow::bail!(msg);
+            return Err(contour_core::output::Reported(msg).into());
         }
     }
 
@@ -1613,7 +2773,7 @@ pub fn handle_ddm_compose(
         if output_mode == OutputMode::Json {
             contour_core::output::print_error_json(&msg, Some("INVALID_ORG"));
         }
-        anyhow::bail!(msg);
+        return Err(contour_core::output::Reported(msg).into());
     };
 
     // 3. Compose.
@@ -1624,7 +2784,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&e.to_string(), Some(e.error_code()));
             }
-            anyhow::bail!(e.to_string());
+            return Err(contour_core::output::Reported(e.to_string()).into());
         }
     };
 
@@ -1639,6 +2799,13 @@ pub fn handle_ddm_compose(
 
     // Fail-closed: validate every emitted declaration against the embedded
     // schema before writing any of them.
+    let mut compose_warnings: Vec<String> = Vec::new();
+    // --platform wins over the bundle's own `platforms`.
+    let targets = parse_platforms(if platforms.is_empty() {
+        &bundle.platforms
+    } else {
+        platforms
+    })?;
     {
         let mut decls: Vec<(&str, &Declaration)> = vec![("configuration", &composed.configuration)];
         if let Some(a) = &composed.asset {
@@ -1652,9 +2819,27 @@ pub fn handle_ddm_compose(
         }
         let mut all_errors = Vec::new();
         for (kind, d) in &decls {
-            let (errors, _) = declaration_errors(d, &registry);
+            let (errors, warnings) = declaration_errors(d, &registry);
             for e in errors {
                 all_errors.push(format!("{kind}: {e}"));
+            }
+            // An unknown field is a warning to `validate`, which reads files
+            // someone may have reasons for. Compose writes them: a key Apple
+            // does not define at that path is ignored on the device, so the
+            // setting the author meant does not apply. Refused, not warned.
+            // A key the target OS does not have is ignored there, like an
+            // unknown one: refused, not warned.
+            for p in &targets {
+                for f in platform_findings(d, &registry, *p) {
+                    all_errors.push(format!("{kind}: {f}"));
+                }
+            }
+            for w in warnings {
+                if w.starts_with("Unknown field") {
+                    all_errors.push(format!("{kind}: {w}"));
+                } else {
+                    compose_warnings.push(format!("{kind}: {w}"));
+                }
             }
         }
         if !all_errors.is_empty() {
@@ -1665,7 +2850,7 @@ pub fn handle_ddm_compose(
             if output_mode == OutputMode::Json {
                 contour_core::output::print_error_json(&msg, Some("SCHEMA_VIOLATION"));
             }
-            anyhow::bail!(msg);
+            return Err(contour_core::output::Reported(msg).into());
         }
     }
 
@@ -1699,8 +2884,8 @@ pub fn handle_ddm_compose(
 
     // 5. Emit human or JSON report.
     match output_mode {
-        OutputMode::Json => emit_compose_json(&bundle, &composed, &written),
-        OutputMode::Human => emit_compose_human(&bundle, &composed, &written),
+        OutputMode::Json => emit_compose_json(&bundle, &composed, &written, &compose_warnings),
+        OutputMode::Human => emit_compose_human(&bundle, &composed, &written, &compose_warnings),
     }
 
     Ok(())
@@ -1710,6 +2895,7 @@ fn emit_compose_json(
     bundle: &Bundle,
     composed: &ComposedBundle,
     written: &[(String, PathBuf, Declaration)],
+    warnings: &[String],
 ) {
     let files: Vec<_> = written
         .iter()
@@ -1740,6 +2926,7 @@ fn emit_compose_json(
         "success":     true,
         "intent_name": bundle.intent_name,
         "files":       files,
+        "warnings":    warnings,
     });
     println!(
         "{}",
@@ -1751,6 +2938,7 @@ fn emit_compose_human(
     bundle: &Bundle,
     composed: &ComposedBundle,
     written: &[(String, PathBuf, Declaration)],
+    warnings: &[String],
 ) {
     println!(
         "{} {}",
@@ -1776,6 +2964,9 @@ fn emit_compose_human(
             path.display()
         );
     }
+    for w in warnings {
+        println!("  {} {w}", "Warning:".yellow());
+    }
 }
 
 /// Verify cross-references across a directory of DDM declarations.
@@ -1795,7 +2986,7 @@ pub fn handle_ddm_verify(
         if output_mode == OutputMode::Json {
             contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
         }
-        anyhow::bail!(msg);
+        return Err(contour_core::output::Reported(msg).into());
     }
 
     // Walk and parse.
@@ -1816,6 +3007,40 @@ pub fn handle_ddm_verify(
         }
     }
 
+    // Verifying nothing is not a pass: a bundle composed into per-intent
+    // subdirectories and checked without -r would otherwise report success
+    // over zero declarations.
+    if files.is_empty() {
+        let nested = if recursive {
+            0
+        } else {
+            WalkDir::new(dir)
+                .min_depth(2)
+                .follow_links(true)
+                .into_iter()
+                .flatten()
+                .filter(|e| {
+                    let p = e.path();
+                    p.is_file() && p.extension().is_some_and(|x| x == "json") && is_ddm_file(p)
+                })
+                .count()
+        };
+        let msg = if nested > 0 {
+            format!(
+                "no DDM declarations directly in {directory}; {nested} found in \
+                 subdirectories — pass -r/--recursive to verify them"
+            )
+        } else {
+            format!("no DDM declarations in {directory} — nothing was verified")
+        };
+        if output_mode == OutputMode::Json {
+            // IO_ERROR, not a new code: the DDM error-code enum is a
+            // contract agents switch on, and "no input found" is its case.
+            contour_core::output::print_error_json(&msg, Some("IO_ERROR"));
+        }
+        return Err(contour_core::output::Reported(msg).into());
+    }
+
     let mut declarations: Vec<(PathBuf, Declaration)> = Vec::new();
     let mut parse_errors: Vec<(PathBuf, String)> = Vec::new();
     for file in files {
@@ -1833,10 +3058,14 @@ pub fn handle_ddm_verify(
         report.is_clean()
     };
     let exit_ok = clean && parse_errors.is_empty();
+    let next = verify_next_steps(directory, &report);
 
     match output_mode {
-        OutputMode::Json => emit_verify_json(directory, &report, &parse_errors),
-        OutputMode::Human => emit_verify_human(directory, &report, &parse_errors, strict),
+        OutputMode::Json => emit_verify_json(directory, &report, &parse_errors, &next),
+        OutputMode::Human => {
+            emit_verify_human(directory, &report, &parse_errors, strict);
+            contour_core::output::print_next_steps(&next);
+        }
     }
 
     if !exit_ok {
@@ -1851,10 +3080,68 @@ pub fn handle_ddm_verify(
     Ok(())
 }
 
-fn emit_verify_json(directory: &str, report: &VerifyReport, parse_errors: &[(PathBuf, String)]) {
+/// After `ddm verify`: a dangling asset reference becomes the `generate`
+/// call that creates the missing asset, typed from the schema's
+/// `assettypes` for that field; an unsubscribed status key points at the
+/// predicate/subscription invariant in the DDM SOP. A clean report needs
+/// nothing.
+fn verify_next_steps(directory: &str, report: &VerifyReport) -> Vec<contour_core::output::NextStep> {
+    use contour_core::output::NextStep;
+    let mut steps = Vec::new();
+    let mut registry = None;
+    for err in &report.errors {
+        match err {
+            VerifyError::DanglingAssetReference {
+                configuration_id,
+                field,
+                target,
+                ..
+            } => {
+                let config_type = report
+                    .configurations
+                    .iter()
+                    .find(|c| &c.identifier == configuration_id)
+                    .map(|c| c.r#type.as_str());
+                let registry = registry.get_or_insert_with(|| SchemaRegistry::embedded().ok());
+                let asset_type = registry
+                    .as_ref()
+                    .zip(config_type)
+                    .and_then(|(reg, t)| reg.get(t))
+                    .and_then(|m| m.fields.values().find(|f| &f.name == field))
+                    .and_then(|f| f.asset_types.iter().find(|a| a.starts_with("com.apple.asset.")))
+                    .cloned()
+                    .unwrap_or_else(|| "<asset type>".to_string());
+                let short = target.rsplit('.').next().unwrap_or("asset");
+                steps.push(NextStep::new(
+                    format!("Create the asset {field} points at"),
+                    format!(
+                        "contour profile ddm generate {asset_type} --identifier {target} --org <org> -o {directory}/{short}.json"
+                    ),
+                ));
+            }
+            VerifyError::UnsubscribedStatusKey { .. } => {
+                let cmd = "contour help-ai --sop ddm --at \"status-subscription\"";
+                if !steps.iter().any(|s: &NextStep| s.command == cmd) {
+                    steps.push(NextStep::new("Subscribe the status key the predicate reads", cmd));
+                }
+            }
+            _ => {}
+        }
+    }
+    steps.truncate(3);
+    steps
+}
+
+fn emit_verify_json(
+    directory: &str,
+    report: &VerifyReport,
+    parse_errors: &[(PathBuf, String)],
+    next: &[contour_core::output::NextStep],
+) {
     let json = serde_json::json!({
         "success":          report.is_clean() && parse_errors.is_empty(),
         "directory":        directory,
+        "next":             next,
         "asset_count":      report.assets.len(),
         "config_count":     report.configurations.len(),
         "activation_count": report.activations.len(),
@@ -2048,6 +3335,101 @@ fn describe_warning(warn: &VerifyWarning) -> String {
 mod tests {
     use super::*;
 
+    fn intelligence(payload: serde_json::Value) -> Vec<String> {
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+        let decl: Declaration = serde_json::from_value(serde_json::json!({
+            "Type": "com.apple.configuration.intelligence.settings",
+            "Identifier": "com.acme.config.ai",
+            "Payload": payload,
+        }))
+        .unwrap();
+        declaration_errors(&decl, &registry).1
+    }
+
+    /// Apple's per-key deprecation notes drive the map: the intelligence
+    /// restrictions show up, nested targets are found, and a key with no
+    /// exact partner is listed without a guessed one.
+    #[test]
+    fn ddm_map_lists_keys_moved_to_other_declarations() {
+        let moved = moved_keys("com.apple.applicationaccess");
+        let ai = moved
+            .get("com.apple.configuration.intelligence.settings")
+            .expect("the intelligence declaration must be listed");
+        assert!(
+            ai.iter().any(|(k, to)| k == "allowMailSummary"
+                && to.as_deref() == Some("Apps.Mail.AllowSummary")),
+            "{ai:?}"
+        );
+        let siri = &moved["com.apple.configuration.siri.settings"];
+        assert!(
+            siri.iter()
+                .any(|(k, to)| k == "allowAssistant" && to.is_none()),
+            "{siri:?}"
+        );
+    }
+
+    fn intelligence_decl(payload: serde_json::Value) -> Declaration {
+        serde_json::from_value(serde_json::json!({
+            "Type": "com.apple.configuration.intelligence.settings",
+            "Identifier": "com.acme.config.ai",
+            "Payload": payload,
+        }))
+        .unwrap()
+    }
+
+    /// Apple's per-platform `n/a` reaches the check, at the top level and
+    /// nested: Image Wand is not a macOS key, Notes transcription is not a
+    /// visionOS one.
+    #[test]
+    fn a_key_apple_does_not_offer_on_the_platform_is_reported() {
+        use crate::schema::Platform;
+        let registry = SchemaRegistry::embedded().unwrap();
+        let d = intelligence_decl(serde_json::json!({
+            "AllowImageWand": false,
+            "AllowGenmoji": false,
+            "Apps": {"Notes": {"AllowTranscription": false}}
+        }));
+        let mac = platform_findings(&d, &registry, Platform::MacOS);
+        assert_eq!(mac.len(), 1, "{mac:?}");
+        assert!(
+            mac[0].starts_with("AllowImageWand is not available on macOS"),
+            "{mac:?}"
+        );
+        let vision = platform_findings(&d, &registry, Platform::VisionOS);
+        assert!(
+            vision
+                .iter()
+                .any(|f| f.starts_with("Apps.Notes.AllowTranscription")),
+            "{vision:?}"
+        );
+        assert!(platform_findings(&d, &registry, Platform::Ios).is_empty());
+    }
+
+    /// A key known by name elsewhere is unknown at the wrong path: `Mail`
+    /// belongs under `Apps`.
+    #[test]
+    fn a_nested_key_at_the_payload_root_is_unknown() {
+        let w = intelligence(serde_json::json!({"Mail": {"AllowSummary": false}}));
+        assert!(w.iter().any(|w| w == "Unknown field: Mail"), "{w:?}");
+    }
+
+    /// Unknown keys are found inside nested dictionaries, not only at the
+    /// top level, and the message names what is valid there.
+    #[test]
+    fn an_unknown_key_in_a_nested_dictionary_is_reported() {
+        let w = intelligence(serde_json::json!({"Apps": {"Mial": {"AllowSummary": false}}}));
+        assert!(
+            w.iter()
+                .any(|w| w.starts_with("Unknown field: Apps.Mial") && w.contains("Mail")),
+            "{w:?}"
+        );
+        let clean = intelligence(serde_json::json!({"Apps": {"Mail": {"AllowSummary": false}}}));
+        assert!(
+            !clean.iter().any(|w| w.starts_with("Unknown field")),
+            "{clean:?}"
+        );
+    }
+
     /// Generate the payload for a DDM type via the same code path as
     /// `handle_ddm_generate`, without touching the filesystem.
     fn build_payload(type_name: &str, full: bool) -> DeclarationPayload {
@@ -2059,7 +3441,7 @@ mod tests {
         let mut payload = DeclarationPayload::new();
         for field_name in &manifest.field_order {
             if let Some(field) = manifest.fields.get(field_name) {
-                if field.parent_key.is_some() {
+                if field.parent_key.is_some() || field.is_placeholder() {
                     continue;
                 }
                 if !field.flags.required && !full {
@@ -2087,16 +3469,12 @@ mod tests {
                 if payload.get(&field.name).is_none() {
                     errors.push(format!("Missing required field: {}", field.name));
                 }
-            } else if field.parent_key.is_some() {
-                let ancestors = resolve_ancestor_path(&field.name, manifest);
-                if let Some(parent_obj) = walk_payload_path(&payload.0, &ancestors)
-                    && !parent_obj.contains_key(&field.name)
-                {
-                    let full_path = ancestors.join(".");
-                    errors.push(format!(
-                        "Missing required field: {full_path}.{}",
-                        field.name
-                    ));
+            } else if field.parent_key.is_some() && field.name != "ANY" {
+                let ancestors = ancestors_of(field);
+                for (label, parent_obj) in walk_payload_paths(&payload.0, &ancestors) {
+                    if !parent_obj.contains_key(&field.name) {
+                        errors.push(format!("Missing required field: {label}.{}", field.name));
+                    }
                 }
             }
         }
@@ -2175,6 +3553,7 @@ mod tests {
                 // contour must never emit a document its own validator rejects.
                 let manifest = registry.get_by_name(type_name).unwrap();
                 let decl = Declaration {
+                    payload_scope: None,
                     declaration_type: manifest.payload_type.clone(),
                     identifier: "com.acme.test".to_string(),
                     server_token: None,
@@ -2218,6 +3597,7 @@ mod tests {
 
         let bundle = Bundle {
             intent_name: "sshd".into(),
+            platforms: Vec::new(),
             asset: Some(BundleAsset {
                 type_name: "com.apple.asset.data".into(),
                 payload: asset_payload,
@@ -2298,6 +3678,7 @@ mod tests {
         cfg.insert("ServiceType".into(), json!("com.apple.sshd"));
         let bundle = Bundle {
             intent_name: "z".into(),
+            platforms: Vec::new(),
             asset: Some(asset),
             configuration: BundleConfiguration {
                 type_name: "com.apple.configuration.services.configuration-files".into(),
@@ -2382,6 +3763,7 @@ mod cross_key_tests {
         let mut payload = DeclarationPayload::new();
         payload.insert("Beta".to_string(), beta);
         Declaration {
+            payload_scope: None,
             declaration_type: SWU.to_string(),
             identifier: "com.acme.settings".to_string(),
             server_token: None,
@@ -2391,7 +3773,8 @@ mod cross_key_tests {
     }
 
     fn programs() -> serde_json::Value {
-        serde_json::json!([{ "Program": { "Description": "Pilot", "Token": "T" } }])
+        // Flat: `Program` is the element's name, not a key.
+        serde_json::json!([{ "Description": "Pilot", "Token": "T" }])
     }
 
     fn program() -> serde_json::Value {
@@ -2476,6 +3859,196 @@ mod cross_key_tests {
         }
     }
 
+    const SSO: &str = "com.apple.configuration.extensible-sso";
+
+    fn decl_with_psso(psso: serde_json::Value) -> Declaration {
+        let mut payload = DeclarationPayload::new();
+        payload.insert("PlatformSSO".to_string(), psso);
+        Declaration {
+            payload_scope: None,
+            declaration_type: SSO.to_string(),
+            identifier: "com.acme.sso".to_string(),
+            server_token: None,
+            authentication: None,
+            payload,
+        }
+    }
+
+    /// Apple, on EnableAtLogin: "Requires that `UseSharedDeviceKeys` is
+    /// `true`." Authenticated Guest Mode without shared device keys installs
+    /// and does nothing.
+    #[test]
+    fn enable_at_login_without_shared_device_keys_is_an_error() {
+        for psso in [
+            serde_json::json!({ "UserCreation": { "EnableAtLogin": true } }),
+            serde_json::json!({ "UseSharedDeviceKeys": false, "UserCreation": { "EnableAtLogin": true } }),
+        ] {
+            let errors = cross_key_errors(&decl_with_psso(psso));
+            assert!(
+                errors.iter().any(|e| e.contains("EnableAtLogin") && e.contains("UseSharedDeviceKeys")),
+                "expected an EnableAtLogin/UseSharedDeviceKeys error, got: {errors:?}"
+            );
+        }
+    }
+
+    /// The same sentence sits on Authorization.EnableIdentityProviderAccounts.
+    #[test]
+    fn identity_provider_accounts_without_shared_device_keys_is_an_error() {
+        let d = decl_with_psso(serde_json::json!({
+            "Authorization": { "EnableIdentityProviderAccounts": true }
+        }));
+        let errors = cross_key_errors(&d);
+        assert!(
+            errors.iter().any(|e| e.contains("EnableIdentityProviderAccounts")),
+            "got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn shared_device_keys_satisfy_both_flags_and_off_flags_need_nothing() {
+        let with_keys = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "Password",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": { "EnableAtLogin": true, "NewUserAuthorizationMode": "Temporary" },
+            "Authorization": { "EnableIdentityProviderAccounts": true }
+        }));
+        assert!(cross_key_errors(&with_keys).is_empty(), "{:?}", cross_key_errors(&with_keys));
+        let flags_off = decl_with_psso(serde_json::json!({
+            "UserCreation": { "EnableAtLogin": false }
+        }));
+        assert!(cross_key_errors(&flags_off).is_empty());
+        let no_user_creation = decl_with_psso(serde_json::json!({ "AuthenticationMethod": "Password" }));
+        assert!(cross_key_errors(&no_user_creation).is_empty());
+    }
+
+    fn with_policies(method: &str, login: &[&str], extra: serde_json::Value) -> Declaration {
+        let mut psso = serde_json::json!({
+            "AuthenticationMethod": method,
+            "Policies": { "Login": login }
+        });
+        if let (Some(dst), Some(src)) = (psso["Policies"].as_object_mut(), extra.as_object()) {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+        decl_with_psso(psso)
+    }
+
+    /// Apple: RequireTouchID / RequireTouchIDOrWatch / AllowOpenIDForTouchIDFallback
+    /// "Only use when AuthenticationMethod is Password or UserSecureEnclaveKey";
+    /// Attempt/Require/AllowAuthenticationGracePeriod "Only use when
+    /// AuthenticationMethod is Password".
+    #[test]
+    fn policy_values_are_held_to_their_authentication_method() {
+        let bad = with_policies("SmartCard", &["RequireAuthentication", "RequireTouchID"], serde_json::json!({}));
+        let errors = cross_key_errors(&bad);
+        assert!(errors.iter().any(|e| e.contains("RequireTouchID") && e.contains("SmartCard")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("RequireAuthentication") && e.contains("SmartCard")), "{errors:?}");
+
+        let sek = with_policies("UserSecureEnclaveKey", &["RequireTouchID"], serde_json::json!({}));
+        assert!(cross_key_errors(&sek).is_empty(), "{:?}", cross_key_errors(&sek));
+
+        let good = with_policies("Password", &["RequireAuthentication", "RequireTouchID"], serde_json::json!({}));
+        assert!(cross_key_errors(&good).is_empty(), "{:?}", cross_key_errors(&good));
+
+        let absent = decl_with_psso(serde_json::json!({ "Policies": { "Login": ["RequireAuthentication"] } }));
+        assert!(cross_key_errors(&absent).iter().any(|e| e.contains("PlatformSSO.AuthenticationMethod") && e.contains("found absent")));
+    }
+
+    /// Apple: AllowOfflineGracePeriod "Only use when AuthenticationMethod is
+    /// Password and RequireAuthentication is enabled, or AuthenticationMethod
+    /// is OpenID"; OfflineGracePeriod "Required when setting
+    /// AllowOfflineGracePeriod"; the same shape for the authentication grace.
+    #[test]
+    fn grace_periods_need_their_partner_keys() {
+        let no_require = with_policies("Password", &["AttemptAuthentication", "AllowOfflineGracePeriod"],
+            serde_json::json!({ "OfflineGracePeriod": 86400 }));
+        assert!(cross_key_errors(&no_require).iter().any(|e| e.contains("AllowOfflineGracePeriod")));
+
+        let no_period = with_policies("Password", &["RequireAuthentication", "AllowOfflineGracePeriod", "AllowAuthenticationGracePeriod"],
+            serde_json::json!({}));
+        let errors = cross_key_errors(&no_period);
+        assert!(errors.iter().any(|e| e.contains("OfflineGracePeriod is required")), "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("AuthenticationGracePeriod is required")), "{errors:?}");
+
+        let complete = with_policies("Password", &["RequireAuthentication", "AllowOfflineGracePeriod", "AllowAuthenticationGracePeriod"],
+            serde_json::json!({ "OfflineGracePeriod": 86400, "AuthenticationGracePeriod": 3600 }));
+        assert!(cross_key_errors(&complete).is_empty(), "{:?}", cross_key_errors(&complete));
+
+        let openid = with_policies("OpenID", &["AllowOfflineGracePeriod"], serde_json::json!({ "OfflineGracePeriod": 3600 }));
+        assert!(cross_key_errors(&openid).is_empty(), "{:?}", cross_key_errors(&openid));
+    }
+
+    /// Apple: RegistrationToken "Requires that AuthenticationMethod isn't
+    /// empty"; LoginFrequency "The minimum value is 3600"; EnableAtLogin
+    /// "with an AuthenticationMethod of either Password or SmartCard".
+    #[test]
+    fn registration_token_login_frequency_and_enable_at_login_rules() {
+        let token = decl_with_psso(serde_json::json!({ "RegistrationToken": "abc" }));
+        assert!(cross_key_errors(&token).iter().any(|e| e.contains("RegistrationToken")));
+
+        let freq = decl_with_psso(serde_json::json!({ "LoginFrequency": 600 }));
+        assert!(cross_key_errors(&freq).iter().any(|e| e.contains("LoginFrequency") && e.contains("600")));
+
+        let sek_guest = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "UserSecureEnclaveKey",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": { "EnableAtLogin": true }
+        }));
+        assert!(cross_key_errors(&sek_guest).iter().any(|e| e.contains("EnableAtLogin") && e.contains("Password or SmartCard")));
+    }
+
+    /// Tap to Login: Apple marks the three AccessKey keys "Required if
+    /// UserCreation.AuthenticationMethods includes AccessKey", and an access
+    /// key only opens an Authenticated Guest Mode session.
+    #[test]
+    fn tap_to_login_needs_the_access_key_block_and_guest_mode() {
+        let bare = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "Password",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": { "EnableAtLogin": true, "NewUserAuthenticationMethods": ["AccessKey"] }
+        }));
+        let errors = cross_key_errors(&bare);
+        for key in ["ReaderGroupIdentifier", "TerminalIdentityAssetReference", "ReaderIssuerCertificateAssetReference"] {
+            assert!(errors.iter().any(|e| e.contains(key)), "missing {key} error in {errors:?}");
+        }
+        assert!(errors.iter().any(|e| e.contains("Temporary")), "{errors:?}");
+
+        let persistent = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "Password",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": {
+                "EnableAtLogin": true,
+                "NewUserAuthenticationMethods": ["AccessKey"],
+                "NewUserAuthorizationMode": "Standard"
+            },
+            "AccessKey": {
+                "ReaderGroupIdentifier": "AAAA",
+                "TerminalIdentityAssetReference": "com.acme.asset.terminal",
+                "ReaderIssuerCertificateAssetReference": "com.acme.asset.reader-ca"
+            }
+        }));
+        let errors = cross_key_errors(&persistent);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("Authenticated Guest Mode") && errors[0].contains("found Standard"));
+
+        let complete = decl_with_psso(serde_json::json!({
+            "AuthenticationMethod": "Password",
+            "UseSharedDeviceKeys": true,
+            "UserCreation": {
+                "EnableAtLogin": true,
+                "NewUserAuthenticationMethods": ["AccessKey"],
+                "NewUserAuthorizationMode": "Temporary"
+            },
+            "AccessKey": {
+                "ReaderGroupIdentifier": "AAAA",
+                "TerminalIdentityAssetReference": "com.acme.asset.terminal",
+                "ReaderIssuerCertificateAssetReference": "com.acme.asset.reader-ca"
+            }
+        }));
+        assert!(cross_key_errors(&complete).is_empty(), "{:?}", cross_key_errors(&complete));
+    }
+
     /// Apple explicitly allows OfferPrograms with no ProgramEnrollment on
     /// unsupervised devices, where it is implicitly `Allowed`.
     #[test]
@@ -2490,6 +4063,7 @@ mod cross_key_tests {
         let mut payload = DeclarationPayload::new();
         payload.insert("Anything".to_string(), serde_json::json!(true));
         let d = Declaration {
+            payload_scope: None,
             declaration_type: "com.apple.configuration.passcode.settings".to_string(),
             identifier: "com.acme.p".to_string(),
             server_token: None,
@@ -2497,6 +4071,253 @@ mod cross_key_tests {
             payload,
         };
         assert!(cross_key_errors(&d).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod array_element_tests {
+    use super::{Declaration, DeclarationPayload, declaration_errors};
+
+    /// Validate an app.settings declaration whose `Allowed` block is `allowed`.
+    fn check(allowed: serde_json::Value) -> (Vec<String>, Vec<String>) {
+        let registry = crate::schema::SchemaRegistry::embedded().unwrap();
+        let mut payload = DeclarationPayload::new();
+        payload.insert("Allowed".to_string(), allowed);
+        let decl = Declaration {
+            payload_scope: None,
+            declaration_type: "com.apple.configuration.app.settings".to_string(),
+            identifier: "com.acme.t".to_string(),
+            server_token: None,
+            authentication: None,
+            payload,
+        };
+        declaration_errors(&decl, &registry)
+    }
+
+    fn mentions(list: &[String], needle: &str) -> bool {
+        list.iter().any(|m| m.contains(needle))
+    }
+
+    #[test]
+    fn a_binary_wrapped_in_its_element_name_is_an_error() {
+        let (errors, _) = check(serde_json::json!({
+            "AllowedBinaries": [{"BinaryIdentifier": {"TeamID": "BJ4HAAB9B3"}}]
+        }));
+        assert!(
+            mentions(&errors, "nests its fields under \"BinaryIdentifier\""),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_flat_binary_entry_is_clean() {
+        // Apple's own shape, from the alr-* examples.
+        let (errors, warnings) = check(serde_json::json!({
+            "AllowedBinaries": [{"TeamID": "*APPLE*", "SigningID": "com.apple.Safari.WebApp"}],
+            "DeniedBinaries": [{"CDHash": "03552d8140254d0c190af06f1e470dbc5ded53ba"}]
+        }));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(!mentions(&warnings, "[0]"), "{warnings:?}");
+    }
+
+    #[test]
+    fn an_app_list_of_objects_is_an_error() {
+        // AppIdentifier is a <string> element: the list is bare bundle IDs.
+        let (errors, _) = check(serde_json::json!({
+            "AllowedApps": [{"AppIdentifier": "us.zoom.xos"}]
+        }));
+        assert!(
+            mentions(
+                &errors,
+                "each element of Allowed.AllowedApps is a bare string"
+            ),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_app_list_of_bare_bundle_ids_is_clean() {
+        let (errors, _) = check(serde_json::json!({
+            "AllowedApps": ["us.zoom.xos"],
+            "DeniedApps": ["com.apple.webapp"]
+        }));
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn a_key_the_type_uses_nowhere_is_reported() {
+        let (_, warnings) = check(serde_json::json!({
+            "AllowedBinaries": [{"TeamID": "BJ4HAAB9B3", "TotallyMadeUp": "x"}]
+        }));
+        assert!(
+            mentions(&warnings, "Allowed.AllowedBinaries[0].TotallyMadeUp"),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn an_element_enum_value_is_checked() {
+        let (errors, _) = check(serde_json::json!({
+            "AllowedBinaries": [{"TeamID": "BJ4HAAB9B3", "SigningState": "Bogus"}]
+        }));
+        assert!(
+            mentions(
+                &errors,
+                "Allowed.AllowedBinaries[0].SigningState: \"Bogus\""
+            ),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_deny_entry_needs_a_real_identifier() {
+        // PathPrefix narrows a match but identifies nothing on its own.
+        let (errors, _) = check(serde_json::json!({
+            "DeniedBinaries": [{"PathPrefix": "/Users/Shared/"}]
+        }));
+        assert!(
+            mentions(
+                &errors,
+                "DeniedBinaries requires CDHash, TeamID, or SigningID"
+            ),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_santa_prefixed_signing_id_is_refused() {
+        let (errors, _) = check(serde_json::json!({
+            "DeniedBinaries": [{"SigningID": "BJ4HAAB9B3:us.zoom.xos"}]
+        }));
+        assert!(mentions(&errors, "no 'TeamID:' prefix"), "{errors:?}");
+    }
+}
+
+#[cfg(test)]
+mod nested_enum_tests {
+    use super::{Declaration, DeclarationPayload, declaration_errors};
+    use crate::schema::SchemaRegistry;
+
+    fn sso(payload: serde_json::Value) -> Declaration {
+        let map: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_value(payload).expect("object payload");
+        Declaration {
+            payload_scope: None,
+            declaration_type: "com.apple.configuration.extensible-sso".to_string(),
+            identifier: "com.test.sso".to_string(),
+            server_token: None,
+            authentication: None,
+            payload: DeclarationPayload(map),
+        }
+    }
+
+    fn policy(method: &str, login: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "ExtensionComposedIdentifier": "com.example.sso.extension (ABCDE12345)",
+            "Type": "Redirect",
+            "URLs": ["https://login.example.com/"],
+            "PlatformSSO": {
+                "AuthenticationMethod": method,
+                "Policies": {
+                    "Login": login,
+                    "Unlock": ["RequireAuthentication", "RequireTouchID"],
+                    "FileVault": ["RequireAuthentication"]
+                }
+            }
+        })
+    }
+
+    /// Regression: `fields` is keyed by full path, the ancestor lookup used
+    /// the leaf name, found nothing, and every allowed-value check below the
+    /// top level passed in silence. A Platform SSO policy with a misspelt
+    /// method or policy value validated. Checked at depth one and inside a
+    /// bare string array.
+    #[test]
+    fn nested_enum_values_are_checked_at_every_depth() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry");
+
+        let (errors, _) =
+            declaration_errors(&sso(policy("Password", &["RequireAuthentication", "RequireTouchID"])), &registry);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let (errors, _) =
+            declaration_errors(&sso(policy("Passwrd", &["RequireAuthentication"])), &registry);
+        assert!(
+            errors.iter().any(|e| e.contains("PlatformSSO.AuthenticationMethod") && e.contains("Passwrd")),
+            "{errors:?}"
+        );
+
+        let (errors, _) =
+            declaration_errors(&sso(policy("Password", &["RequireAuthentication", "RequireTouchId"])), &registry);
+        assert!(
+            errors.iter().any(|e| e.contains("PlatformSSO.Policies.Login[1]") && e.contains("RequireTouchId")),
+            "{errors:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod privacy_key_tests {
+    use super::{Declaration, DeclarationPayload, declaration_errors};
+
+    const APP_SETTINGS: &str = "com.apple.configuration.app.settings";
+
+    /// A real key, as an admin would write it: bare identifier, requirement
+    /// in curly braces, quotes only inside the requirement's own body.
+    const ZOOM: &str = "us.zoom.xos {identifier \"us.zoom.xos\" and anchor apple generic \
+                        and certificate leaf[subject.OU] = BJ4HAAB9B3}";
+
+    fn warnings_for(key: &str) -> Vec<String> {
+        let registry = crate::schema::SchemaRegistry::embedded().unwrap();
+        let mut defaults = serde_json::Map::new();
+        defaults.insert(key.to_string(), serde_json::json!({ "Camera": "Allow" }));
+        let mut payload = DeclarationPayload::new();
+        payload.insert(
+            "Privacy".to_string(),
+            serde_json::json!({ "PermissionDefaults": defaults }),
+        );
+        let decl = Declaration {
+            payload_scope: None,
+            declaration_type: APP_SETTINGS.to_string(),
+            identifier: "com.acme.privacy".to_string(),
+            server_token: None,
+            authentication: None,
+            payload,
+        };
+        declaration_errors(&decl, &registry).1
+    }
+
+    #[test]
+    fn parenthesised_requirement_is_named_as_such() {
+        let w = warnings_for("us.zoom.xos (identifier \"us.zoom.xos\")");
+        assert!(
+            w.iter().any(|m| m.contains("parentheses")),
+            "a parenthesised requirement should be named, not reported as missing: {w:?}"
+        );
+        assert!(
+            !w.iter().any(|m| m.contains("carries no designated")),
+            "the requirement is present, just bracketed wrong: {w:?}"
+        );
+    }
+
+    #[test]
+    fn quoted_identifier_is_flagged() {
+        let w = warnings_for("\"us.zoom.xos\" {anchor apple generic}");
+        assert!(
+            w.iter().any(|m| m.contains("double quotes")),
+            "a quoted app identifier should be flagged: {w:?}"
+        );
+    }
+
+    #[test]
+    fn a_well_formed_key_is_quiet() {
+        let w = warnings_for(ZOOM);
+        for noise in ["parentheses", "double quotes", "carries no designated"] {
+            assert!(
+                !w.iter().any(|m| m.contains(noise)),
+                "well-formed key raised {noise}: {w:?}"
+            );
+        }
     }
 }
 
@@ -2517,7 +4338,14 @@ mod enum_validation_tests {
                      depth: u8,
                      parent: Option<&str>| {
             FieldDefinition {
+                allowed_scopes: std::collections::HashMap::new(),
                 name: name.to_string(),
+                range_min: None,
+                range_max: None,
+                subtype: None,
+                format: None,
+                asset_types: Vec::new(),
+                path: name.to_string(),
                 field_type,
                 flags: FieldFlags::default(),
                 title: name.to_string(),
@@ -2531,6 +4359,7 @@ mod enum_validation_tests {
                 deprecated_in: None,
                 introduced_by_platform: HashMap::new(),
                 deprecated_by_platform: HashMap::new(),
+                removed_by_platform: Default::default(),
                 combinetype: None,
             }
         };
@@ -2555,7 +4384,10 @@ mod enum_validation_tests {
         }
 
         SchemaRegistry::from_manifests_for_test(vec![PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: "com.test.configuration.enumcheck".to_string(),
+            kind: None,
             title: "Enum Check".to_string(),
             description: String::new(),
             platforms: Platforms::default(),
@@ -2571,6 +4403,7 @@ mod enum_validation_tests {
 
     fn declaration(payload: DeclarationPayload) -> Declaration {
         Declaration {
+            payload_scope: None,
             declaration_type: "com.test.configuration.enumcheck".to_string(),
             identifier: "com.test.enumcheck".to_string(),
             server_token: None,
@@ -2663,6 +4496,36 @@ mod scaffold_value_tests {
         );
     }
 
+    /// app.managed's four delivery keys are mutually exclusive at the TOP
+    /// level, where there is no parent dictionary to key the rule on.
+    /// BundleID wins: the only member valid on both macOS and iOS.
+    #[test]
+    fn full_scaffold_picks_bundle_id_for_app_managed() {
+        let registry = crate::schema::SchemaRegistry::embedded().unwrap();
+        let manifest = registry
+            .get("com.apple.configuration.app.managed")
+            .expect("app.managed is in the embedded schema");
+
+        let (payload, choice) = super::build_top_level_payload(manifest, true);
+        let choice = choice.expect("app.managed declares an exclusive group");
+
+        assert_eq!(choice.chosen, "BundleID");
+        assert!(
+            payload.get("BundleID").is_some(),
+            "scaffold dropped the member it claims to have chosen"
+        );
+        for other in ["AppStoreID", "ManifestURL", "AppComposedIdentifier"] {
+            assert!(
+                payload.get(other).is_none(),
+                "scaffold emitted {other} alongside BundleID; Apple allows only one"
+            );
+            assert!(
+                choice.omitted.iter().any(|o| o == other),
+                "{other} was dropped but not reported to the operator"
+            );
+        }
+    }
+
     /// A defaultless enum field must scaffold as a member of its rangelist,
     /// not as `""` — generate's fail-closed gate rejects non-members.
     #[test]
@@ -2671,7 +4534,14 @@ mod scaffold_value_tests {
         use std::collections::HashMap;
 
         let field = crate::schema::FieldDefinition {
+            allowed_scopes: std::collections::HashMap::new(),
             name: "Cadence".to_string(),
+            range_min: None,
+            range_max: None,
+            subtype: None,
+            format: None,
+            asset_types: Vec::new(),
+            path: "Cadence".to_string(),
             field_type: crate::schema::FieldType::String,
             flags: FieldFlags::default(),
             title: "Cadence".to_string(),
@@ -2685,10 +4555,14 @@ mod scaffold_value_tests {
             deprecated_in: None,
             introduced_by_platform: HashMap::new(),
             deprecated_by_platform: HashMap::new(),
+            removed_by_platform: Default::default(),
             combinetype: None,
         };
         let manifest = crate::schema::PayloadManifest {
+            manifest_source: None,
+            fields_recording_availability: Default::default(),
             payload_type: "com.test.configuration.scaffold".to_string(),
+            kind: None,
             title: "Scaffold".to_string(),
             description: String::new(),
             platforms: crate::schema::types::Platforms::default(),
@@ -2727,5 +4601,87 @@ mod scaffold_value_tests {
             download, "Allowed",
             "scaffolded enum default must not carry embedded JSON quotes"
         );
+    }
+}
+
+#[cfg(test)]
+mod placeholder_key_tests {
+    use super::*;
+
+    fn placeholder_keys(v: &serde_json::Value, path: &str, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(o) => {
+                for (k, child) in o {
+                    if crate::schema::FieldDefinition::is_placeholder_name(k) {
+                        out.push(format!("{path}.{k}"));
+                    }
+                    placeholder_keys(child, &format!("{path}.{k}"), out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    placeholder_keys(item, &format!("{path}[{i}]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Apple writes `ANY` under a dictionary whose keys the operator names.
+    /// `--full` must leave that dictionary empty, never emit `"ANY": {…}`.
+    #[test]
+    fn no_full_declaration_emits_a_placeholder_key() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+        let mut offenders = Vec::new();
+        let mut dynamic = 0usize;
+        for m in registry.all().filter(|m| m.category.starts_with("ddm-")) {
+            if m.fields
+                .values()
+                .any(|f| m.dynamic_value_shape(f).is_some())
+            {
+                dynamic += 1;
+            }
+            for f in m.top_level_fields() {
+                let v = generate_field_value(&f.path, f, m, true);
+                placeholder_keys(
+                    &v,
+                    &format!("{}.{}", m.payload_type, f.name),
+                    &mut offenders,
+                );
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "placeholder keys emitted:\n{}",
+            offenders.join("\n")
+        );
+        assert!(
+            dynamic >= 3,
+            "expected several dynamic-key declarations, saw {dynamic}"
+        );
+    }
+
+    /// The R7 acceptance case: `Privacy.PermissionDefaults` is keyed by app
+    /// and its value shape is the per-app permission dictionary.
+    #[test]
+    fn app_settings_permission_defaults_reports_its_value_shape() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry loads");
+        let m = registry
+            .get("com.apple.configuration.app.settings")
+            .expect("app.settings is in the schema");
+        let defaults = m
+            .field_by_path("Privacy.PermissionDefaults")
+            .expect("Privacy.PermissionDefaults exists");
+        let shape = m
+            .dynamic_value_shape(defaults)
+            .expect("PermissionDefaults is keyed by the operator");
+        assert!(shape.is_placeholder(), "the shape *is* the ANY child");
+        let names = m.child_names(shape);
+        for want in ["Camera", "Microphone", "OrganizationJustification"] {
+            assert!(names.contains(&want), "value shape lacks {want}: {names:?}");
+        }
+        // And an ordinary dictionary reports nothing.
+        let privacy = m.field_by_path("Privacy").unwrap();
+        assert!(m.dynamic_value_shape(privacy).is_none());
     }
 }
