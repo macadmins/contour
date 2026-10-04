@@ -331,6 +331,16 @@ check_binary_version() {
         exit 1
     fi
     log_info "$BINARY reports $version"
+    # The datasets are compiled in; census reads them back out of the binary.
+    # A zero count means a schema crate was built without its data.
+    if [[ "$BINARY" == "contour" ]]; then
+        if "$DIST_DIR/$BINARY" census --json 2>/dev/null | grep -Eq '"[a-z_]+": 0(,|$)'; then
+            log_error "$BINARY census reports an empty dataset — a schema crate built without its data:"
+            "$DIST_DIR/$BINARY" census --json 2>/dev/null | grep -E '"[a-z_]+": 0(,|$)' >&2
+            exit 1
+        fi
+        log_info "$BINARY census: every embedded dataset present"
+    fi
 }
 
 strip_binary() {
