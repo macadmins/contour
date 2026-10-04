@@ -46,29 +46,38 @@ jobs:
           release_epoch="$(git log -1 --format=%ct "$RELEASE_REF")"
           echo "SOURCE_DATE_EPOCH=$release_epoch" >> "$GITHUB_ENV"
 
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} -p contour
+      # Two products, as on macOS: contour-mcp is read-only and ships on
+      # its own, so it gets its own archive rather than riding in contour's.
+      - name: Build release binaries
+        run: cargo build --release --target ${{ matrix.target }} -p contour -p contour-mcp
 
-      - name: Strip binary
-        run: strip target/${{ matrix.target }}/release/contour
+      - name: Strip binaries
+        run: strip target/${{ matrix.target }}/release/contour target/${{ matrix.target }}/release/contour-mcp
 
-      - name: Verify release binary
+      - name: Verify release binaries
         env:
-          BINARY_PATH: target/${{ matrix.target }}/release/contour
+          TARGET_DIR: target/${{ matrix.target }}/release
           EXPECTED_MACHINE: ${{ matrix.machine }}
         run: |
-          file "$BINARY_PATH" | tee binary-type.txt
-          grep -Fq "$EXPECTED_MACHINE" binary-type.txt
-          "$BINARY_PATH" --version
+          for bin in contour contour-mcp; do
+            file "$TARGET_DIR/$bin" | tee binary-type.txt
+            grep -Fq "$EXPECTED_MACHINE" binary-type.txt
+            "$TARGET_DIR/$bin" --version
+          done
 
-      - name: Package binary
+      - name: Package binaries
+        env:
+          TARGET_DIR: target/${{ matrix.target }}/release
+          VERSION: ${{ steps.meta.outputs.version }}
+          TARGET: ${{ matrix.target }}
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/contour dist/
+          for bin in contour contour-mcp; do
+            cp "$TARGET_DIR/$bin" dist/
+            tar -C dist -czf "dist/$bin-$VERSION-$TARGET.tar.gz" "$bin"
+          done
           cd dist
-          ARCHIVE="contour-${{ steps.meta.outputs.version }}-${{ matrix.target }}.tar.gz"
-          tar -czf "$ARCHIVE" contour
-          sha256sum "$ARCHIVE" > "checksums-${{ matrix.target }}.txt"
+          sha256sum -- *.tar.gz > "checksums-$TARGET.txt"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -99,7 +108,8 @@ jobs:
       - name: Combine checksums
         run: |
           sort artifacts/checksums-*/checksums-*.txt > checksums.txt
-          test "$(wc -l < checksums.txt)" -eq 2
+          # two binaries on two targets
+          test "$(wc -l < checksums.txt)" -eq 4
 
       - name: Create release
         uses: softprops/action-gh-release@v3
