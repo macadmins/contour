@@ -583,6 +583,12 @@ comma-separated subset of `payload-identifier-reverse-dns`,
 `nested-payload-identifier-prefix`. When combined with `--strict`,
 Tier-2 warnings are promoted to errors.
 
+A key Apple's schema does not list but an mSCP rule sets (for example
+`forceInternetSharingOff` under `com.apple.MCX`) is never an unknown key:
+`--strict` reports it as an `MSCP_KEY` warning naming the rule, and the
+profile passes. The same embedded mSCP data drives `contour mscp`, so the
+two agree on what a baseline profile may contain.
+
 #### `profile diff`
 
 Compare two configuration profiles. Two modes:

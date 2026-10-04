@@ -491,6 +491,29 @@ impl<'a> SchemaValidator<'a> {
                 continue;
             }
 
+            // Apple's schema lacks the key but mSCP sets it: the profile is
+            // following a baseline contour itself generates. Never an error;
+            // strict mode notes where the key comes from. Issue #14.
+            if let Some(rules) =
+                contour_form::mscp_keys::rules_prescribing(&payload.payload_type, key)
+            {
+                if self.options.strict {
+                    let rules: Vec<&str> = rules.iter().take(3).map(String::as_str).collect();
+                    result.issues.push(ValidationIssue::warning(
+                        &payload.payload_type,
+                        Some(index),
+                        Some(key),
+                        format!(
+                            "Key '{key}' is not in Apple's schema for {}; mSCP prescribes it (rule {})",
+                            payload.payload_type,
+                            rules.join(", ")
+                        ),
+                        "MSCP_KEY",
+                    ));
+                }
+                continue;
+            }
+
             // Key is unknown — try fuzzy matching
             if let Some(suggestion) = find_similar_key(key, manifest) {
                 let message = format!("Unknown key '{}'. Did you mean '{}'?", key, suggestion);
@@ -1050,6 +1073,45 @@ mod tests {
         let registry = registry_from_manifest(manifest);
         let result = SchemaValidator::new(&registry).validate(&profile);
         assert!(result.errors().is_empty(), "{:?}", result.errors());
+    }
+
+    /// Issue #14: `forceInternetSharingOff` is not in Apple's schema for
+    /// `com.apple.MCX`, but contour's mSCP data prescribes it. Strict mode
+    /// notes the source instead of failing; a key nobody prescribes still
+    /// fails.
+    #[test]
+    fn a_key_mscp_prescribes_is_not_unknown_in_strict_mode() {
+        let registry = registry_from_manifest(test_manifest("com.apple.MCX", &[]));
+        let validator = SchemaValidator::with_options(&registry, ValidationOptions::strict());
+
+        let mut content = BTreeMap::new();
+        content.insert("forceInternetSharingOff".to_string(), plist::Value::Boolean(true));
+        content.insert("forceSomethingElseOff".to_string(), plist::Value::Boolean(true));
+        let profile = ConfigurationProfile {
+            payload_type: "Configuration".to_string(),
+            payload_version: 1,
+            payload_identifier: "test".to_string(),
+            payload_uuid: "TEST".to_string(),
+            payload_display_name: "Test".to_string(),
+            payload_content: vec![create_test_payload("com.apple.MCX", content)],
+            additional_fields: BTreeMap::new(),
+        };
+
+        let result = validator.validate(&profile);
+        let errors = result.errors();
+        assert_eq!(errors.len(), 1, "only the unprescribed key fails, got {errors:?}");
+        assert_eq!(errors[0].field.as_deref(), Some("forceSomethingElseOff"));
+        let noted: Vec<_> = result.warnings().into_iter().filter(|w| w.code == "MSCP_KEY").collect();
+        assert_eq!(noted.len(), 1, "{:?}", result.warnings());
+        assert!(
+            noted[0].message.contains("system_settings_internet_sharing_disable"),
+            "{}",
+            noted[0].message
+        );
+
+        // Non-strict: accepted silently, as any undocumented key is.
+        let result = SchemaValidator::new(&registry).validate(&profile);
+        assert!(result.warnings().iter().all(|w| w.code != "MSCP_KEY"));
     }
 
     /// Against the REAL registry, not a fixture: the fixture keyed fields by

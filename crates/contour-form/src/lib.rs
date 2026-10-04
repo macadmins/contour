@@ -24,6 +24,7 @@ pub mod loader;
 pub mod path;
 // gated inside the file: `#![cfg(feature = "native")]`
 pub mod lookup;
+pub mod mscp_keys;
 pub mod parse;
 pub mod parser;
 pub mod plist_parser;
