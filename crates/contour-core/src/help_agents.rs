@@ -1765,6 +1765,54 @@ mod tests {
     /// A file nobody registered is invisible three ways at once: not servable,
     /// not searchable, and not obviously missing, because the routing table
     /// that names it is prose.
+    /// Agents act on what stands out. Past a length, rules sit among history
+    /// and rationale and get missed, so each file an agent is handed has a
+    /// word budget: SKILL.md is read every time, the routing SOP first, and
+    /// the rest one at a time. History belongs in docs/ or the commit log.
+    #[test]
+    fn every_agent_file_fits_its_word_budget() {
+        const SOP_BUDGET: usize = 1900;
+        const ROUTING_BUDGET: usize = 1500;
+        const SKILL_BUDGET: usize = 1200;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/contour");
+        let mut files = vec![(root.join("SKILL.md"), SKILL_BUDGET)];
+        for entry in std::fs::read_dir(root.join("references"))
+            .expect("references/ exists")
+            .flatten()
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("sop-") && name.ends_with(".md") {
+                let budget = if name == "sop-routing.md" {
+                    ROUTING_BUDGET
+                } else {
+                    SOP_BUDGET
+                };
+                files.push((entry.path(), budget));
+            }
+        }
+        let mut over: Vec<String> = files
+            .iter()
+            .filter_map(|(path, budget)| {
+                let words = std::fs::read_to_string(path)
+                    .expect("readable")
+                    .split_whitespace()
+                    .count();
+                (words > *budget).then(|| {
+                    format!(
+                        "  {}: {words} words (budget {budget})",
+                        path.file_name().unwrap().to_string_lossy()
+                    )
+                })
+            })
+            .collect();
+        over.sort();
+        assert!(
+            over.is_empty(),
+            "over budget; cut history and repetition, not rules:\n{}",
+            over.join("\n")
+        );
+    }
+
     #[test]
     fn every_sop_file_is_in_the_catalog() {
         let dir =

@@ -1,20 +1,35 @@
 # SOP: Migrate a Fleet GitOps Repo to v4.83 Structure
 
-A **one-time migration playbook**, not a callable procedure. Driven by
-a human who can eyeball each diff. The goal: take a Fleet GitOps repo
-on legacy (`lib/`) or v4.82 (flat `platforms/`, `macos_settings`)
-shape and end up matching the structure `fleetctl new` scaffolds today.
+A **one-time migration playbook**, driven by a human who eyeballs each diff.
+Goal: take a legacy (`lib/`) or v4.82 (flat `platforms/`, `macos_settings`)
+repo to the structure `fleetctl new` scaffolds today (validated against
+fleetctl v4.84.2 and `fleet/docs/Configuration/yaml-files.md`).
 
-Validated against:
-- A live `fleetctl v4.84.2` scaffold (`fleetctl new`) — the
-  source of truth for what the canonical layout actually generates today
-- `fleet/docs/Configuration/yaml-files.md`
-- `fleet/cmd/fleetctl/fleetctl/templates/new/.github/fleet-gitops/gitops.sh`
+On **v4.82** already (flat `platforms/`)? Most steps are no-ops; do the
+YAML-key and DDM-separation work in steps 4–5.
 
-If you're on **v4.82** already (flat `platforms/`), most steps are a
-no-op — you only need the YAML-key + DDM-separation work in steps 4–5.
+## Hard rules (don't drop these)
 
----
+- **DDM declarations live in `platforms/<os>/declaration-profiles/`**, not
+  in `configuration-profiles/`.
+- **`controls.apple_settings.configuration_profiles` defaults to `paths:` globs**.
+  Use per-file `path:` when one profile needs `labels_include_all`,
+  `labels_include_any`, or `labels_exclude_any` filtering.
+- **`scripts:` is nested under `controls:`**, but **`reports:` and `policies:`
+  are TOP-LEVEL fleet keys** — not under `controls`.
+- **`fleets/` is the directory** (NOT `teams/`); **`unassigned.yml`** is the
+  no-fleet bucket file (NOT `no-team.yml`).
+- **Every fleet YAML has a unique `name:`** — gitops.sh blocks duplicates.
+- **Every label referenced in policies/reports/software** must appear in
+  the `labels:` section of `default.yml` or the relevant fleet YAML.
+- **`apple_settings.configuration_profiles`** replaces
+  `macos_settings.custom_settings` (v4.83.0; old names are deprecated
+  aliases). Never both in one place: Fleet rejects `apple_settings` beside
+  `macos_settings` as conflicting field names. contour writes the new names
+  in files it creates and keeps a file's existing spelling when it edits one.
+- **Never auto-fix a migration step**: stop at each manual diff checkpoint
+  for a human to review.
+
 
 ## Canonical v4.83 directory tree (what `fleetctl new` produces)
 
@@ -53,22 +68,20 @@ your-gitops-repo/
         └── workflow.yml
 ```
 
-**Note on `lib/`** — Fleet's docs also document a `lib/` folder for
-shared label / policy / report YAMLs referenced by `path:` from
-`default.yml`. It's an alternative to platforms-specific dirs; pick one
-storage convention and stick to it. `fleetctl new` uses `labels/` and
-`platforms/<platform>/` and that's the recommended canonical shape.
+**Note on `lib/`** — Fleet also documents a `lib/` folder for shared
+YAMLs referenced by `path:`. Pick one storage convention; the canonical one
+is `labels/` + `platforms/<platform>/`.
 
 ## Top-level YAML keys (verified against fleetctl v4.84.2)
 
-`default.yml` (global) — the scaffolded shape uses just three keys:
+`default.yml` (global) — three keys:
 ```yaml
 org_settings:                # required, default.yml ONLY
 controls:                    # global controls (optional per-fleet override)
 labels:                      # references label files
 ```
 
-`fleets/<fleet-name>.yml` — the scaffolded shape:
+`fleets/<fleet-name>.yml`:
 ```yaml
 name:                        # required, unique across all fleets
 controls:                    # nested: setup_experience, apple_settings,
@@ -80,14 +93,8 @@ agent_options:               # optional (per docs)
 settings:                    # optional (per-fleet settings; replaces team_settings)
 ```
 
-> **Important shape detail**: `scripts` lives **inside `controls:`**.
-> `reports` and `policies` are **top-level fleet keys**, NOT nested
-> under controls. This is easy to get backwards.
+`fleets/unassigned.yml` (hosts in no fleet) does NOT support `labels:`.
 
-`fleets/unassigned.yml` is the bucket for hosts not claimed by any
-fleet. It does NOT support a `labels:` key (per `yaml-files.md`).
-
----
 
 ## Step-by-step migration
 
@@ -99,8 +106,7 @@ git switch -c migrate/v4.83                 # work on a branch
 fleetctl gitops --dry-run -f default.yml    # snapshot the current valid state
 ```
 
-If the dry-run already fails on the unmigrated repo, fix that first
-— migration on top of brokenness compounds the error surface.
+If the dry-run already fails, fix that first.
 
 ### 2. Create the canonical v4.83 tree
 
@@ -129,7 +135,6 @@ mv lib/all/policies/*.yml                          platforms/all/policies/      
 #### From v4.82 (DDM `.json` mixed with `.mobileconfig`)
 
 ```bash
-# Separate DDM from configuration profiles. v4.83 puts DDM in its own dir.
 mv platforms/macos/configuration-profiles/*.json platforms/macos/declaration-profiles/ 2>/dev/null || true
 ```
 
@@ -143,26 +148,20 @@ find . -name "*.json" -path "*declaration-profiles*" | sort > /tmp/ddm.txt
 
 ### 4. Rewrite `default.yml`
 
-The big YAML-key change is `controls.macos_settings.custom_settings` →
-`controls.apple_settings.configuration_profiles`. The **canonical v4.84+
-form uses `paths:` globs** (one entry per directory), not per-file
-references. The scaffolded `default.yml` has just three top-level keys
-— `org_settings`, `controls`, `labels` — and references everything via
-glob:
+Rename `controls.macos_settings.custom_settings` →
+`controls.apple_settings.configuration_profiles`. Keep only
+`org_settings`, `controls`, `labels`, referencing files via `paths:` globs:
 
 ```yaml
 labels:
   - paths: ./labels/*.yml
 ```
 
-`team_settings:` → `settings:` was already done in v4.82. Verify it's
-gone in your migrated tree.
+Verify no `team_settings:` remains (it is `settings:` since v4.82).
 
 ### 5. Rewrite each `fleets/*.yml` — canonical glob form
 
-The scaffold's `workstations.yml` is the reference shape. Every profile,
-script, policy, and report block uses `paths:` globs against the
-canonical platforms tree:
+The scaffold's `workstations.yml` is the reference shape:
 
 ```yaml
 name: "💻 Workstations"
@@ -202,15 +201,12 @@ software:
   app_store_apps:        # …
 ```
 
-The `name:` field at top must be unique across all `fleets/*.yml`
-(`gitops.sh` enforces this via a perl one-liner — duplicates fail the
-run).
+`name:` must be unique across `fleets/*.yml` (`gitops.sh` fails duplicates).
 
 ### 5b. Per-file form for label-targeted profiles (alternative)
 
-When a single profile needs label filtering (e.g. only deploy to one
-department), the **per-file `path:` form is supported** alongside the
-glob form (per `yaml-files.md` `### apple_settings and windows_settings`):
+When one profile needs label filtering, use the **per-file `path:` form**
+alongside globs:
 
 ```yaml
 controls:
@@ -231,12 +227,9 @@ Only one of `labels_include_all`, `labels_include_any`, or
 `labels_exclude_any` per entry. Glob and per-file entries can mix in
 the same `configuration_profiles:` array.
 
-If any file is named `no-team.yml`, rename to `unassigned.yml`. The
-`fleets/unassigned.yml` file represents hosts not assigned to any fleet
-and follows the same schema as a fleet file minus `labels:`.
+Rename any `no-team.yml` to `unassigned.yml` (fleet schema minus `labels:`).
 
-**Manual diff checkpoint #2**: every fleet YAML should now parse with
-`fleetctl gitops --dry-run -f fleets/<name>.yml`. Loop over them:
+**Manual diff checkpoint #2**: every fleet YAML must pass a dry-run:
 
 ```bash
 for f in fleets/*.yml; do
@@ -247,9 +240,7 @@ done
 
 ### 6. Move labels
 
-`fleetctl new` puts each label set in its own `labels/<set>.yml` file.
-Each file holds one or more inline label definitions (see
-`yaml-files.md` `## labels`):
+One `labels/<set>.yml` per label set, each with inline definitions:
 
 ```yaml
 - name: Apple Silicon
@@ -267,14 +258,11 @@ labels:
   - path: ./labels/engineering.yml
 ```
 
-Fleet's docs note that **any label referenced in policies, reports, or
-software MUST appear in the `labels:` section** — confirm none are
-referenced and missing.
+Confirm no label is referenced but missing (see Hard rules).
 
 ### 7. Migrate `.github/fleet-gitops/`
 
-`fleetctl new` ships a canonical `gitops.sh`; if your repo has an older
-or hand-written one, replace it. The stable env-var contract is:
+Replace an older or hand-written `gitops.sh` with the canonical one. Env vars:
 
 | Env var | Default | Purpose |
 |---|---|---|
@@ -315,8 +303,7 @@ fleetctl gitops --dry-run -f default.yml \
   $(for f in fleets/*.yml; do echo -n "-f $f "; done)
 ```
 
-Then validate every contour-emitted artifact at the same time —
-catches schema regressions that the Fleet-side dry-run won't:
+Then validate contour-emitted artifacts (catches what the dry-run won't):
 
 ```bash
 contour profile validate platforms/macos/configuration-profiles/ --recursive --json
@@ -325,16 +312,10 @@ contour profile ddm verify platforms/macos/declaration-profiles --json
 contour osquery validate . --recursive --json     # every policy, report and label query, both schemas
 ```
 
-`osquery validate` reads `default.yml`, the team files, and every
-`*.policies.yml` / `*.reports.yml` / `*.labels.yml` under `platforms/`,
-and fails on a table or column the embedded osquery and Fleet schemas do
-not have. For a repo `contour mscp generate` produced, `contour mscp
-validate -o .` runs the same check plus Fleet's own schema over those
-files.
-
-If you have an active `pre-commit` hook (see `--sop precommit`), this
-is the same check the hook runs — clean here means clean for every
-subsequent commit.
+`osquery validate` fails on a table or column neither embedded schema has.
+For a repo `contour mscp generate` produced, `contour mscp validate -o .`
+adds Fleet's own schema. A `pre-commit` hook (`--sop precommit`) runs the
+same check.
 
 ### 9. Clean up
 
@@ -345,77 +326,21 @@ git rm -r lib/                               # legacy storage gone
 git status                                   # confirm no stragglers
 ```
 
-Commit in two parts so the diff is reviewable: first the
-restructure (moves only, no content changes), then the YAML rewrites.
-Cherry-picking gets cleaner if the migration needs to be partially
-reverted later.
+Commit in two parts: first the moves only, then the YAML rewrites.
 
----
 
 ## Attach a baseline across many fleets (inject engine)
 
-Once a repo is on the v4.83 layout, contour can attach an mSCP baseline to one,
-several, or every fleet — **comment-preserving** and idempotent. One generated
-profile set is referenced by many fleets via glob (never duplicated per fleet).
-
-```bash
-# Generate + attach in one run (see --sop mscp for the full flag set):
-contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG \
-  --fleets workstations,servers,kiosks          # named fleets (comma-separated), or:
-  # --all-fleets               # every fleet under fleets/ (multi-brand)
-  # --exclude-fleets a,b       # with --all-fleets, skip these
-  # --canonical-fleets         # greenfield: scaffold workstations + personal-mobile-devices
-
-# Each injected block is led by a `# contour:<baseline>` marker; the attach is
-# recorded in .contour/fleet-injections.toml. Withdraw it manifest-driven:
-contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG \
-  --fleets lx --remove
-```
-
-Fail-closed: if a splice would produce invalid YAML, contour refuses to write and
-leaves the fleet file byte-for-byte untouched. Operator content and comments are
-always preserved.
-
----
-
-## Hard rules (don't drop these)
-
-- **DDM declarations live in `platforms/<os>/declaration-profiles/`**, not
-  in `configuration-profiles/`. Mixing them broke validation in v4.82
-  → v4.83.
-- **`controls.apple_settings.configuration_profiles` defaults to `paths:` globs**
-  (verified against fleetctl v4.84.2). Per-file `path:` is also supported
-  and is the form to use when a single profile needs `labels_include_all`,
-  `labels_include_any`, or `labels_exclude_any` filtering.
-- **`scripts:` is nested under `controls:`**, but **`reports:` and `policies:`
-  are TOP-LEVEL fleet keys** — not under `controls`. Easy to get backwards.
-- **`fleets/` is the directory** (NOT `teams/`); **`unassigned.yml`** is the
-  no-fleet bucket file (NOT `no-team.yml`).
-- **Every fleet YAML has a unique `name:`** — gitops.sh blocks duplicates.
-- **Every label referenced in policies/reports/software** must appear in
-  the `labels:` section of `default.yml` or the relevant fleet YAML.
-- **`apple_settings.configuration_profiles`** replaces
-  `macos_settings.custom_settings` — renamed in Fleet v4.83.0, with the old
-  names kept as deprecated aliases. A file may use either spelling, never
-  both in one place: Fleet rejects `apple_settings` beside `macos_settings`
-  as conflicting field names. contour writes the new names in files it
-  creates and keeps a file's existing spelling when it edits one.
-
----
+On a v4.83 repo, `contour mscp generate --fleets … | --all-fleets
+[--exclude-fleets …] | --canonical-fleets` attaches a baseline (glob-shared,
+comment-preserving, idempotent, fail-closed); `--remove` withdraws it. Full
+flag set: `--sop mscp`.
 
 ## Why this SOP isn't procedural
 
-A migration like this is a one-time, eyes-on operation. Every step has
-a "manual diff checkpoint" because YAML migrations have meaningful
-semantic deltas — missing a label, dropping a profile, or merging two
-fleets is not something an agent should auto-fix without a human eyeing
-the diff. Procedural format with `AUTO_FIX` blocks would encourage
+YAML migrations carry semantic deltas (a dropped label, profile or fleet)
+that need a human eyeing each diff gate; `AUTO_FIX` blocks would invite
 exactly that auto-fixing.
-
-The right shape for this content is a numbered playbook with explicit
-diff gates between steps. If the same migration becomes a repeating
-pattern (e.g. v4.83 → v4.84), revisit and consider promoting parts to a
-procedural SOP.
 
 ## Reference (canonical sources)
 

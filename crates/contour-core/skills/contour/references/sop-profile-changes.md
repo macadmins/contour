@@ -1,13 +1,8 @@
 # SOP: Profile Change Impact Review (plan / rollback)
 
-This SOP exists because **bulk edits to `.mobileconfig` files are dangerous
-in ways that text diffs don't show.** A change that looks cosmetic in
-`git diff` can do a remove-and-reinstall pass on every device in the
-fleet, melt your CA under a thundering re-enrollment herd, or silently
-disable a setting because a `<string>` was used where the consuming app
-wants `<integer>`.
-
-Use this SOP whenever you (or an AI agent) are about to:
+Bulk `.mobileconfig` edits can reinstall payloads fleet-wide or silently
+disable settings in ways text diffs don't show. Use this SOP whenever you
+are about to:
 
 - Regenerate UUIDs across more than one profile
 - Refactor or "normalize" a directory of profiles
@@ -19,46 +14,33 @@ Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 
 ## Why this matters (the risk model)
 
-Apple MDM matches **profiles** by their outer `PayloadIdentifier`, and
-**inner payloads** by `PayloadUUID`. When the new profile is pushed:
+Apple MDM matches **profiles** by outer `PayloadIdentifier` (match → update
+in place), then **inner payloads** by `PayloadUUID`:
 
-1. If outer `PayloadIdentifier` matches an installed profile → MDM updates
-   that profile in place.
-2. Inside the profile, every inner payload is matched by its
-   `PayloadUUID`:
-   - Same UUID, same type → **in-place update** of that payload's values.
-   - New UUID → existing payload **removed**, new payload installed.
-   - Missing UUID (was there, isn't now) → existing payload **removed**.
+1. Same UUID, same type → **in-place update** of that payload's values.
+2. New UUID → existing payload **removed**, new payload installed.
+3. Missing UUID (was there, isn't now) → existing payload **removed**.
 
-**The destructive case** is point 2's middle branch. Re-randomising
-`PayloadUUID` while leaving `PayloadIdentifier` and `PayloadType` the
-same looks identical to a human reviewer ("just a UUID rotation") but
-costs the device a remove + reinstall — which for security-sensitive
-payloads (SCEP, FileVault recovery escrow, identity preferences,
-firewall) means a brief deconfigured window AND, for SCEP, a fresh
-certificate enrollment against the CA. On a 15,000-endpoint fleet
-that's a 15k-deep CA queue inside one push window.
+**The destructive case** is point 2: a re-randomised `PayloadUUID` looks like
+"just a UUID rotation" but is a remove + reinstall — a deconfigured window,
+and for SCEP a fresh certificate enrollment per device against the CA.
 
-**The silent-failure case** — what a review of a 33-file Fleet GitOps PR
-turns up:
+**The silent-failure cases:**
 
 | Pattern | Failure mode |
 |---|---|
-| Regenerated SCEP `PayloadUUID` but left `PayloadCertificateUUID` pointing at the old SCEP UUID | Identity preference does not bind. Apps using mTLS to the IdP fail auth without an obvious error path. |
-| Set `refreshSOFAFeedTime` as `<string>300</string>` instead of `<integer>` | Nudge's `Codable` decoder rejects the type and silently falls back to its 86,400-second default. The 5-minute interval the admin thought they configured never takes effect. |
-| TCC ACL rule changed from `BundleIdentifier=com.okta.mobile` to `BundleIdentifierPrefix=com.okta.` | Every `com.okta.*`-signed bundle now satisfies the rule. Scope broadened past least-privilege. |
-| Missing `PayloadDisplayName` on a nested payload | Cosmetic in profile UI; not a behavior change. Real, but low priority. |
+| Regenerated SCEP `PayloadUUID` but left `PayloadCertificateUUID` pointing at the old SCEP UUID | Identity preference does not bind; mTLS to the IdP fails without an obvious error. |
+| Set `refreshSOFAFeedTime` as `<string>300</string>` instead of `<integer>` | Nudge rejects the type and silently falls back to its 86,400-second default. |
+| TCC ACL rule changed from `BundleIdentifier=com.okta.mobile` to `BundleIdentifierPrefix=com.okta.` | Every `com.okta.*` bundle now satisfies the rule — scope broadened. |
+| Missing `PayloadDisplayName` on a nested payload | Cosmetic; low priority. |
 
-These are different shapes of the same underlying problem: **the change
-review process couldn't see the change.** `contour profile plan` and
-`contour profile rollback` exist to make these invisible classes of
-change visible and reversible.
+`contour profile plan` and `contour profile rollback` make these changes
+visible and reversible.
 
 ## TIER ENUM (the change taxonomy)
 
 `contour profile plan` classifies every payload-level delta into exactly
-one tier. This enum is the contract; tooling, CI, and agents all branch
-on it.
+one tier. Agents and CI branch on it.
 
 ```
 NOOP              canonical-form-only delta after normalize; nothing pushed
@@ -81,16 +63,14 @@ DEPRECATED        introduces a deprecated payload type or key
 | Tier | Exit | Override |
 |---|---|---|
 | NOOP / IN_PLACE_UPDATE / ADD / REMOVE | 0 | — |
-| REPLACE | non-zero | `--accept-replace` (informed acceptance) |
-| SCOPE_BROADENED | non-zero | `--accept-scope-change` (informed acceptance) |
+| REPLACE | non-zero | `--accept-replace` |
+| SCOPE_BROADENED | non-zero | `--accept-scope-change` |
 | REF_BROKEN / TYPE_INVALID / DEPRECATED | non-zero | none — fix the change |
 
 ## ERROR-CODE ENUM (procedure failures, not findings)
 
-Findings ride in the TIER ENUM above. The error_code enum below
-covers procedure-level failures (CLI couldn't run, file unreadable,
-etc.). Agents MUST switch on these and never substring-match the
-prose `error` field.
+Findings ride in the TIER ENUM; these codes cover procedure-level failures.
+Agents MUST switch on these and never substring-match the prose `error` field.
 
 ```
 INVALID_FORMAT       not a valid plist / corrupted / not a profile
@@ -103,8 +83,6 @@ ROLLBACK_UNSAFE      rollback would produce a broken reference graph
 IO_ERROR             file unreadable / disk full / permission denied
 UNKNOWN              unmatched — treat as fatal, do NOT auto-retry
 ```
-
----
 
 ## PROCEDURE plan_profile_changes(baseline, proposed, accept)
 
@@ -131,7 +109,6 @@ PRECONDITIONS:
   ASSERT both sides have the same number of profiles when directories,
          OR baseline and proposed are both single files
     WARN  "directory shape changed; ADD/REMOVE tiers will be non-empty"
-  # Determinism is a hard requirement for honest plans:
   AUTO_FIX: normalize both sides through normalize_profile (predictable
             v5 UUIDs when --org is supplied) before classifying.
 
@@ -143,26 +120,17 @@ EXECUTION:
            [--fleet-size {accept.fleet_size}]
 
   # JSON shape (success path):
-  #   { "success": true,
-  #     "summary": { "noop": int, "in_place_update": int, "add": int,
-  #                  "remove": int, "replace": int, "ref_broken": int,
-  #                  "scope_broadened": int, "type_invalid": int,
-  #                  "deprecated": int },
-  #     "changes": [
-  #       { "tier": <TIER>,
-  #         "file": "<path>",
-  #         "payload_index": int,
-  #         "payload_type": string,
-  #         "payload_identifier": string,
-  #         "baseline_uuid": string | null,
-  #         "proposed_uuid": string | null,
-  #         "fields_changed": [string],
-  #         "evidence": string,
-  #         "blast_radius": { "endpoints": int | null, "narrative": string }
-  #       }, ...
-  #     ],
-  #     "exit_policy": "ok" | "blocked",
-  #     "blockers": [ "<TIER>:<file>:<payload_index>", ... ] }
+  { "success": true,
+    "summary": { "noop": int, "in_place_update": int, "add": int,
+                 "remove": int, "replace": int, "ref_broken": int,
+                 "scope_broadened": int, "type_invalid": int, "deprecated": int },
+    "changes": [ { "tier": <TIER>, "file": "<path>", "payload_index": int,
+                   "payload_type": string, "payload_identifier": string,
+                   "baseline_uuid": string|null, "proposed_uuid": string|null,
+                   "fields_changed": [string], "evidence": string,
+                   "blast_radius": { "endpoints": int|null, "narrative": string } }, ... ],
+    "exit_policy": "ok"|"blocked",
+    "blockers": [ "<TIER>:<file>:<payload_index>", ... ] }
 
 POSTCONDITIONS:
   SWITCH result.exit_code
@@ -175,9 +143,8 @@ POSTCONDITIONS:
         CASE INVALID_PROPOSED:
           HALT  "proposed could not be resolved: {result.error}"
         CASE PLAN_BLOCKED:
-          # plan ran, but exit policy denied — surface blockers to human
           REQUIRE human approval listing result.blockers
-          # If the human accepts, retry with appropriate accept flag(s)
+          # if accepted, retry with the matching accept flag(s)
         DEFAULT:
           HALT  "plan failed: {result.error_code}: {result.error}"
 
@@ -188,8 +155,6 @@ INVARIANTS:
   - Every REF_BROKEN finding names both the source payload (containing
     the dangling reference) and the dead UUID it points at.
 ```
-
----
 
 ## PROCEDURE rollback_profile_changes(baseline, current, filter)
 
@@ -227,13 +192,10 @@ EXECUTION:
            [--no-rewrite-refs if not filter.rewrite_refs]
            [--dry-run on first pass]
 
-  # JSON shape (success path, dry-run identical except `applied: false`):
-  #   { "success": true,
-  #     "applied": bool,
-  #     "uuids_restored": int,
-  #     "refs_rewritten": int,
-  #     "files_changed": [string],
-  #     "post_validation": { "valid": bool, "errors": [...] } }
+  # JSON shape (success path; dry-run identical except `applied: false`):
+  { "success": true, "applied": bool, "uuids_restored": int,
+    "refs_rewritten": int, "files_changed": [string],
+    "post_validation": { "valid": bool, "errors": [...] } }
 
 POSTCONDITIONS:
   ASSERT result.post_validation.valid
@@ -255,13 +217,9 @@ INVARIANTS:
     profile.
 ```
 
----
-
 ## PROCEDURE review_bulk_profile_pr(pr_ref, base_ref)
 
-The composed workflow an agent uses when asked to review a PR that
-touches multiple profiles. This is the procedure to reach for first
-when a review finding lands on a PR.
+Reach for this first when reviewing a PR that touches multiple profiles.
 
 ```
 INPUT:
@@ -269,10 +227,8 @@ INPUT:
   base_ref  : git ref of the merge base (default: origin/main)
 
 STEP 1 — Plan the change:
-  CALL plan_profile_changes(
-    baseline = "git:" + base_ref,
-    proposed = pr_ref worktree,
-    accept   = {})
+  CALL plan_profile_changes(baseline = "git:" + base_ref,
+    proposed = pr_ref worktree, accept = {})
 
   SWITCH plan.summary
     CASE all NOOP:
@@ -288,34 +244,25 @@ STEP 1 — Plan the change:
                note: "fix the change; these tiers don't have an accept flag" }
 
     CASE only REPLACE, no other blockers:
-      # The 15k-CA-storm pattern. Two paths forward:
-      #
-      # a) The REPLACE was unintentional UUID churn (most common):
-      #    CALL rollback_profile_changes(
-      #      baseline = "git:" + base_ref,
-      #      current  = pr_ref worktree,
-      #      filter   = { uuids_only: true })
-      #    Then re-plan. Should collapse to NOOP / IN_PLACE_UPDATE.
-      #
-      # b) The REPLACE was intentional (e.g. rotating a SCEP cert):
-      #    REQUIRE human approval naming each REPLACE'd payload type
-      #    and (if --fleet-size set) the blast-radius narrative.
-      #    Approver re-runs plan with --accept-replace.
+      IF unintentional UUID churn (most common):
+        CALL rollback_profile_changes(baseline = "git:" + base_ref,
+          current = pr_ref worktree, filter = { uuids_only: true })
+        Then re-plan; should collapse to NOOP / IN_PLACE_UPDATE.
+      IF intentional (e.g. rotating a SCEP cert):
+        REQUIRE human approval naming each REPLACE'd payload type
+        and (if --fleet-size set) the blast-radius narrative.
+        Approver re-runs plan with --accept-replace.
 
     CASE only SCOPE_BROADENED:
-      # Security review territory. Surface the diff explicitly:
       WARN to human: list each ACL rule with old → new shape
       REQUIRE human approval; --accept-scope-change to proceed.
 
     CASE mixed (e.g. one REPLACE + one REF_BROKEN):
-      # The Okta SCEP bug shape. Almost always a churn-introduced ref break.
-      CALL rollback_profile_changes(
-        baseline = "git:" + base_ref,
-        current  = pr_ref worktree,
-        filter   = { uuids_only: true, refs_only: true, rewrite_refs: true })
-      Then re-plan. If the REF_BROKEN clears alongside the REPLACE,
-      this was the Fleet pattern: vendor regenerated UUIDs, forgot to
-      rewrite cross-refs. Rollback fixes both at once.
+      # Almost always a churn-introduced ref break.
+      CALL rollback_profile_changes(baseline = "git:" + base_ref,
+        current = pr_ref worktree,
+        filter = { uuids_only: true, refs_only: true, rewrite_refs: true })
+      Then re-plan; the REF_BROKEN should clear alongside the REPLACE.
 
 POSTCONDITIONS:
   RETURN { verdict, plan, rollback (if applied), required_fixes }
@@ -323,99 +270,68 @@ POSTCONDITIONS:
 INVARIANTS:
   - Never approve a PR with non-zero blockers without an explicit
     accept flag and a recorded reason.
-  - Plan output is the source of truth for review. Reviewer-eye
-    judgement on a text diff is not sufficient for this class of file.
+  - Plan output is the source of truth for review, not a text diff.
 ```
-
----
 
 ## Worked example: a Fleet GitOps PR (four review findings)
 
-Reproduce the failure modes locally to keep the SOP grounded:
-
 ```bash
-# 1. The 33-file PayloadUUID churn problem.
+# 1. PayloadUUID churn across a directory → REPLACE findings.
 contour profile plan baseline/ proposed/ --recursive --json
-# Expected: 33 REPLACE findings, 0 IN_PLACE_UPDATE.
-
-# Apply the fix in one pass:
 contour profile rollback baseline/ proposed/ --recursive --uuids-only
 contour profile plan baseline/ proposed/ --recursive --json
-# Expected: 0 REPLACE, possibly some IN_PLACE_UPDATE (real value changes).
+# Expected: 0 REPLACE; IN_PLACE_UPDATE only for real value changes.
 
-# 2. The orphaned PayloadCertificateUUID (Okta SCEP).
+# 2. Orphaned PayloadCertificateUUID (SCEP).
 contour profile plan baseline/fleet-okta-conditional-access.mobileconfig \
                      proposed/fleet-okta-conditional-access.mobileconfig --json
-# Expected: REPLACE on the SCEP payload AND REF_BROKEN on the identity
-# preference. rollback --uuids-only fixes both: it rewrites refs by
-# default (--no-rewrite-refs opts out).
+# Expected: REPLACE on SCEP + REF_BROKEN on the identity preference.
+# rollback --uuids-only fixes both: it rewrites refs by default
+# (--no-rewrite-refs opts out).
 
-# 3. The Nudge refreshSOFAFeedTime type error.
+# 3. Nudge refreshSOFAFeedTime type error.
 contour profile plan baseline/nudge-configuration.mobileconfig \
                      proposed/nudge-configuration.mobileconfig --json
 # Expected: TYPE_INVALID at refreshSOFAFeedTime; fix to <integer>.
 
-# 4. The Okta TCC scope broadening.
+# 4. TCC scope broadening.
 contour profile plan baseline/okta-verify-settings.mobileconfig \
                      proposed/okta-verify-settings.mobileconfig --json
-# Expected: SCOPE_BROADENED on the TCC rule. Decide policy: keep
-# exact BundleIdentifier or accept the prefix with --accept-scope-change.
+# Expected: SCOPE_BROADENED. Keep exact BundleIdentifier, or accept the
+# prefix with --accept-scope-change.
 ```
 
 ## Decision tree (when to reach for which command)
 
 ```
-    PR / change under review
-                │
-                ▼
-    contour profile plan ──── all NOOP/IN_PLACE_UPDATE/ADD/REMOVE? ── yes ──► approve
-                │                                  │
-                │                                  └── no
-                ▼
-    Any REF_BROKEN / TYPE_INVALID / DEPRECATED? ── yes ──► request changes (no accept flag)
-                │
-                └── no
-                ▼
-    Any REPLACE? ── yes ──► was it intentional?
-                │              │
-                │              ├── no  ──► contour profile rollback --uuids-only [--refs-only]
-                │              │           re-plan; should collapse.
-                │              │
-                │              └── yes ──► document blast radius; --accept-replace
-                │
-                └── no
-                ▼
-    Any SCOPE_BROADENED? ── yes ──► security review; --accept-scope-change if approved
-                │
-                └── no
-                ▼
-            approve
+contour profile plan
+  all NOOP/IN_PLACE_UPDATE/ADD/REMOVE        → approve
+  any REF_BROKEN/TYPE_INVALID/DEPRECATED     → request changes (no accept flag)
+  any REPLACE, unintentional                 → contour profile rollback --uuids-only [--refs-only];
+                                               re-plan; should collapse
+  any REPLACE, intentional                   → document blast radius; --accept-replace
+  any SCOPE_BROADENED                        → security review; --accept-scope-change if approved
+  otherwise                                  → approve
 ```
 
 ## Anti-patterns
 
 - **Don't blanket-regenerate UUIDs as part of "normalize" runs.** Use
-  `--predictable` so v5 UUIDs are derived from `(org, identifier)` and
-  stay stable across runs. The CLI defaults `--predictable` on when
-  `--org` is set; do not override.
+  `--predictable` (v5 UUIDs from `(org, identifier)`, stable across runs);
+  it defaults on when `--org` is set — do not override.
 - **Don't approve a profile PR off a text diff alone** for files with
-  cross-references (SCEP/identity preferences, EAP/WiFi+root cert,
-  IKEv2 VPN, FileVault escrow). The text diff cannot see the orphan.
+  cross-references (SCEP/identity preferences, EAP/WiFi+root cert, IKEv2
+  VPN, FileVault escrow). The text diff cannot see the orphan.
 - **Don't `git revert` a churn-only PR** when only some payloads need
-  restoring. `git revert` discards real value changes; `contour profile
-  rollback --payload-type ...` is the surgical alternative.
+  restoring — it discards real value changes; use `contour profile
+  rollback --payload-type ...`.
 - **Don't substring-match the `error` prose** to detect plan blockers.
   Switch on the TIER ENUM and the `error_code` enum.
-- **Don't disable `link::validator`** to make a plan pass. A failing
-  link validator is the warning shot — fix the cross-reference.
+- **Don't disable `link::validator`** to make a plan pass — fix the
+  cross-reference.
 
 ## Wiring (after this SOP ships)
 
-- Help routing: add a `"profile-changes" | "plan" | "rollback"` arm in
-  `crates/contour-core/src/help_agents.rs`'s `generate_sop` match,
-  pointing to `include_str!("../skills/contour/references/sop-profile-changes.md")`.
-- Drift detector: extend `crates/profile/tests/sop_traps.rs` with one
-  trap per documented `--json` shape (plan summary, plan changes entry,
-  rollback result, error_code envelope).
-- Migration status: add a row to `sop-format-spec.md`'s Migration table
-  with status "Migrated (procedural)".
+Maintainers only: served by `generate_sop` in
+`crates/contour-core/src/help_agents.rs`; `--json` shapes are pinned in
+`crates/profile/tests/sop_traps.rs`.

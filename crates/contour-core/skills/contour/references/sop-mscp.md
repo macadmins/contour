@@ -1,19 +1,24 @@
 # SOP: mSCP Security Compliance
 
-This SOP covers the macOS Security Compliance Project (mSCP) integration:
-generating MDM-deployable compliance artifacts (mobileconfigs, scripts,
-policies, labels) for baselines like CIS Level 1, 800-53, STIG, CMMC.
+Generates MDM-deployable compliance artifacts (mobileconfigs, scripts,
+policies, labels) for mSCP baselines (CIS, 800-53, STIG, CMMC, …).
 
-> **OS-preview rules** (Apple Intelligence PCC, Siri AI, …) live on a
-> separate embedded beta channel: `contour mscp schema search <kw> --beta` /
-> `schema rule <id> --beta`. See the "mSCP OS-preview rules" section in
-> `--sop beta`. Note `mscp recipe` reads a repo checkout, not the embedded
-> dataset — `--beta` does not apply to it.
+Hard rules:
+- **ODVs**: many rules carry an organization-defined value whose generic
+  `odv_default` is wrong for production. Surface each choice to the user
+  before generating (`resolve_odv`); never auto-pick.
+- `--org` is required and must not be `com.example`.
+- Unknown baseline / rule names return `[]` / `null` with exit 0: check the
+  response shape, not the exit code.
+
+> **OS-preview rules** (Apple Intelligence PCC, Siri AI, …) are on the embedded
+> beta channel: `contour mscp schema search <kw> --beta` / `schema rule <id>
+> --beta`; see "mSCP OS-preview rules" in `--sop beta`. `mscp recipe` reads a
+> repo checkout, so `--beta` does not apply to it.
 
 ## Layout: mSCP 2.0 only (verified, 1.x refused)
 
-contour reads the mSCP 2.0 schema — the `main` branch. It verifies a
-`--mscp-repo` path by sniffing one rule YAML:
+contour verifies a `--mscp-repo` path by sniffing one rule YAML:
 
 | Signal | Result |
 |---|---|
@@ -21,63 +26,23 @@ contour reads the mSCP 2.0 schema — the `main` branch. It verifies a
 | Top-level `id:` without `platforms:` | **1.x** — refused with the fix: `git -C <repo> checkout main`; custom 1.x baselines migrate with mSCP's own `--migrate` |
 | Neither | error: "could not detect mSCP layout" with the offending file |
 
-1.x (flat `tags`/`check`/`fix`, `baselines/<name>.yaml`, the `tahoe` /
-`sequoia` release branches) is deprecated upstream. `main` already carries
-the older OS releases under their own version keys (macOS 15.0 and 26.0,
-iOS 17.0 and 18.0), so nothing is lost by refusing it. An agent that hits
-the refusal should switch the checkout, not look for a flag — there is none.
+`main` carries older OS releases under their own version keys (macOS 15.0,
+26.0; iOS 17.0, 18.0), so nothing is lost. On the refusal, switch the
+checkout — there is no flag.
 
-**2.0 rule (multi-OS):**
+A 2.0 rule nests per-OS data under `platforms:` (`macOS: {'15.0': {benchmarks:
+[{name: cis_lvl1}]}, enforcement_info: {check, fix}}`, `iOS: {'18.0': {supervised,
+benchmarks}}`), with `mobileconfig_info` (PayloadType + PayloadContent) top-level.
 
-```yaml
-id: system_settings_screensaver_password_enforce
-title: Enforce Screensaver Password
-platforms:
-  macOS:
-    '15.0':
-      benchmarks:
-        - name: cis_lvl1
-        - name: disa_stig
-          severity: medium
-    enforcement_info:
-      check: { shell: '/usr/bin/osascript -l JavaScript ...', result: { string: 'true' } }
-      fix:   { shell: '/usr/bin/defaults write ...' }
-  iOS:
-    '18.0':
-      supervised: true
-      benchmarks:
-        - name: cis_lvl1_byod
-mobileconfig_info:
-  - PayloadType: com.apple.screensaver
-    PayloadContent:
-      - askForPassword: true
-```
-
-Baselines live at `baselines/<os>/<name>_<os>_<version>.yaml`; the bare
-name (`cis_lvl1`, `800-53r5_high`) is what every flag takes. Seven
-baselines (`indigo_*`, `ios_*`, `nlmapgov_*`, `mscp`) exist only as
-benchmark tags on rules and have no file; membership falls back to tags
-for those. A name that neither a file nor any rule knows is an error.
+Baselines live at `baselines/<os>/<name>_<os>_<version>.yaml`; every flag
+takes the bare name (`cis_lvl1`, `800-53r5_high`). Seven (`indigo_*`,
+`ios_*`, `nlmapgov_*`, `mscp`) exist only as rule tags, without a file.
+A name neither a file nor any rule knows is an error.
 
 **Operator flags** (on `mscp recipe` and friends):
 
 - `--os <macos|ios|visionos>` — default `macos`
 - `--os-version <X.Y>` — default: highest version present in the rule set
-
-Internally the 2.0 deserializer flattens to one `MscpRule` struct
-parameterized on `(os, os_version)`. Downstream extractors, recipe
-aggregators, and ODV resolvers work on that struct.
-
----
-
-mSCP rules carry rich metadata that agents must inspect before generation —
-the most important is **organization-defined values (ODV)**. Many rules
-have a baseline-specific recommended value but a generic `odv_default`
-that's wrong for production. Generating without surfacing the choice to
-the user produces deployable but incorrect compliance artifacts.
-
-Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
-Drift detector: `crates/profile/tests/sop_traps.rs`
 
 ## ERROR-CODE ENUM
 
@@ -91,23 +56,17 @@ INVALID_ORG            org domain absent or malformed
 UNKNOWN                unmatched — treat as fatal, do NOT auto-retry
 ```
 
-Failure-path JSON envelope (since contour ≥0.2.1):
+Failure-path JSON envelope:
 
 ```json
 { "success": false, "error": "...", "error_code": "INVALID_ORG" }
 ```
 
-NB: clap-level usage errors (e.g. missing `--mscp-repo`) emit on stderr
-without a JSON envelope and exit code 2, NOT 1. Agents that branch on
-exit code MUST distinguish 0 (ok), 1 (anyhow error → JSON envelope),
-2 (clap usage error → plain stderr).
+Agents that branch on exit code MUST distinguish 0 (ok), 1 (error → JSON
+envelope), 2 (clap usage error, e.g. missing `--mscp-repo` → plain stderr).
 
----
 
 ## DEPRECATED_LIST
-
-mSCP rules can produce mobileconfigs that target legacy payloads being
-phased out by Apple. The most impactful:
 
 ```
 DEPRECATED_PAYLOADS = [
@@ -118,18 +77,14 @@ DEPRECATED_PAYLOADS = [
 ]
 ```
 
-Software-update mSCP rules with `enforcement_type: "mobileconfig"` should
-trigger `WARN if any rule in baseline targets a deprecated payload`. The
-DDM-native replacement is in scope for `create_ddm_config`, not
-`generate_baseline_compliance`.
+WARN if any rule in the baseline targets a deprecated payload (e.g.
+software-update rules with `enforcement_type: "mobileconfig"`). The DDM
+replacement belongs to `create_ddm_config`, not `generate_baseline_compliance`.
 
----
 
 ## Presets — quick baseline selection
 
-`contour mscp presets` lists friendly names for the common frameworks; each
-expands to a baseline keyword **and** its platform, so you don't have to
-remember keywords or `--os`:
+Each preset expands to a baseline keyword **and** its platform (`--os`):
 
 ```
 contour mscp presets                                   # list them (--json for tooling)
@@ -146,27 +101,23 @@ Raw keywords still work everywhere: `--preset 800-53r5_high` and
 `-k 800-53r5_high` are equivalent. `--preset` and `--keyword` are mutually
 exclusive; exactly one is required on `generate`.
 
----
 
 ## PROCEDURE generate_baseline_compliance(baseline, org, mscp_repo, output_dir)
 
 ```
-SCHEMA_SOURCE: usnistgov/macos_security (release branch matching macOS version)
+SCHEMA_SOURCE: usnistgov/macos_security, `main` branch (mSCP 2.0)
 SCHEMA_TOOL:   contour mscp schema baselines --json
                contour mscp schema rules --baseline {name} --json
                contour mscp schema rule {rule_id} --json
 
 INPUT:
-  baseline    : baseline name from `mscp schema baselines` (e.g. cis_lvl1,
-                800-53r5_high, stig). MUST match an existing baseline; the
-                CLI silently emits no rules for unknown names.
-  org         : reverse-domain identifier (com.acme). REQUIRED — the CLI
-                refuses to default to com.example since contour ≥0.2.1.
-  mscp_repo   : path to a checked-out usnistgov/macos_security repo.
-                Required for full generation (Python pipeline runs from there).
-  output_dir  : where to emit the v4.83 GitOps layout. Will be populated
-                with platforms/macos/{configuration-profiles,scripts,policies}/
-                {baseline}/, mscp/{baseline}/baseline.toml, labels/, fleets/.
+  baseline    : name from `mscp schema baselines` (cis_lvl1, 800-53r5_high).
+                Unknown names silently emit no rules.
+  org         : reverse-domain identifier (com.acme). REQUIRED.
+  mscp_repo   : usnistgov/macos_security checkout (Python pipeline runs there).
+  output_dir  : v4.83 GitOps layout: platforms/macos/{configuration-profiles,
+                scripts,policies}/{baseline}/, mscp/{baseline}/baseline.toml,
+                labels/, fleets/.
 
 PRECONDITIONS:
   ASSERT baseline matches /^[a-z0-9_]+(-r[0-9]+)?(_[a-z0-9]+)*$/
@@ -180,127 +131,96 @@ PRECONDITIONS:
   ASSERT output_dir exists OR can be created
     AUTO_FIX: mkdir -p {output_dir}
 
-  # Confirm the baseline is real BEFORE running the (slow) Python pipeline.
+  # Confirm the baseline BEFORE the slow Python pipeline.
   baselines = contour mscp schema baselines --json
   ASSERT baseline in baselines.map(b -> b.baseline)
     HALT "unknown baseline '{baseline}'; run `contour mscp schema baselines`"
 
-STEP 1 — ODV resolution (the trap most prose SOPs miss):
+STEP 1 — ODV resolution:
   rules = contour mscp schema rules --baseline {baseline} --json
-  # NB: returns `[]` with exit 0 for unknown baselines. Already guarded by
-  # the precondition above, but the format pattern (check len, not exit)
-  # is the same trap as profile search.
+  # `[]` with exit 0 for unknown baselines — check len, not exit.
 
   odv_rules = filter(rules, fn r: r.has_odv == true)
   if len(odv_rules) > 0:
-    REQUIRE human approval listing each odv rule with:
-      - rule.rule_id
-      - rule.title
-      - rule.payload.odv_options[baseline]   # baseline-specific recommendation
-      - rule.odv_default                      # generic fallback (often WRONG)
-    # Without explicit user input, the generator silently uses odv_default
-    # which produces compliant-looking but incorrect deployments.
+    REQUIRE human approval listing each odv rule's rule_id, title,
+      payload.odv_options[baseline] (recommendation) and odv_default (often WRONG)
+    # Otherwise the generator silently uses odv_default.
 
 STEP 2 — Generation:
-  result = contour mscp generate \
-    --baseline {baseline} \
-    --mscp-repo {mscp_repo} \
-    --output {output_dir} \
-    --org {org} \
-    --json
+  result = contour mscp generate --baseline {baseline} --mscp-repo {mscp_repo} \
+             --output {output_dir} --org {org} --json
 
-  # Success-path: prints batch summary; exit 0.
-  # Failure-path: emits JSON envelope on stderr with error_code (since B3).
-
+  # Failure: JSON envelope on stderr with error_code.
   if result.exit_code == 2:
     HALT "clap usage error: {result.stderr}"   # missing required flag, etc.
   if result.exit_code != 0:
     HALT "{result.error_code}: {result.error}"
 
-STEP 3 — Verify output layout (Fleet v4.83+):
-  for each path:
-    ASSERT {output_dir}/mscp/{baseline}/baseline.toml exists
-    ASSERT {output_dir}/platforms/macos/configuration-profiles/{baseline}/
-           contains *.mobileconfig files
-    ASSERT {output_dir}/platforms/macos/scripts/{baseline}/ contains *.sh
-    ASSERT {output_dir}/labels/mscp-{baseline}.labels.yml exists
-  # If any of these fail, the v4.83 layout migration is broken — file an issue.
+STEP 3 — Verify output layout (Fleet v4.83+), under {output_dir}:
+  ASSERT mscp/{baseline}/baseline.toml exists
+  ASSERT platforms/macos/configuration-profiles/{baseline}/*.mobileconfig exist
+  ASSERT platforms/macos/scripts/{baseline}/*.sh exist
+  ASSERT labels/mscp-{baseline}.labels.yml exists
+  # Any failure here is a contour bug — file an issue.
 
 STEP 4 — Validate the emitted set:
   contour mscp validate --output {output_dir} --json
-  # Pre-Phase-1 this hardcoded `lib/mscp/` and always failed. Post-Phase-1
-  # it accepts v4.83 layouts. If it errors, the generator and validator
-  # have drifted — file an issue.
+  # An error means generator and validator drifted — file an issue.
 
 CROSS-FILE INVARIANT (after STEP 4):
   ASSERT every fleet yaml in {output_dir}/fleets/ that references {baseline}
          points at files that exist on disk
-    # Phase 1 fix made the validator's path resolution use the YAML file's
-    # parent dir; warnings here mean the fleet yaml has stale paths.
+    # Warnings here mean the fleet yaml has stale paths.
 
 INVARIANTS:
-  # Re-running with identical {baseline, org, mscp_repo} MUST produce
-  # identical output files (modulo timestamps in baseline.toml).
-  # If diff shows content changes, that is a bug.
+  # Identical {baseline, org, mscp_repo} MUST produce identical output
+  # (modulo baseline.toml timestamps); a content diff is a bug.
 
 POSTCONDITIONS:
-  RETURN {
-    baseline: {baseline},
-    output_dir: {output_dir},
-    profile_count: count of *.mobileconfig in platforms/macos/configuration-profiles/{baseline}/,
-    script_count:  count of *.sh in platforms/macos/scripts/{baseline}/,
-    odv_resolved:  list of (rule_id, value) pairs the user approved in STEP 1,
-  }
+  RETURN { baseline, output_dir, profile_count, script_count,
+           odv_resolved: (rule_id, value) pairs approved in STEP 1 }
 ```
 
----
 
 ## When a baseline contradicts itself
 
-Some published mSCP baselines list two rules that set one key to different
-values. `all_rules`, `cmmc_lvl2`, `cnssi-1253_high`, `cnssi-1253_moderate`,
-`cnssi-1253_low` and `hicp_lp` all carry both smartcard trust rules:
+Some baselines set one key two ways. `all_rules`, `cmmc_lvl2`,
+`cnssi-1253_high|moderate|low` and `hicp_lp` carry both
 `auth_smartcard_certificate_trust_enforce_high` (`checkCertificateTrust` 3)
 and `..._moderate` (2).
 
-**mSCP's own generator ships the later rule's value and says nothing.** Both
-rules are listed high-then-moderate, so mSCP builds `checkCertificateTrust = 2`
-even for `cnssi-1253_high`. That is a weaker setting than the baseline's name
-implies; mention it whenever it applies.
+**mSCP's own generator silently ships the later-listed rule's value** —
+`checkCertificateTrust = 2` even for `cnssi-1253_high`, weaker than the name
+implies. Mention it whenever it applies.
 
-contour keeps the same value (the practical one, and what mSCP ships) and
-says so:
+contour keeps the same value and says so:
 
 ```
-mscp recipe      keeps mSCP's value, prints WARNING, and records it in the
-                 recipe description ("conflict kept as mSCP does: ...")
-mscp generate    prints the same WARNING before mSCP's output, and records
-                 it in the JSON warnings
+mscp recipe      prints WARNING; recipe description records
+                 "conflict kept as mSCP does: ..."
+mscp generate    prints the WARNING before mSCP's output; JSON warnings record it
 posture generate same WARNING, same value
 ```
 
-Lists and dictionaries are not conflicts: rules that each add one
-DisabledSystemSettings pane, SkipSetupItems screen or `Apps` entry merge.
-Only a scalar set two ways is.
+Only a scalar set two ways conflicts; list/dict entries (DisabledSystemSettings
+panes, SkipSetupItems, `Apps`) merge.
 
-To ship the other value instead, in mSCP's own terms:
+To ship the other value:
 
 ```
 1. Tailor the baseline (preferred; mSCP-native):
-     mSCP's scripts/generate_baseline.py -t writes a tailored baseline and
-     moves the rule that does not apply into a `section: Excluded` block.
-     mSCP's generators skip that section, and so does contour: recipe and
-     generate both honor it, and the recipe description names those rules.
-2. Quick path for an untailored baseline (recipe only):
+     mSCP's scripts/generate_baseline.py -t moves the unwanted rule into a
+     `section: Excluded` block. mSCP and contour (recipe and generate) skip
+     it; the recipe description names those rules.
+2. Untailored baseline, recipe only:
      contour mscp recipe -r <repo> -k cnssi-1253_high \
          --exclude-rule auth_smartcard_certificate_trust_enforce_moderate
      The recipe description records the exclusion.
 ```
 
 Do NOT use `excluded_rules` in mscp.toml for this on the generate path: mSCP
-builds the profile from both rules first, and excluded_rules drops whole
-profiles afterwards, so the merged value stays. contour says so when it sees
-it. Tailoring is the fix there.
+merges both rules into the profile first and excluded_rules drops whole
+profiles afterwards, so the merged value stays (contour says so). Tailor.
 
 ## PROCEDURE resolve_odv(rule_id)
 
@@ -313,30 +233,19 @@ INPUT:
 EXECUTION:
   detail = contour mscp schema rule {rule_id} --json
 
-  # NB: unknown rule_id emits `null` on stdout with exit 0 — agents MUST
-  # check the response shape, not exit code.
+  # Unknown rule_id → `null`, exit 0. Check the shape, not exit code.
   ASSERT detail is not null
     HALT "unknown rule_id '{rule_id}'"
 
-  # The shape returned by `schema rule` (verified):
-  #   { "rule_id": str,
-  #     "title": str,
-  #     "baselines": [str],
-  #     "has_odv": bool,
-  #     "odv_default": value or null,
-  #     "payload": { "odv_options": object,    ← per-baseline recommendations
-  #                  "check_script": str,
-  #                  "fix_script": str,
-  #                  "mobileconfig_info": [...],
-  #                  ... },
-  #     "enforcement_type": str,
-  #     ... }
+  # Shape: { rule_id, title, baselines[], has_odv, odv_default,
+  #   payload: { odv_options, check_script, fix_script, mobileconfig_info, … },
+  #   enforcement_type, … }   — see "Key JSON fields" below.
 
 POSTCONDITIONS:
   if detail.has_odv == false:
     RETURN { has_odv: false, value: null }
 
-  # Has ODV — surface the choice; do NOT auto-pick.
+  # Has ODV — do NOT auto-pick.
   options = detail.payload.odv_options or {}
   REQUIRE human approval with:
     - rule: detail.rule_id  ({detail.title})
@@ -346,7 +255,6 @@ POSTCONDITIONS:
   RETURN { has_odv: true, value: <user-chosen> }
 ```
 
----
 
 ## Other operations (prose recipes; not yet migrated)
 
@@ -355,7 +263,6 @@ POSTCONDITIONS:
 ```
 contour mscp schema baselines --json
 # Returns: [{baseline, title, preamble, authors, platforms}, ...]
-# 16 baselines registered as of contour 0.2.x.
 ```
 
 ### List rules in a baseline
@@ -363,7 +270,6 @@ contour mscp schema baselines --json
 ```
 contour mscp schema rules --baseline cis_lvl1 --json
 # Returns: [{rule_id, title, has_odv, mobileconfig, has_ddm_info, ...}, ...]
-# Empty array (NOT error) for unknown baseline name.
 ```
 
 ### Search rules by keyword
@@ -377,16 +283,15 @@ contour mscp schema search <keyword> --json
 
 ```
 contour mscp schema compare <mscp_repo_path> <baseline> --json
-# Diffs the schema embedded in contour against an external repo.
-# Useful when contour's embedded data is older than the repo.
+# Diffs contour's embedded data against a (possibly newer) repo.
 ```
 
 ### Generate from mscp.toml config
 
 ```
 contour mscp generate-all --config ./mscp.toml
-# Multi-baseline batch using the config schema. See `contour mscp init`
-# to scaffold mscp.toml, fleet-constraints.yml, and clone the mSCP repo.
+# Multi-baseline batch. `contour mscp init` scaffolds mscp.toml and
+# fleet-constraints.yml and clones the mSCP repo.
 ```
 
 ### Inspect the v4.83 output layout
@@ -401,22 +306,21 @@ contour mscp deduplicate --output ./output     # find shared profiles
 ### Attach a baseline to existing fleets (inject engine)
 
 ```
-# Generate the baseline AND attach its profiles + scripts to fleet files in one run.
-# Profiles are unscoped by default (every host in the fleet); --fleet-label scopes them.
+# Generate AND attach profiles + scripts to fleet files. Unscoped by default.
 contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG \
   --fleets workstations,kiosks   # attach to named fleets (comma-separated)
   # --all-fleets                   # attach to EVERY fleet under fleets/ (multi-brand)
-  # --exclude-fleets a,b           # with --all-fleets, skip these ("all or nearly all")
+  # --exclude-fleets a,b           # with --all-fleets, skip these
   # --fleet-label "SYS - VIP"      # scope the attached profiles to a label
   # --canonical-fleets             # greenfield: scaffold workstations + personal-mobile-devices, attach to workstations
   # --glob                         # one *.mobileconfig glob entry instead of per-file
 #
-# Idempotent: a fleet already carrying the baseline is left unchanged.
-# A `# contour:<baseline>` marker leads each injected block (cosmetic signpost).
-# The injection manifest (.contour/fleet-injections.toml) records every attach.
+# Idempotent and comment-preserving. A `# contour:<baseline>` marker leads each
+# injected block; .contour/fleet-injections.toml records every attach.
 # ONE profile set is referenced by MANY fleets via glob — never duplicated or re-identified per fleet.
+# Fail-closed: a splice that would produce invalid YAML is refused; the file stays untouched.
 
-# Withdraw a baseline (manifest-driven — removes the entries + markers it added):
+# Withdraw (manifest-driven; removes only what it added):
 contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG \
   --fleets kiosks --remove
 ```
@@ -424,32 +328,29 @@ contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG \
 ### Generate Fleet scheduled-query reports
 
 ```
-# --osquery also emits Fleet "reports" (scheduled queries for data collection — NOT pass/fail):
+# --osquery also emits Fleet "reports" (scheduled data collection — NOT pass/fail):
 #   platforms/macos/reports/<baseline>-compliance.reports.yml  — per-rule audit-plist status
 #   platforms/macos/reports/security-posture.reports.yml       — OS/FileVault/SIP/firewall/Gatekeeper/screen-lock
 contour mscp generate --mscp-repo R --keyword cis_lvl1 --output O --org ORG --osquery
 #
-# The security-posture pack is OVERRIDABLE: drop a repo-local .contour/security-posture.toml
-# (a list of [[report]] tables: name, description, query, platform=darwin, interval,
-# observer_can_run, automations_enabled) to replace or extend it WITHOUT recompiling.
-# Canonical fleets glob ../platforms/macos/reports/*.yml so reports apply automatically.
+# Override/extend the posture pack with a repo-local .contour/security-posture.toml
+# ([[report]] tables: name, description, query, platform=darwin, interval,
+# observer_can_run, automations_enabled). Canonical fleets glob
+# ../platforms/macos/reports/*.yml, so reports apply automatically.
 # Verify the emitted queries with `contour osquery verify` (see --sop osquery).
 ```
 
----
 
 ## Key JSON fields for agents
 
 From `mscp schema rule <id> --json`:
 
-- `has_odv: bool` — true if the rule needs an organization-defined value;
-  agents MUST surface the choice to the user (see `resolve_odv` above)
-- `odv_default` — generic fallback used silently if user doesn't specify
+- `has_odv: bool` — needs an ODV; MUST surface the choice (`resolve_odv`)
+- `odv_default` — generic fallback used silently if the user doesn't choose
 - `payload.odv_options` — per-baseline recommendations + optional `hint`
-- `mobileconfig: bool` — rule is enforceable via MDM mobileconfig
-- `has_ddm_info: bool` — rule is enforceable via DDM declaration
+- `mobileconfig: bool` / `has_ddm_info: bool` — enforceable via mobileconfig / DDM
 - `enforcement_type: str` — how the rule is enforced
-- `payload.mobileconfig_info` — array of `{payload_type, keys}` for profile generation
+- `payload.mobileconfig_info` — `[{payload_type, keys}]` for profile generation
 - `payload.check_script` / `payload.fix_script` — bash scripts
-- `osquery_checkable: bool` + `osquery_table: str` — when true, the rule
-  references an osquery table (validate via `contour osquery table {name}`)
+- `osquery_checkable: bool` + `osquery_table: str` — rule references an osquery
+  table (validate via `contour osquery table {name}`)
