@@ -989,6 +989,12 @@ pub enum Commands {
         /// Defaults to the highest version present in the rule set.
         #[arg(long)]
         os_version: Option<String>,
+
+        /// Leave out one rule by id (repeatable, or comma-separated), for a
+        /// baseline that lists two rules setting one key differently. The
+        /// recipe's description names every excluded rule.
+        #[arg(long = "exclude-rule", value_delimiter = ',')]
+        exclude_rule: Vec<String>,
     },
 }
 

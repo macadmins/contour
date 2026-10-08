@@ -383,14 +383,14 @@ fn trap_18b_baseline_alias_for_keyword_round_trips() {
 fn trap_19_mscp_recipe_aggregates_baseline_rules() {
     let tmp = tempfile::tempdir().unwrap();
 
-    // Two rules targeting the firewall payload (collision on
-    // EnableFirewall + extra key) plus one rule on a separate payload.
+    // Two rules targeting the firewall payload (both set EnableFirewall
+    // true; one adds a key) plus one rule on a separate payload.
     write_v2x_rule(
         tmp.path(),
         "system_settings",
         "fw_enable",
         "  macOS:\n    '15.0':\n      benchmarks:\n        - name: tinybase\n",
-        "mobileconfig_info:\n  - PayloadType: com.apple.security.firewall\n    PayloadContent:\n      - EnableFirewall: false\n",
+        "mobileconfig_info:\n  - PayloadType: com.apple.security.firewall\n    PayloadContent:\n      - EnableFirewall: true\n",
     );
     write_v2x_rule(
         tmp.path(),
@@ -455,22 +455,56 @@ fn trap_19_mscp_recipe_aggregates_baseline_rules() {
     assert!(body.contains(r#"payload_type = "com.apple.security.firewall""#));
     assert!(body.contains(r#"payload_type = "com.apple.screensaver""#));
 
-    // Last-writer-wins: fw_stealth overwrites fw_enable's
-    // EnableFirewall value.
-    assert!(
-        body.contains("EnableFirewall = true"),
-        "EnableFirewall must take the later writer's value; got: {body}"
-    );
+    // Both rules' keys survive; agreeing on EnableFirewall is no conflict.
+    assert!(body.contains("EnableFirewall = true"), "{body}");
     assert!(body.contains("EnableStealthMode = true"));
     assert!(body.contains("idleTime = 300"));
 
-    // Collision warning surfaces on stderr — operators rely on this
-    // for compliance review.
+    // Two rules requiring different values for one key: the recipe keeps the
+    // value mSCP's generator keeps (the rule the baseline lists later), warns,
+    // and records the choice in the recipe.
+    write_v2x_rule(
+        tmp.path(),
+        "system_settings",
+        "fw_off",
+        "  macOS:\n    '15.0':\n      benchmarks:\n        - name: conflictbase\n",
+        "mobileconfig_info:\n  - PayloadType: com.apple.security.firewall\n    PayloadContent:\n      - EnableFirewall: false\n",
+    );
+    write_v2x_baseline(
+        tmp.path(),
+        "conflictbase",
+        "macos",
+        "15.0",
+        &["fw_enable", "fw_off"],
+    );
+    let conflict_out = tmp.path().join("conflictbase.toml");
+    let output = Command::cargo_bin("mscp")
+        .unwrap()
+        .args([
+            "recipe",
+            "--mscp-repo",
+            tmp.path().to_str().unwrap(),
+            "--baseline",
+            "conflictbase",
+            "-o",
+            conflict_out.to_str().unwrap(),
+            "--org",
+            "com.acme",
+        ])
+        .output()
+        .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("EnableFirewall"),
-        "stderr must surface the collision; got: {stderr}"
+        output.status.success(),
+        "a conflicting baseline still builds; {stderr}"
     );
+    assert!(
+        stderr.contains("WARNING") && stderr.contains("EnableFirewall = false from 'fw_off'"),
+        "the warning names the kept value and its rule; got: {stderr}"
+    );
+    let body = fs::read_to_string(&conflict_out).expect("recipe written");
+    assert!(body.contains("EnableFirewall = false"), "{body}");
+    assert!(body.contains("conflict kept as mSCP does"), "{body}");
 }
 
 // ---------------------------------------------------------------------------

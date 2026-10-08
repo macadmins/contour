@@ -137,9 +137,11 @@ impl RuleExtractor {
     /// AND no rule tagging the name means the name is wrong, and zero rules
     /// with a green exit would hide that.
     pub fn extract_rules_for_baseline(&self, baseline_name: &str) -> Result<Vec<MscpRule>> {
+        // A tailored baseline's `Excluded` section is not membership: mSCP's
+        // generators skip it, and so does this (see `BaselineSection`).
         let all_rules = self.extract_all_rules()?;
         let filtered: Vec<MscpRule> = match self.baseline_rule_ids(baseline_name)? {
-            BaselineMembership::Explicit(ids) => {
+            BaselineMembership::Explicit(ids, _) => {
                 let id_set: std::collections::HashSet<&str> =
                     ids.iter().map(String::as_str).collect();
                 all_rules
@@ -175,6 +177,27 @@ impl RuleExtractor {
             baseline_name
         );
         Ok(filtered)
+    }
+
+    /// The baseline file's member rules in the order the file lists them,
+    /// `Excluded` section left out. Empty for a baseline defined only by
+    /// tags. mSCP's own generator keeps the value of the rule listed later
+    /// when two set one key, so this is what says which value it ships.
+    pub fn baseline_rule_order(&self, baseline_name: &str) -> Result<Vec<String>> {
+        Ok(match self.baseline_rule_ids(baseline_name)? {
+            BaselineMembership::Explicit(ids, _) => ids,
+            BaselineMembership::NoFile(_) => Vec::new(),
+        })
+    }
+
+    /// Rules a tailored baseline file moved to its `Excluded` section, so a
+    /// caller can say what the output leaves out. Empty for a published
+    /// baseline, or one defined only by tags.
+    pub fn excluded_by_tailoring(&self, baseline_name: &str) -> Result<Vec<String>> {
+        Ok(match self.baseline_rule_ids(baseline_name)? {
+            BaselineMembership::Explicit(_, excluded) => excluded,
+            BaselineMembership::NoFile(_) => Vec::new(),
+        })
     }
 
     /// Is `name` a baseline this 2.0 tree knows about on ANY platform — either
@@ -283,15 +306,16 @@ impl RuleExtractor {
             .with_context(|| format!("reading baseline {}", path.display()))?;
         let parsed: BaselineMembership_ = yaml_serde::from_str(&text)
             .with_context(|| format!("parsing baseline {}", path.display()))?;
-        let ids: Vec<String> = parsed
+        let (excluded, included): (Vec<BaselineSection>, Vec<BaselineSection>) = parsed
             .profile
             .into_iter()
-            .flat_map(|section| section.rules)
-            .collect();
-        if ids.is_empty() {
+            .partition(BaselineSection::is_excluded);
+        let ids: Vec<String> = included.into_iter().flat_map(|s| s.rules).collect();
+        let excluded: Vec<String> = excluded.into_iter().flat_map(|s| s.rules).collect();
+        if ids.is_empty() && excluded.is_empty() {
             return Ok(BaselineMembership::NoFile(path));
         }
-        Ok(BaselineMembership::Explicit(ids))
+        Ok(BaselineMembership::Explicit(ids, excluded))
     }
 
     fn extract_v2x(&self, os: Platform, os_version: &str) -> Result<Vec<MscpRule>> {
@@ -337,8 +361,10 @@ impl RuleExtractor {
 /// How a baseline's membership was determined.
 #[derive(Debug)]
 enum BaselineMembership {
-    /// The baseline file's explicit `profile[].rules[]` list.
-    Explicit(Vec<String>),
+    /// The baseline file's explicit `profile[].rules[]` list, without the
+    /// rules a tailored baseline moved to its `Excluded` section; those are
+    /// the second list.
+    Explicit(Vec<String>, Vec<String>),
     /// No usable file; carries the path that was looked for.
     NoFile(std::path::PathBuf),
 }
@@ -354,7 +380,18 @@ struct BaselineMembership_ {
 #[derive(serde::Deserialize)]
 struct BaselineSection {
     #[serde(default)]
+    section: String,
+    #[serde(default)]
     rules: Vec<String>,
+}
+
+impl BaselineSection {
+    /// mSCP's tailoring moves rules an operator rejects into an `Excluded`
+    /// section, and its generators skip any section whose name contains
+    /// "Excluded" (`profiles.py`, `manifest.py`). The same test here.
+    fn is_excluded(&self) -> bool {
+        self.section.contains("Excluded")
+    }
 }
 
 fn parse_v2x_rule<P: AsRef<Path>>(path: P) -> Result<MscpRuleV2x> {
@@ -462,6 +499,28 @@ mod tests {
         assert!(!rules.is_empty());
     }
 
+    /// A tailored baseline: rules in its `Excluded` section are not members
+    /// (mSCP's generators skip them), and are reported as tailored out.
+    #[test]
+    fn a_tailored_baselines_excluded_section_is_not_membership() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bdir = tmp.path().join("baselines").join("macos");
+        std::fs::create_dir_all(&bdir).unwrap();
+        std::fs::write(
+            bdir.join("tailored_macos_27.0.yaml"),
+            "title: t\nparent_values: recommended\nplatform:\n  os: macOS\n  version: 27.0\nprofile:\n  - section: os\n    rules:\n      - os_kept\n  - section: Excluded\n    rules:\n      - os_rejected\n",
+        )
+        .unwrap();
+        let ex = RuleExtractor::new(tmp.path())
+            .with_layout(MscpLayout)
+            .with_os(Platform::MacOS, Some("27.0".to_string()));
+        assert_eq!(ex.baseline_rule_order("tailored").unwrap(), vec!["os_kept"]);
+        assert_eq!(
+            ex.excluded_by_tailoring("tailored").unwrap(),
+            vec!["os_rejected"]
+        );
+    }
+
     /// 2.0 tree: the lookup must resolve `baselines/<os>/<name>_<os>_<version>.yaml`.
     #[test]
     fn baseline_rule_ids_resolves_the_2_0_nested_path() {
@@ -477,7 +536,7 @@ mod tests {
             .with_layout(MscpLayout)
             .with_os(Platform::MacOS, Some("27.0".to_string()));
         match ex.baseline_rule_ids("example_baseline").expect("lookup") {
-            BaselineMembership::Explicit(ids) => {
+            BaselineMembership::Explicit(ids, _) => {
                 assert_eq!(
                     ids,
                     vec!["os_example_rule_enable", "os_example_other_disable"]
@@ -506,7 +565,7 @@ mod tests {
                     "tried {t}"
                 );
             }
-            other @ BaselineMembership::Explicit(_) => panic!("expected NoFile, got {other:?}"),
+            other @ BaselineMembership::Explicit(..) => panic!("expected NoFile, got {other:?}"),
         }
     }
 

@@ -10,10 +10,9 @@
 //!     one `[[ddm]]` block whose configuration payload is the union
 //!     of every contributor's `ddm_key → ddm_value` pair.
 //!
-//! On key collision (same payload-type key OR same DDM key inside a
-//! configuration) the writer warns to stderr and the later writer
-//! wins. Compliance baselines are mostly collision-free in practice;
-//! this matches the behavior of mSCP's own Python generator.
+//! Rules that set the same key merge: dictionaries key by key, lists as
+//! a union. Two rules giving one scalar different values is a conflict,
+//! and `mscp recipe` refuses rather than write either value.
 //!
 //! The recipe TOML output is consumed by
 //! `contour profile generate --recipe <path>` so a baseline becomes a
@@ -103,7 +102,7 @@ impl std::fmt::Display for ConflictWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "[{}] key '{}' set by '{}' = {} then by '{}' = {}; using last writer",
+            "[{}] {}: '{}' sets {}, '{}' sets {}",
             self.payload_type,
             self.key,
             self.previous_rule,
@@ -140,6 +139,10 @@ impl std::fmt::Display for ConflictWarning {
     clippy::implicit_hasher,
     reason = "override map is always built with the default hasher; a generic S would ripple through five private helpers for no caller benefit"
 )]
+#[allow(
+    dead_code,
+    reason = "the mscp binary compiles this module too and calls only the _excluding form"
+)]
 pub fn baseline_to_recipe(
     baseline_name: &str,
     org: Option<&str>,
@@ -147,6 +150,70 @@ pub fn baseline_to_recipe(
     mode: OdvMode,
     odv_overrides: &HashMap<String, yaml_serde::Value>,
 ) -> Result<(String, Vec<ConflictWarning>, AggregateStats)> {
+    baseline_to_recipe_excluding(
+        baseline_name,
+        org,
+        rules,
+        mode,
+        odv_overrides,
+        &RecipeSelection::default(),
+    )
+}
+
+/// What the operator and the baseline file say about which rules apply.
+#[derive(Debug, Default)]
+pub struct RecipeSelection<'a> {
+    /// `--exclude-rule` ids; each must be among the baseline's rules.
+    pub excluded: &'a [String],
+    /// Rules the baseline file's own `Excluded` section names (mSCP
+    /// tailoring); already absent from the rule set.
+    pub tailored_out: &'a [String],
+    /// Member rules in the order the baseline file lists them, for saying
+    /// which value mSCP's own generator would ship on a conflict.
+    pub listed_order: &'a [String],
+}
+
+/// [`baseline_to_recipe`] with rules left out by id.
+///
+/// For a baseline that lists two rules setting one key differently: the
+/// operator names the rule that does not apply. Every id must be in
+/// `rules`, so a typo cannot pass as an exclusion. The recipe's
+/// description names `--exclude-rule` and tailored-out rules alike.
+#[allow(
+    clippy::implicit_hasher,
+    reason = "override map is always built with the default hasher"
+)]
+pub fn baseline_to_recipe_excluding(
+    baseline_name: &str,
+    org: Option<&str>,
+    rules: &[MscpRule],
+    mode: OdvMode,
+    odv_overrides: &HashMap<String, yaml_serde::Value>,
+    selection: &RecipeSelection<'_>,
+) -> Result<(String, Vec<ConflictWarning>, AggregateStats)> {
+    let RecipeSelection {
+        excluded,
+        tailored_out,
+        listed_order,
+    } = *selection;
+    let unknown: Vec<&str> = excluded
+        .iter()
+        .filter(|id| !rules.iter().any(|r| &r.id == *id))
+        .map(String::as_str)
+        .collect();
+    if !unknown.is_empty() {
+        anyhow::bail!(
+            "--exclude-rule: not in baseline '{baseline_name}': {}",
+            unknown.join(", ")
+        );
+    }
+    let kept: Vec<MscpRule> = rules
+        .iter()
+        .filter(|r| !excluded.contains(&r.id))
+        .cloned()
+        .collect();
+    let rules = kept.as_slice();
+
     let mut warnings: Vec<ConflictWarning> = Vec::new();
     let mut stats = AggregateStats::default();
     // Variable mode collects defaults here; inline mode leaves it empty.
@@ -155,6 +222,7 @@ pub fn baseline_to_recipe(
     let profiles = aggregate_profiles(
         baseline_name,
         rules,
+        listed_order,
         mode,
         &mut warnings,
         &mut stats,
@@ -164,6 +232,7 @@ pub fn baseline_to_recipe(
     let ddm_bundles = aggregate_ddm(
         baseline_name,
         rules,
+        listed_order,
         mode,
         &mut warnings,
         &mut stats,
@@ -174,10 +243,27 @@ pub fn baseline_to_recipe(
     stats.profile_count = profiles.len();
     stats.ddm_count = ddm_bundles.len();
 
-    let description = format!(
+    let mut description = format!(
         "mSCP {} baseline aggregated into one recipe ({} profile(s), {} ddm bundle(s))",
         baseline_name, stats.profile_count, stats.ddm_count
     );
+    if !tailored_out.is_empty() {
+        let _ = write!(
+            description,
+            "; excluded by the tailored baseline: {}",
+            tailored_out.join(", ")
+        );
+    }
+    if !excluded.is_empty() {
+        let _ = write!(description, "; rules excluded: {}", excluded.join(", "));
+    }
+    for c in &warnings {
+        let _ = write!(
+            description,
+            "; conflict kept as mSCP does: {} = {} from {} (not {} from {})",
+            c.key, c.winning_value, c.winning_rule, c.previous_value, c.previous_rule
+        );
+    }
     // mscp renders its own `[[ddm]]` section below (it splices `[odv]`
     // mid-document and needs per-bundle control), so pass no DDMs here.
     let body_with_profiles = write_recipe_toml(baseline_name, &description, org, &profiles, &[])?;
@@ -227,6 +313,9 @@ pub fn baseline_to_recipe(
         body.push_str(&ddm_section);
     }
 
+    // Two rules requiring different values for one setting keep mSCP's pick
+    // (the rule the baseline lists later). The caller prints the warnings;
+    // the recipe itself says what was kept, so the file carries it too.
     Ok((body, warnings, stats))
 }
 
@@ -251,10 +340,16 @@ fn render_toml_scalar(v: &PlistValue) -> Result<String> {
 }
 
 /// Group `mobileconfig: true` rules by Apple payload type and merge
-/// their `mobileconfig_info` fields, last-writer-wins on collisions.
+/// their `mobileconfig_info` fields; on a scalar two rules set differently
+/// the rule the baseline file lists later wins, as in mSCP's generator.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the aggregation state, passed through"
+)]
 fn aggregate_profiles(
     baseline_name: &str,
     rules: &[MscpRule],
+    listed_order: &[String],
     mode: OdvMode,
     warnings: &mut Vec<ConflictWarning>,
     stats: &mut AggregateStats,
@@ -265,11 +360,11 @@ fn aggregate_profiles(
     // resulting TOML is deterministic across invocations.
     let mut grouped: BTreeMap<String, Group> = BTreeMap::new();
 
-    // Sort rules by id so "last writer wins" is deterministic — the
-    // rule extractor walks the filesystem and returns rules in
-    // walkdir order, which varies by platform.
+    // Baseline-file order, so the rule mSCP's generator keeps on a conflict
+    // (the one listed later) is the one kept here. Rules the file does not
+    // list follow, by id: the extractor's walkdir order varies by platform.
     let mut sorted: Vec<&MscpRule> = rules.iter().filter(|r| r.mobileconfig).collect();
-    sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    sort_listed(&mut sorted, listed_order);
     stats.mobileconfig_rule_count = sorted.len();
 
     for rule in sorted {
@@ -339,6 +434,30 @@ fn aggregate_profiles(
                     }
                     if let Some(PlistValue::Dictionary(pc)) = group.fields.get_mut("PayloadContent")
                     {
+                        // A second rule for the same domain adds to it; it
+                        // used to replace the first rule's settings.
+                        let prefs = match pc.get(domain).and_then(mcx_prefs) {
+                            Some(existing) => {
+                                let prev_rule = group
+                                    .field_origin
+                                    .get(&format!("PayloadContent.{domain}"))
+                                    .cloned()
+                                    .unwrap_or_default();
+                                match merge_rule_value(
+                                    &PlistValue::Dictionary(existing.clone()),
+                                    PlistValue::Dictionary(prefs),
+                                    domain,
+                                    payload_type,
+                                    &prev_rule,
+                                    &rule.id,
+                                    warnings,
+                                ) {
+                                    PlistValue::Dictionary(d) => d,
+                                    _ => unreachable!("two dictionaries merge to one"),
+                                }
+                            }
+                            None => prefs,
+                        };
                         pc.insert(
                             domain.to_string(),
                             PlistValue::Dictionary(mcx_envelope(prefs)),
@@ -369,21 +488,25 @@ fn aggregate_profiles(
                     format!("converting key '{key_str}' from rule '{}'", rule.id)
                 })?;
 
-                if let Some(prev) = group.fields.get(key_str) {
-                    let prev_rule = group
-                        .field_origin
-                        .get(key_str)
-                        .cloned()
-                        .unwrap_or_else(|| "<unknown>".to_string());
-                    warnings.push(ConflictWarning {
-                        payload_type: payload_type.to_string(),
-                        key: key_str.to_string(),
-                        previous_rule: prev_rule,
-                        previous_value: short_repr(prev),
-                        winning_rule: rule.id.clone(),
-                        winning_value: short_repr(&plist_val),
-                    });
-                }
+                let plist_val = match group.fields.get(key_str) {
+                    Some(prev) => {
+                        let prev_rule = group
+                            .field_origin
+                            .get(key_str)
+                            .cloned()
+                            .unwrap_or_else(|| "<unknown>".to_string());
+                        merge_rule_value(
+                            prev,
+                            plist_val,
+                            key_str,
+                            payload_type,
+                            &prev_rule,
+                            &rule.id,
+                            warnings,
+                        )
+                    }
+                    None => plist_val,
+                };
 
                 group.fields.insert(key_str.to_string(), plist_val);
                 group
@@ -397,12 +520,18 @@ fn aggregate_profiles(
 }
 
 /// Group rules with `ddm_info` by `declarationtype` and merge their
-/// `ddm_key → ddm_value` pairs, last-writer-wins on collisions.
+/// `ddm_key → ddm_value` pairs; dictionary values merge, and only a leaf two
+/// rules set differently is a collision (last writer wins, with a warning).
 /// Skips rules using the unsupported services-configuration-files
 /// shape (those need paired asset bundles, out of scope here).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the aggregation state, passed through"
+)]
 fn aggregate_ddm(
     baseline_name: &str,
     rules: &[MscpRule],
+    listed_order: &[String],
     mode: OdvMode,
     warnings: &mut Vec<ConflictWarning>,
     stats: &mut AggregateStats,
@@ -412,7 +541,7 @@ fn aggregate_ddm(
     let mut grouped: BTreeMap<String, DdmGroup> = BTreeMap::new();
 
     let mut sorted: Vec<&MscpRule> = rules.iter().filter(|r| r.ddm_info.is_some()).collect();
-    sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    sort_listed(&mut sorted, listed_order);
     stats.ddm_rule_count = sorted.len();
 
     for rule in sorted {
@@ -472,27 +601,174 @@ fn aggregate_ddm(
             .entry(declarationtype.clone())
             .or_insert_with(|| DdmGroup::new(&declarationtype));
 
-        if let Some(prev) = group.payload.get(&ddm_key) {
-            let prev_rule = group
-                .field_origin
-                .get(&ddm_key)
-                .cloned()
-                .unwrap_or_else(|| "<unknown>".to_string());
-            warnings.push(ConflictWarning {
-                payload_type: declarationtype.clone(),
-                key: ddm_key.clone(),
-                previous_rule: prev_rule,
-                previous_value: short_repr(prev),
-                winning_rule: rule.id.clone(),
-                winning_value: short_repr(&ddm_value),
-            });
-        }
+        let ddm_value = match group.payload.get(&ddm_key) {
+            Some(prev) => {
+                let prev_rule = group
+                    .field_origin
+                    .get(&ddm_key)
+                    .cloned()
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                merge_rule_value(
+                    prev,
+                    ddm_value,
+                    &ddm_key,
+                    &declarationtype,
+                    &prev_rule,
+                    &rule.id,
+                    warnings,
+                )
+            }
+            None => ddm_value,
+        };
 
         group.payload.insert(ddm_key.clone(), ddm_value);
         group.field_origin.insert(ddm_key, rule.id.clone());
     }
 
     Ok(grouped.into_values().map(DdmGroup::into_bundle).collect())
+}
+
+/// Order rules by their position in the baseline file; rules it does not
+/// list follow, by id.
+fn sort_listed(rules: &mut [&MscpRule], listed_order: &[String]) {
+    let rank = |r: &MscpRule| {
+        listed_order
+            .iter()
+            .position(|id| *id == r.id)
+            .unwrap_or(usize::MAX)
+    };
+    rules.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| a.id.cmp(&b.id)));
+}
+
+/// The settings two of `rules` require different values for, found the way
+/// the recipe aggregates them (dictionaries merge, lists union). For a path
+/// that hands the rules to mSCP's own generator, which keeps the later
+/// rule's value silently, this is what to warn about first.
+pub fn find_conflicts(
+    baseline_name: &str,
+    rules: &[MscpRule],
+    listed_order: &[String],
+) -> Result<Vec<ConflictWarning>> {
+    let mut warnings = Vec::new();
+    let mut stats = AggregateStats::default();
+    let mut odv_defaults = BTreeMap::new();
+    let none = HashMap::new();
+    aggregate_profiles(
+        baseline_name,
+        rules,
+        listed_order,
+        OdvMode::Inline,
+        &mut warnings,
+        &mut stats,
+        &mut odv_defaults,
+        &none,
+    )?;
+    aggregate_ddm(
+        baseline_name,
+        rules,
+        listed_order,
+        OdvMode::Inline,
+        &mut warnings,
+        &mut stats,
+        &mut odv_defaults,
+        &none,
+    )?;
+    Ok(warnings)
+}
+
+/// What to print when a baseline lists two rules that set one key to
+/// different values. contour keeps the value mSCP's own generator keeps
+/// (the rule the baseline file lists later) and says so, which mSCP does not.
+pub fn conflict_report(baseline_name: &str, conflicts: &[ConflictWarning]) -> String {
+    let mut out = format!(
+        "'{baseline_name}' lists rules that set the same key to different values \
+         ({} conflict(s)). Kept the value mSCP's generator keeps, the rule the baseline \
+         lists later; mSCP itself does this without a word:\n",
+        conflicts.len()
+    );
+    for c in conflicts {
+        let _ = writeln!(
+            out,
+            "  [{}] {} = {} from '{}' (not {} from '{}')",
+            c.payload_type,
+            c.key,
+            c.winning_value,
+            c.winning_rule,
+            c.previous_value,
+            c.previous_rule
+        );
+    }
+    out.push_str(
+        "If the other value applies: tailor the baseline (mSCP's generate_baseline.py -t \
+         moves the rule that does not apply into an `Excluded` section, which contour \
+         honors), or name that rule with --exclude-rule <id> (mscp recipe).",
+    );
+    out
+}
+
+/// Combine two rules' values for one key.
+///
+/// Dictionaries merge key by key, recursively: mSCP splits one setting
+/// across rules (`Apps` → `Mail`, `Apps` → `Notes` in intelligence.settings;
+/// `AutomaticActions` in softwareupdate.settings), and keeping only the last
+/// rule's dictionary dropped the others' controls from the baseline. Lists
+/// take the union. Only two different scalars at the same leaf are a
+/// conflict, recorded with the full key path; `mscp recipe` refuses on any.
+fn merge_rule_value(
+    prev: &PlistValue,
+    next: PlistValue,
+    path: &str,
+    payload_type: &str,
+    prev_rule: &str,
+    next_rule: &str,
+    warnings: &mut Vec<ConflictWarning>,
+) -> PlistValue {
+    match (prev, next) {
+        (PlistValue::Dictionary(old), PlistValue::Dictionary(new)) => {
+            let mut merged = old.clone();
+            for (k, v) in new {
+                let child = match old.get(&k) {
+                    Some(o) => merge_rule_value(
+                        o,
+                        v,
+                        &format!("{path}.{k}"),
+                        payload_type,
+                        prev_rule,
+                        next_rule,
+                        warnings,
+                    ),
+                    None => v,
+                };
+                merged.insert(k, child);
+            }
+            PlistValue::Dictionary(merged)
+        }
+        // A list two rules contribute to is a union: mSCP gives each
+        // DisabledSystemSettings pane, SkipSetupItems screen and alr DenyList
+        // app its own rule, and all of them are required.
+        (PlistValue::Array(old), PlistValue::Array(new)) => {
+            let mut merged = old.clone();
+            for item in new {
+                if !merged.contains(&item) {
+                    merged.push(item);
+                }
+            }
+            PlistValue::Array(merged)
+        }
+        (old, new) => {
+            if *old != new {
+                warnings.push(ConflictWarning {
+                    payload_type: payload_type.to_string(),
+                    key: path.to_string(),
+                    previous_rule: prev_rule.to_string(),
+                    previous_value: short_repr(old),
+                    winning_rule: next_rule.to_string(),
+                    winning_value: short_repr(&new),
+                });
+            }
+            new
+        }
+    }
 }
 
 struct Group {
@@ -870,6 +1146,18 @@ fn resolve_odv_for_rule(
 /// build time: `{ Forced: [ { mcx_preference_settings: <prefs> } ] }`. This is
 /// the same shape `wrap_mcx_payload` produces in the profile renderer, kept in
 /// sync so import↔aggregate↔render round-trips agree.
+/// The preference settings inside an envelope [`mcx_envelope`] built.
+fn mcx_prefs(domain: &PlistValue) -> Option<&Dictionary> {
+    domain
+        .as_dictionary()?
+        .get("Forced")?
+        .as_array()?
+        .first()?
+        .as_dictionary()?
+        .get("mcx_preference_settings")?
+        .as_dictionary()
+}
+
 fn mcx_envelope(prefs: Dictionary) -> Dictionary {
     let mut forced_entry = Dictionary::new();
     forced_entry.insert(
@@ -886,7 +1174,9 @@ fn mcx_envelope(prefs: Dictionary) -> Dictionary {
 
 fn yaml_to_plist(value: &yaml_serde::Value) -> Result<PlistValue> {
     Ok(match value {
-        yaml_serde::Value::Null => PlistValue::String(String::new()),
+        // A blank value has no plist form. It used to become "", which wrote
+        // a profile setting the key to an empty string no rule asked for.
+        yaml_serde::Value::Null => anyhow::bail!("the value is empty (YAML null)"),
         yaml_serde::Value::Bool(b) => PlistValue::Boolean(*b),
         yaml_serde::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
@@ -956,6 +1246,167 @@ fn humanize_tail(tail: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dict(pairs: &[(&str, PlistValue)]) -> PlistValue {
+        let mut d = Dictionary::new();
+        for (k, v) in pairs {
+            d.insert((*k).to_string(), v.clone());
+        }
+        PlistValue::Dictionary(d)
+    }
+
+    /// CIS L1 splits intelligence.settings' `Apps` across three rules. Each
+    /// rule's control has to survive into the one declaration; keeping the
+    /// last rule's dictionary dropped Mail and half of Notes.
+    #[test]
+    fn rules_that_share_a_dictionary_key_all_keep_their_controls() {
+        let mail = dict(&[(
+            "Mail",
+            dict(&[("AllowSummary", PlistValue::Boolean(false))]),
+        )]);
+        let notes_a = dict(&[(
+            "Notes",
+            dict(&[("AllowTranscription", PlistValue::Boolean(false))]),
+        )]);
+        let notes_b = dict(&[(
+            "Notes",
+            dict(&[("AllowTranscriptionSummary", PlistValue::Boolean(false))]),
+        )]);
+        let mut warnings = Vec::new();
+        let t = "com.apple.configuration.intelligence.settings";
+        let v = merge_rule_value(&mail, notes_a, "Apps", t, "mail", "notes_a", &mut warnings);
+        let v = merge_rule_value(&v, notes_b, "Apps", t, "notes_a", "notes_b", &mut warnings);
+        let expected = dict(&[
+            (
+                "Mail",
+                dict(&[("AllowSummary", PlistValue::Boolean(false))]),
+            ),
+            (
+                "Notes",
+                dict(&[
+                    ("AllowTranscription", PlistValue::Boolean(false)),
+                    ("AllowTranscriptionSummary", PlistValue::Boolean(false)),
+                ]),
+            ),
+        ]);
+        assert_eq!(v, expected);
+        assert!(warnings.is_empty(), "no leaf disagreed: {warnings:?}");
+    }
+
+    /// Two rules for one MCX preference domain both keep their settings.
+    #[test]
+    fn mcx_rules_sharing_a_domain_merge() {
+        let a: yaml_serde::Value = yaml_serde::from_str(
+            "com.apple.ManagedClient.preferences:\n  com.apple.Safari:\n    A: true\n",
+        )
+        .unwrap();
+        let b: yaml_serde::Value = yaml_serde::from_str(
+            "com.apple.ManagedClient.preferences:\n  com.apple.Safari:\n    B: false\n",
+        )
+        .unwrap();
+        let (toml, _, _) = baseline_to_recipe(
+            "m",
+            None,
+            &[rule("a", a), rule("b", b)],
+            OdvMode::Inline,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert!(
+            toml.contains("A = true") && toml.contains("B = false"),
+            "{toml}"
+        );
+    }
+
+    /// Excluding one rule of a conflicting pair builds the recipe and says
+    /// so; an id the baseline does not hold is refused.
+    #[test]
+    fn exclude_rule_resolves_a_conflict_and_is_recorded() {
+        let on: yaml_serde::Value =
+            yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: true\n").unwrap();
+        let off: yaml_serde::Value =
+            yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: false\n")
+                .unwrap();
+        let rules = vec![rule("fw_on", on), rule("fw_off", off)];
+        let none = std::collections::HashMap::new();
+        let (toml, _, _) = baseline_to_recipe_excluding(
+            "c",
+            None,
+            &rules,
+            OdvMode::Inline,
+            &none,
+            &RecipeSelection {
+                excluded: &["fw_off".to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(toml.contains("EnableFirewall = true"), "{toml}");
+        assert!(toml.contains("rules excluded: fw_off"), "{toml}");
+        let err = baseline_to_recipe_excluding(
+            "c",
+            None,
+            &rules,
+            OdvMode::Inline,
+            &none,
+            &RecipeSelection {
+                excluded: &["fw_of".to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("fw_of"), "{err}");
+    }
+
+    /// 800-53r5 High hides several System Settings panes, one rule each.
+    #[test]
+    fn lists_from_several_rules_are_a_union() {
+        let one = |s: &str| {
+            dict(&[(
+                "DisabledSystemSettings",
+                PlistValue::Array(vec![PlistValue::String(s.into())]),
+            )])
+        };
+        let mut warnings = Vec::new();
+        let v = merge_rule_value(
+            &one("Bluetooth"),
+            one("TouchID"),
+            "k",
+            "t",
+            "a",
+            "b",
+            &mut warnings,
+        );
+        let v = merge_rule_value(&v, one("Bluetooth"), "k", "t", "b", "c", &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            v,
+            dict(&[(
+                "DisabledSystemSettings",
+                PlistValue::Array(vec![
+                    PlistValue::String("Bluetooth".into()),
+                    PlistValue::String("TouchID".into())
+                ])
+            )])
+        );
+    }
+
+    /// Two rules setting one leaf differently is a real conflict, recorded
+    /// with the full path; `mscp recipe` refuses on it.
+    #[test]
+    fn a_leaf_two_rules_set_differently_is_a_conflict() {
+        let a = dict(&[("Download", PlistValue::String("AlwaysOn".into()))]);
+        let b = dict(&[("Download", PlistValue::String("AlwaysOff".into()))]);
+        let mut warnings = Vec::new();
+        let v = merge_rule_value(&a, b, "AutomaticActions", "t", "r1", "r2", &mut warnings);
+        assert_eq!(
+            v,
+            dict(&[("Download", PlistValue::String("AlwaysOff".into()))])
+        );
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].key, "AutomaticActions.Download");
+    }
 
     fn rule(id: &str, info: yaml_serde::Value) -> MscpRule {
         MscpRule {
@@ -1043,28 +1494,38 @@ mod tests {
     }
 
     #[test]
-    fn collision_emits_warning_last_writer_wins() {
+    /// Like mSCP's generator: the rule the baseline lists later wins, here
+    /// against id order (fw_off < fw_on), and the conflict is reported.
+    fn a_profile_key_conflict_keeps_the_later_listed_rule_and_warns() {
         let info_a: yaml_serde::Value =
             yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: false\n")
                 .unwrap();
         let info_b: yaml_serde::Value =
             yaml_serde::from_str("com.apple.security.firewall:\n  EnableFirewall: true\n").unwrap();
         let rules = vec![rule("fw_off", info_a), rule("fw_on", info_b)];
+        let order = ["fw_on".to_string(), "fw_off".to_string()];
 
-        let (toml, warnings, _stats) = baseline_to_recipe(
+        let (toml, conflicts, _) = baseline_to_recipe_excluding(
             "c",
             None,
             &rules,
             OdvMode::Inline,
             &std::collections::HashMap::new(),
+            &RecipeSelection {
+                listed_order: &order,
+                ..Default::default()
+            },
         )
         .unwrap();
-        assert_eq!(warnings.len(), 1);
-        let w = &warnings[0];
-        assert_eq!(w.key, "EnableFirewall");
-        assert_eq!(w.previous_rule, "fw_off");
-        assert_eq!(w.winning_rule, "fw_on");
-        assert!(toml.contains("EnableFirewall = true"));
+        assert!(toml.contains("EnableFirewall = false"), "{toml}");
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].winning_rule, "fw_off");
+        assert!(toml.contains("conflict kept as mSCP does"), "{toml}");
+        let report = conflict_report("c", &conflicts);
+        assert!(
+            report.contains("EnableFirewall = false from 'fw_off'"),
+            "{report}"
+        );
     }
 
     #[test]
@@ -1090,6 +1551,7 @@ mod tests {
             aggregate_profiles(
                 "mcx",
                 &rules,
+                &[],
                 OdvMode::Inline,
                 &mut warnings,
                 &mut stats,
@@ -1222,7 +1684,7 @@ mod tests {
     }
 
     #[test]
-    fn ddm_collision_emits_warning_last_writer_wins() {
+    fn a_ddm_key_conflict_keeps_the_later_listed_rule() {
         let a = ddm_rule(
             "su_off",
             "declarationtype: com.apple.configuration.softwareupdate.settings\n\
@@ -1235,20 +1697,21 @@ mod tests {
              ddm_key: Notifications\n\
              ddm_value: true\n",
         );
-        let (toml, warnings, _stats) = baseline_to_recipe(
+        let order = ["su_on".to_string(), "su_off".to_string()];
+        let (toml, conflicts, _) = baseline_to_recipe_excluding(
             "ddm",
             None,
             &[a, b],
             OdvMode::Inline,
             &std::collections::HashMap::new(),
+            &RecipeSelection {
+                listed_order: &order,
+                ..Default::default()
+            },
         )
         .unwrap();
-        assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].previous_rule, "su_off");
-        assert_eq!(warnings[0].winning_rule, "su_on");
-        // Last writer wins → Notifications = true survives.
-        assert!(toml.contains("Notifications = true"));
-        assert!(!toml.contains("Notifications = false"));
+        assert!(toml.contains("Notifications = false"), "{toml}");
+        assert_eq!(conflicts[0].winning_rule, "su_off");
     }
 
     // ── ODV resolution ────────────────────────────────────────────

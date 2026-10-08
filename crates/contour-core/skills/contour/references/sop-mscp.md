@@ -255,6 +255,53 @@ POSTCONDITIONS:
 
 ---
 
+## When a baseline contradicts itself
+
+Some published mSCP baselines list two rules that set one key to different
+values. `all_rules`, `cmmc_lvl2`, `cnssi-1253_high`, `cnssi-1253_moderate`,
+`cnssi-1253_low` and `hicp_lp` all carry both smartcard trust rules:
+`auth_smartcard_certificate_trust_enforce_high` (`checkCertificateTrust` 3)
+and `..._moderate` (2).
+
+**mSCP's own generator ships the later rule's value and says nothing.** Both
+rules are listed high-then-moderate, so mSCP builds `checkCertificateTrust = 2`
+even for `cnssi-1253_high`. That is a weaker setting than the baseline's name
+implies; mention it whenever it applies.
+
+contour keeps the same value (the practical one, and what mSCP ships) and
+says so:
+
+```
+mscp recipe      keeps mSCP's value, prints WARNING, and records it in the
+                 recipe description ("conflict kept as mSCP does: ...")
+mscp generate    prints the same WARNING before mSCP's output, and records
+                 it in the JSON warnings
+posture generate same WARNING, same value
+```
+
+Lists and dictionaries are not conflicts: rules that each add one
+DisabledSystemSettings pane, SkipSetupItems screen or `Apps` entry merge.
+Only a scalar set two ways is.
+
+To ship the other value instead, in mSCP's own terms:
+
+```
+1. Tailor the baseline (preferred; mSCP-native):
+     mSCP's scripts/generate_baseline.py -t writes a tailored baseline and
+     moves the rule that does not apply into a `section: Excluded` block.
+     mSCP's generators skip that section, and so does contour: recipe and
+     generate both honor it, and the recipe description names those rules.
+2. Quick path for an untailored baseline (recipe only):
+     contour mscp recipe -r <repo> -k cnssi-1253_high \
+         --exclude-rule auth_smartcard_certificate_trust_enforce_moderate
+     The recipe description records the exclusion.
+```
+
+Do NOT use `excluded_rules` in mscp.toml for this on the generate path: mSCP
+builds the profile from both rules first, and excluded_rules drops whole
+profiles afterwards, so the merged value stays. contour says so when it sees
+it. Tailoring is the fix there.
+
 ## PROCEDURE resolve_odv(rule_id)
 
 ```
