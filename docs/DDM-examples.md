@@ -5,8 +5,7 @@ Device Management (DDM) declarations with contour, built around the examples App
 publishes in its [device-management](https://github.com/apple/device-management)
 repository.
 
-Everything here is the **released schema**. The beta channel is disabled in this build
-and `--beta` refuses, so no command below carries it.
+Everything here is the **released schema**; no command below needs `--beta`.
 
 > **Org domain:** every generate needs one (`--org com.acme`, or `export
 > CONTOUR_ORG=com.acme`, or `.contour/config.toml`). contour never falls back to

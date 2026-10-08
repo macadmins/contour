@@ -1810,8 +1810,11 @@ fn print_deployment_notes(declaration_type: &str) {
     if beta_only {
         println!(
             "  • {}",
-            "Pre-release — this type is in the OS 27 beta seed only; keys may still change."
-                .dimmed()
+            format!(
+                "Pre-release — this type is in the {} only; keys may still change.",
+                mdm_schema::seed_label()
+            )
+            .dimmed()
         );
     }
     for n in notes {

@@ -263,6 +263,9 @@ pub struct RuleDetail {
 /// channel, one answer, one explanation.
 fn require_beta_dataset(beta: bool) -> Result<()> {
     if beta && !mscp_schema::beta_dataset_is_carried() {
+        if mdm_schema::SEED_DATASET {
+            anyhow::bail!(mdm_schema::MSCP_NO_SEED_MESSAGE);
+        }
         anyhow::bail!(mdm_schema::BETA_DISABLED_MESSAGE);
     }
     Ok(())
@@ -385,7 +388,14 @@ mod tests {
                 "no preview dataset is carried, so a --beta query must refuse rather than \
                  answer from the stable tables",
             );
-            assert!(e.to_string().contains("disabled"), "{e}");
+            // With an Apple seed carried, mSCP says it has no pre-release
+            // branch; without one, that the channel is disabled.
+            let want = if mdm_schema::SEED_DATASET {
+                "no pre-release branch"
+            } else {
+                "disabled"
+            };
+            assert!(e.to_string().contains(want), "{e}");
         }
 
         // The stable path is untouched by any of this, and says so here so a

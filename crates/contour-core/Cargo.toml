@@ -18,6 +18,9 @@ serde_json.workspace = true
 plist.workspace = true
 toml.workspace = true
 
+# Whether this build carries an OS seed, for the beta SOP's banner
+mdm-schema.workspace = true
+
 # Error handling
 anyhow.workspace = true
 thiserror.workspace = true

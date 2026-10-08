@@ -352,17 +352,16 @@ mobile on managed Macs through the vendor's preference domain. The working
 path today is an `mcx_domain` recipe (e.g. `com.anthropic.claudecode`);
 the embedded app-policy dataset has no query CLI yet.
 
-## mSCP OS-preview rules → `--sop beta`
+## OS seed schema (beta) → `--sop beta`
 
-**The beta channel is disabled right now** — no pre-release seed dataset is
-compiled in, and `--beta` / `--channel beta` refuse rather than returning the
-stable dataset under another name. Do not route anyone to `--beta` today; the
-command will fail. `contour census` prints the state, and `--sop beta` explains
-why and when it returns.
+The beta channel serves Apple's pre-release OS seed when the binary carries
+one, and refuses otherwise. Check `contour census` (or the opening of
+`--sop beta`) before routing anyone to `--beta`.
 
-Use when (once a seed is carried again): querying preview-only compliance rules
-(Apple Intelligence PCC, Siri AI). `contour mscp schema search <kw> --beta` /
-`schema rule <id> --beta`.
+Use when a seed is carried: looking up seed-only declarations, keys and status
+items (`contour profile ddm info <type> --beta`, `profile search <kw> --beta`,
+`profile ddm status <kw> --beta`). mSCP has no pre-release branch, so
+`contour mscp schema search <kw> --beta` refuses and says so.
 
 ## Other SOPs
 

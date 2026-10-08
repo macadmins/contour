@@ -78,7 +78,7 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 | Beta enrollment, AppleSeed for IT, seeding tokens | `contour help-ai --sop beta-enrollment` |
 | Apple Intelligence: Writing Tools, Genmoji, external-intelligence (ChatGPT), `app.settings` | `contour help-ai --sop generative` |
 | AI coding tools' own settings: Claude Code, OpenAI Codex, Cursor, Gemini Enterprise mobile | `contour help-ai --sop app-policy` |
-| mSCP OS-preview compliance rules (beta channel; disabled in this build) | `contour help-ai --sop beta` |
+| Apple's pre-release OS seed schema (beta channel) | `contour help-ai --sop beta` |
 
 For the full routing table with examples, read `references/sop-routing.md`.
 
@@ -133,4 +133,4 @@ binary has been upgraded since, run `contour census` (add `--json`) — it
 counts the bytes the binary actually carries, so it is never stale. Quote it,
 not this line, when a number matters.
 
-`--beta` and `--channel beta` are **disabled** and refuse: Apple's `release` branch moved ahead of the last OS 27 seed, so the seed set held no additions and no pre-release dataset is compiled in. They used to return the stable dataset silently, which is what this line warned about; now the command declines and says why. Do not tell a user to pass `--beta` — it will fail, and there is no pre-release schema to see. The flags are kept because the next seed restores them, and contour decides from the embedded bytes, so nothing needs editing when it does. `contour census` reports the state.
+`--beta` and `--channel beta` serve Apple's pre-release OS seed when the binary carries one, and refuse otherwise rather than return the stable dataset under another name. Which it is depends on the build, so check before suggesting the flag: `contour census` reports it, and `--sop beta` opens with the current state. mSCP has no pre-release branch; its `--beta` always refuses.

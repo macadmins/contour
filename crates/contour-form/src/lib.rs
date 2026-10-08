@@ -59,23 +59,33 @@ pub use validate::{Diagnostic, validate, validate_for, validate_target};
 /// Set globally with `--channel <stable|beta>` or per-command with `--beta`.
 /// The effective channel is beta if *either* is requested (see dispatch).
 ///
-/// Beta is currently DISABLED: no seed dataset is compiled in, and asking
+/// Beta serves Apple's OS seed when the build embeds one. Without one, asking
 /// for it refuses rather than returning stable under another name. See
-/// [`SchemaRegistry::beta_dataset_is_carried`] — the state is read from the
-/// bytes, so beta re-enables itself when a seed dataset ships again.
+/// [`SchemaRegistry::beta_dataset_is_carried`]: the state is read from the
+/// bytes, so beta follows whichever dataset the build carries.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum Channel {
     /// Released Apple schema (the default).
     #[default]
     Stable,
-    /// DISABLED — no seed dataset in this build; commands refuse rather than return stable.
+    /// Apple's pre-release OS seed schema.
     ///
     /// Beta carries Apple's pre-release seed-only declarations and keys when
     /// a seed dataset ships. It is dormant, not removed: the state is read from
     /// the embedded bytes, so it re-enables itself with the next seed.
+    #[cfg_attr(feature = "cli", value(help = BETA_VALUE_HELP))]
     Beta,
 }
+
+/// `--channel beta`'s line in the possible values: says "disabled" only in a
+/// build without a seed dataset.
+#[cfg(feature = "cli")]
+const BETA_VALUE_HELP: &str = if mdm_schema::SEED_DATASET {
+    "Apple's pre-release OS seed schema"
+} else {
+    "DISABLED: no seed dataset in this build; commands refuse rather than return stable"
+};
 
 impl Channel {
     /// True when this is the beta (OS seed) channel.
@@ -115,19 +125,28 @@ pub fn suggest_other_channel(name: &str, current: Channel, by_name: bool) -> Opt
         Channel::Stable => Channel::Beta,
         Channel::Beta => Channel::Stable,
     };
-    let reg = SchemaRegistry::embedded_channel(other).ok()?;
-    let found = if by_name {
-        reg.get_by_name(name).is_some()
-    } else {
-        reg.get(name).is_some() || !reg.search(name).is_empty()
+    let found_in = |reg: &SchemaRegistry| {
+        if by_name {
+            reg.get_by_name(name).is_some()
+        } else {
+            reg.get(name).is_some() || !reg.search(name).is_empty()
+        }
     };
-    if !found {
+    // The search is fuzzy, so the same predicate has to miss in `current`
+    // too: `com.apple.softwareupdate` fuzzy-matches types both channels
+    // carry, and was reported as seed-only.
+    if !found_in(&SchemaRegistry::embedded_channel(other).ok()?)
+        || SchemaRegistry::embedded_channel(current)
+            .ok()
+            .is_some_and(|r| found_in(&r))
+    {
         return None;
     }
     Some(match other {
         Channel::Beta => format!(
-            "'{name}' is not in the released schema but exists in the OS 27 beta seed — \
-             re-run with --beta (pre-release: keys may still change)."
+            "'{name}' is not in the released schema but exists in the {} — \
+             re-run with --beta (pre-release: keys may still change).",
+            mdm_schema::seed_label()
         ),
         Channel::Stable => format!(
             "'{name}' is in the released schema — drop --beta to use the stable definition."
@@ -275,7 +294,8 @@ impl SchemaRegistry {
     pub fn embedded_beta() -> Result<Self> {
         let manifests_vec = loader::load_embedded_beta()?;
         let mut reg = Self::build(manifests_vec, SchemaSource::Embedded)?;
-        reg.provenance = mdm_schema::source_versions::read(mdm_schema::embedded_source_versions())?;
+        reg.provenance =
+            mdm_schema::source_versions::read(mdm_schema::embedded_source_versions_beta())?;
         reg.channel = Some(Channel::Beta);
         Ok(reg)
     }
@@ -783,10 +803,18 @@ mod tests {
         // The reverse direction still works and still matters: someone who
         // passed --beta and missed gets told to drop it.
         if SchemaRegistry::beta_dataset_is_carried() {
-            // Beta is back. The hint should work again; pick a seed-only type
-            // for the forward direction when that happens.
-            let back = suggest_other_channel("com.apple.dock", Channel::Beta, false);
-            assert!(back.as_deref().is_some_and(|h| h.contains("drop --beta")));
+            // Beta is carried and is a superset of stable. A type both
+            // channels have gets no hint either way: the fuzzy search used to
+            // call `com.apple.softwareupdate` seed-only.
+            for current in [Channel::Stable, Channel::Beta] {
+                assert!(
+                    suggest_other_channel("com.apple.dock", current, false).is_none(),
+                    "com.apple.dock is in both channels"
+                );
+            }
+            assert!(
+                suggest_other_channel("com.apple.softwareupdate", Channel::Stable, false).is_none()
+            );
             return;
         }
 

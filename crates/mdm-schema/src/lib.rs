@@ -39,30 +39,49 @@ pub fn embedded_examples() -> &'static [u8] {
     include_bytes!("../data/examples.parquet")
 }
 
-// ── The beta channel is dormant ─────────────────────────────────────────────
+// ── The beta channel ────────────────────────────────────────────────────────
 //
-// Every `*_beta` accessor below returns the STABLE bytes. With no OS seed
-// open there is no pre-release schema to serve, so `--beta` refuses rather
-// than answer with the released schema under another name. What 27.0
-// introduced as seed-only — app.settings, LiquidGlass,
-// AccessibilityAppearance, package UninstallBehavior — is in the stable set.
-//
-// When Apple opens the next seed and a seed dataset is published again,
-// point these accessors back at `include_bytes!` of
-// `data/beta/…`, and restore the seed-additions test that
-// `beta_accessors_currently_mirror_stable` replaced. [`beta_is_retired`] then
-// turns false on its own, and the CLI stops telling users `--beta` is a no-op.
+// When the dataset pin carries an OS seed (`sha256_mdm-schema-beta` in
+// schema-data.toml), build.rs fills `data-beta/` and sets `seed_dataset`, and
+// the `*_beta` accessors below embed those tables. Without one they return
+// the STABLE bytes, and every `--beta` surface refuses rather than answer
+// with the released schema under another name: [`beta_dataset_is_carried`]
+// tells the two apart by address, so nothing here hardcodes which it is.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Embedded **beta** examples. Retired — returns the stable bytes (see above).
+/// Embedded **beta** examples: the seed's when one is carried, else stable's.
 pub fn embedded_examples_beta() -> &'static [u8] {
+    #[cfg(seed_dataset)]
+    return include_bytes!("../data-beta/examples.parquet");
+    #[cfg(not(seed_dataset))]
     embedded_examples()
 }
 
-/// Embedded **beta** capabilities. Retired — returns the stable bytes; see the
-/// banner above for why, and what to change when the next seed opens.
+/// Embedded **beta** capabilities: the seed's when one is carried, else
+/// stable's.
 pub fn embedded_capabilities_beta() -> &'static [u8] {
+    #[cfg(seed_dataset)]
+    return include_bytes!("../data-beta/capabilities.parquet");
+    #[cfg(not(seed_dataset))]
     embedded_capabilities()
+}
+
+/// Embedded **beta** status items: the seed's when one is carried, else
+/// stable's.
+pub fn embedded_status_items_beta() -> &'static [u8] {
+    #[cfg(seed_dataset)]
+    return include_bytes!("../data-beta/status_items.parquet");
+    #[cfg(not(seed_dataset))]
+    embedded_status_items()
+}
+
+/// Embedded **beta** provenance: which seed commit the beta tables came from
+/// when one is carried, else stable's.
+pub fn embedded_source_versions_beta() -> &'static [u8] {
+    #[cfg(seed_dataset)]
+    return include_bytes!("../data-beta/source_versions.parquet");
+    #[cfg(not(seed_dataset))]
+    embedded_source_versions()
 }
 
 /// Whether the beta channel is retired: its accessors serve the stable bytes,
@@ -128,10 +147,11 @@ pub fn embedded_skip_keys() -> &'static [u8] {
     include_bytes!("../data/skip_keys.parquet")
 }
 
-/// Embedded **beta** skip keys. Retired — returns the stable bytes; see the
-/// banner above [`embedded_examples_beta`]. `LiquidGlass` and
-/// `AccessibilityAppearance`, once seed-only, are in the stable set.
+/// Embedded **beta** skip keys: the seed's when one is carried, else stable's.
 pub fn embedded_skip_keys_beta() -> &'static [u8] {
+    #[cfg(seed_dataset)]
+    return include_bytes!("../data-beta/skip_keys.parquet");
+    #[cfg(not(seed_dataset))]
     embedded_skip_keys()
 }
 
@@ -145,9 +165,9 @@ pub fn schema_versions_toml() -> &'static str {
 pub struct SchemaVersionInfo {
     pub apple_device_management_commit: String,
     pub apple_device_management_date: String,
-    /// Beta seed pin (empty when no seed channel is recorded). Provenance for a
-    /// seed-channel parquet; none is shipped today — the `*_beta` accessors
-    /// return the stable bytes (see the banner above them).
+    /// The carried seed's commit, date and release label (empty without a
+    /// seed). Read from the seed's own `source_versions` row; an older
+    /// `[apple_device_management_seed]` table in the TOML still counts.
     pub apple_device_management_seed_commit: String,
     pub apple_device_management_seed_date: String,
     pub apple_device_management_seed_release: String,
@@ -159,9 +179,21 @@ pub struct SchemaVersionInfo {
     pub generation_source: String,
 }
 
-/// Parse the embedded schema-versions.toml into structured version info.
+/// Parse the embedded schema-versions.toml into structured version info, with
+/// the seed's provenance when one is carried.
 pub fn schema_versions() -> SchemaVersionInfo {
-    parse_schema_versions(schema_versions_toml())
+    let mut v = parse_schema_versions(schema_versions_toml());
+    if v.apple_device_management_seed_commit.is_empty()
+        && beta_dataset_is_carried()
+        && let Some(seed) = source_versions::read(embedded_source_versions_beta())
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|r| r.source == "device-management"))
+    {
+        v.apple_device_management_seed_commit = seed.revision.unwrap_or_default();
+        v.apple_device_management_seed_date = seed.date.unwrap_or_default();
+        v.apple_device_management_seed_release = seed.version;
+    }
+    v
 }
 
 /// Parse a schema-versions TOML string. Split out from [`schema_versions`] so the
@@ -583,35 +615,58 @@ release = "seed_OS_27_0"
     }
 
     #[test]
-    fn beta_accessors_currently_mirror_stable() {
-        // With no seed dataset, every `*_beta` accessor returns the stable
-        // bytes (see the banner above them). This asserts that mapping
-        // directly: byte equality, not set equality, so a half-finished
-        // re-pointing at `data/beta/` cannot pass.
-        //
-        // While a seed is carried, the right invariant is that beta strictly
-        // exceeds stable; restore that test together with the `data/beta/`
-        // includes when a seed dataset is published again.
-        assert_eq!(
-            embedded_capabilities_beta().as_ptr(),
-            embedded_capabilities().as_ptr(),
-            "beta capabilities must be the stable bytes while beta is retired"
-        );
-        assert_eq!(
-            embedded_skip_keys_beta().as_ptr(),
-            embedded_skip_keys().as_ptr(),
-            "beta skip keys must be the stable bytes while beta is retired"
-        );
-        assert_eq!(
-            embedded_examples_beta().as_ptr(),
-            embedded_examples().as_ptr(),
-            "beta examples must be the stable bytes while beta is retired"
-        );
-        // The function the CLI asks must agree with the mapping pinned here.
-        assert!(
-            beta_is_retired(),
-            "beta_is_retired must report the retired mapping"
-        );
+    fn beta_accessors_follow_the_seed() {
+        let pairs: [(&str, &[u8], &[u8]); 5] = [
+            (
+                "capabilities",
+                embedded_capabilities_beta(),
+                embedded_capabilities(),
+            ),
+            ("skip keys", embedded_skip_keys_beta(), embedded_skip_keys()),
+            ("examples", embedded_examples_beta(), embedded_examples()),
+            (
+                "status items",
+                embedded_status_items_beta(),
+                embedded_status_items(),
+            ),
+            (
+                "source versions",
+                embedded_source_versions_beta(),
+                embedded_source_versions(),
+            ),
+        ];
+        if SEED_DATASET {
+            // A seed is carried and adds to the release branch. Only tables
+            // the seed changed can sit at a different address: the linker
+            // merges byte-identical embeds, so an unchanged skip_keys shares
+            // stable's. Contents are what must hold for each table.
+            assert_ne!(
+                embedded_capabilities_beta().as_ptr(),
+                embedded_capabilities().as_ptr(),
+                "beta capabilities are the stable bytes"
+            );
+            for (name, beta, _) in pairs {
+                assert!(!beta.is_empty(), "beta {name} is empty");
+            }
+            let count = |b: &[u8]| capabilities::read(b).expect("capabilities").len();
+            assert!(
+                count(embedded_capabilities_beta()) > count(embedded_capabilities()),
+                "a carried seed must add capability rows to the release"
+            );
+            assert!(!beta_is_retired() && beta_dataset_is_carried());
+            assert!(
+                seed_label().starts_with("OS "),
+                "the seed's provenance row should name its OS: {}",
+                seed_label()
+            );
+        } else {
+            // No seed: every beta accessor is the stable bytes, by address, so
+            // the CLI's refusal and this mapping cannot disagree.
+            for (name, beta, stable) in pairs {
+                assert_eq!(beta.as_ptr(), stable.as_ptr(), "beta {name} without a seed");
+            }
+            assert!(beta_is_retired() && !beta_dataset_is_carried());
+        }
     }
 
     #[test]
@@ -689,6 +744,33 @@ pub fn beta_dataset_is_carried() -> bool {
     let beta = embedded_capabilities_beta();
     !std::ptr::eq(stable.as_ptr(), beta.as_ptr()) || stable.len() != beta.len()
 }
+
+/// What to call the carried seed in a message: `OS 27.2 beta seed`, from the
+/// seed's own provenance row, or `beta seed` when the row does not say.
+pub fn seed_label() -> String {
+    let os = source_versions::read(embedded_source_versions_beta())
+        .ok()
+        .and_then(|rows| rows.into_iter().find(|v| v.source == "device-management"))
+        .map(|v| v.os)
+        .filter(|os| !os.is_empty());
+    match os {
+        Some(os) => format!("OS {os} beta seed"),
+        None => "beta seed".to_string(),
+    }
+}
+
+/// Whether this build embeds an OS seed dataset. Known at compile time, so
+/// help text can say it; everything that decides at run time asks
+/// [`beta_dataset_is_carried`], which reads the bytes.
+pub const SEED_DATASET: bool = cfg!(seed_dataset);
+
+/// What mSCP's `--beta` says when an Apple seed is carried but mSCP has no
+/// pre-release branch: its rules are the same on both channels, and serving
+/// them under beta's name would answer a different question.
+pub const MSCP_NO_SEED_MESSAGE: &str = "mSCP has no pre-release branch for this OS seed: its \
+     rules are the same on both channels, so `--beta` has nothing different to show. \
+     Re-run without the flag. The Apple schema's beta channel (profile and ddm \
+     commands) does carry the seed.";
 
 /// What to tell someone who asked for beta when no seed dataset is carried.
 ///

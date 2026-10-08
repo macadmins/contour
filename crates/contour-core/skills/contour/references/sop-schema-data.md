@@ -37,6 +37,19 @@ what says which dataset a build carries.
 binary does not embed the pin. `CONTOUR_*_SCHEMA_URL` fetches one crate's
 archive from another URL, unverified.
 
+## The OS seed: `mdm-schema-beta.zip` → `data-beta/`
+
+When a release carries Apple's pre-release seed, it ships one more archive,
+`mdm-schema-beta.zip`, and `schema-data.toml` records `sha256_mdm-schema-beta`.
+`mdm-schema`'s build script then fills `crates/mdm-schema/data-beta/` the same
+way (local `CONTOUR_SCHEMA_BETA_SRC`, the stamp, or the pinned archive, or
+`CONTOUR_MDM_SCHEMA_BETA_URL`) and the `*_beta` accessors embed it. It sits
+beside `data/`, not inside it, because a stable refetch replaces `data/` whole.
+
+Without that hash the seed is not carried: `data-beta/` is removed and every
+`--beta` surface refuses. Dropping the line when the seed's OS ships is the
+whole retirement.
+
 ## PROCEDURE update_schema_data
 
 ```
@@ -45,7 +58,8 @@ PRECONDITIONS:
   - its per-archive sha256 values are known
 
 STEPS:
-  1. Edit schema-data.toml: set zip_release, and each sha256_<crate>.
+  1. Edit schema-data.toml: set zip_release, and each sha256_<crate>
+     (sha256_mdm-schema-beta only when the release carries a seed).
   2. cargo build — every crate whose stamp differs fetches, verifies and
      re-stamps its data/. A hash mismatch fails the build and says so.
   3. cargo test --workspace.

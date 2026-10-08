@@ -58,15 +58,15 @@ crates/mscp-schema/data/*.json
 crates/osquery-schema/data/*.parquet
 crates/app-policy-schema/data/*.parquet
 crates/windows-schema/data/*.parquet
-# Beta seed channel — (downloaded at build time)
-crates/mdm-schema/data/beta/*.parquet
+# OS seed channel: data-beta/ beside data/ (downloaded at build time)
+crates/mdm-schema/data-beta/
+crates/mdm-schema/data-beta.staging-*/
+crates/mdm-schema/data-beta.replaced-*/
 # The stamp naming which dataset filled data/, and the directories a build
 # swaps through when it replaces data/ (build-support/schema_data.rs).
 crates/*-schema/data/.dataset-pin
 crates/*-schema/data.staging-*/
 crates/*-schema/data.replaced-*/
-crates/mscp-schema/data/beta/*.parquet
-crates/osquery-schema/data/beta/*.parquet
 # Top-level schema archives — orphaned build-time data, never read by build.rs
 # (it extracts the gitignored data/*.parquet or downloads via CONTOUR_*_SCHEMA_URL)
 crates/mdm-schema.zip

@@ -12,8 +12,8 @@ hook that lets a third-party assistant such as ChatGPT plug into the OS, and the
 > `com.openai.codex` and friends as managed-preferences profiles.
 
 Every payload here is in the **released schema** (intelligence and external-intelligence
-since 26.4, app.settings since 27.0, safari.settings since 26.0). No `--beta` — the
-beta channel is disabled and would refuse anyway (`--sop beta`).
+since 26.4, app.settings since 27.0, safari.settings since 26.0). None of it needs
+`--beta`.
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Companion SOPs: `--sop ddm`, `--sop santa` (the app.settings bridge), `--sop app-policy` (AI coding tools).

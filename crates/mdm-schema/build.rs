@@ -10,7 +10,29 @@ fn main() {
     // Whatever the dataset carries, a table it predates becomes a
     // zero-length placeholder; see the function.
     ensure_optional_placeholders(Path::new("data"));
+
+    // The OS seed's Apple schema, when the pin carries one. lib.rs embeds
+    // `data-beta/` under this cfg and serves stable's bytes without it.
+    println!("cargo::rustc-check-cfg=cfg(seed_dataset)");
+    if resolve_seed_dataset(&DatasetSpec {
+        archive: "mdm-schema-beta",
+        url_var: "CONTOUR_MDM_SCHEMA_BETA_URL",
+        files: SEED_SCHEMA_FILES,
+        optional: &[],
+    }) {
+        println!("cargo:rustc-cfg=seed_dataset");
+    }
 }
+
+/// The tables the seed archive carries: the Apple schema itself, and the
+/// provenance row naming the seed commit.
+const SEED_SCHEMA_FILES: &[&str] = &[
+    "capabilities.parquet",
+    "examples.parquet",
+    "skip_keys.parquet",
+    "status_items.parquet",
+    "source_versions.parquet",
+];
 
 /// Parquet files this crate embeds, in the order the dataset release lists
 /// them for this archive.

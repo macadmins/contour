@@ -42,8 +42,8 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Schema channel: stable (released), or beta (pre-release OS seed — currently disabled)
     #[arg(
+        help = profile::cli::CHANNEL_HELP,
         long,
         global = true,
         value_enum,
