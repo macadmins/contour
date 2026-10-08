@@ -176,6 +176,8 @@ Workflow: define bundles in TOML → classify Fleet inventory against them:
 ```bash
 contour santa cel fields --json                         # list available fields
 contour santa cel check '<expression>' --json           # syntax-validate
+contour santa cel compile -c '<condition>' --result blocklist --json  # conditions → CEL
+contour santa faa schema --json                         # FAA policy field schema
 contour santa cel eval '<expression>' \
     --field team_id=EQHXZ8M8AV --field path=/Applications/Chrome.app --json
 contour santa cel classify bundles.toml \

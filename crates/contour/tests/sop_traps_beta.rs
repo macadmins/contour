@@ -149,18 +149,20 @@ fn the_skill_file_states_the_beta_channel_correctly() {
         .expect("setup-agent installs SKILL.md");
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    if beta_is_carried() {
-        assert!(
-            !flat.contains("are **disabled** and refuse"),
-            "a seed dataset is carried again, but SKILL.md still tells agents the beta \
-             flags refuse"
-        );
-        return;
-    }
+    // SKILL.md is installed as static text, while whether a seed is carried
+    // depends on the build. So it must state the rule, not today's answer:
+    // beta refuses without a seed, and an agent checks before suggesting it.
     assert!(
-        flat.contains("are **disabled** and refuse"),
-        "SKILL.md does not say the beta flags refuse. An agent reading it will route \
-         someone to a flag that errors:\n{text}"
+        flat.contains("refuse otherwise"),
+        "SKILL.md must say the beta flags refuse when no seed is carried:\n{text}"
+    );
+    assert!(
+        flat.contains("`contour census` reports it"),
+        "SKILL.md must send agents to `contour census` before suggesting --beta"
+    );
+    assert!(
+        !flat.contains("are **disabled** and refuse"),
+        "SKILL.md states one build's beta state as if it were every build's"
     );
     assert!(
         !flat.contains("still work but currently return the **stable** dataset"),

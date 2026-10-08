@@ -667,6 +667,34 @@ contour mscp recipe -r <MSCP_REPO> -k <KEYWORD> [flags]
 | `--odv-mode <MODE>` | How to render `$ODV` placeholders: `variable` or `inline` | `variable` |
 | `--os <OS>` | OS target: `macos`, `ios`, `visionos` | `macos` |
 | `--os-version <VER>` | OS version (e.g. `26.0`); highest available if unset | auto |
+| `--exclude-rule <ID>` | Leave a rule out (repeatable, or comma-separated). Each id must be in the baseline; the recipe's description names it | none |
+
+Rules that set the same key merge: dictionaries key by key, lists as a
+union, so every rule's control reaches the recipe. Two rules requiring
+different values for one key keep the later-listed rule's value, as mSCP
+does, with a WARNING naming both. Some published baselines list such a pair: `all_rules`,
+`cmmc_lvl2`, `cnssi-1253_*` and `hicp_lp` carry both smartcard trust rules
+(`checkCertificateTrust` 3 and 2).
+
+mSCP's own generator keeps the value of the rule the baseline file lists
+later and says nothing: for all of these it ships `checkCertificateTrust = 2`,
+including `cnssi-1253_high`. contour keeps the same value and says so:
+`mscp recipe` prints a WARNING and records the choice in the recipe's
+description; `mscp generate` prints the same WARNING before mSCP's output and
+records it in the JSON warnings.
+
+mSCP's way to resolve it is tailoring: `scripts/generate_baseline.py -t`
+moves the rule that does not apply into a `section: Excluded` block, which
+mSCP's generators and contour (`recipe`, `generate`) both skip; the recipe
+description names those rules. For an untailored baseline, `mscp recipe`
+also takes `--exclude-rule`. On the generate path use tailoring, not
+`excluded_rules`: mSCP builds the profile from both rules before
+`excluded_rules` is applied, so the merged value would stay.
+
+```bash
+contour mscp recipe -r ./macos_security -k cnssi-1253_high \
+  --exclude-rule auth_smartcard_certificate_trust_enforce_moderate -o cnssi.toml
+```
 
 `--odv-mode variable` (default) keeps the literal `"$ODV"` placeholder
 in each field and emits the resolved per-baseline defaults into a

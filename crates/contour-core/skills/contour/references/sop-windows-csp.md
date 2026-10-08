@@ -2,16 +2,9 @@
 
 Contour embeds Microsoft's DDF v2 Windows CSP catalogue, queryable offline
 via `--windows` on `profile search` and `profile info`, and **emits SyncML**
-from a settings file via `profile windows generate`.
-
-For the size of the embedded catalogue run `contour census` — it counts
-what this binary carries. No count is written by hand in this SOP.
-
-Both halves of the Apple loop exist here: the schema tells you what a node
-is, and generation refuses anything the schema does not support. What does
-NOT exist is a *reader* — there is no `profile windows validate` for a
-SyncML document someone else wrote. Windows is checked when contour writes
-it, not when contour reads it.
+from a settings file via `profile windows generate`. `contour census` gives
+the catalogue size. Generation refuses anything the schema does not support;
+there is no `profile windows validate` for SyncML someone else wrote.
 
 ---
 
@@ -19,28 +12,35 @@ it, not when contour reads it.
 
 ```
 What are you trying to do?
-│
-├─ Find which CSP controls a Windows feature (BitLocker, Defender, …)
-│  → Recipe 1: Search
-│
-├─ Read a CSP's keys, types, enums, and Windows-version gates
-│  → Recipe 2: Inspect
-│
+├─ Find which CSP controls a feature (BitLocker, …) → Recipe 1: Search
+├─ Read a CSP's keys, types, enums, version gates  → Recipe 2: Inspect
 ├─ Turn CSP keys into a deployable Windows profile
-│  → Recipe 3: `profile windows generate` (contour emits the SyncML)
-│
+│    → Recipe 3: `profile windows generate` (contour emits the SyncML)
 ├─ Configure Chrome / Edge / Firefox / M365 / OneDrive on Windows
-│  → Recipe 4: third-party app policies (ADMXInstall, --admx-dir)
-│
-├─ Understand the SyncML contour produced, or hand-author one
-│  → Recipe 5: the SyncML contract, field by field
-│
+│    → Recipe 4: third-party app policies (ADMXInstall, --admx-dir)
+├─ Understand or hand-author SyncML → Recipe 5: the SyncML contract
 ├─ Windows STIG compliance (rules, registry checks, Fleet policies)
-│  → Recipe 6: `profile windows stig` (list, search, show, export)
-│
+│    → Recipe 6: `profile windows stig` (list, search, show, export)
 └─ Apple payloads, DDM, mobileconfig
-   → Wrong SOP: drop --windows; see --sop profile / --sop ddm
+     → Wrong SOP: drop --windows; see --sop profile / --sop ddm
 ```
+
+## Traps
+
+- **`--windows` and `--beta` are mutually exclusive** — the Windows dataset
+  has no seed channel; clap rejects the combination.
+- **Case-sensitive near-duplicates exist in the DDF itself** (`BitLocker`
+  and `Bitlocker` are two distinct CSPs). Search is case-insensitive and
+  shows both; `info` lookup is exact — copy the Payload Type verbatim.
+- **`windows-admx` values are not scalars.** In a settings file use
+  `action = "enable"` plus `[setting.elements]`, not `value = …`; contour
+  builds the policy-XML body.
+- **An `app = …` policy without its template does nothing.** Without
+  `--admx-dir` the generate is refused.
+- **`--envelope` is for a DM session, not for Fleet.** Fleet and GitOps want
+  the bare fragments, which is the default.
+- **No org domain involved.** Exploration is read-only; `--org` is neither
+  needed nor consulted.
 
 ---
 
@@ -51,13 +51,11 @@ contour profile search bitlocker --windows
 contour profile search defender --windows --json
 ```
 
-Output columns worth reading:
-
-- **Category** is `windows-csp` (a native CSP node) or `windows-admx`
-  (an ADMX-backed Group Policy surfaced through the Policy CSP — same
-  delivery mechanism, but values are policy-XML strings, not typed scalars).
-- **Platforms** shows `Windows` — these entries never claim Apple support,
-  and the Windows set never appears in a search without `--windows`.
+- **Category** is `windows-csp` (native CSP node) or `windows-admx`
+  (ADMX-backed Group Policy via the Policy CSP; values are policy-XML
+  strings).
+- **Platforms** shows `Windows`. Windows entries never appear without
+  `--windows`.
 
 ## Recipe 2: Inspect
 
@@ -67,13 +65,10 @@ contour profile info BitLocker --windows --full   # every node
 contour profile info BitLocker --windows --json   # machine-readable
 ```
 
-What the fields mean on the Windows side:
-
-- `values:` on a field lists the **MSFT AllowedValues enumeration** — the
-  only legal values for that node. Anything else is rejected by the CSP at
-  apply time.
-- `introduced:` carries a **Windows build version** (e.g. `10.0.15063` =
-  Windows 10 1703), not a marketing version.
+- `values:` is the **MSFT AllowedValues enumeration** — anything else is
+  rejected by the CSP at apply time.
+- `introduced:` is a **Windows build version** (`10.0.15063` = Windows 10
+  1703), not a marketing version.
 - `[required]` marks nodes the CSP expects on every operation.
 
 ## Recipe 3: Generate SyncML
@@ -84,25 +79,17 @@ contour profile windows generate windows.toml --write    # windows-profile.xml
 contour profile windows generate windows.toml --envelope # wrapped for a DM session
 ```
 
-Bare fragments are the default because that is what Fleet and GitOps want.
-`--envelope` wraps them in `<SyncML>` for a DM session and numbers the
-commands.
+`--envelope` wraps fragments in `<SyncML>` and numbers the commands.
 
 Every generated file opens with one XML comment naming the contour version
-and the Windows dataset pin the settings were resolved against
-(`<!-- generated by contour 0.5.0… · windows-schema release v2026… sha256 … -->`).
-A SyncML file without that line was authored by hand, and nothing in contour
-has checked it — see "Data maturity" below. `--json` carries the same pin as
-`dataset_pin`.
-
-Fleet accepts the leading comment: `ValidateUserProvided` (server/mdm/microsoft/
-`windows_mdm.go`) tokenises the profile in strict mode and ignores comment
-tokens, with a test case "XML with top level comment"; the platform sniff
-treats a `<!--` prefix as Windows. Two things it does not change: a file must
-still carry at least one `<Replace>`, `<Add>`, `<Exec>` or `<Atomic>`, and
-`fleetctl gitops --dry-run` remains the PR gate for Fleet's own checks (LocURI
-format, reserved URIs, name collisions) — noting that dry-run skips profiles
-that reference `$FLEET_SECRET_` variables.
+and dataset pin
+(`<!-- generated by contour 0.5.0… · windows-schema release v2026… sha256 … -->`;
+`--json`: `dataset_pin`). A file without it was hand-authored and is
+unchecked. Fleet accepts the comment, but a file must still carry at least
+one `<Replace>`, `<Add>`, `<Exec>` or `<Atomic>`, and
+`fleetctl gitops --dry-run` remains the PR gate for Fleet's checks (LocURI
+format, reserved URIs, name collisions) — dry-run skips profiles that
+reference `$FLEET_SECRET_` variables.
 
 The settings file:
 
@@ -132,15 +119,13 @@ IgnoreInvalidCertDate = false
 IgnoreWrongCertUsage  = false
 ```
 
-Every element the policy displays must be given — Windows applies an ADMX
-policy only with all of them, and contour no longer fills in what is missing.
-`contour profile info <CSP> --windows` or `profile windows apps show` lists
-them. `multiText` and `list` elements take a TOML array of strings; contour
-joins them with the U+F000 separator Windows reads.
+Give every element the policy displays — Windows applies an ADMX policy only
+with all of them; contour does not fill gaps. `profile info <CSP> --windows`
+or `profile windows apps show` lists them. `multiText` and `list` elements
+take a TOML array of strings (joined with U+F000).
 
-**Every setting is resolved before anything is emitted, and all refusals are
-reported together.** A settings file is edited as a whole, so failing on the
-first of thirty would turn one review into thirty. What gets refused:
+**Every setting is resolved before anything is emitted; all refusals are
+reported together:**
 
 | Refusal | Means |
 |---|---|
@@ -150,30 +135,23 @@ first of thirty would turn one review into thirty. What gets refused:
 | unfilled instance placeholder | the path has a `{…}` segment you did not supply |
 | action-only node | the node takes `enable`/`disable`, not a value |
 
-Deprecated settings **warn and still generate** — they apply on builds
-before their removal, so refusing them would be wrong.
+Deprecated settings **warn and still generate** (they apply on older builds).
 
 ### What the DDF says beyond the type
 
-Generation acts on facts the DDF carries that a type alone does not:
-
-- **`AtomicRequired`** — nodes Microsoft says must be applied together are
-  grouped into one `<Atomic>` block. Splitting them across commands is a
-  documented way to get a partial apply.
-- **`DependencyBehavior`** — a node whose meaning depends on another is
-  reported when its dependency is absent from the same settings file, and
-  reported as having no effect when the file sets the dependency to a
-  value outside the allowed ones. A dependency the file satisfies is silent.
-- **`ValueDescription`** — where the DDF explains what a value *means*,
-  `info` shows it next to the enum, so `2` reads as its behaviour and not
-  as a bare integer.
+- **`AtomicRequired`** — nodes that must apply together go in one
+  `<Atomic>` block; splitting them risks a partial apply.
+- **`DependencyBehavior`** — reported when the dependency is absent from the
+  settings file, or set outside its allowed values (no effect). A satisfied
+  dependency is silent.
+- **`ValueDescription`** — `info` shows what each enum value means.
 
 ## Recipe 4: Third-party app policies (Chrome, Edge, M365, …)
 
 `app = …` names a template Windows does not ship — Chrome, Edge, Firefox,
-Brave, the Microsoft 365 apps, OneDrive, Adobe DC, FSLogix, Zoom, Google
-Update, winget. The policy names are the vendor's own
-(`DefaultCookiesSetting`, not a CSP path). Find them, never guess them:
+Brave, Microsoft 365 apps, OneDrive, Adobe DC, FSLogix, Zoom, Google Update,
+winget. Policy names are the vendor's (`DefaultCookiesSetting`). Find them,
+never guess them:
 
 ```bash
 contour profile windows apps list                          # templates, and what MDM can deliver
@@ -181,11 +159,10 @@ contour profile windows apps search cookies --app chrome   # policy names
 contour profile windows apps show chrome DefaultCookiesSetting
 ```
 
-`show` prints the element schema (kinds, enums, ranges), both LocURIs, where
-the vendor publishes the ADMX, and the `[[setting]]` entry to paste. A policy
-marked **native** has a Policy CSP area Windows ships — use that instead; one
-marked **blocked** writes where Windows will not let MDM ingest, so the
-device drops it. `generate` refuses both.
+`show` prints the element schema, both LocURIs, where the vendor publishes
+the ADMX, and the `[[setting]]` entry to paste. **native** = Windows ships a
+Policy CSP area, use that; **blocked** = Windows will not let MDM ingest it.
+`generate` refuses both.
 
 ```toml
 [[setting]]
@@ -197,41 +174,31 @@ DefaultCookiesSetting = "2"
 ```
 
 **These policies do not exist on the device until the template is
-ingested**, so delivery is two steps and contour emits both in order: one
-`ADMXInstall` command per template carrying the vendor's ADMX file as its
-body, then the policies at
+ingested.** contour emits one `ADMXInstall` command per template (the
+vendor's ADMX as its body), then the policies at
 `…/Policy/Config/{App}~Policy~{category}/{Policy}`.
 
 ```bash
 contour profile windows generate windows.toml --admx-dir ./admx
 ```
 
-**contour does not ship the ADMX XML** — vendors license their templates.
-`--admx-dir` points at the files; a missing one is an error naming where to
-fetch it. Templates are read in the encoding the vendor wrote them: Chrome's
-are UTF-16, and a UTF-8-only read refuses them.
-
-The output follows Fleet's documented practice for ADMX-backed policies:
-one profile, the `ADMXInstall` block first as a `<Replace>`, the policies
-after it, and the ADMX's `<?xml …?>` declaration on the same line as
-`<![CDATA[`. A line break or space between those two makes `ADMXInstall`
-fail with `status 500`; contour strips leading whitespace from the template
-so a vendor file with a blank first line cannot cause it. Every profile that
-sets an app's policies must carry that app's ADMX; splitting policies across
-profiles means embedding the template in each.
-
-The ingested template is also the authority on each policy's area. The
-dataset was built from one version of the vendor's file and the device
-indexes only the version it ingests, so `generate` reads the category chain
-from the ADMX in `--admx-dir`: a policy the template places elsewhere is
-emitted under the template's area with a warning naming both, and a policy
-the template does not define is refused.
+- **contour does not ship the ADMX XML** (vendor-licensed). A file missing
+  from `--admx-dir` is an error naming where to fetch it. Templates are read
+  in the vendor's encoding (Chrome's are UTF-16).
+- Layout: one profile, `ADMXInstall` first as a `<Replace>`, then the
+  policies; the ADMX's `<?xml …?>` sits on the same line as `<![CDATA[` —
+  any whitespace between them fails `ADMXInstall` with `status 500`
+  (contour strips the template's leading whitespace).
+- Every profile that sets an app's policies must carry that app's ADMX;
+  splitting across profiles means embedding the template in each.
+- The ADMX in `--admx-dir` decides each policy's area: one placed elsewhere
+  is emitted under the template's area with a warning naming both; one the
+  template does not define is refused.
 
 ## Recipe 5: The SyncML contract, field by field
 
-Read this to understand what contour emitted, or to hand-author a fragment
-for a node the dataset does not carry. The contract, per Fleet's CSP guides
-(fleetdm.com/guides/creating-windows-csps):
+For reading contour's output or hand-authoring a node the dataset lacks
+(per fleetdm.com/guides/creating-windows-csps):
 
 ```xml
 <Replace>                                   <!-- Replace = modify; Add = new -->
@@ -245,44 +212,35 @@ for a node the dataset does not carry. The contract, per Fleet's CSP guides
 </Replace>
 ```
 
-- **LocURI** = `./Device/Vendor/MSFT/` + the CSP path — `{Area}` is the
-  CSP name from `profile search --windows`, `{PolicyName}` the field name
-  from `profile info --windows`.
-- **`<Format>` must match the field's type** from `info`: `int` for
-  integers (and booleans as 0/1), `chr` for strings and every ADMX-backed
-  policy. `chr` on an integer node is a classic silent failure.
-- **`windows-admx` fields take a policy-XML body**, not a scalar:
-  `<![CDATA[<enabled/><data id="..." value="..."/>]]>` — the legal `value`s
-  are the field's `values:` list. If the device reports "success but result
-  couldn't be verified", escape the XML (`&lt;enabled/&gt;`) instead of
-  using CDATA.
-- **Verify on-device**: applied values land in the registry under
-  `HKLM\SOFTWARE\Microsoft\Provisioning\NodeCache\CSP` (Policy-CSP areas
-  additionally under `PolicyManager\current` — not the Group Policy path
-  Microsoft's docs show). Event log:
-  `DeviceManagement-Enterprise-Diagnostics-Provider/Admin`.
-- **Canary first.** Fleet's own guidance: roll authored or converted CSP
-  profiles to a small test group before broad deployment.
+- **LocURI** = `./Device/Vendor/MSFT/` + CSP path; `{Area}` from
+  `profile search --windows`, `{PolicyName}` from `profile info --windows`.
+- **`<Format>` must match the field's type**: `int` for integers (booleans
+  as 0/1), `chr` for strings and every ADMX-backed policy. `chr` on an
+  integer node is a classic silent failure.
+- **`windows-admx` fields take a policy-XML body**:
+  `<![CDATA[<enabled/><data id="..." value="..."/>]]>`, `value` from the
+  field's `values:`. On "success but result couldn't be verified", escape
+  the XML (`&lt;enabled/&gt;`) instead of using CDATA.
+- **Verify on-device**: `HKLM\SOFTWARE\Microsoft\Provisioning\NodeCache\CSP`
+  (Policy-CSP areas also under `PolicyManager\current`, not the Group Policy
+  path). Event log: `DeviceManagement-Enterprise-Diagnostics-Provider/Admin`.
+- **Canary first**: roll to a small test group before broad deployment.
 
-Worked micro-example (Windows Update deadline, from Fleet's
-custom-windows-updates guide): node
-`./Device/Vendor/MSFT/Policy/Config/Update/ConfigureDeadlineForQualityUpdates`,
-format `int`, data `7` (days). Gotcha: deadline policies override legacy
+Example: `./Device/Vendor/MSFT/Policy/Config/Update/ConfigureDeadlineForQualityUpdates`,
+`int`, `7` (days). Gotcha: deadline policies override legacy
 `AllowAutoUpdate` when both exist.
 
 ## Recipe 6: STIG compliance — `profile windows stig`
 
-The `windows-schema` crate embeds the Windows STIG compliance corpus — the
-Windows counterpart to mSCP, kept strictly separate from the Apple datasets:
+The `windows-schema` crate embeds the Windows STIG corpus, separate from the
+Apple datasets (`contour census` for counts):
 
 - `windows_rules` — STIG rules (severity, CCI tags, check/fix flags)
-- `stig_registry_checks` — registry checks, each with a generated osquery
-  query over the `registry` table
-- `fleet_stigs` — Fleet-deployable policies pairing a CSP OMA-URI and a
-  ready SyncML enforcement fragment with an `mdm_bridge` compliance query;
-  `enforcement_status` marks each generated / blocked / unmapped
-
-Run `contour census` for the counts. None is written by hand here.
+- `stig_registry_checks` — registry checks with generated osquery SQL over
+  the `registry` table
+- `fleet_stigs` — Fleet policies pairing a CSP OMA-URI and SyncML fragment
+  with an `mdm_bridge` compliance query; `enforcement_status` is
+  generated / blocked / unmapped
 
 ```bash
 contour profile windows stig list                       # profiles, and how much of each is enforceable
@@ -293,103 +251,51 @@ contour profile windows stig export --profile dod-windows-11-stig-v2r4 -o w11.ym
 ```
 
 `show` gives ENFORCE (OMA-URI, format, data, SyncML) and VERIFY (the
-`mdm_bridge` or `registry` query) together, which is the pairing the corpus
-exists for. `export` writes Fleet GitOps policies.
+`mdm_bridge` or `registry` query) together. `export` writes Fleet GitOps
+policies.
 
 ### Four things to know before deploying an export
 
 - **An export is a subset, and the header says by how much.** Only rules
-  with both an enforcement and a compliance query are written — a policy
-  Fleet cannot check is not a policy. Every exported file states the count
-  against the profile's total in its header, and `stig list` shows the gap
-  per profile before you export. Deploying the file is not deploying the
-  STIG. No figure for it is written here; run the command.
-- **Policy names are contour's, not upstream's.** Upstream truncates every
-  policy name to the same string (`STIG - Ensure `), and Fleet keys policies
-  BY name, so exporting them as-is would have each policy overwrite the last
-  — silently. contour derives the name from the OMA-URI instead. Names are
-  unique within a profile; merging two profiles' exports into one Fleet team
-  can collide, because the Windows 10 and Windows 11 STIGs set many of the
-  same nodes.
-- **`unmapped` rows have no CSP node at all.** For those the `oma_uri`
-  column holds the rule's DISA *definition ID*, not a URI — upstream found
-  no DDF match. They are never exported, and `show`/`search` label them.
-- **A check reads what was reported, not what is true.** An `mdm_bridge`
-  query reads what the CSP says it was set to; a registry check reads a
-  registry value. Neither observes the behaviour the rule is about. That is
-  how Fleet does Windows compliance, and it is a narrower claim than
-  "this machine is compliant".
+  with both enforcement and a compliance query are written; the header
+  states the count against the profile's total, and `stig list` shows the
+  gap beforehand. Deploying the file is not deploying the STIG.
+- **Policy names are contour's, not upstream's** (derived from the OMA-URI,
+  because Fleet keys policies BY name). Unique within a profile; merging
+  two profiles' exports into one Fleet team can collide.
+- **`unmapped` rows have no CSP node.** Their `oma_uri` holds the DISA
+  *definition ID*, not a URI. Never exported; `show`/`search` label them.
+- **A check reads what was reported, not what is true** — the CSP's
+  reported value or a registry value, not the behaviour itself.
 
 ### Provenance
 
-The corpus is community-generated (`tux234/windows-fleet-stigs`, pinned)
-from DISA content paired against Microsoft's DDF by machine. It is derived,
-not published, and every output says so. Its agreement with the DDF contour
-embeds is held by a test: every enforceable policy targets a node the DDF
-describes, with a value that node accepts. The test is the claim — if it
-passes, the dataset in your binary holds, whatever its size.
-
-The registry checks are verified against osquery's schema: every query
-names a real table and real columns, and every row's SQL agrees with its own
-hive, path and value name. Ten checks
-carry no comparison at all, because the requirement cannot be expressed as
-a single value test (six say absence is also compliant, two accept several
-values, two state no value at all). Those ten are not failures; they are
-the checks a query cannot settle on its own.
+Community-generated (`tux234/windows-fleet-stigs`, pinned), DISA content
+machine-paired against the DDF: derived, not published, and every output
+says so. Tests hold that every enforceable policy targets a DDF node with an
+accepted value, and that registry checks match osquery's schema. Ten checks
+carry no comparison (absence also compliant, several values, or no value) —
+not failures; a query cannot settle them alone.
 
 ## Data maturity — read this before trusting the output
 
-Windows is new territory for contour, and the datasets are first-generation.
-Known limits, stated plainly:
-
-- **Generation is checked; reading is not.** `windows generate` refuses a
-  path, value, channel or action the dataset does not support, so what
-  contour writes is schema-valid. There is no `profile windows validate`:
-  a SyncML document contour did not produce is not checked by anything
-  here. Cross-check hand-authored nodes against Microsoft's CSP docs.
-- **Schema-valid is not device-valid.** The dataset says what the CSP
-  accepts, not what your build, edition or licence honours.
-- **The data has already had one real defect**: an early build stamped 83%
-  of CSP rows `platform: macOS`. It's fixed and pinned by a test, but treat
-  it as the calibration point for how much to trust unreviewed corners.
+- **Generation is checked; reading is not.** SyncML contour did not produce
+  is not checked; cross-check hand-authored nodes against Microsoft's docs.
+- **Schema-valid is not device-valid** — build, edition and licence still
+  decide.
 - **DDF quirks pass through uncorrected** (case-duplicate CSP names,
-  build-number version strings, `[required]` flags that reflect DDF
-  metadata rather than practical deployment requirements).
-- **Scope semantics are unmodeled**: `./Device/` vs `./User/` LocURI
-  scoping exists in the CSP world but is not represented in the dataset.
-- Expertise on this surface is thinner than on the Apple side — when
-  contour's data and Microsoft's docs disagree, **Microsoft's docs win**;
-  please report the mismatch.
-
----
-
-## Traps
-
-- **`--windows` and `--beta` are mutually exclusive** — the Windows dataset
-  has no seed channel; clap rejects the combination.
-- **Case-sensitive near-duplicates exist in the DDF itself** (`BitLocker`
-  and `Bitlocker` are two distinct CSPs). Search is case-insensitive and
-  shows both; `info` lookup is exact — copy the Payload Type verbatim from
-  the search results.
-- **`windows-admx` values are not scalars.** ADMX-backed policies take the
-  `<enabled/>`/`<data …/>` policy-XML string format at deploy time. In a
-  settings file that is `action = "enable"` plus `[setting.elements]`, not
-  `value = …`; contour builds the XML body.
-- **An `app = …` policy without its template does nothing.** The ADMXInstall
-  step is not optional and not idempotent-by-luck — without `--admx-dir` the
-  generate is refused rather than emitting policies the device will ignore.
-- **`--envelope` is for a DM session, not for Fleet.** Fleet and GitOps want
-  the bare fragments, which is the default.
-- **No org domain involved.** Exploration is read-only; `--org` is neither
-  needed nor consulted.
+  build-number versions, `[required]` reflecting DDF metadata, not practical
+  need).
+- **Scope semantics are unmodeled**: `./Device/` vs `./User/` is not in the
+  dataset.
+- The datasets are first-generation. When they disagree with Microsoft's
+  docs, **Microsoft's docs win**; report the mismatch.
 
 ## Key flags
 
-- `--windows` — query the Windows CSP dataset; default is the Apple schema.
-- `--admx-dir <DIR>` — on `windows generate`, where the vendor `.admx`
-  templates live. Required for any `app = …` setting.
-- `--envelope` — on `windows generate`, wrap in `<SyncML>` for a DM session.
+- `--windows` — query the Windows CSP dataset (default: Apple schema).
+- `--admx-dir <DIR>` — vendor `.admx` templates; required for `app = …`.
+- `--envelope` — wrap in `<SyncML>` for a DM session.
 - `--write` / `-o` — write `windows-profile.xml` instead of stdout.
-- `--full` — expand every node (CSPs like `LocalPoliciesSecurityOptions`
-  carry 80+).
+- `--full` — expand every node (`LocalPoliciesSecurityOptions` has 80+).
 - `--json` — structured output for CI/agents.

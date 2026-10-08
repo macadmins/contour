@@ -26,11 +26,13 @@ ref = ""
 # The release every crate's archive is fetched at. Its name and the first
 # characters of the archive's sha256 go into the request URL, so a cached
 # copy of another release cannot be served for this one.
-zip_release = "v2026.10.01-1"
+zip_release = "v2026.10.08-1"
 
 # The sha256 of each archive at `zip_release`. A downloaded archive that does
 # not match fails the build.
-sha256_mdm-schema = "0ac34629d19ee35dd229c05cef0e87ded48934e45bc1478b25dc0c90cb69f2cf"
+sha256_mdm-schema = "f7e21788f6e00ff510ab1639a516feabc2931e07901dd5ebd5aff5bbcac2daf0"
+# The OS 27.2 seed (seed_OS-27.2, Seed3). Drop this line when 27.2 ships.
+sha256_mdm-schema-beta = "8e1dda41ccbe7cafc2fe919a8f8149ea46a24a8b38cf1375535c9083abdc7380"
 sha256_osquery-schema = "1a98b619ec682adf090ada169c717d3f157a2ce5c5682b93fbe9f8bee8a9a1f2"
 sha256_mscp-schema = "e99ce3cf3a29da83fd1b2b40441709a7d0bb898c870b3554f9679301fcf696fa"
 sha256_windows-schema = "a2a6b1ffc05b3f2ef9cb582af5b5c195a9e1dc2aea65ac4bd58db25638f8bfbb"

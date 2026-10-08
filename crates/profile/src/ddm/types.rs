@@ -4,7 +4,6 @@
 //! declarative device management protocol.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// A DDM declaration
 ///
@@ -62,13 +61,16 @@ pub struct Declaration {
 
 /// The payload of a DDM declaration
 ///
-/// Contains the actual configuration values as key-value pairs.
+/// Contains the actual configuration values as key-value pairs, in insertion
+/// order (`serde_json` is built with `preserve_order`), so a declaration
+/// writes its keys in the order it was built: the schema's, for a generated
+/// one. A `HashMap` here made every write order its keys at random.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DeclarationPayload(pub HashMap<String, serde_json::Value>);
+pub struct DeclarationPayload(pub serde_json::Map<String, serde_json::Value>);
 
 impl DeclarationPayload {
     pub fn new() -> Self {
-        Self(HashMap::new())
+        Self(serde_json::Map::new())
     }
 
     pub fn get(&self, key: &str) -> Option<&serde_json::Value> {
@@ -395,5 +397,22 @@ mod tests {
         let decl = Declaration::new("com.apple.configuration.test", "test.id");
         let json = serde_json::to_string(&decl).unwrap();
         assert!(!json.contains("ServerToken"));
+    }
+
+    /// A declaration writes its keys in the order they were inserted, so the
+    /// same inputs give the same bytes. With a `HashMap` here, two runs of
+    /// `ddm generate` wrote one declaration's keys in different orders.
+    #[test]
+    fn payload_keys_serialize_in_insertion_order() {
+        let mut p = DeclarationPayload::new();
+        for k in ["Zulu", "Alpha", "Mike", "Bravo", "Yankee", "Charlie"] {
+            p.insert(k.to_string(), serde_json::Value::Bool(true));
+        }
+        let json = serde_json::to_string(&p).unwrap();
+        let order: Vec<usize> = ["Zulu", "Alpha", "Mike", "Bravo", "Yankee", "Charlie"]
+            .iter()
+            .map(|k| json.find(k).unwrap())
+            .collect();
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{json}");
     }
 }

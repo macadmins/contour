@@ -1,24 +1,6 @@
 # SOP: Beta (pre-release OS seed) schema
 
-> **The beta channel is DISABLED right now.** No seed dataset is compiled into
-> the binary, and `--beta` / `--channel beta` refuse with an explanation rather
-> than returning the stable dataset under another name. Everything below
-> describes how the channel works when a seed is carried, and becomes live
-> again — with no code change — the moment one is.
->
-> Why it is off: the dataset pipeline builds beta from Apple's pre-release seed schema, and
-> the last seed held no additions over the release branch, so there was nothing
-> to ship. The pipeline's source lock records this against the
-> `device-management-beta` source. When a future seed carries seed-only
-> declarations or keys, the pipeline publishes them and the flag starts working.
->
-> How contour knows: it compares the embedded beta table to the stable one.
-> They are currently the same bytes, which is what "no seed dataset" means in
-> practice. Nothing is hardcoded, so this state corrects itself.
->
-> **Do not tell anyone to pass `--beta` today.** It will fail. If you are here
-> because a type was not found in stable, it is not in beta either — beta is
-> the same data.
+<!-- beta-channel-state -->
 
 This SOP covers contour's **beta channel** — Apple's pre-release OS *seed* schema,
 exposed opt-in via the per-command `--beta` flag OR the global `--channel beta` flag
@@ -53,12 +35,11 @@ BETA-AWARE (accept --beta, and honor the global --channel beta):
   # Equivalent global form (flag BEFORE the subcommand):
   contour --channel beta profile generate <type> --org <org> -o out.mobileconfig
 
-  # mSCP OS-preview rules (separate dataset, same opt-in idea — see the
-  # "mSCP OS-preview rules" section below):
-  contour mscp schema search <kw>       --beta
-  contour mscp schema rule   <rule_id>  --beta
+  # DDM status items the seed adds:
+  contour profile ddm status <kw>       --beta
 
 NOT beta-aware (stable schema only):
+  contour mscp schema ... --beta        # refuses: mSCP has no pre-release branch
   contour santa ...                     # no beta channel
   contour mscp recipe / baselines ...   # reads a repo checkout, not the
                                         # embedded dataset — --beta does not apply
@@ -67,12 +48,15 @@ NOT beta-aware (stable schema only):
 When `profile generate` runs on the beta channel it **stamps** the artifact:
 `PayloadDescription` is suffixed with `[contour: beta-seed schema]` (visible in MDM
 consoles), and a stderr badge prints the pinned seed, e.g.
-`⚠ generated from BETA seed schema (Apple seed seed_OS_27_0 <sha>)`. The stamp marks
+`⚠ generated from BETA seed schema (Apple seed seed_OS-27.2 (Seed3) <sha>)`. The stamp marks
 the profile as built against pre-release schema — see SAFETY before deploying.
 
 Data layer (for reference; agents use the CLI, not these directly):
-`mdm_schema::embedded_capabilities_beta()`, `embedded_skip_keys_beta()` read
-`crates/mdm-schema/data/beta/*.parquet`, published by the dataset pipeline.
+`mdm_schema::embedded_capabilities_beta()`, `embedded_examples_beta()`,
+`embedded_skip_keys_beta()`, `embedded_status_items_beta()` and
+`embedded_source_versions_beta()` read `crates/mdm-schema/data-beta/`, which
+`build.rs` fills from `mdm-schema-beta.zip` when `schema-data.toml` pins its
+sha256 (or from `CONTOUR_SCHEMA_BETA_SRC`, a local dataset build).
 
 ## INVARIANT — channel isolation
 
@@ -161,50 +145,23 @@ collision pairs: `intelligence.settings` ⊂ `external-intelligence.settings`.
 ## PROVENANCE — which seed is embedded
 
 ```
-contour profile info            # human: "Apple seed (--beta): <sha> (seed_OS_27_0, <date>)"
+contour profile info            # human: "Apple seed (--beta): <sha> (seed_OS-27.2 (Seed3), <date>)"
 contour profile info --json     # sources.apple_device_management_seed.{commit,date,release}
+contour census                  # "beta seed dataset  carried" or "not carried"
 ```
 
-The seed pin lives in `schema-versions.toml`, which is **gitignored and
-pipeline-maintained** (the dataset pipeline writes `[apple_device_management_seed]` into
-the data zip; `build.rs` extracts it). When the seed line is absent, `profile info`
-simply omits it — that means the embedded data predates seed-pin recording, not an
-error. To refresh: re-publish from the dataset pipeline (a *beta* config prints the exact
-seed-pin block to paste).
+The seed's provenance is its own `source_versions` row, shipped in the seed
+archive: the seed branch and Apple's commit subject as the release label, and the
+commit the tables were read from. Without a seed these fields are empty.
 
 ---
 
-## mSCP OS-preview rules
+## mSCP has no pre-release branch
 
-The mSCP compliance dataset has its own beta channel, built from the mSCP
-OS-preview branch (`dev_27` at time of writing) instead of Apple's seed repo.
-Same opt-in contract, different content: preview-only **rules**, not payload
-schemas. What it carries beyond stable:
-
-- ~1,650 rules including rows at `os_version: 27.0`
-- OS-27-only rules — Apple Intelligence Private Cloud Compute
-  (`os_apple_intelligence_pcc_disable`), visual intelligence,
-  natural-language editing, Siri AI
-
-```bash
-contour mscp schema search "apple intelligence" --beta   # 65 hits on dev_27
-contour mscp schema rule os_apple_intelligence_pcc_disable --beta
-```
-
-Contracts:
-
-- **Channel isolation holds**: the same lookup without `--beta` returns
-  nothing for a preview-only rule — that's the isolation test.
-- **Graduation**: when a preview rule ships in the stable mSCP branch,
-  `--beta` still resolves it; the flag stops being *needed*, mirrors the
-  seed-payload graduation model above.
-- **`mscp recipe` is unaffected**: it reads rule YAML from a repo checkout
-  (`-r ./macos_security`), not the embedded dataset. To build recipes from
-  preview rules, check out the preview branch — `--beta` on `recipe` is not
-  a thing.
-- Enforcement caveat: several preview AI rules are `ScriptOnly` or
-  `AuditOnly` (no mobileconfig) — read `enforcement_type` before promising a
-  profile.
+mSCP's OS-27 preview branch was merged into `main` upstream, so mSCP's rules are
+the same on both channels. `contour mscp schema search <kw> --beta` and
+`schema rule <id> --beta` refuse and say so rather than return the stable rules
+under beta's name. Use them without the flag.
 
 ## SAFETY — beta is pre-release
 

@@ -305,7 +305,7 @@ fn ancestors_of(field: &crate::schema::types::FieldDefinition) -> Vec<String> {
 /// Returns `(label, object)` pairs where `label` is the concrete path, so an
 /// error names the app it came from rather than the word `ANY`.
 fn walk_payload_paths<'a>(
-    root: &'a std::collections::HashMap<String, serde_json::Value>,
+    root: &'a serde_json::Map<String, serde_json::Value>,
     path: &[String],
 ) -> Vec<(String, &'a serde_json::Map<String, serde_json::Value>)> {
     // `parent_key` in a manifest is a full dotted path
@@ -365,7 +365,7 @@ fn walk_payload_paths<'a>(
 /// required-field check would then look for a *key* named `BinaryIdentifier`
 /// in every correct element and fail it.
 fn array_element_findings(
-    payload: &std::collections::HashMap<String, serde_json::Value>,
+    payload: &serde_json::Map<String, serde_json::Value>,
     manifest: &crate::schema::PayloadManifest,
 ) -> (Vec<String>, Vec<String>) {
     use crate::schema::{FieldDefinition, FieldType};
@@ -1810,8 +1810,11 @@ fn print_deployment_notes(declaration_type: &str) {
     if beta_only {
         println!(
             "  • {}",
-            "Pre-release — this type is in the OS 27 beta seed only; keys may still change."
-                .dimmed()
+            format!(
+                "Pre-release — this type is in the {} only; keys may still change.",
+                mdm_schema::seed_label()
+            )
+            .dimmed()
         );
     }
     for n in notes {
@@ -4199,7 +4202,7 @@ mod nested_enum_tests {
     use crate::schema::SchemaRegistry;
 
     fn sso(payload: serde_json::Value) -> Declaration {
-        let map: std::collections::HashMap<String, serde_json::Value> =
+        let map: serde_json::Map<String, serde_json::Value> =
             serde_json::from_value(payload).expect("object payload");
         Declaration {
             payload_scope: None,

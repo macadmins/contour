@@ -1,39 +1,24 @@
 # SOP: osquery Schema Lookup + Policy Patterns
 
-This SOP covers two distinct concerns, both centred on osquery:
-1. **Schema lookup** (procedural) — finding the right table and columns to
-   query, given a keyword or compliance requirement.
-2. **Idiomatic policy patterns** (reference cookbook) — battle-tested SQL
-   templates drawn from real-world deployments (Fleet's `it-and-security`
-   repo is the source for many; the patterns generalize to any osquery
-   consumer). Agents should reuse these patterns; inventing new query
-   structures is a common source of false-negatives (queries that work
-   locally but fail across host versions).
-
-The lookup half is procedural. The patterns half is a cookbook —
-agents pick a pattern, fill in the table/column, and validate against the
-schema before deploying. Both halves use the same `contour osquery` CLI,
-just with different shapes of result.
-
-Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
-Drift detector: `crates/profile/tests/sop_traps.rs`
+Two halves, both via `contour osquery`: **schema lookup** (find the table
+and columns for a requirement) and a **policy-pattern cookbook** (reuse its
+SQL; validate against the schema before deploying).
 
 ## ERROR-CODE ENUM
 
 ```
 INVALID_FORMAT         malformed --json input
-SCHEMA_VIOLATION       query references a nonexistent table (validate is table-level across files; columns are checked for single-table queries)
+SCHEMA_VIOLATION       query names a nonexistent table (columns checked on single-table queries)
 IO_ERROR               schema data missing / unreadable
 UNKNOWN                unmatched (e.g. unknown table name)
 ```
 
-Failure-path JSON envelope (since contour ≥0.2.1):
+Failure-path JSON envelope:
 
 ```json
 { "success": false, "error": "...", "error_code": "UNKNOWN" }
 ```
 
----
 
 ## PROCEDURE find_query_table(keyword, platform)
 
@@ -45,10 +30,8 @@ SCHEMA_TOOL:   contour osquery search <keyword> --json
                contour osquery validate <yaml> --json     # before deploying what you wrote
 
 INPUT:
-  keyword   : a noun describing the compliance check or data point
-              (e.g. "disk_encryption", "filevault", "preferences")
-  platform  : optional platform filter ("darwin", "linux", "windows")
-              — narrows results when the same keyword applies to multiple OS
+  keyword   : noun for the check or data point ("filevault", "preferences")
+  platform  : optional filter ("darwin", "linux", "windows")
 
 PRECONDITIONS:
   ASSERT keyword is non-empty
@@ -56,19 +39,16 @@ PRECONDITIONS:
 
 STEP 1 — Search:
   matches = contour osquery search {keyword} [--platform {platform}] --json
-  # Returns a JSON ARRAY of column-level matches:
-  #   [ { "table_name", "table_description", "platforms",
-  #       "evented", "column_name", "column_description",
-  #       "column_type", "required", "hidden", "source" }, ... ]
-  # NB: each entry is one matching COLUMN (so a single matching table
-  #     with 8 matching columns produces 8 entries).
+  # JSON ARRAY, one entry per matching COLUMN:
+  #   [ { "table_name", "table_description", "platforms", "evented",
+  #       "column_name", "column_description", "column_type",
+  #       "required", "hidden", "source" }, ... ]
   # NB: "source" is "osquery" or "fleet". A "fleet" table needs Fleet's
   #     agent (fleetd); plain osqueryd returns no rows for it.
   # Empty array (no match) exits 0 — agents MUST check len(), not exit.
 
   ASSERT len(matches) > 0
-    HALT "no osquery columns match '{keyword}'; try `contour osquery stats` \
-          to see registered tables, or broaden the keyword"
+    HALT "no osquery columns match '{keyword}'; broaden it or check `contour osquery stats`"
 
 STEP 2 — Reduce to candidate tables:
   tables = unique(matches.map(m -> m.table_name))
@@ -79,36 +59,26 @@ STEP 2 — Reduce to candidate tables:
 
 STEP 3 — Inspect the chosen table:
   schema = contour osquery table {candidate} --json
-  # Returns one OBJECT:
-  #   { "table_name", "table_description", "platforms",
-  #     "evented", "columns": [ { "column_name", "column_type",
-  #                                "column_description",
-  #                                "required", "hidden" }, ... ],
-  #     "fleet": { "examples", "notes", "url" }      # when Fleet documents it
-  #     "source", "note" }                            # on a Fleet-only table
-  # Start from fleet.examples where present — it is Fleet's worked query.
-  # NB: column fields are prefixed (column_name, column_type,
-  #     column_description) — NOT bare name/type. Same prefix used
-  #     by `osquery search` results.
+  # One OBJECT: { "table_name", "table_description", "platforms", "evented",
+  #   "columns": [ { "column_name", "column_type", "column_description",
+  #                  "required", "hidden" } ],
+  #   "fleet": { "examples", "notes", "url" },   # when Fleet documents it
+  #   "source", "note" }                         # on a Fleet-only table
+  # Start from fleet.examples where present.
+  # NB: column fields are prefixed (column_name, …) — NOT bare name/type.
 
   if schema.exit_code != 0:
-    # Unknown table — emits {success:false, error_code:"UNKNOWN"} on stderr.
+    # Unknown table → {success:false, error_code:"UNKNOWN"} on stderr.
     HALT "{schema.error_code}: {schema.error}"
 
 POSTCONDITIONS:
   ASSERT platform in schema.platforms (if platform was specified)
     HALT "{candidate} not available on {platform}; platforms: {schema.platforms}"
 
-  RETURN {
-    table: candidate,
-    platforms: schema.platforms,
-    columns: schema.columns,
-    matched_columns: matches.filter(m -> m.table_name == candidate)
-                            .map(m -> m.column_name),
-  }
+  RETURN { table: candidate, platforms, columns,
+           matched_columns: matching column_names in candidate }
 ```
 
----
 
 ## PROCEDURE write_policy_query(intent, table_info)
 
@@ -118,62 +88,44 @@ INPUT:
                         check_app_version, check_disk_space,
                         check_software_updates, check_mdm_profile,
                         snapshot_data, complex_multi_condition}
-  table_info  : output of find_query_table — table name, columns, platforms
+  table_info  : output of find_query_table
 
 PRECONDITIONS:
   ASSERT intent in known intents (see "Idiomatic policy patterns" below)
     HALT "{intent} is not a known query pattern; pick from list or add to SOP"
 
 EXECUTION:
-  # Pick the matching SQL template (see cookbook below).
-  template = get_template(intent, table_info.platforms)
-
-  # Substitute identifiers from table_info — never interpolate user strings
-  # directly (sql-injection avoided because we control the template).
-  query = template.fill({
-    table:    table_info.table,
-    column:   chosen column from table_info.columns,
-    value:    user-provided literal (escape per template rules),
-  })
+  template = cookbook pattern for {intent} and table_info.platforms
+  query = template.fill(table, column from table_info; value = escaped literal)
+  # Identifiers come from table_info — never interpolate user strings.
 
 INVARIANTS:
-  # Version comparison MUST use osquery's version_compare() function, not
-  # string comparison. String comparison fails on mixed-format versions
-  # ("4.48.100" > "4.5.1" is false lexicographically, but true semantically).
+  # Version comparison MUST use version_compare(), not string comparison
+  # ("4.48.100" > "4.5.1" is false lexicographically).
   if intent == check_app_version:
     ASSERT query contains "version_compare("
-      HALT "version checks must use version_compare(); string comparison \
-            produces wrong results across version formats"
+      HALT "version checks must use version_compare(), not string comparison"
 
-  # Prefer bundle_identifier over name for app checks — name varies by
-  # locale and macOS version; bundle_identifier is stable.
+  # Prefer bundle_identifier over name (name varies by locale and version).
   if intent == is_app_installed and platform == darwin:
     ASSERT query references bundle_identifier OR
            "WHERE name =" appears with REQUIRE human approval
-      WARN "policy uses `name` instead of `bundle_identifier`; \
-            name can vary by locale and major version"
+      WARN "policy uses `name` instead of `bundle_identifier`"
 
 POSTCONDITIONS:
   RETURN { query, references_table: table_info.table, intent }
 ```
 
----
 
 ## Idiomatic policy patterns (reference cookbook)
 
-Battle-tested patterns drawn from real-world osquery deployments
-(Fleet's public `it-and-security` repo is the source for several below).
-**Reuse these
-verbatim; do not invent new query structures** — agents that synthesize
-queries from scratch produce false-negatives that look like compliant
-hosts but are actually unmonitored.
+**Reuse these verbatim; do not invent new query structures** — synthesized
+queries produce false negatives that look like compliant hosts.
 
-Every `sql` block below is checked against the embedded osquery and Fleet
-schemas by a test (`trap_97`), so a table or column named here exists.
-Some patterns use Fleet agent tables (`filevault_status`, `software_update`,
-`macos_profiles`, `mdm_bridge`): `contour osquery table <name>` shows
-`source: fleet`, and the query returns nothing under plain osqueryd. Ship
-those only to Fleet-managed hosts.
+Every `sql` block below is schema-checked by a test (`trap_97`). Fleet agent
+tables (`filevault_status`, `software_update`, `macos_profiles`, `mdm_bridge`)
+show `source: fleet` and return nothing under plain osqueryd: ship those only
+to Fleet-managed hosts.
 
 ### `is_setting_enabled` — boolean check
 
@@ -195,7 +147,7 @@ SELECT 1 FROM alf WHERE global_state >= 1;
 ### `is_app_installed` — app presence check
 
 ```sql
--- macOS — bundle_identifier preferred (stable across versions)
+-- macOS — bundle_identifier preferred
 SELECT 1 FROM apps WHERE bundle_identifier = 'com.1password.1password';
 
 -- Windows
@@ -205,7 +157,7 @@ SELECT 1 FROM programs WHERE name = '1Password';
 ### `check_app_version` — version comparison via NOT EXISTS
 
 ```sql
--- Fail-if-outdated pattern (NOT EXISTS returns 1 only if no compliant app found)
+-- Fail if outdated
 SELECT 1 WHERE NOT EXISTS (
   SELECT 1 FROM apps
   WHERE name = 'Slack.app'
@@ -243,7 +195,7 @@ SELECT 1 FROM software_update WHERE software_update_required = 0;
 SELECT 1 FROM macos_profiles WHERE identifier = 'com.fleetdm.nudge.managed';
 ```
 
-### `snapshot_data` — collect raw rows (not boolean policy)
+### `snapshot_data` — raw rows, not a boolean policy
 
 ```sql
 -- Apple Intelligence opt-in detection
@@ -266,15 +218,10 @@ SELECT 1 WHERE
   AND EXISTS (SELECT 1 FROM package_receipts WHERE package_id = 'com.fleetdm.Nudge.assets');
 ```
 
----
 
 ## Software-assignment patterns (Fleet shown; generalizes to any policy engine)
 
-These are not osquery patterns, but agents writing osquery policies often
-need them as the next step. Fleet's policy engine is the example shown
-below — when a policy query returns no rows, Fleet's `install_software`
-wires an auto-install. Other policy engines that consume osquery
-results have analogous hooks; the SQL patterns are portable.
+Fleet: when a policy query returns no rows, `install_software` auto-installs.
 
 ### Custom package YAML
 
@@ -293,8 +240,6 @@ url: https://downloads.1password.com/mac/1Password.pkg
   platform: darwin
 ```
 
-When the policy fails (no row returned), Fleet auto-installs the package.
-
 ### Software in fleet YAML (self-service, categories, labels)
 
 ```yaml
@@ -303,34 +248,27 @@ software:
     - path: ../platforms/macos/software/1password.yml
       self_service: true
       setup_experience: true        # install during first-time setup
-      categories:
-        - Security
+      categories: [Security]
     - path: ../platforms/macos/software/firefox.yml
       self_service: true
       labels_include_any:           # only install on matching hosts
         - "Macs with Firefox needed"
-      categories:
-        - Browsers
+      categories: [Browsers]
   fleet_maintained_apps:
     - slug: slack/darwin
       self_service: true
-      categories:
-        - Communication
+      categories: [Communication]
 ```
 
----
 
 ## PROCEDURE resolve_app_identifier(app_name)
 
-Use when a downstream artifact is keyed by an app's **bundle identifier** or
-**Team ID** — PPPC profiles, `com.apple.configuration.app.settings` privacy
-defaults, BTM allow-rules, Santa rules.
+Use when an artifact is keyed by **bundle identifier** or **Team ID** — PPPC,
+`com.apple.configuration.app.settings` privacy defaults, BTM, Santa rules.
 
-These artifacts share a failure mode that makes identifier accuracy the whole
-job: **naming an app that is not installed is not an error.** The profile or
-declaration is schema-valid, installs cleanly, and reports Verified. It simply
-grants nothing. Nothing in the chain ever signals it, so a wrong identifier
-survives indefinitely.
+**Naming an app that is not installed is not an error.** The artifact is
+schema-valid, installs, reports Verified, and grants nothing — silently and
+indefinitely. Identifier accuracy is the whole job.
 
 ### IDENTIFIER_TRUST_HIERARCHY
 
@@ -338,17 +276,15 @@ Use the highest-ranked source available.
 
 | Rank | Source | Trust |
 |---|---|---|
-| 1 | `apps` + `signature` on the device | What the device actually has. Authoritative. |
+| 1 | `apps` + `signature` on the device | Authoritative. |
 | 2 | `codesign -dr -` on an installed copy | Authoritative for that one machine. |
 | 3 | An existing profile's `Identifier` + `CodeRequirement` | Was true when written; may be stale. |
-| 4 | Vendor docs / community lists | Unversioned, often a different edition. |
+| 4 | Vendor docs / community lists | Often a different edition. |
 | 5 | **Installer metadata** (pkg/dmg receipt id) | **Not a bundle identifier at all.** |
 
-**Rank 5 is the common trap.** A pkg receipt or updater identifier is a
-different namespace from the app's `CFBundleIdentifier`, and they are similar
-enough to look right (`com.vendor.product.updater` vs `com.vendor.Product`).
-Take only the **Team ID** from installer metadata — that comes from the signing
-certificate and is reliable.
+**Rank 5 is the common trap**: a pkg receipt id is not the app's
+`CFBundleIdentifier`, yet looks right (`com.vendor.product.updater` vs
+`com.vendor.Product`). Take only the **Team ID** from installer metadata.
 
 ```
 SCHEMA_TOOL: contour osquery table apps
@@ -358,12 +294,10 @@ PRECONDITIONS:
   ASSERT the target table is `signature`, NOT `codesign`
     HALT "codesign is a Fleet extension table, absent from vanilla osqueryd.
           Use signature — it is core osquery and works in both."
-    # contour flags this: `osquery validate` warns
-    #   'codesign' is a Fleet extension table; requires Fleet's agent
+    # `osquery validate` warns: 'codesign' is a Fleet extension table
 
   ASSERT the query constrains signature.path
-    # `signature.path` is a REQUIRED column (contour osquery table signature).
-    # Unconstrained, the table returns nothing. A JOIN on apps.path supplies it.
+    # REQUIRED column; unconstrained returns nothing. JOIN on apps.path supplies it.
 
 STEP 1 — Enumerate installed apps with their signing identity:
   SELECT DISTINCT
@@ -378,24 +312,16 @@ STEP 1 — Enumerate installed apps with their signing identity:
     AND s.hash_executable = 0
   ORDER BY a.name;
 
-  # Every clause earns its place:
-  #  DISTINCT               — a universal binary emits one signature row per
-  #                           architecture; without it each app appears 2-3x.
-  #  NOT LIKE '%/Contents/%'— `apps` indexes nested helper bundles. Unfiltered,
-  #                           one Electron app returns its Helper, WebView and
-  #                           ModuleHost as separate rows.
-  #  bundle_identifier <> ''— some bundles carry no CFBundleIdentifier.
-  #  hash_* = 0             — these are TABLE PARAMETERS, not predicates: the
-  #                           column docs read "Set to 1 to also hash resources,
-  #                           or 0 otherwise. Default is 1". Passing 0 skips
-  #                           expensive hashing. Omitting them hashes every
-  #                           binary on the box.
+  # Keep every clause:
+  #  DISTINCT                — one signature row per architecture otherwise.
+  #  NOT LIKE '%/Contents/%' — drops nested helper bundles (Helper, WebView…).
+  #  bundle_identifier <> '' — some bundles carry no CFBundleIdentifier.
+  #  hash_* = 0              — TABLE PARAMETERS (default 1), not predicates;
+  #                            omitting them hashes every binary on the box.
 
 STEP 2 — Validate before deploying the query:
   contour osquery validate <gitops.yml>
-  # Catches unknown tables offline (table-level only; columns are not checked).
-  # A Fleet-only table such as codesign is a warning: real under Fleet's agent,
-  # empty under plain osqueryd.
+  # Offline; a Fleet-only table such as codesign is a warning.
 
 POSTCONDITIONS:
   ASSERT the identifier came from rank 1-3, never rank 5
@@ -404,13 +330,9 @@ POSTCONDITIONS:
 
 ### Helper binaries are invisible to `apps`
 
-`apps` returns `.app` bundles only. Separately-signed components inside a
-bundle — daemons, XPC services, system extensions — never appear, however the
-query is filtered. This matters because **PPPC and Santa grants are made per
-signed component, not per app**, so coverage cannot be audited from `apps`
-alone.
-
-`signature` reaches them, because it accepts `LIKE` on `path`:
+`apps` returns `.app` bundles only; daemons, XPC services and system
+extensions never appear. **PPPC and Santa grants are made per signed
+component, not per app**, so audit them via `signature` (`LIKE` on `path`):
 
 ```sql
 SELECT DISTINCT identifier, team_identifier
@@ -420,39 +342,27 @@ WHERE (   path LIKE '/Applications/<App>.app/Contents/MacOS/%'
   AND signed = 1 AND hash_resources = 0 AND hash_executable = 0;
 ```
 
-Both patterns are required: helpers live in `Contents/MacOS/`, system
-extensions under `Contents/Library/SystemExtensions/`. A security agent
-commonly ships 6-8 signed components behind a single `.app`.
+Both patterns are required (helpers vs system extensions); a security
+agent often ships 6-8 signed components.
 
 ### Reading drift results without false positives
 
-Comparing profile identifiers against device inventory finds stale profiles,
-but only one pattern is real drift:
+Only one pattern is real drift: **the app is installed, under a different
+bundle ID than the profile names.** Exclude first:
 
-> **the app is installed, under a different bundle ID than the profile names.**
-
-Two false-positive classes to exclude first:
-
-- **Not installed.** An identifier absent from one machine usually means the
-  app is not on that machine. Only a fleet-wide run distinguishes this from
-  drift.
-- **Legitimate sub-bundles.** A profile targeting `com.vendor.app.daemon`
-  while the installed app is `com.vendor.app` is normally correct — PPPC
-  targets the daemon deliberately. See the helper-binaries note above.
-- **Fuzzy name matching.** Match on bundle identifier, never on display name:
-  matching a folder named `ms-office` against "any app whose name starts
-  Microsoft" pairs it with Teams.
+- **Not installed** on that machine — only a fleet-wide run tells this apart.
+- **Legitimate sub-bundles** — a profile for `com.vendor.app.daemon` while
+  `com.vendor.app` is installed is normally correct (PPPC targets the daemon).
+- **Fuzzy name matching** — match on bundle identifier, never display name
+  (`ms-office` vs "starts with Microsoft" pairs it with Teams).
 
 ### Scope limit
 
-This procedure yields *identity*, not *entitlement*. Which permissions an app
-needs is a separate decision — and for several the answer is that DDM cannot
-express it at all. Camera, Microphone, Accessibility, Dictation, Bluetooth,
-LocalNetwork, Location and LocationAccuracy are the entire declarative
-surface; Full Disk Access, ScreenCapture, AppleEvents, Calendar, AddressBook
-and the folder policies stay in a PPPC profile. See `--sop app-privacy`.
+This yields *identity*, not *entitlement*. DDM covers only Camera,
+Microphone, Accessibility, Dictation, Bluetooth, LocalNetwork, Location and
+LocationAccuracy; Full Disk Access, ScreenCapture, AppleEvents, Calendar,
+AddressBook and folder policies stay in PPPC. See `--sop app-privacy`.
 
----
 
 ## Other operations (prose)
 
@@ -460,25 +370,22 @@ and the folder policies stay in a PPPC profile. See `--sop app-privacy`.
 
 ```
 contour osquery stats --json
-# Returns: {total_tables, total_columns, darwin_tables, linux_tables,
-#           windows_tables, sources: {osquery, fleet, both, fleet_only[], osquery_only[]}}
-# Live totals: contour osquery stats
+# {total_tables, total_columns, <os>_tables, sources: {osquery, fleet, both, fleet_only[], osquery_only[]}}
 ```
 
 ### Verify generated queries against a host (osqueryi / orbit)
 
 ```
-# Render every generated *.policies.yml / *.reports.yml query as a path-resolved,
-# copy-pasteable command. contour NEVER executes them — you run them on the host.
-contour osquery verify ./output                  # scan a GitOps repo (or a dir/file), print commands
-contour osquery verify ./output -o verify.md     # write a Markdown reference instead of printing
+# Renders every *.policies.yml / *.reports.yml query as a copy-pasteable command.
+# contour NEVER executes them — you run them on the host.
+contour osquery verify ./output                  # GitOps repo, dir or file; print commands
+contour osquery verify ./output -o verify.md     # write Markdown instead
 contour osquery verify ./output --json           # {count, queries[{name, source, query, osqueryi_cmd, orbit_cmd}]}
 #
-# Each query is emitted in BOTH host forms (one doc works everywhere):
+# Each query is emitted in BOTH forms:
 #   dev / CI:            osqueryi --json "<sql>"
 #   Fleet-managed host:  sudo orbit shell -- --json "<sql>"   (no osqueryi there; needs root)
-# Binary paths are resolved (PATH, then the standard install location).
-# Non-osquery policies (e.g. Fleet `type: patch` software/FMA policies) are skipped — they have no query.
+# Fleet `type: patch` policies are skipped — they have no query.
 
 # Same thing inline, right after generating:
 contour mscp generate ... --osquery --verify-queries
@@ -489,9 +396,8 @@ contour mscp generate ... --osquery --verify-queries
 
 ```
 # `contour mscp generate ... --osquery` (Fleet output) emits, per baseline:
-#   osquery/<baseline>/<baseline>.policies.yml          — pass/fail Fleet policies (native query or plist read)
-#   osquery/<baseline>/<baseline>-audit.sh              — Tier-2 audit script (writes /Library/Preferences/<org>.<baseline>.audit.plist)
-#   osquery/<baseline>/<baseline>.osquery-coverage.md   — Tier-1/Tier-2/uncovered coverage report
-#   platforms/macos/reports/<baseline>-compliance.reports.yml  — scheduled query over the audit plist
-#   platforms/macos/reports/security-posture.reports.yml       — baseline-independent posture pack (overridable; see --sop mscp)
+#   osquery/<baseline>/<baseline>.policies.yml, <baseline>-audit.sh,
+#   <baseline>.osquery-coverage.md, and under platforms/macos/reports/
+#   <baseline>-compliance.reports.yml + security-posture.reports.yml.
+# Details: --sop mscp-osquery (tiers, audit plist), --sop mscp (posture pack).
 ```

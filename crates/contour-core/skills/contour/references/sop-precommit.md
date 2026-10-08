@@ -1,16 +1,12 @@
 # SOP: Contour as a Git Pre-Commit Validator
 
-Wire `contour profile validate` into a Git pre-commit hook so a malformed profile
-in a staged change blocks the commit before it lands. Cheap insurance
-that catches schema regressions, dangling DDM references, and broken
-TOML configs at the developer's keyboard rather than in CI 20 minutes
-later — or worse, on production devices days later.
+Wire contour validators into a Git pre-commit hook so a malformed profile,
+dangling DDM reference or broken TOML in a staged change blocks the commit.
 
-The canonical install path is **`uvx pre-commit`** (the
-[pre-commit](https://pre-commit.com/) framework run ephemerally via
-[`uv`](https://docs.astral.sh/uv/) — no global Python install required).
-A framework-free shell hook is also documented for repos that prefer
-zero external tooling.
+Canonical install: **`uvx pre-commit`** (the
+[pre-commit](https://pre-commit.com/) framework run via
+[`uv`](https://docs.astral.sh/uv/), no global Python install). A
+framework-free shell hook is also documented.
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 
@@ -26,9 +22,8 @@ Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 | Same, persistently in your shell | `export CONTOUR=…/dist/contour` then any of the above |
 
 **Recommended dev flow:** `uvx pre-commit install` once → hooks fire on
-every `git commit`. For pre-release contour testing, prefix with
-`CONTOUR=…/dist/contour git commit` (env propagates into the hook
-subprocess).
+every `git commit`. For pre-release contour: `CONTOUR=…/dist/contour git commit`
+(env propagates into the hook).
 
 ## ERROR-CODE ENUM
 
@@ -41,10 +36,8 @@ INVALID_ORG            org-domain check failed (DDM compose path)
 UNKNOWN                unmatched
 ```
 
-The hook itself only needs `exit 0` (block-or-pass), but reading the
-error_code from `--json` lets you surface a useful summary message.
-
----
+The hook only needs its exit status (block-or-pass); `error_code` from
+`--json` makes a useful summary.
 
 ## PROCEDURE configure_pre_commit_validation(repo_root, hook_style)
 
@@ -61,12 +54,9 @@ INPUT:
   repo_root   : GitOps repo root (Fleet v4.83 layout shown; any
                 contour-output repo works)
   hook_style  : "git-hooks"            — plain `.git/hooks/pre-commit`
-                "pre-commit-framework" — pre-commit (Python tool, the
-                                          dominant pattern in MDM
-                                          GitOps repos)
+                "pre-commit-framework" — pre-commit (Python)
                 "husky"                — Node-based hook manager
-                "lefthook"             — Go-based, parallel-friendly
-                                          alternative
+                "lefthook"             — Go-based
 
 PRECONDITIONS:
   ASSERT contour --version succeeds
@@ -83,9 +73,7 @@ PRECONDITIONS:
 STEP 1 — Classify staged changes:
   staged = git diff --cached --name-only --diff-filter=ACMR
 
-  Bucket by extension and path. The canonical layout shown here is
-  Fleet's v4.83 (`platforms/{platform}/...`) but the matchers are
-  layout-agnostic — they key off file shape, not directory.
+  Bucket by file shape (layout-agnostic; Fleet v4.83 paths shown).
 
   buckets = {
     profiles_macos    : staged.match("*.mobileconfig"),
@@ -112,8 +100,8 @@ STEP 2 — Validate each bucket:
 
   for dir in buckets.ddm_dirs:
     # Cross-file DAG check (asset → configuration → activation +
-    # predicate ↔ subscription). Fires on dangling refs even if every
-    # individual file passed schema validation above.
+    # predicate ↔ subscription); catches dangling refs that per-file
+    # validation passes.
     contour profile ddm verify {dir} --json
     on non-zero: errors += verify-errors
 
@@ -124,12 +112,12 @@ STEP 2 — Validate each bucket:
 
   if buckets.mscp_present:
     # Whole-repo GitOps validate (paths, identifiers, label refs).
-    # Slow-ish; opt-in via --mscp flag in the hook config.
+    # Slow; opt-in via --mscp flag in the hook config.
     contour mscp validate -o {repo_root} --strict --json
     on non-zero: errors += mscp-errors
 
-  # NB: enrollment .dep.json has no validator surface yet (Phase 2).
-  # The hook silently skips them; flag in the README so authors know.
+  # NB: enrollment .dep.json has no validator; the hook skips them —
+  # say so in the README so authors know.
 
 POSTCONDITIONS:
   if len(errors) > 0:
@@ -140,21 +128,15 @@ POSTCONDITIONS:
     exit 0        # commit proceeds
 
 INVARIANTS:
-  # The hook MUST only validate staged changes — not the whole working
-  # tree. Otherwise:
-  #   1. Slow on large repos (mSCP can take >10s for big baselines)
-  #   2. Surfaces unrelated errors that aren't part of this commit
+  # The hook MUST only validate staged changes, not the whole tree
+  # (whole-tree is slow and surfaces errors unrelated to this commit).
   ASSERT every path passed to contour came from `git diff --cached`
-
   # The hook MUST exit 0 on no-op commits (no relevant files staged).
-  # Otherwise the hook becomes friction on pure-doc / unrelated commits.
   ASSERT no validators run when buckets are all empty
-
-  # Validators receive RELATIVE paths from the repo root so the hook
-  # works from any cwd inside the worktree.
+  # Repo-relative paths so the hook works from any cwd in the worktree.
   ASSERT every path is repo-relative (not absolute)
 
-STEP 3 — Smoke test (the verification the user described):
+STEP 3 — Smoke test:
   # 3a. Negative case: malformed profile
   echo '<plist><dict>BROKEN</dict></plist>' > platforms/macos/configuration-profiles/bad.mobileconfig
   git add platforms/macos/configuration-profiles/bad.mobileconfig
@@ -182,8 +164,7 @@ POSTCONDITIONS:
 
 ## Hook scripts (prose recipes — copy/paste)
 
-The procedural half above is the contract; the recipes below are the
-ready-to-paste implementations of STEP 2.
+Ready-to-paste implementations of STEP 2.
 
 ### Style A: `pre-commit` framework via `uvx` (recommended)
 
@@ -244,10 +225,9 @@ repos:
         pass_filenames: true
 ```
 
-The `bash -c '...' --` shape is intentional: it lets pre-commit pass
-file arguments via `"$@"` while keeping the `${CONTOUR:-contour}`
-indirection so `CONTOUR=…/dist/contour` overrides the binary without
-mutating `PATH`.
+Keep the `bash -c '...' --` shape: it passes files via `"$@"` and keeps
+`${CONTOUR:-contour}`, so `CONTOUR=…/dist/contour` overrides the binary
+without touching `PATH`.
 
 Install:
 ```bash
@@ -257,24 +237,17 @@ uvx pre-commit run --all-files          # one-shot validate the whole tree
 
 ### Style B: framework-free `.git/hooks/pre-commit`
 
-Drop in `.git/hooks/pre-commit`, `chmod +x`. No external dependencies.
-Same script ships at `docs/examples/pre-commit-contour.sh`:
+Save as `.git/hooks/pre-commit`, `chmod +x` (also shipped at
+`docs/examples/pre-commit-contour.sh`):
 
 ```bash
 #!/usr/bin/env bash
 # Contour pre-commit hook — validates staged contour artifacts.
-# Exits non-zero on the first error so git aborts the commit.
-
 set -uo pipefail
+CONTOUR="${CONTOUR:-contour}"   # override: CONTOUR=/path/to/dist/contour git commit
 
-# Override binary location with `CONTOUR=/path/to/dist/contour git commit`
-# (env propagates into this hook subprocess). Defaults to whatever's on PATH.
-CONTOUR="${CONTOUR:-contour}"
-
-# Resolve staged files relative to repo root.
 staged() { git diff --cached --name-only --diff-filter=ACMR -- "$@" 2>/dev/null; }
 
-# Group staged files into buckets.
 profiles=$(staged '*.mobileconfig')
 ddm_files=$(staged '**/declaration-profiles/*.json')
 pppc_files=$(staged '**/pppc.toml')
@@ -282,7 +255,7 @@ btm_files=$(staged '**/btm.toml')
 notif_files=$(staged '**/notifications.toml')
 support_files=$(staged '**/support.toml')
 
-# No-op fast path: nothing to validate.
+# No-op fast path.
 if [[ -z "$profiles$ddm_files$pppc_files$btm_files$notif_files$support_files" ]]; then
   exit 0
 fi
@@ -290,7 +263,6 @@ fi
 failed=0
 fail() { echo "✗ contour: $*" >&2; failed=1; }
 
-# .mobileconfig — schema-validate every staged profile.
 if [[ -n "$profiles" ]]; then
   # shellcheck disable=SC2086
   "$CONTOUR" profile validate $profiles --json >/dev/null 2>&1 \
@@ -298,15 +270,13 @@ if [[ -n "$profiles" ]]; then
              run: $CONTOUR profile validate $profiles"
 fi
 
-# DDM .json — per-file schema validate.
 if [[ -n "$ddm_files" ]]; then
   # shellcheck disable=SC2086
   "$CONTOUR" profile ddm validate $ddm_files --json >/dev/null 2>&1 \
     || fail "DDM declaration(s) failed schema validation; \
              run: $CONTOUR profile ddm validate $ddm_files"
 
-  # Then a directory-level cross-reference DAG check on every dir
-  # that touched DDM files. Catches dangling asset/config/predicate refs.
+  # Cross-reference DAG check per touched DDM dir.
   ddm_dirs=$(echo "$ddm_files" | xargs -I{} dirname {} | sort -u)
   for dir in $ddm_dirs; do
     "$CONTOUR" profile ddm verify "$dir" --json >/dev/null 2>&1 \
@@ -345,70 +315,40 @@ chmod +x .git/hooks/pre-commit
 
 ## Demo — the malformed → fix → pass loop
 
-Starting point: clean GitOps repo (Fleet v4.83 layout) with the hook registered:
+With the hook installed, staging a profile with an unknown `PayloadType`
+blocks the commit:
 
 ```
-$ uvx pre-commit install
-pre-commit installed at .git/hooks/pre-commit
-```
-
-Now simulate a developer staging a malformed profile:
-
-```
-$ cat <<'EOF' > platforms/macos/configuration-profiles/bad.mobileconfig
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-  <key>PayloadType</key>
-  <string>com.apple.does.not.exist</string>
-</dict>
-</plist>
-EOF
-
-$ git add platforms/macos/configuration-profiles/bad.mobileconfig
 $ git commit -m "add: bad profile"
 ✗ contour: configuration profile(s) failed validation;
            run: contour profile validate platforms/macos/configuration-profiles/bad.mobileconfig
 
 ✗ contour pre-commit blocked: fix the errors above and re-commit.
 
-$ # Investigate:
 $ contour profile validate platforms/macos/configuration-profiles/bad.mobileconfig --json | jq '.[] | .errors'
 [
   "Unknown payload type: com.apple.does.not.exist",
   "Missing PayloadIdentifier",
   "Missing PayloadUUID"
 ]
-
-$ # Fix it (or remove the file):
-$ rm platforms/macos/configuration-profiles/bad.mobileconfig
-$ git add -u
-$ git commit -m "add: bad profile"
-[main abc1234] add: bad profile
-
-$ # The hook ran but found nothing staged — clean exit, commit lands.
 ```
 
----
+Fix or remove the file, `git add -u`, and re-commit; nothing invalid staged
+→ clean exit, commit lands.
 
 ## Operational notes
 
-- **Bypassing the hook**: `git commit --no-verify` skips it. Reserve for
-  emergencies and document the bypass in the commit message.
-- **Pre-commit on rename/delete**: the `--diff-filter=ACMR` covers Add /
-  Copy / Modify / Rename. Pure deletes (`D`) skip validation — there's
-  nothing to validate. Renames re-validate with the new path's content.
-- **Performance**: contour validates are fast (~50ms per file, parallel
-  with rayon by default). Even large commits stay <1s. The slow outlier
-  is `contour mscp validate` on a full repo — gate that behind
-  `--mscp` opt-in or a `commit-msg` hook so it doesn't block every
-  routine commit.
-- **CI parity**: the same validators that run in the hook should run
-  in CI. The procedural SOP for CI lives in `--sop ci`; the hook is
-  the developer-side mirror of that.
-- **Schema freshness**: contour ships embedded schemas per release;
-  re-installing the binary refreshes Apple's schema — no per-repo
-  schema config required.
+- **Bypassing**: `git commit --no-verify`. Emergencies only; document the
+  bypass in the commit message.
+- **Rename/delete**: `--diff-filter=ACMR` covers Add / Copy / Modify /
+  Rename; pure deletes (`D`) skip validation. Renames re-validate the new
+  path's content.
+- **Performance**: validates take ~50ms per file. The slow outlier is
+  `contour mscp validate` on a full repo — gate it behind `--mscp` opt-in
+  or a `commit-msg` hook.
+- **CI parity**: run the same validators in CI — see `--sop ci`.
+- **Schema freshness**: schemas are embedded per release; re-installing
+  the binary refreshes them. No per-repo schema config.
 
 ---
 
@@ -418,10 +358,8 @@ $ # The hook ran but found nothing staged — clean exit, commit lands.
   file changed in the commit. Whole-tree validation belongs in CI.
 - **What it MUST NOT do**: run `contour profile generate` or any
   network-bound operation. Hooks are validation only.
-- **DDM cross-references** are a recurring footgun (predicate references
-  an unsubscribed `@status`, or `*AssetReference` points at a missing
-  asset). `ddm verify` was built specifically for this — wire it into
-  the hook even if individual `ddm validate` is already there.
-- **`--json` mode** on every validator emits a stable error envelope
-  (`{success, error, error_code}`) so the hook can produce structured
-  summaries without parsing prose.
+- **DDM cross-references** (predicate referencing an unsubscribed
+  `@status`, `*AssetReference` to a missing asset): wire `ddm verify` into
+  the hook even when `ddm validate` is already there.
+- **`--json`** on every validator emits a stable envelope
+  (`{success, error, error_code}`) — summarize without parsing prose.

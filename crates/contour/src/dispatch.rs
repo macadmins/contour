@@ -2020,6 +2020,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             odv_mode,
             os,
             os_version,
+            exclude_rule,
         } => {
             dispatch_mscp_recipe(
                 &mscp_repo,
@@ -2030,6 +2031,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 os.into(),
                 os_version,
                 odv,
+                &exclude_rule,
             )?;
         }
     }
@@ -2052,6 +2054,7 @@ fn dispatch_mscp_recipe(
     os: mscp::models::mscp::Platform,
     os_version: Option<String>,
     odv_path: Option<std::path::PathBuf>,
+    exclude_rule: &[String],
 ) -> Result<()> {
     use anyhow::Context;
     use colored::Colorize;
@@ -2064,6 +2067,8 @@ fn dispatch_mscp_recipe(
     let rules = extractor
         .extract_rules_for_baseline(keyword)
         .with_context(|| format!("loading keyword '{keyword}' from {}", mscp_repo.display()))?;
+    // Rules a tailored baseline excluded: absent from `rules`, named in the recipe.
+    let tailored_out = extractor.excluded_by_tailoring(keyword)?;
 
     let resolved_org = match org {
         Some(s) => Some(s.to_string()),
@@ -2082,16 +2087,27 @@ fn dispatch_mscp_recipe(
         );
     }
 
-    let (body, warnings, stats) = mscp::baseline_to_recipe::baseline_to_recipe(
+    // On two rules requiring different values, keeps mSCP's pick and returns
+    // them as warnings, printed below.
+    let (body, conflicts, stats) = mscp::baseline_to_recipe::baseline_to_recipe_excluding(
         keyword,
         resolved_org.as_deref(),
         &rules,
         mode,
         &odv_overrides,
+        &mscp::baseline_to_recipe::RecipeSelection {
+            excluded: exclude_rule,
+            tailored_out: &tailored_out,
+            listed_order: &extractor.baseline_rule_order(keyword)?,
+        },
     )?;
 
-    for w in &warnings {
-        eprintln!("warning: {w}");
+    if !conflicts.is_empty() {
+        eprintln!(
+            "{} {}",
+            "WARNING".yellow().bold(),
+            mscp::baseline_to_recipe::conflict_report(keyword, &conflicts)
+        );
     }
 
     let output_path = output
@@ -2123,13 +2139,6 @@ fn dispatch_mscp_recipe(
         println!(
             "  ODVs: {} resolved{}, {} left as $ODV (edit the recipe to override)",
             stats.odv_resolved, from_overrides, stats.odv_unresolved,
-        );
-    }
-    if !warnings.is_empty() {
-        println!(
-            "{} {} key collision(s) — last writer won; review the warnings above",
-            "!".yellow(),
-            warnings.len()
         );
     }
     println!(

@@ -527,8 +527,44 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
                 names.join(", ")
             )
         })?;
-    writer.write_all(sop.as_bytes())?;
+    writer.write_all(with_beta_state(sop).as_bytes())?;
     Ok(())
+}
+
+/// Where the beta SOP says whether this binary carries a seed.
+const BETA_STATE_MARKER: &str = "<!-- beta-channel-state -->";
+
+/// Fill the beta SOP's state banner from the embedded bytes.
+///
+/// Static text cannot know which dataset a build embeds: the same source
+/// builds with a seed under one pin and without under the next. So the
+/// banner is chosen here, from [`mdm_schema::beta_dataset_is_carried`], the
+/// same check every `--beta` surface makes.
+fn with_beta_state(sop: &str) -> std::borrow::Cow<'_, str> {
+    if !sop.contains(BETA_STATE_MARKER) {
+        return std::borrow::Cow::Borrowed(sop);
+    }
+    let banner = if mdm_schema::beta_dataset_is_carried() {
+        format!(
+            "> **This binary carries the {}.** `--beta` / `--channel beta` serve its \
+             declarations, keys and status items, which may still change before the OS \
+             ships. mSCP has no pre-release branch, so its `--beta` refuses and says so. \
+             `contour census` reports what is carried.",
+            mdm_schema::seed_label()
+        )
+    } else {
+        "> **The beta channel is DISABLED right now.** No seed dataset is compiled into \
+         the binary, and `--beta` / `--channel beta` refuse with an explanation rather \
+         than returning the stable dataset under another name. Everything below \
+         describes how the channel works when a seed is carried.\n>\n\
+         > How contour knows: it compares the embedded beta table to the stable one. \
+         They are the same bytes, which is what \"no seed dataset\" means in practice. \
+         `contour census` reports the state.\n>\n\
+         > **Do not tell anyone to pass `--beta` today.** It will fail. If you are here \
+         because a type was not found in stable, it is not in beta either."
+            .to_string()
+    };
+    std::borrow::Cow::Owned(sop.replace(BETA_STATE_MARKER, &banner))
 }
 
 /// Resolve an alias to the canonical SOP name, or return it unchanged.
@@ -1729,6 +1765,54 @@ mod tests {
     /// A file nobody registered is invisible three ways at once: not servable,
     /// not searchable, and not obviously missing, because the routing table
     /// that names it is prose.
+    /// Agents act on what stands out. Past a length, rules sit among history
+    /// and rationale and get missed, so each file an agent is handed has a
+    /// word budget: SKILL.md is read every time, the routing SOP first, and
+    /// the rest one at a time. History belongs in docs/ or the commit log.
+    #[test]
+    fn every_agent_file_fits_its_word_budget() {
+        const SOP_BUDGET: usize = 1900;
+        const ROUTING_BUDGET: usize = 1500;
+        const SKILL_BUDGET: usize = 1200;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/contour");
+        let mut files = vec![(root.join("SKILL.md"), SKILL_BUDGET)];
+        for entry in std::fs::read_dir(root.join("references"))
+            .expect("references/ exists")
+            .flatten()
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("sop-") && name.ends_with(".md") {
+                let budget = if name == "sop-routing.md" {
+                    ROUTING_BUDGET
+                } else {
+                    SOP_BUDGET
+                };
+                files.push((entry.path(), budget));
+            }
+        }
+        let mut over: Vec<String> = files
+            .iter()
+            .filter_map(|(path, budget)| {
+                let words = std::fs::read_to_string(path)
+                    .expect("readable")
+                    .split_whitespace()
+                    .count();
+                (words > *budget).then(|| {
+                    format!(
+                        "  {}: {words} words (budget {budget})",
+                        path.file_name().unwrap().to_string_lossy()
+                    )
+                })
+            })
+            .collect();
+        over.sort();
+        assert!(
+            over.is_empty(),
+            "over budget; cut history and repetition, not rules:\n{}",
+            over.join("\n")
+        );
+    }
+
     #[test]
     fn every_sop_file_is_in_the_catalog() {
         let dir =
@@ -1839,7 +1923,7 @@ mod tests {
             generate_sop(name, &mut sink).unwrap_or_else(|e| panic!("--sop {name}: {e}"));
             assert_eq!(
                 String::from_utf8(sink).expect("utf8"),
-                *content,
+                with_beta_state(content),
                 "--sop {name} served a different SOP's content"
             );
         }

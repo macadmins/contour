@@ -869,18 +869,15 @@ mod tests {
             stable.difference(&beta).collect::<Vec<_>>()
         );
 
-        // The strict-growth half of this invariant is suspended while the beta
-        // channel is mapped to stable (see the banner on mdm-schema's
-        // `*_beta` accessors).
-        // Equality is now the correct expectation, and asserting it keeps the
-        // test honest instead of vacuous: if someone re-points the accessors
-        // at seed data without restoring the growth assertion below, this
-        // fails and says so.
-        assert_eq!(
-            beta, stable,
-            "while beta is mapped to stable the two registries must be identical; \
-             if the beta build is back, restore the pinned-seed growth assertion"
-        );
+        // Without a seed the beta accessors are the stable bytes, so the two
+        // registries are equal. With one, the superset above is the contract;
+        // a seed may add only keys, and mdm-schema checks that it adds rows.
+        if !mdm_schema::beta_dataset_is_carried() {
+            assert_eq!(
+                beta, stable,
+                "without a seed, beta must be stable's registry"
+            );
+        }
     }
 
     #[test]

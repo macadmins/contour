@@ -1,28 +1,19 @@
 # SOP: Profile Generation & Validation
 
-This SOP uses the **procedural format** for piloted operations (generate,
-normalize, jamf import) and **prose recipes** for ops not yet migrated.
-Procedures specify INPUT, PRECONDITIONS, EXECUTION, POSTCONDITIONS, and
-INVARIANTS — agents follow them deterministically. The prose sections are
-progressively being migrated as each operation is end-to-end traced.
+Follow the PROCEDURE blocks deterministically.
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Drift detector: `crates/profile/tests/sop_traps.rs`
 
 ## Finding a command
 
-Not sure which subcommand to use? `contour profile find <term>` fuzzy-searches
-the profile command tree (typo-tolerant) and prints matching
-`contour profile …` invocations plus a `help-ai --command` pointer — faster than
-scanning `--help`. E.g. `contour profile find "rename org"` → `normalize`.
-
----
+`contour profile find <term>` fuzzy-searches profile commands and prints
+invocations plus a `help-ai --command` pointer. E.g. `contour profile find "rename org"` →
+`normalize`.
 
 ## ERROR-CODE ENUM
 
-All procedures return failures with a stable typed `error_code` from this enum.
-Agents MUST switch on these codes — substring-matching the prose `error` field
-is fragile and discouraged.
+Agents MUST switch on `error_code`, not substring-match `error`.
 
 ```
 INVALID_IDENTIFIER     identifier syntax issue (spaces, invalid chars)
@@ -34,14 +25,11 @@ INVALID_ORG            org domain malformed
 UNKNOWN                unmatched — treat as fatal, do NOT auto-retry
 ```
 
-When a top-level call fails (e.g. precondition rejected by the CLI), `--json`
-mode emits the envelope on stderr:
+A failed top-level call in `--json` mode emits on stderr:
 
 ```json
 { "success": false, "error": "...", "error_code": "INVALID_ORG" }
 ```
-
----
 
 ## PROCEDURE generate_profile(payload_key, org, output_file)
 
@@ -57,65 +45,43 @@ PRECONDITIONS:
     HALT "org must be reverse-domain; got '{org}'"
   ASSERT org != "com.example"
     HALT "refusing default 'com.example' — produces non-deployable PayloadIdentifier"
-    # CLI also enforces this since contour ≥0.2.1; ASSERT is defence-in-depth
-    # for callers that resolve org through profile.toml or .contour/config.toml.
+    # also covers org resolved via profile.toml or .contour/config.toml
   ASSERT parent(output_file) exists OR can be created
     AUTO_FIX: mkdir -p {parent(output_file)}
 
 STEP 1 — Schema lookup:
   schema = contour profile search {payload_key} --json
-  # Returns a JSON array. Empty array means no match.
-  # NB: exit code is always 0 — agents MUST check array length, not exit.
-
+  # Exit code is always 0 — agents MUST check array length, not exit.
   ASSERT len(schema) > 0
     HALT "unknown payload: {payload_key}. Run `contour profile search <keyword>` to discover."
-
   exact = filter(schema, fn entry: entry.payload_type == {payload_key})
   if len(exact) == 0:
-    suggestions = schema[0..3].map(fn e: e.payload_type)
-    WARN "no exact match for {payload_key}; closest: {suggestions}"
+    WARN "no exact match for {payload_key}; closest: {schema[0..3].payload_type}"
     REQUIRE human approval before proceeding with closest match
 
 STEP 2 — Generation:
   result = contour profile generate {payload_key} --full --org {org} \
            -o {output_file} --json
-
-  # Success-path JSON shape:
-  #   { "success":      true,
-  #     "output":       string,        # file path written
-  #     "payload_type": string,
-  #     "title":        string,
-  #     "format":       "mobileconfig" | "plist",
-  #     "fields":       "all" | "required" }
-
+  # Success: { "success": true, "output": path, "payload_type", "title",
+  #            "format": "mobileconfig" | "plist", "fields": "all" | "required" }
   if result.exit_code != 0:
-    # B3: failure path emits JSON on stderr with error_code
-    HALT "{result.error_code}: {result.error}"
+    HALT "{result.error_code}: {result.error}"   # JSON on stderr
 
 STEP 3 — Post-generation validation (always):
   CALL normalize_profile({result.output}, {org})
   validation = contour profile validate {result.output} --json
-
-  # Validation JSON shape:
-  #   { "valid": bool,                       ← top-level pass/fail
-  #     "errors": [string],
-  #     "warnings": [string],
-  #     "schema_validation": { "valid": bool, "errors": [], "warnings": [] },
-  #     "profile": { "identifier", "uuid", "organization", ... } }
-
+  # { "valid": bool, "errors": [string], "warnings": [string],
+  #   "schema_validation": { "valid", "errors", "warnings" },
+  #   "profile": { "identifier", "uuid", "organization", ... } }
   ASSERT validation.valid AND validation.schema_validation.valid
     HALT "generated profile failed validation: {validation.errors}"
 
 POSTCONDITIONS:
-  RETURN {
-    file_path: result.output,
-    payload_identifier: validation.profile.identifier,
-    payload_uuid: validation.profile.uuid,
-    validation_status: "valid",
-  }
+  RETURN { file_path: result.output,
+           payload_identifier: validation.profile.identifier,
+           payload_uuid: validation.profile.uuid,
+           validation_status: "valid" }
 ```
-
----
 
 ## PROCEDURE normalize_profile(path, org)
 
@@ -134,77 +100,42 @@ PRECONDITIONS:
 
 EXECUTION:
   result = contour profile normalize {path} -r --org {org} --json
-  # Both single-file and batch modes emit the same BatchResult shape:
-  #   { "operation":   "normalize",
-  #     "success":     bool,
-  #     "total":       int,
-  #     "succeeded":   int,
-  #     "failed":      int,
-  #     "skipped":     int,
-  #     "with_warnings": int,
-  #     "failure_categories": [
-  #       { "category": string,                ← human-readable bucket
-  #         "count":    int,
-  #         "hint":     string,
-  #         "files":    [{"file": path,
-  #                       "error": message,    ← prose for humans
-  #                       "error_code": ENUM}] ← typed for agents
-  #       } ],
-  #     "warnings":  [{"file": path, "warnings": [string]}],
-  #     "files":     [{"input": path, "output": path,            ← single-file only
-  #                    "identifier": str, "uuid": str}] }
+  # Single-file and batch both emit BatchResult:
+  #   { "operation": "normalize", "success": bool, "total", "succeeded",
+  #     "failed", "skipped", "with_warnings": int,
+  #     "failure_categories": [ { "category", "count", "hint",
+  #        "files": [{"file", "error" (prose), "error_code" (ENUM)}] } ],
+  #     "warnings": [{"file", "warnings": [string]}],
+  #     "files": [{"input", "output", "identifier", "uuid"}] }  ← single-file only
 
 POSTCONDITIONS:
   ASSERT result.success
-    for each category in result.failure_categories:
-      for each entry in category.files:
-        SWITCH entry.error_code:
-          CASE INVALID_IDENTIFIER:
-            HALT "{entry.file}: identifier has spaces or invalid chars"
-          CASE INVALID_FORMAT:
-            HALT "{entry.file}: not a valid mobileconfig"
-          CASE MISSING_PAYLOAD_TYPE:
-            HALT "{entry.file}: missing required field"
-          CASE SCHEMA_VIOLATION:
-            HALT "{entry.file}: schema validation: {entry.error}"
-          CASE IO_ERROR:
-            HALT "{entry.file}: I/O: {entry.error}"
-          CASE UNKNOWN:
-            HALT "{entry.file}: {entry.error}"
+    for each entry in result.failure_categories[*].files:
+      HALT "{entry.file}: {entry.error_code}: {entry.error}"   # every code is fatal here
     HALT "normalize failed for {result.failed}/{result.total} files"
-
   ASSERT result.total > 0
     WARN "no .mobileconfig files found at {path}"
-  RETURN {
-    succeeded: result.succeeded,
-    total: result.total,
-    files: result.files OR [],
-  }
+  RETURN { succeeded: result.succeeded, total: result.total, files: result.files OR [] }
 
 INVARIANTS:
   # Re-running normalize with identical inputs MUST produce identical output.
   # If `diff orig.mobileconfig <(normalize ... | normalize again)` differs, it's a bug.
 ```
 
-**What normalize does:**
-- Rewrites PayloadIdentifier under `--org` namespace (top-level AND child payloads)
-- Regenerates UUIDs (deterministic from identifier)
-- Fixes PayloadVersion, PayloadScope, display names
-- Preserves MDM placeholders (`$FLEET_VAR_*`, `%HardwareUUID%`, `{{var}}`)
-- Preserves XML comments
+**What normalize does:** rewrites PayloadIdentifier under `--org` (top-level
+AND child payloads); regenerates UUIDs (deterministic); fixes PayloadVersion,
+PayloadScope, display names; preserves MDM placeholders (`$FLEET_VAR_*`,
+`%HardwareUUID%`, `{{var}}`) and XML comments.
 
-**What normalize does NOT do:**
-- Does not fix typos in the name segment of identifiers (e.g.
-  `com.old.zscaler-cofing → com.yourco.zscaler-cofing` — prefix fixed, typo preserved).
-- To fix a name typo: use `contour profile duplicate --name 'correct-name' --org com.yourco`.
-
----
+**What normalize does NOT do:** fix name-segment typos
+(`com.old.zscaler-cofing → com.yourco.zscaler-cofing`). Use
+`contour profile duplicate --name 'correct-name' --org com.yourco`.
 
 ## PROCEDURE import_jamf_backup(backup_dir, org, output_dir)
 
 ```
 INPUT:
-  backup_dir : directory containing jamf-cli profile YAML files
+  backup_dir : directory of jamf-cli profile YAML files
                (jamf-cli backup --resources profiles dumps these)
   org        : reverse-domain identifier (e.g. com.acme)
   output_dir : where to write normalized .mobileconfig files
@@ -213,95 +144,60 @@ PRECONDITIONS:
   ASSERT backup_dir exists and contains *.yaml files
     HALT "{backup_dir} contains no .yaml files"
   ASSERT org is set
-    HALT "--org is required for Jamf imports (CLI enforces this since contour ≥0.2.1)"
+    HALT "--org is required for Jamf imports (the CLI enforces this)"
 
 EXECUTION:
   result = contour profile import --jamf {backup_dir} --all \
            -o {output_dir} --org {org} --json
-
-  # Two distinct response shapes — agents MUST branch on field presence.
+  # Two response shapes — agents MUST branch on field presence.
 
 EMPTY-SOURCE shape (no .yaml files match the Jamf envelope):
-  {
-    "success":     false,
-    "total_found": 0,
-    "message":     "No .yaml files found"
-  }
-  # Branch detection: presence of `total_found` ⇒ empty-source path.
-  # Lacks the BatchResult fields entirely.
+  { "success": false, "total_found": 0, "message": "No .yaml files found" }
+  # `total_found` present ⇒ empty-source path; no BatchResult fields.
 
 BATCH-RESULT shape (at least one Jamf YAML discovered):
-  {
-    "operation": "jamf_import",
-    "success":   bool,
-    "total":     int,    ← only counts files matching Jamf envelope;
-                           non-Jamf YAML in dir is silently filtered
-    "succeeded": int,
-    "failed":    int,
-    "failure_categories": [
-      { "category": string, "count": int, "hint": string,
-        "files": [{"file": path,
-                   "error": message,
-                   "error_code": ENUM}] }
-    ],
-    "warnings":  [{"file": path, "warnings": [string]}]
-  }
+  { "operation": "jamf_import", "success": bool,
+    "total": int,    ← counts only Jamf-envelope files; other YAML is silently filtered
+    "succeeded": int, "failed": int,
+    "failure_categories": [ { "category", "count", "hint",
+       "files": [{"file", "error", "error_code": ENUM}] } ],
+    "warnings": [{"file", "warnings": [string]}] }
 
 POSTCONDITIONS:
   if "total_found" in result:
     HALT "no Jamf YAML files in {backup_dir}; check the path or jamf-cli output"
-
   ASSERT result.success
     for each category in result.failure_categories:
       for each entry in category.files:
-        SWITCH entry.error_code:
-          CASE INVALID_FORMAT:
-            WARN "{entry.file}: not a valid Jamf profile YAML (skipping)"
-            # continue — partial failures are tolerable for batch import
-          CASE INVALID_IDENTIFIER, MISSING_PAYLOAD_TYPE, SCHEMA_VIOLATION:
-            WARN "{entry.file}: {entry.error_code}: {entry.error}"
-          CASE IO_ERROR:
-            WARN "{entry.file}: I/O: {entry.error}"
-          CASE UNKNOWN:
-            WARN "[{category.category}] {entry.file}: {entry.error}"
+        # every code WARNs and continues — partial failures are tolerable
+        WARN "[{category.category}] {entry.file}: {entry.error_code}: {entry.error}"
     if result.succeeded == 0:
       HALT "all imports failed ({result.failed}/{result.total})"
     WARN "{result.failed} of {result.total} profiles failed; {result.succeeded} imported"
-
   ASSERT result.total > 0
     HALT "no Jamf-format profiles discovered in {backup_dir}"
-  RETURN {
-    imported: result.succeeded,
-    failed: result.failed,
-    failure_summary: result.failure_categories,
-  }
+  RETURN { imported: result.succeeded, failed: result.failed,
+           failure_summary: result.failure_categories }
 ```
 
----
-
 ## Other operations (prose recipes; not yet migrated to the procedural format)
-
-These operations work with the existing prose recipes. They will be migrated
-once each one has been end-to-end traced and added to the `sop_traps` suite.
 
 ### Generate from a recipe (multi-profile bundle)
 
 ```
-1. contour profile generate --list-recipes --json   # list available recipes
+1. contour profile generate --list-recipes --json
 2. contour profile generate --recipe <name> --set KEY=VALUE -o <dir>
-   # Secrets: use op:// (1Password), env:VAR, or file:/path
-   # Exit 1 when a --set key matches no {{KEY}} in the recipe (a typo), or
-   # when any {{KEY}} is left unfilled. The files are written either way.
-   # --allow-placeholders exits 0 with them unfilled, to edit by hand;
-   # a file with a literal {{KEY}} in it is not deployable.
+   # Secrets: op:// (1Password), env:VAR, or file:/path
+   # Exit 1 if a --set key matches no {{KEY}} (typo) or any {{KEY}} is
+   # unfilled; files are written either way. --allow-placeholders exits 0
+   # to edit by hand — a file with a literal {{KEY}} is not deployable.
 ```
 
 ### Create a custom recipe
 
 ```
 1. contour profile generate --create-recipe <name> <type1> <type2> ...
-   # Creates a TOML recipe template from payload types
-2. Edit the TOML to set field values and placeholders
+2. Edit the generated TOML (field values, placeholders)
 3. contour profile generate --recipe <name> --recipe-path ./recipes/
 ```
 
@@ -314,20 +210,15 @@ once each one has been end-to-end traced and added to the `sop_traps` suite.
 
 ### Generate as a GitOps fragment (Fleet v4.83 layout)
 
-A fragment is a `fragment.toml` manifest plus Fleet's v4.83 directory
-layout, for merging into an existing GitOps repo. `profile generate` writes
-one from a payload type or a recipe, listing profiles and DDM declarations
-under `controls.apple_settings.configuration_profiles`; it refuses what Fleet
-would refuse at upload (FileVault payloads, status-subscription declarations,
-an activation naming more than one configuration) and leaves a plain
-activation for Fleet to make. The per-tool generators write fragments too:
+A `fragment.toml` manifest plus Fleet's v4.83 layout, to merge into a GitOps
+repo; entries go under `controls.apple_settings.configuration_profiles`.
+Refuses what Fleet refuses at upload (FileVault payloads, status-subscription
+declarations, an activation naming more than one configuration); leaves a
+plain activation for Fleet to make.
 
 ```
 contour profile generate --recipe hardening-macos-baseline --org <ORG> --fragment -o fragment/
-contour btm generate btm.toml --fragment -o fragment/
-contour pppc generate pppc.toml --fragment -o fragment/
-contour notifications generate notifications.toml --fragment -o fragment/
-contour support generate support.toml --fragment -o fragment/
+contour {btm|pppc|notifications|support} generate <tool>.toml --fragment -o fragment/
 contour santa generate rules.yaml --fragment -o fragment/
 ```
 
@@ -347,102 +238,73 @@ contour profile duplicate <source> --name 'New Name' --org com.yourco \
   -o fixed.mobileconfig
 ```
 
-Creates a copy with new PayloadDisplayName, PayloadIdentifier, and UUIDs.
-Use this to fix identifier typos or create variants of an existing profile.
+New PayloadDisplayName, PayloadIdentifier and UUIDs.
 
 ### Generate MDM command payloads (.plist)
 
 ```
-1. contour profile command list --json                # list all 65 MDM commands
-2. contour profile command info <command> --json      # show keys, types, descriptions
+1. contour profile command list --json
+2. contour profile command info <command> --json      # keys, types, descriptions
 3. contour profile command generate <command> -o cmd.plist
-   --set KEY=VALUE    # set command parameters
+   --set KEY=VALUE    # command parameters
    --uuid             # add CommandUUID for tracking
-   --base64           # output as base64 string (ready for Fleet API)
-   --json             # JSON output includes base64 field automatically
+   --base64           # base64 string (Fleet API)
+   --json             # includes the base64 field
 ```
 
 #### Common MDM commands
 
 ```
-contour profile command generate RestartDevice -o restart.plist
-contour profile command generate ShutDownDevice -o shutdown.plist
 contour profile command generate DeviceLock --set PIN=123456 \
   --set Message='Locked by IT' --uuid -o lock.plist
-contour profile command generate EraseDevice --set PIN=123456 --uuid -o erase.plist
-contour profile command generate RemoveProfile --set Identifier=com.example.wifi -o remove.plist
 contour profile command generate ScheduleOSUpdate --set InstallAction=InstallASAP -o update.plist
-contour profile command generate EnableRemoteDesktop -o remote.plist
-contour profile command generate RotateFileVaultKey -o rotate-fvkey.plist
 ```
+
+Also: `RestartDevice`, `RemoveProfile` (`--set Identifier=…`),
+`ShutDownDevice`, `EraseDevice`, `EnableRemoteDesktop`, `RotateFileVaultKey`.
 
 #### Send via your MDM (Fleet shown as the worked example)
 
 ```
-# Fleet CLI:
 fleetctl mdm run-command --host <hostname> --payload cmd.plist
-
-# Fleet API (base64 form — also the form most other MDM APIs accept):
-contour profile command generate RestartDevice --uuid --base64
-
-# JSON form (base64 field included automatically — pipe to your MDM's API):
-contour profile command generate RestartDevice --uuid --json
-
-# Fleet API POST: /api/v1/fleet/commands/run
-#   payload keys: command (base64 string), host_uuids (array)
-# Verify result via Fleet:
-#   fleetctl get mdm-command-results --id=<CommandUUID>
-#
-# Other MDMs accept the same .plist or its base64 — substitute the
-# vendor's send-command endpoint and identifier shape.
+fleetctl get mdm-command-results --id=<CommandUUID>    # verify
 ```
+
+Fleet API: `POST /api/v1/fleet/commands/run` with `command` (the `--base64`
+string) and `host_uuids` (array). Other MDMs take the same .plist or base64.
 
 ### Generate DEP enrollment profiles
 
-```
-contour profile enrollment list --platform macOS --json
-contour profile enrollment generate --platform macOS --skip "Siri,TOS,Diagnostics,Privacy" -o enrollment.dep.json
-contour profile enrollment generate --platform macOS --skip-list skip-list.toml -o enrollment.dep.json
-contour profile enrollment generate --platform macOS --interactive -o enrollment.dep.json
-```
-
-`--skip-all` skips every pane that may be skipped; it never includes
-`FileVault` or `SoftwareUpdate` (the NEVER_SKIP guardrail), and naming
-either in `--skip` or a skip list is refused. See `--sop enrollment` for the full procedural workflow.
-
----
+See `--sop enrollment` (`contour profile enrollment generate --platform macOS
+--skip … | --skip-list … | --interactive -o enrollment.dep.json`). `--skip-all`
+never skips `FileVault` or `SoftwareUpdate` (NEVER_SKIP); naming either in
+`--skip` or a skip list is refused.
 
 ## What contour refuses, and why
 
-Two families of refusal exist on the Apple side. Both are deliberate and
-neither is worked around by retrying — an agent that does not know them
-reads a refusal as a bug in contour.
+Both families are deliberate; do not retry or work around them.
 
 ### Not authorable at all
 
-Some payload types in Apple's schema are not documents an operator writes,
-and `form spec` / `form emit` refuse them by kind with `not-authorable`:
+`form spec` / `form emit` refuse these kinds with `not-authorable`:
 
 | Kind | Why it is refused |
 |---|---|
 | `MdmCommand` | protocol traffic a server sends to a device |
 | `MdmCheckin` | protocol traffic a device sends to a server |
-| `SharedStructure` | a shape another document carries, or a protocol body — Apple's `other/` directory, not a payload |
+| `SharedStructure` | a shape another document carries, or a protocol body (Apple's `other/` directory) |
 
-`SharedStructure` is the one that surprises. Apple publishes these beside
-real payloads and they look authorable: they have a type, a title and keys.
-They are the *shape of a key* some other declaration embeds. Asking for one
-is almost always a sign the wrong type was picked from a search — go back to
-`profile search` and look for the declaration that carries it.
+A `SharedStructure` looks authorable but is the *shape of a key* another
+declaration embeds — go back to `profile search` for the declaration that
+carries it.
 
 ### Available, but not on the target you named
 
-`--os` and `--os-version` turn the schema's per-OS availability into
-answers. **Without a target, neither surface below can judge anything**:
-contour cannot tell you a key is gone on macOS 27 if you never said macOS 27.
+Pass `--os` and `--os-version`: **without a target, neither surface below
+can judge anything.**
 
-There are TWO surfaces and they use DIFFERENT vocabularies. Do not expect
-one to produce the other's words.
+TWO surfaces, DIFFERENT vocabularies — do not expect one to produce the
+other's words.
 
 **1. `form spec` — a `verdict` per key, in `availability`.**
 
@@ -450,8 +312,8 @@ one to produce the other's words.
 contour profile form spec com.apple.applicationaccess --os macos --os-version 27.0 --json
 ```
 
-Each node carries `availability` with `introduced` / `deprecated` /
-`removed` maps per platform, an `unavailable` list, and one `verdict`:
+Each node's `availability`: per-platform `introduced` / `deprecated` /
+`removed`, an `unavailable` list, and one `verdict`:
 
 | `verdict` | Means |
 |---|---|
@@ -479,35 +341,27 @@ Warnings, still emitted:
 | Rule | Means |
 |---|---|
 | `key-deprecated-on-target` | deprecated at or before your target; it still applies |
-| `key-removed` / `payload-removed` | removed *somewhere*, but you named no OS version, so contour cannot say whether it affects you |
+| `key-removed` / `payload-removed` | removed *somewhere*; with no OS version named, contour cannot say whether it affects you |
 | `key-deprecated` | deprecated somewhere, same caveat |
 
-The `-on-target` suffix is the tell: those were computed against an OS
-version you supplied. The bare ones mean "Apple removed this on some
-platform and you did not say which you target" — name a target to find out
-whether it matters.
+Bare (non-`-on-target`) rules: name a target to learn whether they matter.
 
-**Where Apple names a replacement, `key-removed-on-target` repeats it.**
-Apple's schema often ends a removed key's description with what to use
-instead, and the diagnostic carries it through as `Apple says: …`. For
-example `allowRapidSecurityResponseInstallation`, removed at macOS 27.0,
-points at the `com.apple.configuration.softwareupdate.settings` declarative
-configuration. When that sentence is present, use it — do not infer a
-replacement from the key's name.
+**Where Apple names a replacement, `key-removed-on-target` repeats it** as
+`Apple says: …`. Use that sentence — do not infer a replacement from the
+key's name.
 
 ### Unknown is not OK
 
-A source that records no availability reports `Unknown`, never `Ok`.
-Community manifests (ProfileCreator) carry no `introduced`/`deprecated`, and
-silence there means nobody checked — unlike silence in Apple's own schema,
-which means the key inherits its payload's availability. Do not read
-`Unknown` as approval.
+A source that records no availability (e.g. ProfileCreator community
+manifests) reports `Unknown`, never `Ok`: nobody checked. Do not read
+`Unknown` as approval. (Silence in Apple's schema means the key inherits its
+payload's availability.)
 
 ## Key flags
 
-- `--full` — include all fields, not just required
+- `--full` — all fields, not just required
 - `--interactive` — pick segments and set values interactively
 - `--format plist` — raw payload dict (for Workspace ONE)
-- `--org com.yourcompany` — set organization identifier (REQUIRED for generate/normalize/import)
-- `--json` — structured output for programmatic consumption
-- `--fragment` — generate composable fragment (Fleet v4.83 GitOps layout)
+- `--org com.yourcompany` — organization identifier (REQUIRED for generate/normalize/import)
+- `--json` — structured output
+- `--fragment` — composable fragment (Fleet v4.83 GitOps layout)

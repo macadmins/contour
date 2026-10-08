@@ -153,6 +153,37 @@ pub fn process_baseline(
         None
     };
 
+    // Rules in this baseline that set one key to different values. mSCP's
+    // generator, which built these profiles, keeps the later rule's value and
+    // says nothing; contour keeps the same value and says so.
+    if let Some(ref repo_path) = mscp_repo_path {
+        let extractor = rule_extractor_for(&baseline, repo_path);
+        let rules = extractor.extract_rules_for_baseline(&baseline.name)?;
+        let order = extractor.baseline_rule_order(&baseline.name)?;
+        let conflicts =
+            crate::baseline_to_recipe::find_conflicts(&baseline.name, &rules, &order)?;
+        if !conflicts.is_empty() {
+            let mut report =
+                crate::baseline_to_recipe::conflict_report(&baseline.name, &conflicts);
+            let excluded = excluded_rules.as_deref().unwrap_or_default();
+            for c in &conflicts {
+                for rule in [&c.previous_rule, &c.winning_rule] {
+                    if excluded.contains(rule) {
+                        report.push_str(&format!(
+                            "\nexcluded_rules names '{rule}', but mSCP built the profile from \
+                             both rules first; excluded_rules does not change the value. \
+                             Tailor the baseline so mSCP leaves '{rule}' out."
+                        ));
+                    }
+                }
+            }
+            if output_mode == OutputMode::Human {
+                eprintln!("{} {report}", "WARNING".yellow().bold());
+            }
+            result.add_warning(report);
+        }
+    }
+
     // Apply rule-level exclusions from `[[baselines]] excluded_rules`.
     //
     // This setting was parsed, counted and printed — "Excluded rules: 1" —

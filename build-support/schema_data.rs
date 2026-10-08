@@ -407,6 +407,9 @@ pub struct DatasetSpec {
 }
 
 const DATA_DIR: &str = "data";
+/// Where an OS seed's tables go: beside `data/`, not inside it, because a
+/// stable refetch replaces `data/` whole.
+const SEED_DIR: &str = "data-beta";
 const STAMP: &str = ".dataset-pin";
 
 fn required_present(dir: &Path, spec: &DatasetSpec) -> bool {
@@ -420,16 +423,49 @@ fn read_stamp(dir: &Path) -> Option<String> {
     std::fs::read_to_string(dir.join(STAMP)).ok()
 }
 
-/// Fill `data/` for one schema crate. The only entry point a build.rs calls.
+/// Fill `data/` for one schema crate.
 pub fn resolve_dataset(spec: &DatasetSpec) {
-    let data = Path::new(DATA_DIR);
+    resolve_dataset_in(spec, DATA_DIR, "CONTOUR_SCHEMA_SRC");
+}
+
+/// Fill `data-beta/` with the OS seed's tables when there is one to fill it
+/// with, and say whether there is.
+///
+/// A seed is carried when `schema-data.toml` records `sha256_<archive>` for
+/// it, or when `spec.url_var` or `CONTOUR_SCHEMA_BETA_SRC` names one. A
+/// release without a seed leaves the channel dormant: this returns false and
+/// removes a `data-beta/` left from an earlier pin, so the crate cannot embed
+/// a seed the pin no longer names.
+pub fn resolve_seed_dataset(spec: &DatasetSpec) -> bool {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(root) = manifest_dir.parent().and_then(|p| p.parent()) {
+        println!("cargo:rerun-if-changed={}", root.join("schema-data.toml").display());
+    }
+    println!("cargo:rerun-if-env-changed={}", spec.url_var);
+    println!("cargo:rerun-if-env-changed=CONTOUR_SCHEMA_BETA_SRC");
+    let named = |var: &str| std::env::var(var).is_ok_and(|v| !v.is_empty());
+    let carried = expected_zip_sha256(&manifest_dir, spec.archive).is_some()
+        || named(spec.url_var)
+        || named("CONTOUR_SCHEMA_BETA_SRC");
+    if !carried {
+        let _ = std::fs::remove_dir_all(SEED_DIR);
+        return false;
+    }
+    resolve_dataset_in(spec, SEED_DIR, "CONTOUR_SCHEMA_BETA_SRC");
+    true
+}
+
+/// Fill `dir` for one dataset: `data/` for the release, `data-beta/` for a
+/// seed. `src_var` is the local-build override for that directory.
+fn resolve_dataset_in(spec: &DatasetSpec, dir: &str, src_var: &str) {
+    let data = Path::new(dir);
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    println!("cargo:rerun-if-changed={DATA_DIR}/{STAMP}");
+    println!("cargo:rerun-if-changed={dir}/{STAMP}");
     println!("cargo:rerun-if-env-changed=CONTOUR_SCHEMA_SKIP_DOWNLOAD");
     println!("cargo:rerun-if-env-changed={}", spec.url_var);
 
-    if sync_local_src(data, spec) {
+    if sync_local_src(data, spec, src_var) {
         return;
     }
 
@@ -437,8 +473,9 @@ pub fn resolve_dataset(spec: &DatasetSpec) {
     let found = read_stamp(data);
     let complete = required_present(data, spec);
 
-    // The data repository, when configured, answers first.
-    if let Some(pin) = schema_data_pin(&manifest_dir) {
+    // The data repository, when configured, answers first. It holds the
+    // release only, so a seed never comes from it.
+    if let Some(pin) = schema_data_pin(&manifest_dir).filter(|_| dir == DATA_DIR) {
         let wanted = dataset_stamp("repo", &format!("{}@{}", pin.repo, pin.reference));
         match decide_data_action(found.as_deref(), &wanted, complete, skip) {
             DataAction::Use => return,
@@ -462,17 +499,17 @@ pub fn resolve_dataset(spec: &DatasetSpec) {
                 if complete {
                     println!(
                         "cargo:warning={}: neither CONTOUR_SCHEMA_ZIP_BASE nor {} is \
-                         set; building with the unverified data/ already present",
+                         set; building with the unverified {dir}/ already present",
                         spec.archive, spec.url_var
                     );
                     return;
                 }
                 panic!(
                     "Neither CONTOUR_SCHEMA_ZIP_BASE nor {var} is set, and \
-                     crates/{a}/data/ is missing files.\n\
+                     {dir}/ is missing files.\n\
                      Export CONTOUR_SCHEMA_ZIP_BASE (the dataset host; CI gets it from the \
                      repository secret of the same name), set {var} to the URL of {a}.zip, \
-                     or copy the parquet files into crates/{a}/data/ manually.",
+                     or copy the parquet files into {dir}/ manually.",
                     var = spec.url_var,
                     a = spec.archive
                 );
@@ -498,8 +535,8 @@ pub fn resolve_dataset(spec: &DatasetSpec) {
             });
             if !ok {
                 panic!(
-                    "{a}.zip from {url} did not carry every file crates/{a} embeds: {files:?}. \
-                     data/ was left as it was.",
+                    "{a}.zip from {url} did not carry every file this crate embeds in \
+                     {dir}/: {files:?}. {dir}/ was left as it was.",
                     a = spec.archive,
                     files = spec.files
                 );
@@ -530,18 +567,19 @@ fn replace_data(
     // Leftovers from an earlier build that stopped midway — a hash mismatch
     // panics inside `fill` — carry another process id. Cargo runs one build
     // script per crate at a time, so any of them is safe to clear.
+    let dir = data.display();
     if let Ok(entries) = std::fs::read_dir(".") {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&format!("{DATA_DIR}.staging-"))
-                || name.starts_with(&format!("{DATA_DIR}.replaced-"))
+            if name.starts_with(&format!("{dir}.staging-"))
+                || name.starts_with(&format!("{dir}.replaced-"))
             {
                 let _ = std::fs::remove_dir_all(e.path());
             }
         }
     }
     let pid = std::process::id();
-    let staging = std::path::PathBuf::from(format!("{DATA_DIR}.staging-{pid}"));
+    let staging = std::path::PathBuf::from(format!("{dir}.staging-{pid}"));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).expect("creating the data staging directory");
 
@@ -551,14 +589,14 @@ fn replace_data(
     }
     std::fs::write(staging.join(STAMP), format!("{stamp}\n")).expect("writing the data stamp");
 
-    let aside = std::path::PathBuf::from(format!("{DATA_DIR}.replaced-{pid}"));
+    let aside = std::path::PathBuf::from(format!("{dir}.replaced-{pid}"));
     let _ = std::fs::remove_dir_all(&aside);
     if data.exists() {
         std::fs::rename(data, &aside).expect("moving the previous data/ aside");
     }
-    std::fs::rename(&staging, data).expect("moving the new dataset into data/");
+    std::fs::rename(&staging, data).expect("moving the new dataset into place");
     let _ = std::fs::remove_dir_all(&aside);
-    println!("cargo:warning={}: data/ is now `{stamp}`", spec.archive);
+    println!("cargo:warning={}: {dir}/ is now `{stamp}`", spec.archive);
     true
 }
 
@@ -609,15 +647,16 @@ fn download_zip_into(url: &str, dest: &Path, spec: &DatasetSpec, manifest_dir: &
     true
 }
 
-/// `CONTOUR_SCHEMA_SRC`: copy this crate's files from a local dataset build.
+/// `CONTOUR_SCHEMA_SRC` (or `CONTOUR_SCHEMA_BETA_SRC` for `data-beta/`):
+/// copy this crate's files from a local dataset build.
 ///
 /// Local development only, and loud about it. Every file must be there before
 /// any is copied — a half-updated data/ is the failure this prevents — and
 /// the directory is stamped `local <path>`, so the next build without the
 /// variable sees a dataset that is not the pin and fetches the pin again.
-fn sync_local_src(data: &Path, spec: &DatasetSpec) -> bool {
-    println!("cargo:rerun-if-env-changed=CONTOUR_SCHEMA_SRC");
-    let Ok(src) = std::env::var("CONTOUR_SCHEMA_SRC") else {
+fn sync_local_src(data: &Path, spec: &DatasetSpec, src_var: &str) -> bool {
+    println!("cargo:rerun-if-env-changed={src_var}");
+    let Ok(src) = std::env::var(src_var) else {
         return false;
     };
     let src = Path::new(&src);
@@ -632,23 +671,25 @@ fn sync_local_src(data: &Path, spec: &DatasetSpec) -> bool {
     }
     if !missing.is_empty() {
         panic!(
-            "CONTOUR_SCHEMA_SRC is set to {} but {} of {} file(s) are missing:\n  {}\n\
-             data/ was left untouched. Build the dataset first, or unset CONTOUR_SCHEMA_SRC to \
+            "{src_var} is set to {} but {} of {} file(s) are missing:\n  {}\n\
+             {} was left untouched. Build the dataset first, or unset {src_var} to \
              build against the published data.",
             src.display(),
             missing.len(),
             spec.files.len(),
-            missing.join("\n  ")
+            missing.join("\n  "),
+            data.display()
         );
     }
     let stamp = dataset_stamp("local", &src.display().to_string());
     let ok = replace_data(data, spec, &stamp, |staging| {
         spec.files.iter().all(|f| std::fs::copy(src.join(f), staging.join(f)).is_ok())
     });
-    assert!(ok, "copying from CONTOUR_SCHEMA_SRC failed");
+    assert!(ok, "copying from {src_var} failed");
     println!(
-        "cargo:warning=Using LOCAL schema data from {} — NOT the published dataset",
-        src.display()
+        "cargo:warning=Using LOCAL schema data from {} in {} — NOT the published dataset",
+        src.display(),
+        data.display()
     );
     true
 }

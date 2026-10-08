@@ -1102,11 +1102,13 @@ pub fn dispatch(
                 query,
                 platform,
                 errors,
+                beta,
             } => {
                 crate::cli::ddm_status::handle_status(
                     query.as_deref(),
                     platform.as_deref(),
                     errors,
+                    channel.or_beta(beta),
                     output_mode,
                 )?;
             }

@@ -1,19 +1,16 @@
 # SOP: DDM Declaration Generation
 
-This SOP covers Apple Declarative Device Management (DDM). Unlike profile
-generation, DDM declarations form a **dependency DAG** — agents that emit
-declarations in the wrong order, or whose identifier references don't match,
-produce configurations that fail at deploy time without any authoring-time
-signal. The procedural format here makes that DAG explicit.
+Apple Declarative Device Management (DDM). Declarations form a **dependency
+DAG**: wrong order or mismatched identifier references fail at deploy time
+with no authoring-time signal.
 
 Format spec: `crates/contour-core/skills/contour/references/sop-format-spec.md`
 Drift detector: `crates/profile/tests/sop_traps.rs`
 
 ## ERROR-CODE ENUM
 
-All procedures emit failures with a stable typed `error_code` from this enum.
-Agents MUST switch on these codes — substring-matching the prose `error` field
-is fragile and discouraged.
+Agents MUST switch on these `error_code` values — never substring-match the
+prose `error` field.
 
 ```
 INVALID_IDENTIFIER     identifier syntax issue (spaces, invalid chars)
@@ -32,14 +29,11 @@ on stderr:
 { "success": false, "error": "...", "error_code": "INVALID_ORG" }
 ```
 
----
-
 ## DEPRECATED_LIST (DDM replaces these legacy payloads)
 
-Apple is deprecating profile-payload-based device management in favor of DDM.
 **macOS Tahoe (26 / 27) removes** software update management via the legacy
-`com.apple.SoftwareUpdate` profile payload. Agents that keep generating it
-will produce broken deployments on the next macOS release.
+`com.apple.SoftwareUpdate` profile payload; generating it produces broken
+deployments.
 
 ```
 DEPRECATED_PAYLOADS = [
@@ -52,8 +46,6 @@ DEPRECATED_PAYLOADS = [
 The PRECONDITIONS block of every DDM procedure MUST check this list and
 redirect agents to the supported DDM type before generation runs.
 
----
-
 ## DDM dependency DAG
 
 ```
@@ -64,12 +56,8 @@ ASSET (optional)
                                                   (subscribed via management.status-subscriptions)
 ```
 
-Build order is **bottom-up** (asset → configuration → activation). Writing
-the activation before the configuration produces a dangling
-`StandardConfigurations[]` reference; writing the configuration before the
-asset produces a dangling asset reference inside the configuration payload.
-
----
+Build order is **bottom-up** (asset → configuration → activation); any other
+order leaves a dangling `StandardConfigurations[]` or asset reference.
 
 ## PROCEDURE create_ddm_config(intent, org_prefix, output_dir)
 
@@ -118,12 +106,8 @@ STEP 1 — Schema lookup (always live, never speculate):
     activation_type = "com.apple.activation.simple"
 
 STEP 2 — Author the bundle TOML, then compose:
-  # `contour profile ddm compose` takes a single TOML input describing the
-  # full DDM intent and emits asset.json + configuration.json + activation.json
-  # with identifiers and cross-references already wired by construction.
-  # Replaces the multi-step generate-and-edit-by-hand orchestration that
-  # earlier revisions of this SOP documented (asset → configuration →
-  # activation, with manual identifier overrides and asset-reference edits).
+  # compose takes one TOML describing the intent and emits asset.json +
+  # configuration.json + activation.json, identifiers and references wired.
 
   bundle = author bundle.toml describing the intent (see DDM_BUNDLE_FORMAT
                                                        below)
@@ -141,21 +125,17 @@ STEP 2 — Author the bundle TOML, then compose:
     files: result.files.map(f -> f.path),
     identifiers: { kind -> result.files[kind].identifier },
     deploy_order: [asset?, configuration, activation?]
-      # The MDM server applies declarations in this order; out-of-order push
-      # produces transient unresolved-reference errors that resolve once all
-      # are applied. Pushing in build order avoids that flap.
+      # push in this order; out-of-order push flaps with transient
+      # unresolved-reference errors.
   }
 
 CROSS-FILE INVARIANT:
-  Compose enforces this by construction — it builds the dependency DAG
-  in memory, writes files atomically (no files on disk on error), and
-  refuses to emit dangling references or orphan assets in strict mode.
-  No post-hoc verification step required.
+  Compose enforces this by construction: atomic writes (no files on error),
+  refuses dangling references or orphan assets in strict mode.
 
 INVARIANTS:
   Compose never authors `ServerToken` (the MDM server adds it at push
-  time). Pinned by trap_34. Direct hand-edits afterwards must preserve
-  this.
+  time). Hand-edits afterwards must preserve this.
 ```
 
 ### DDM_BUNDLE_FORMAT (the input to `compose`)
@@ -175,10 +155,8 @@ Password = "..."
 type = "com.apple.configuration.account.exchange"
 # identifier = "{override}"
 asset_ref_field = "AuthenticationCredentialsAssetReference"
-                                            # REQUIRED only when the schema
-                                            # has multiple *AssetReference
-                                            # fields (Mail, Exchange, etc.).
-                                            # Single-field schemas auto-resolve.
+                                            # REQUIRED only when the schema has
+                                            # multiple *AssetReference fields
 [configuration.payload]
 HostName = "outlook.example.com"
 EmailAddress = "user@example.com"
@@ -194,19 +172,13 @@ keys = ["passcode.is-compliant"]            # status keys the device should subs
 # identifier = "{override}"                 # default {org}.subscriptions.{intent_name}
 ```
 
-Override hatches (rare; defaults are correct for most intents):
-- `asset.identifier`, `configuration.identifier`, `activation.identifier`,
-  `subscriptions.identifier` — explicit identifier; bypasses the
-  `{org}.{kind}.{intent_name}` default.
-- `configuration.asset_ref_field` — disambiguate when a configuration's
-  schema has multiple `*AssetReference` fields.
-- `activation.references` — explicit `StandardConfigurations[]` array.
+The commented `identifier` / `references` keys are rare overrides; the
+defaults are correct for most intents.
 
 ### DATA_ASSET_ZIP_WORKFLOW (`com.apple.asset.data` — hosting a file)
 
-A data asset references a file (zip) the device downloads. Instead of pasting a
-SHA-256 by hand, point `[asset]` at the local `.zip`; contour hashes it and fills
-the `Reference`:
+Point `[asset]` at the local `.zip` the device downloads; contour hashes it
+(never paste a SHA-256 by hand) and fills the `Reference`:
 
 ```toml
 [asset]
@@ -221,38 +193,22 @@ ServiceType = "com.apple.sshd"        # DataAssetReference is auto-wired
 [activation]
 ```
 
-Emits a complete asset:
-```json
-{ "Type": "com.apple.asset.data", "Identifier": "{org}.asset.{intent}",
-  "Payload": { "Reference": { "ContentType": "application/zip",
-    "DataURL": "...", "Hash-SHA-256": "<computed>" } },
-  "Authentication": { "Type": "None" } }
-```
-
 - **`url` omitted** → a `https://REPLACE-WITH-HOSTED-URL/...` placeholder is
   emitted. Host the zip (S3 / Cloudflare R2 / any HTTPS), then replace the URL.
-- **`auth`** is Apple's `Authentication.Type` and has only two values — there is
+- **`auth`** is Apple's `Authentication.Type`, two values only — there is
   **no username/password field**; host credentials are NEVER embedded:
-  - `none` — a standard GET. Use for public URLs OR **presigned / tokened long
-    URLs** (S3 presigned, Cloudflare signed URL) where the URL itself carries auth.
-  - `mdm` — the device authenticates with its MDM identity certificate. Use when
-    the file is hosted behind an endpoint that validates the device cert (e.g.
-    served by the MDM/an auth-gated proxy).
-  - For anything else (rotating secrets, basic-auth servers), front the file with
-    a presigned URL and use `none`, or proxy it behind MDM-cert auth and use `mdm`.
+  - `none` — plain GET: public URLs or **presigned / tokened URLs**.
+  - `mdm` — device authenticates with its MDM identity certificate.
+  - Anything else (rotating secrets, basic auth): front it with a presigned
+    URL (`none`) or an MDM-cert-auth proxy (`mdm`).
 - `[asset.authentication]` is an advanced override for the full dictionary.
 
 ### Predicate ↔ status-subscription invariant
 
-Apple's DDM spec defines two distinct predicate failure modes:
-- `Error.PredicateFailed` — predicate cleanly evaluated to `false`
-  (intentional gating; activation simply doesn't install).
-- `Error.UnableToEvaluatePredicate` — predicate could not evaluate
-  (syntax error, type mismatch, OR a referenced `@status('key')` isn't
-  subscribed). This is an **authoring bug** that ships clean and
-  surfaces at deploy time.
-
-The CLI prevents the unsubscribed-key class at authoring time:
+`Error.PredicateFailed` is intentional gating (predicate evaluated `false`).
+`Error.UnableToEvaluatePredicate` is an **authoring bug** that surfaces only at
+deploy time — syntax error, type mismatch, or an unsubscribed `@status('key')`.
+The CLI catches the unsubscribed-key class at authoring time:
 
 - **`compose` PRECONDITION**: parses the activation predicate's
   `@status(...)` references and asserts every referenced key is in
@@ -261,17 +217,11 @@ The CLI prevents the unsubscribed-key class at authoring time:
   emits a fourth declaration file `status-subscriptions.json`
   (`com.apple.configuration.management.status-subscriptions`).
 - **`ddm verify <dir>`**: walks all `*.json` declarations in a
-  directory and applies the same cross-check across files (useful for
-  hand-authored or externally-sourced sets — see below). A directory with
+  directory and applies the same cross-check across files. A directory with
   no declarations in it fails with `IO_ERROR`; when they sit in
   subdirectories the error says so — pass `-r/--recursive`.
 
----
-
 ## Other operations (prose recipes; not yet migrated to the procedural format)
-
-These DDM CLI operations work with the existing prose recipes; they will be
-migrated as each one is end-to-end traced.
 
 ### Start from a preset
 
@@ -288,17 +238,14 @@ contour profile ddm compose --preset passcode-settings --org {org} -o {dir} --js
 
 ```
 contour profile ddm list --json
-# 60+ types embedded; covers asset, configuration, activation, management,
-# and status categories. `contour profile ddm list` prints the live count.
+# asset, configuration, activation, management and status types
 ```
 
 ### Show schema for a specific type
 
 ```
 contour profile ddm info com.apple.configuration.passcode.settings --json
-# Returns full field schema: types, descriptions, requiredness, defaults.
-# Add --full to expand nested dictionary keys as a tree; --json carries
-# depth/parent/path per field so the hierarchy is machine-reconstructable.
+# --full expands nested keys as a tree; --json carries depth/parent/path per field
 contour profile ddm info network.vpn.ikev2 --beta --full
 ```
 
@@ -316,29 +263,24 @@ contour profile ddm map com.apple.mail.managed --json
 
 ```
 contour profile ddm coverage --json
-# Assessed types by status (available/partial/legacy/none), native-DDM
-# coverage %, the list still requiring legacy profiles (e.g. wifi.managed,
-# vpn.managed, proxy.http.global), and schema counts. --channel beta counts
-# seed declaration types.
+# status per type (available/partial/legacy/none), native-DDM coverage %,
+# types still needing legacy profiles. --channel beta counts seed types.
 ```
 
 ### Populate `app.settings` allow/deny from a signing catalog
 
-`com.apple.configuration.app.settings` (released in OS 27.0) gates apps by
-`AllowedBinaries`/`DeniedBinaries` keyed on `{CDHash, SigningID, TeamID}` — the
-same code-signing vocabulary Santa uses. The Santa toolkit can emit this
-declaration directly from the community **fleet-maintained-apps** catalog, so you
-don't hand-write binary entries:
+`com.apple.configuration.app.settings` (OS 27.0) gates apps by
+`AllowedBinaries`/`DeniedBinaries` keyed on `{CDHash, SigningID, TeamID}`. Emit
+it from the **fleet-maintained-apps** catalog instead of hand-writing entries:
 
 ```
-# Catalog of ~1,200 known-good Mac apps with signingId/teamId/cdhash/sha256:
-#   https://github.com/allenhouchins/fleet-maintained-apps-growth-tracker/blob/main/data/app_security_info.json
+# Catalog: https://github.com/allenhouchins/fleet-maintained-apps-growth-tracker/blob/main/data/app_security_info.json
 curl -sSL <raw-url> -o app_security_info.json
 
 # Emit the DDM app.settings declaration (and a matching Santa profile):
 contour santa fetch fleet-apps app_security_info.json --org com.yourco --emit ddm -o out/
 #   → out/app-settings.json   (AllowedBinaries: {SigningID, TeamID} per app)
-contour profile ddm validate out/app-settings.json --beta     # validate vs seed schema
+contour profile ddm validate out/app-settings.json
 
 # --match signingid|teamid|cdhash · --policy allow|deny · --emit santa,ddm,rules
 ```
@@ -359,25 +301,19 @@ contour profile ddm generate com.apple.management.properties \
 #    "Payload":{"hello":"world"}}
 ```
 
-Note: this emits ONE declaration in isolation. For multi-component setups
-(asset + configuration + activation with cross-references), use
-`compose` (above) — it enforces the cross-file invariants the per-file
-generate cannot.
+This emits ONE declaration; for cross-referenced sets use `compose`, which
+enforces the cross-file invariants.
 
-Both `generate` and `compose` are **fail-closed**: a declaration that is
-schema-invalid (missing a required field, etc.) is NOT written — the command
-errors with `SCHEMA_VIOLATION` listing what's wrong. For `compose` that
-includes an **unknown field**: a key the schema does not define at that path
-(`Mail` at the intelligence payload root, where Apple nests it under `Apps`)
-is refused, because the device ignores it. `ddm validate` reports the same
-finding as a warning, since it reads files that may be hand-authored.
+Both `generate` and `compose` are **fail-closed**: a schema-invalid
+declaration is NOT written — `SCHEMA_VIOLATION` lists what's wrong. `compose`
+also refuses an **unknown field** (e.g. `Mail` at the intelligence payload
+root, where Apple nests it under `Apps`) because the device ignores it;
+`ddm validate` reports it as a warning.
 
-A declaration does not say which OS it is for, so platform checks run only
-when told: a bundle's `platforms = ["macOS"]`, or `--platform <OS>` on
-`compose` (refuses) and `validate` (warns). Then a key Apple does not offer
-on that platform — `AllowImageWand` on macOS — is reported. So any file contour emits is
-schema-valid by construction; `ddm validate`/`verify` (below) remain the gate for
-hand-edited or externally-sourced declarations.
+Platform checks run only when told: a bundle's `platforms = ["macOS"]`, or
+`--platform <OS>` on `compose` (refuses) and `validate` (warns) — then a key
+Apple does not offer there (`AllowImageWand` on macOS) is reported.
+`ddm validate`/`verify` remain the gate for hand-edited or external declarations.
 
 ### Compose a bundle (asset + configuration + activation in one shot)
 
@@ -386,11 +322,9 @@ contour profile ddm compose <bundle.toml> -o <output_dir> --json
 contour profile ddm compose <bundle.toml> -o <output_dir> --allow-orphans --json
 ```
 
-The canonical multi-component path. See DDM_BUNDLE_FORMAT above for the
-TOML schema and `docs/examples/ddm-exchange-bundle.toml` for a worked
-example. Strict by default — declared assets that aren't wired into the
-configuration trigger `SCHEMA_VIOLATION`. Pass `--allow-orphans` for
-incremental authoring.
+Format: DDM_BUNDLE_FORMAT above; example `docs/examples/ddm-exchange-bundle.toml`.
+Strict by default — unwired assets trigger `SCHEMA_VIOLATION`; `--allow-orphans`
+for incremental authoring.
 
 ### Verify a directory of declarations
 
@@ -418,14 +352,10 @@ contour profile ddm parse <file>.json --json     # show structure
 contour profile ddm validate <file>.json --json  # schema-validate
 ```
 
----
-
 ## Key flags
 
-- `--full` — include all fields, not just required (useful for surfacing
-  optional knobs to humans; agents typically populate only what intent needs)
+- `--full` — include all fields, not just required
 - `--json` — structured output for programmatic consumption
 - `-o <path>` — output file path (DDM `generate` emits one declaration per call)
-- `--schema-path <dir>` — point at an external `apple/device-management`
-  checkout to override the embedded schema (useful for trying unreleased
-  declaration types from main)
+- `--schema-path <dir>` — use an external `apple/device-management` checkout
+  instead of the embedded schema

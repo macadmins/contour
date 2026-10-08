@@ -72,6 +72,33 @@ Getting started:
   contour completions zsh --install  enable <TAB> shell completion
   contour trainer profile            step-by-step interactive tutorial";
 
+/// `--channel` help: says "disabled" only in a build without a seed dataset.
+pub const CHANNEL_HELP: &str = if mdm_schema::SEED_DATASET {
+    "Schema channel: stable (released), or beta (pre-release OS seed)"
+} else {
+    "Schema channel: stable (released), or beta (pre-release OS seed — currently disabled)"
+};
+const BETA_SCHEMA_HELP: &str = if mdm_schema::SEED_DATASET {
+    "Use the beta seed schema (shorthand for --channel beta)"
+} else {
+    "Use the beta seed schema (shorthand for --channel beta) — currently disabled"
+};
+const BETA_SEARCH_HELP: &str = if mdm_schema::SEED_DATASET {
+    "Search the beta seed schema (shorthand for --channel beta)"
+} else {
+    "Search the beta seed schema (shorthand for --channel beta) — currently disabled"
+};
+const BETA_GENERATE_HELP: &str = if mdm_schema::SEED_DATASET {
+    "Generate against the beta seed schema (shorthand for --channel beta)"
+} else {
+    "Generate against the beta seed schema (shorthand for --channel beta) — currently disabled"
+};
+const BETA_COUNT_HELP: &str = if mdm_schema::SEED_DATASET {
+    "Count seed declaration types (shorthand for --channel beta)"
+} else {
+    "Count seed declaration types (shorthand for --channel beta) — currently disabled"
+};
+
 #[derive(Debug, Parser)]
 #[command(name = "profile")]
 #[command(author = env!("CARGO_PKG_AUTHORS"))]
@@ -98,7 +125,7 @@ pub struct Cli {
         global = true,
         value_enum,
         default_value_t = crate::schema::Channel::Stable,
-        help = "Schema channel: stable (released), or beta (pre-release OS seed — currently disabled)"
+        help = CHANNEL_HELP
     )]
     pub channel: crate::schema::Channel,
 }
@@ -150,7 +177,7 @@ pub enum Commands {
 
         #[arg(
             long,
-            help = "Use the beta seed schema (shorthand for --channel beta) — currently disabled"
+            help = BETA_SCHEMA_HELP
         )]
         beta: bool,
 
@@ -768,7 +795,7 @@ pub enum Commands {
 
         #[arg(
             long,
-            help = "Search the beta seed schema (shorthand for --channel beta) — currently disabled"
+            help = BETA_SEARCH_HELP
         )]
         beta: bool,
 
@@ -1222,7 +1249,7 @@ pub enum Commands {
 
         #[arg(
             long,
-            help = "Generate against the beta seed schema (shorthand for --channel beta) — currently disabled"
+            help = BETA_GENERATE_HELP
         )]
         beta: bool,
 
@@ -1513,6 +1540,9 @@ pub enum DdmAction {
                     of the same channel"
         )]
         errors: bool,
+
+        #[arg(long, help = BETA_SCHEMA_HELP)]
+        beta: bool,
     },
 
     #[command(about = "Parse and display DDM declaration(s)")]
@@ -1668,7 +1698,7 @@ pub enum DdmAction {
     Coverage {
         #[arg(
             long,
-            help = "Count seed declaration types (shorthand for --channel beta) — currently disabled"
+            help = BETA_COUNT_HELP
         )]
         beta: bool,
     },
