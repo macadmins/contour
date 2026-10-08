@@ -322,13 +322,13 @@ fn is_asset_reference_key(key: &str) -> bool {
 /// `IncomingServer.AuthenticationCredentialsAssetReference`; the embedded
 /// CLI schema flattens those to dotted top-level keys, but profiles in
 /// the wild may keep them nested. The recursive walk handles both.
-fn extract_asset_refs(payload: &std::collections::HashMap<String, Value>) -> Vec<(String, String)> {
+fn extract_asset_refs(payload: &serde_json::Map<String, Value>) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     walk_for_refs(payload, &mut out);
     out
 }
 
-fn walk_for_refs(map: &std::collections::HashMap<String, Value>, out: &mut Vec<(String, String)>) {
+fn walk_for_refs(map: &serde_json::Map<String, Value>, out: &mut Vec<(String, String)>) {
     for (key, value) in map {
         if is_asset_reference_key(key)
             && let Some(s) = value.as_str()
@@ -350,10 +350,7 @@ fn walk_for_refs(map: &std::collections::HashMap<String, Value>, out: &mut Vec<(
 fn walk_value_for_refs(key: &str, value: &Value, out: &mut Vec<(String, String)>) {
     match value {
         Value::Object(child) => {
-            // serde_json::Map is not the same as HashMap; convert.
-            let nested: std::collections::HashMap<String, Value> =
-                child.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            walk_for_refs(&nested, out);
+            walk_for_refs(child, out);
         }
         Value::Array(items) => {
             for item in items {
@@ -373,7 +370,7 @@ fn walk_value_for_refs(key: &str, value: &Value, out: &mut Vec<(String, String)>
     }
 }
 
-fn extract_status_items(payload: &std::collections::HashMap<String, Value>) -> Vec<String> {
+fn extract_status_items(payload: &serde_json::Map<String, Value>) -> Vec<String> {
     payload
         .get("StatusItems")
         .and_then(Value::as_array)
@@ -391,7 +388,7 @@ fn extract_status_items(payload: &std::collections::HashMap<String, Value>) -> V
 }
 
 fn extract_string_array(
-    payload: &std::collections::HashMap<String, Value>,
+    payload: &serde_json::Map<String, Value>,
     key: &str,
 ) -> Vec<String> {
     payload
