@@ -1,0 +1,48 @@
+name: Homebrew formulas
+
+# Keeps Formula/*.rb pointed at the newest release: rewrites version, URLs and
+# sha256s from the release's checksum manifests, then opens a PR. Requires
+# "Allow GitHub Actions to create pull requests" in the repo's Actions settings.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Update formulas
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "version=$(scripts/bump-homebrew.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Install and test
+        if: steps.bump.outputs.version != ''
+        run: |
+          brew tap-new --no-git local/ci
+          cp Formula/*.rb "$(brew --repository local/ci)/Formula/"
+          brew install --formula local/ci/contour local/ci/contour-mcp
+          brew test local/ci/contour local/ci/contour-mcp
+
+      - name: Open PR
+        if: steps.bump.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          branch="homebrew-$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -am "homebrew: contour $VERSION"
+          git push origin "$branch"
+          gh pr create --title "homebrew: contour $VERSION" --body "Automated formula bump for v$VERSION."

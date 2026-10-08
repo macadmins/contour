@@ -31,6 +31,14 @@ sudo installer -pkg ~/Downloads/contour-<version>.pkg -target /
 contour --help
 ```
 
+Or with Homebrew (macOS arm64, Linux arm64/x86_64). The formulas live in this repo, so tap it by URL:
+
+```bash
+brew tap macadmins/contour https://github.com/macadmins/contour
+brew install contour        # CLI
+brew install contour-mcp    # read-only MCP server
+```
+
 ### Use case 1: Postprocess existing profiles
 
 The most common entry point. Contour standardizes identifiers, regenerates UUIDs deterministically, and validates against the embedded Apple schema. Works on a single file or a whole tree.
