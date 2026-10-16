@@ -1294,6 +1294,7 @@ pub fn dispatch(
                 no_parallel,
                 beta,
                 platforms,
+                strict,
             } => {
                 let beta = beta || channel.is_beta();
                 let parallel = !no_parallel;
@@ -1305,6 +1306,7 @@ pub fn dispatch(
                     parallel,
                     beta,
                     &platforms,
+                    strict,
                     output_mode,
                 )?;
             }
