@@ -1658,7 +1658,8 @@ mod tests {
     fn an_unknown_payload_type_is_reported_as_unverified() {
         let registry = registry_from_manifest(test_manifest("com.apple.known", &["A"]));
         let mut known = BTreeMap::new();
-        known.insert("A".to_string(), plist::Value::Boolean(true));
+        // test_manifest declares every field a String.
+        known.insert("A".to_string(), plist::Value::String("a".into()));
         let profile = ConfigurationProfile {
             payload_type: "Configuration".to_string(),
             payload_version: 1,

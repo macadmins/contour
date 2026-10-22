@@ -34,7 +34,9 @@ fn a_file_that_is_not_a_declaration_is_a_failed_result_not_a_missing_one() {
 fn json_mode_exits_nonzero_on_an_invalid_declaration() {
     let dir = tempfile::tempdir().unwrap();
     let bad = dir.path().join("bad.json");
-    std::fs::write(&bad, r#"{"Type":"com.apple.configuration.passcode.settings","Identifier":"com.acme.pw","Payload":{"MinimumLength":"six"}}"#).unwrap();
+    // Missing both required keys. `ddm validate` does not type-check values,
+    // so a wrong-typed key would not make the declaration invalid.
+    std::fs::write(&bad, r#"{"Type":"com.apple.configuration.softwareupdate.enforcement.specific","Identifier":"com.acme.su","Payload":{}}"#).unwrap();
     let out = Command::cargo_bin("profile")
         .unwrap()
         .args(["ddm", "validate", bad.to_str().unwrap(), "--json"])
