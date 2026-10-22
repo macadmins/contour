@@ -1599,6 +1599,9 @@ pub enum DdmAction {
             help = "Warn about keys Apple does not offer on this platform (repeatable: macOS, iOS, tvOS, watchOS, visionOS)"
         )]
         platforms: Vec<String>,
+
+        #[arg(long, help = "Strict mode: unknown fields are errors, not warnings")]
+        strict: bool,
     },
 
     #[command(

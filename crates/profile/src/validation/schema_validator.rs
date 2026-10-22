@@ -11,7 +11,7 @@
 
 use crate::profile::{ConfigurationProfile, PayloadContent};
 use crate::schema::{FieldPath, FieldType, PayloadManifest, SchemaRegistry};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Severity level for validation issues
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,11 +91,25 @@ pub struct SchemaValidationResult {
     pub issues: Vec<ValidationIssue>,
     pub payloads_validated: usize,
     pub payloads_unknown: usize,
+    /// Payload types no schema covered — these payloads passed unchecked.
+    pub unknown_types: Vec<String>,
 }
 
 impl SchemaValidationResult {
     pub fn is_valid(&self) -> bool {
         !self.issues.iter().any(|i| i.severity == Severity::Error)
+    }
+
+    /// `invalid`, `valid`, or `valid_unverified` when some payload had no
+    /// schema to check against. A pass that checked nothing must say so.
+    pub fn status(&self) -> &'static str {
+        if !self.is_valid() {
+            "invalid"
+        } else if self.payloads_unknown > 0 {
+            "valid_unverified"
+        } else {
+            "valid"
+        }
     }
 
     pub fn errors(&self) -> Vec<&ValidationIssue> {
@@ -226,6 +240,7 @@ impl<'a> SchemaValidator<'a> {
             }
 
             result.payloads_unknown += 1;
+            result.unknown_types.push(payload.payload_type.clone());
             if self.options.warn_unknown_types {
                 // Try to find a similar payload type to suggest
                 let suggestion = self.find_similar_payload_type(&payload.payload_type);
@@ -585,35 +600,87 @@ impl<'a> SchemaValidator<'a> {
     /// Uses reverse-DNS aware matching optimized for Apple payload types
     fn find_similar_payload_type(&self, unknown_type: &str) -> Option<String> {
         let unknown_lower = unknown_type.to_lowercase();
-
-        // Extract components for reverse-DNS matching
         let unknown_parts: Vec<&str> = unknown_lower.split('.').collect();
 
-        let mut best_match: Option<(String, u32)> = None; // (type, score) - higher is better
+        // `list()` is HashMap order, random per process: sort so ties and
+        // the scan itself are the same on every run.
+        let mut known = self.registry.list();
+        known.sort_unstable();
+        let lowered: Vec<String> = known.iter().map(|k| k.to_lowercase()).collect();
 
-        for known_type in self.registry.list() {
-            let known_lower = known_type.to_lowercase();
-
-            // Case-insensitive exact match - perfect score
-            if unknown_lower == known_lower {
-                return Some(known_type.to_string());
-            }
-
-            let score = reverse_dns_similarity(&unknown_lower, &unknown_parts, &known_lower);
-
-            // Only consider matches with reasonable similarity (score > 50)
-            if score > 50 && (best_match.is_none() || score > best_match.as_ref().unwrap().1) {
-                best_match = Some((known_type.to_string(), score));
-            }
+        // Case-insensitive exact match - perfect score
+        if let Some(i) = lowered.iter().position(|k| *k == unknown_lower) {
+            return Some(known[i].to_string());
         }
 
-        best_match.map(|(s, _)| s)
+        // A name token shared by many types (`managed`, `security`) says
+        // little about which one was meant; a rare one (`wifi`) says a lot.
+        let mut doc_freq: HashMap<&str, usize> = HashMap::new();
+        for k in &lowered {
+            let unique: HashSet<&str> = name_tokens(&k.split('.').collect::<Vec<_>>())
+                .into_iter()
+                .collect();
+            for t in unique {
+                *doc_freq.entry(t).or_default() += 1;
+            }
+        }
+        let total = (lowered.len() + 1) as f64;
+        let weight = |token: &str| (total / doc_freq.get(token).copied().unwrap_or(1) as f64).ln();
+
+        known
+            .iter()
+            .zip(&lowered)
+            .map(|(k, kl)| (reverse_dns_similarity(&unknown_parts, kl, &weight), k, kl))
+            // Only consider matches with reasonable similarity (score > 50)
+            .filter(|(score, _, _)| *score > 50)
+            // Highest score, then smallest edit distance, then name order.
+            .min_by_key(|(score, k, kl)| {
+                (
+                    std::cmp::Reverse(*score),
+                    levenshtein_distance(&unknown_lower, kl),
+                    **k,
+                )
+            })
+            .map(|(_, k, _)| (*k).to_string())
+    }
+}
+
+/// Split dotted name components into words: `system-extension-policy`
+/// becomes `system`, `extension`, `policy`.
+fn name_tokens<'a>(parts: &[&'a str]) -> Vec<&'a str> {
+    parts
+        .iter()
+        .flat_map(|p| p.split(['-', '_']))
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// How alike two name words are, 0.0-1.0.
+fn token_similarity(a: &str, b: &str) -> f64 {
+    if a == b {
+        return 1.0;
+    }
+    let shorter = a.len().min(b.len());
+    match levenshtein_distance(a, b) {
+        // "Zservicemanagement" -> "servicemanagement", "extensions" -> "extension"
+        1 if shorter >= 4 => 0.9,
+        2 if shorter > 5 => 0.7,
+        _ if shorter >= 4 && (a.contains(b) || b.contains(a)) => 0.6,
+        _ => 0.0,
     }
 }
 
 /// Calculate similarity score for reverse-DNS style identifiers
-/// Returns a score 0-100 where higher is more similar
-fn reverse_dns_similarity(_unknown: &str, unknown_parts: &[&str], known: &str) -> u32 {
+/// Returns a score 0-100 where higher is more similar.
+///
+/// After the shared leading components, the remaining words of both names
+/// are compared, each counted by `weight`, so a distinctive word outweighs
+/// one most types share.
+fn reverse_dns_similarity(
+    unknown_parts: &[&str],
+    known: &str,
+    weight: &dyn Fn(&str) -> f64,
+) -> u32 {
     let known_parts: Vec<&str> = known.split('.').collect();
 
     // Must have at least 2 components (e.g., "com.apple")
@@ -621,88 +688,45 @@ fn reverse_dns_similarity(_unknown: &str, unknown_parts: &[&str], known: &str) -
         return 0;
     }
 
-    let mut score: u32 = 0;
-
-    // Check prefix match (com.apple. is very common)
     let prefix_match_count = unknown_parts
         .iter()
         .zip(known_parts.iter())
         .take_while(|(a, b)| a == b)
         .count();
 
-    // Matching prefix is important - each matching segment adds 15 points
-    score += (prefix_match_count as u32) * 15;
-
     // If prefixes don't match at all, very unlikely to be related
     if prefix_match_count == 0 {
         return 0;
     }
 
-    // Extract the "key" part - the distinguishing segment(s) after common prefix
-    // For "com.apple.servicemanagement", the key is "servicemanagement"
-    // For "com.apple.wifi.managed", the keys are "wifi" and "managed"
-    let unknown_key_parts: Vec<&str> = unknown_parts
-        .iter()
-        .skip(prefix_match_count)
-        .copied()
-        .collect();
-    let known_key_parts: Vec<&str> = known_parts
-        .iter()
-        .skip(prefix_match_count)
-        .copied()
-        .collect();
+    let unknown_words = name_tokens(&unknown_parts[prefix_match_count..]);
+    let known_words = name_tokens(&known_parts[prefix_match_count..]);
 
-    if unknown_key_parts.is_empty() || known_key_parts.is_empty() {
+    if unknown_words.is_empty() || known_words.is_empty() {
         // One is a prefix of the other
-        return score + 10;
+        return (prefix_match_count as u32) * 15 + 10;
     }
 
-    // Compare key parts
-    let unknown_key = unknown_key_parts.join(".");
-    let known_key = known_key_parts.join(".");
-
-    // Exact key match after prefix
-    if unknown_key == known_key {
-        return 100;
+    // Weighted Dice coefficient: matched weight over the weight of both names.
+    let matched: f64 = unknown_words
+        .iter()
+        .map(|u| {
+            known_words
+                .iter()
+                .map(|k| token_similarity(u, k) * weight(k))
+                .fold(0.0, f64::max)
+        })
+        .sum();
+    let total: f64 = unknown_words
+        .iter()
+        .chain(&known_words)
+        .map(|w| weight(w))
+        .sum();
+    if total <= 0.0 {
+        return 0;
     }
 
-    // Check if one key contains the other (substring match)
-    if unknown_key.contains(&known_key) || known_key.contains(&unknown_key) {
-        score += 40;
-    }
-
-    // Check individual key segments for similarity
-    for unknown_seg in &unknown_key_parts {
-        for known_seg in &known_key_parts {
-            // Exact segment match
-            if unknown_seg == known_seg {
-                score += 25;
-                continue;
-            }
-
-            // One segment contains the other
-            if unknown_seg.contains(known_seg) || known_seg.contains(unknown_seg) {
-                score += 20;
-                continue;
-            }
-
-            // Small edit distance on segment (for typos like "Zservicemanagement" -> "servicemanagement")
-            let seg_distance = levenshtein_distance(unknown_seg, known_seg);
-            if seg_distance == 1 {
-                score += 35; // Very likely a typo
-            } else if seg_distance == 2 && unknown_seg.len() > 5 {
-                score += 20; // Possible typo for longer words
-            }
-        }
-    }
-
-    // Penalize length differences in key parts
-    let len_diff = unknown_key_parts.len().abs_diff(known_key_parts.len()) as u32;
-    if len_diff > 0 {
-        score = score.saturating_sub(len_diff * 10);
-    }
-
-    score.min(100)
+    ((200.0 * matched / total).round() as u32).min(100)
 }
 
 use contour_core::levenshtein_distance;
@@ -834,7 +858,7 @@ fn is_standard_payload_key(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     fn create_test_payload(
         payload_type: &str,
@@ -910,7 +934,7 @@ mod tests {
         // Same prefix, typo in key segment (single char insertion)
         let unknown = "com.apple.zservicemanagement";
         let unknown_parts: Vec<&str> = unknown.split('.').collect();
-        let score = reverse_dns_similarity(unknown, &unknown_parts, "com.apple.servicemanagement");
+        let score = reverse_dns_similarity(&unknown_parts, "com.apple.servicemanagement", &|_| 1.0);
         assert!(
             score > 50,
             "Single char typo should score > 50, got {}",
@@ -920,7 +944,7 @@ mod tests {
         // Same prefix, substring match
         let unknown2 = "com.apple.wifi";
         let unknown_parts2: Vec<&str> = unknown2.split('.').collect();
-        let score2 = reverse_dns_similarity(unknown2, &unknown_parts2, "com.apple.wifi.managed");
+        let score2 = reverse_dns_similarity(&unknown_parts2, "com.apple.wifi.managed", &|_| 1.0);
         assert!(
             score2 > 50,
             "Substring match should score > 50, got {}",
@@ -930,13 +954,13 @@ mod tests {
         // Different prefix - should score 0
         let unknown3 = "org.example.wifi";
         let unknown_parts3: Vec<&str> = unknown3.split('.').collect();
-        let score3 = reverse_dns_similarity(unknown3, &unknown_parts3, "com.apple.wifi.managed");
+        let score3 = reverse_dns_similarity(&unknown_parts3, "com.apple.wifi.managed", &|_| 1.0);
         assert_eq!(score3, 0, "Different prefix should score 0");
 
         // Same prefix, completely different key
         let unknown4 = "com.apple.bluetooth";
         let unknown_parts4: Vec<&str> = unknown4.split('.').collect();
-        let score4 = reverse_dns_similarity(unknown4, &unknown_parts4, "com.apple.wifi.managed");
+        let score4 = reverse_dns_similarity(&unknown_parts4, "com.apple.wifi.managed", &|_| 1.0);
         assert!(
             score4 < 50,
             "Different key should score < 50, got {}",
@@ -950,15 +974,58 @@ mod tests {
         let unknown = "singlecomponent";
         let unknown_parts: Vec<&str> = unknown.split('.').collect();
         assert_eq!(
-            reverse_dns_similarity(unknown, &unknown_parts, "com.apple.test"),
+            reverse_dns_similarity(&unknown_parts, "com.apple.test", &|_| 1.0),
             0
         );
 
         // One is prefix of other
         let unknown2 = "com.apple";
         let unknown_parts2: Vec<&str> = unknown2.split('.').collect();
-        let score = reverse_dns_similarity(unknown2, &unknown_parts2, "com.apple.wifi");
+        let score = reverse_dns_similarity(&unknown_parts2, "com.apple.wifi", &|_| 1.0);
         assert!(score > 0, "Prefix relationship should have some score");
+    }
+
+    /// The distinctive words decide the suggestion, not a `.managed` suffix
+    /// dozens of types share.
+    #[test]
+    fn a_misspelt_system_extension_type_suggests_system_extension_policy() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry");
+        let validator = SchemaValidator::new(&registry);
+        assert_eq!(
+            validator
+                .find_similar_payload_type("com.apple.system-extensions.managed")
+                .as_deref(),
+            Some("com.apple.system-extension-policy")
+        );
+    }
+
+    /// `security` names a whole family of types; `wifi` names one.
+    #[test]
+    fn a_misplaced_wifi_type_suggests_wifi_managed() {
+        let registry = SchemaRegistry::embedded().expect("embedded registry");
+        let validator = SchemaValidator::new(&registry);
+        assert_eq!(
+            validator
+                .find_similar_payload_type("com.apple.security.wifi")
+                .as_deref(),
+            Some("com.apple.wifi.managed")
+        );
+    }
+
+    /// The registry iterates in HashMap order, random per process and per
+    /// map. Fresh registries stand in for fresh runs.
+    #[test]
+    fn the_suggestion_is_the_same_on_every_lookup() {
+        let suggest = || {
+            let registry = SchemaRegistry::embedded().expect("embedded registry");
+            SchemaValidator::new(&registry)
+                .find_similar_payload_type("com.apple.system-extensions.managed")
+        };
+        let first = suggest();
+        assert!(first.is_some());
+        for _ in 0..5 {
+            assert_eq!(suggest(), first);
+        }
     }
 
     #[test]
@@ -1582,5 +1649,39 @@ mod tests {
         let content: BTreeMap<String, plist::Value> = BTreeMap::new();
         let result = walk_plist_path(&content, &["CustomRegex".to_string()]);
         assert!(result.is_none());
+    }
+
+    /// A payload with no schema passes unchecked. The result must say so:
+    /// `status` is `valid_unverified` and the type is listed, so a consumer
+    /// cannot read a pass that checked nothing as a pass.
+    #[test]
+    fn an_unknown_payload_type_is_reported_as_unverified() {
+        let registry = registry_from_manifest(test_manifest("com.apple.known", &["A"]));
+        let mut known = BTreeMap::new();
+        // test_manifest declares every field a String.
+        known.insert("A".to_string(), plist::Value::String("a".into()));
+        let profile = ConfigurationProfile {
+            payload_type: "Configuration".to_string(),
+            payload_version: 1,
+            payload_identifier: "test".to_string(),
+            payload_uuid: "TEST".to_string(),
+            payload_display_name: "Test".to_string(),
+            payload_content: vec![
+                create_test_payload("com.apple.known", known),
+                create_test_payload("com.example.nobody-has-a-schema", BTreeMap::new()),
+            ],
+            additional_fields: BTreeMap::new(),
+        };
+
+        let result = SchemaValidator::new(&registry).validate(&profile);
+        assert!(result.is_valid(), "{:?}", result.errors());
+        assert_eq!(result.status(), "valid_unverified");
+        assert_eq!(result.payloads_unknown, 1);
+        assert_eq!(result.unknown_types, vec!["com.example.nobody-has-a-schema"]);
+
+        // Strict mode turns the same situation into an error, and the status follows.
+        let strict = SchemaValidator::with_options(&registry, ValidationOptions::strict())
+            .validate(&profile);
+        assert_eq!(strict.status(), "invalid");
     }
 }

@@ -477,8 +477,10 @@ fn validate_single_file_detailed(
             let sr = validator.validate(&profile);
             Some(serde_json::json!({
                 "valid": sr.is_valid(),
+                "status": sr.status(),
                 "payloads_validated": sr.payloads_validated,
                 "payloads_unknown": sr.payloads_unknown,
+                "unvalidated_payload_types": sr.unknown_types,
                 "errors": sr.errors().iter().map(|i| serde_json::json!({
                     "payload_type": i.payload_type,
                     "payload_index": i.payload_index,
@@ -750,6 +752,7 @@ fn handle_validate_single(
                 false,
                 false,
                 &[],
+                strict,
                 output_mode,
             );
         }
@@ -893,8 +896,10 @@ fn handle_validate_single(
         if let Some(ref sr) = schema_result {
             json_result["schema_validation"] = serde_json::json!({
                 "valid": sr.is_valid(),
+                "status": sr.status(),
                 "payloads_validated": sr.payloads_validated,
                 "payloads_unknown": sr.payloads_unknown,
+                "unvalidated_payload_types": sr.unknown_types,
                 "errors": sr.errors().iter().map(|i| serde_json::json!({
                     "payload_type": i.payload_type,
                     "payload_index": i.payload_index,
@@ -952,6 +957,14 @@ fn handle_validate_single(
 
         if sr.is_valid() && sr.errors().is_empty() {
             println!("  {} All payloads conform to schema", "✓".green());
+        }
+        if !sr.unknown_types.is_empty() {
+            println!(
+                "  {} {} payload(s) NOT checked — no schema for: {}",
+                "!".yellow(),
+                sr.payloads_unknown,
+                sr.unknown_types.join(", ")
+            );
         }
 
         let errors = sr.errors();

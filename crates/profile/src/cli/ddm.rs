@@ -1321,11 +1321,21 @@ fn validate_single_ddm(
     path: &Path,
     registry: &SchemaRegistry,
     platforms: &[crate::schema::Platform],
+    strict: bool,
 ) -> Result<DdmValidationResult> {
     let decl = parse_declaration_file(path)?;
-    let (errors, mut warnings) = declaration_errors(&decl, registry);
+    let (mut errors, mut warnings) = declaration_errors(&decl, registry);
     for p in platforms {
         warnings.extend(platform_findings(&decl, registry, *p));
+    }
+    // The device ignores a key it does not know, so a declaration made of
+    // them does nothing. `--strict` says so with an error, as `validate` does.
+    if strict {
+        let (unknown, rest) = warnings
+            .into_iter()
+            .partition(|w: &String| w.starts_with("Unknown field"));
+        errors.extend(unknown);
+        warnings = rest;
     }
     Ok(DdmValidationResult {
         file: path.to_path_buf(),
@@ -1346,6 +1356,7 @@ pub fn handle_ddm_validate(
     parallel: bool,
     beta: bool,
     platforms: &[String],
+    strict: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
     let platforms = parse_platforms(platforms)?;
@@ -1363,16 +1374,22 @@ pub fn handle_ddm_validate(
     // Load schema registry once (beta seed schema when requested).
     let registry = load_registry_opts(schema_path, beta)?;
 
+    // A file that does not parse as a declaration is a failed result, not a
+    // missing one: dropping it printed `[]` with exit 0 for Apple's asset
+    // examples, which are payload fragments with no `Type`.
+    let one = |f: &PathBuf| {
+        validate_single_ddm(f, &registry, &platforms, strict).unwrap_or_else(|e| DdmValidationResult {
+            file: f.clone(),
+            declaration_type: String::new(),
+            valid: false,
+            errors: vec![format!("Not a DDM declaration: {e:#}")],
+            warnings: vec![],
+        })
+    };
     let results: Vec<DdmValidationResult> = if parallel && files.len() > 1 {
-        files
-            .par_iter()
-            .filter_map(|f| validate_single_ddm(f, &registry, &platforms).ok())
-            .collect()
+        files.par_iter().map(one).collect()
     } else {
-        files
-            .iter()
-            .filter_map(|f| validate_single_ddm(f, &registry, &platforms).ok())
-            .collect()
+        files.iter().map(one).collect()
     };
 
     let valid_count = results.iter().filter(|r| r.valid).count();
@@ -1393,6 +1410,10 @@ pub fn handle_ddm_validate(
             })
             .collect();
         println!("{}", serde_json::to_string_pretty(&json_results)?);
+        // Same verdict as the human path: `--json` exited 0 on invalid files.
+        if invalid_count > 0 {
+            anyhow::bail!("Validation failed for {invalid_count} file(s)");
+        }
         return Ok(());
     }
 
@@ -2555,7 +2576,7 @@ pub fn handle_ddm_generate(
     // validate` uses. The in-memory check above already ran the schema
     // rules; this guards the serialize/parse round-trip, so a file that
     // would fail `validate` is a hard error here rather than left on disk.
-    let result = validate_single_ddm(std::path::Path::new(&output_path), &registry, &[])?;
+    let result = validate_single_ddm(std::path::Path::new(&output_path), &registry, &[], false)?;
     if !result.valid {
         if output_mode == OutputMode::Human {
             eprintln!(
