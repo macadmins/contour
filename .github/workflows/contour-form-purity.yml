@@ -50,12 +50,14 @@ jobs:
           hits=$(grep -rnE 'std::(fs|process|env|net)|SystemTime|chrono::' crates/contour-form/src --include='*.rs' \
             | grep -vE '^\S+:\s*//' || true)
           if [ -n "$hits" ]; then
-            echo "$hits" | while IFS= read -r line; do
+            # Not `echo | while`: a piped loop runs in a subshell and loses fail.
+            while IFS= read -r line; do
               file=$(echo "$line" | cut -d: -f1); ln=$(echo "$line" | cut -d: -f2)
-              # Allowed if the enclosing region is native-gated or a test module.
-              if ! awk -v L="$ln" 'NR<=L && (/#\[cfg\(feature = "native"\)\]/ || /#\[cfg\(test\)\]/) {ok=1} END{exit !ok}' "$file"; then
+              # Allowed if the enclosing region is native-gated (an item's
+              # #[cfg] or a whole file's #![cfg]) or a test module.
+              if ! awk -v L="$ln" 'NR<=L && (/#!?\[cfg\(feature = "native"\)\]/ || /#\[cfg\(test\)\]/) {ok=1} END{exit !ok}' "$file"; then
                 echo "::error file=$file,line=$ln::forbidden in pure build: $line"; fail=1
               fi
-            done
+            done <<< "$hits"
           fi
           [ -z "${fail:-}" ]
