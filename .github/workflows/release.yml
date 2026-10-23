@@ -57,7 +57,7 @@ jobs:
       # Two products, as on macOS: contour-mcp is read-only and ships on
       # its own, so it gets its own archive rather than riding in contour's.
       - name: Build release binaries
-        run: cargo build --release --target ${{ matrix.target }} -p contour -p contour-mcp
+        run: cargo build --locked --release --target ${{ matrix.target }} -p contour -p contour-mcp
 
       - name: Strip binaries
         run: strip target/${{ matrix.target }}/release/contour target/${{ matrix.target }}/release/contour-mcp
