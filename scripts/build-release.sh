@@ -295,7 +295,7 @@ build_binary() {
 
     log_step "Building $BINARY for aarch64-apple-darwin"
     cd "$PROJECT_ROOT"
-    cargo build --release --target aarch64-apple-darwin -p "$BINARY"
+    cargo build --locked --release --target aarch64-apple-darwin -p "$BINARY"
     log_info "Build complete"
 }
 
