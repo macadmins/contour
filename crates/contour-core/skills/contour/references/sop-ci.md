@@ -76,8 +76,10 @@ IaC of choice, then never touch them.
 ```yaml
 - name: Install contour
   run: |
+    tag="$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/macadmins/contour/releases/latest)"
+    tag="${tag##*/}"
     curl -fsSL -o contour.pkg \
-      https://github.com/macadmins/contour/releases/latest/download/contour-*.pkg
+      "https://github.com/macadmins/contour/releases/download/${tag}/contour-${tag#v}.pkg"
     sudo installer -pkg contour.pkg -target /
     contour --version
 ```
@@ -85,10 +87,12 @@ IaC of choice, then never touch them.
 For pinned versions (recommended in production CI):
 
 ```yaml
-- name: Install contour 0.2.0
+- name: Install contour (pinned)
+  env:
+    CONTOUR_VERSION: 0.5.0-beta.2
   run: |
     curl -fsSL -o contour.pkg \
-      https://github.com/macadmins/contour/releases/download/v0.2.0/contour-0.2.0.pkg
+      "https://github.com/macadmins/contour/releases/download/v${CONTOUR_VERSION}/contour-${CONTOUR_VERSION}.pkg"
     sudo installer -pkg contour.pkg -target /
 ```
 
@@ -154,8 +158,10 @@ jobs:
 
       - name: Install contour
         run: |
+          tag="$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/macadmins/contour/releases/latest)"
+          tag="${tag##*/}"
           curl -fsSL -o contour.pkg \
-            https://github.com/macadmins/contour/releases/latest/download/contour-*.pkg
+            "https://github.com/macadmins/contour/releases/download/${tag}/contour-${tag#v}.pkg"
           sudo installer -pkg contour.pkg -target /
 
       - name: Validate every staged artifact

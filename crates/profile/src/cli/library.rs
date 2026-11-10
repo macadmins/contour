@@ -95,8 +95,11 @@ jobs:
       - name: Install contour
         run: |
           # Adjust to your preferred install path / version pin.
-          curl -fsSL https://github.com/declarative-io/contour/releases/latest/download/contour-x86_64-unknown-linux-gnu.tar.gz \
-            | tar xz -C /usr/local/bin
+          # Release assets carry the version, so resolve the latest tag first.
+          tag="$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/macadmins/contour/releases/latest)"
+          tag="${tag##*/}"
+          curl -fsSL "https://github.com/macadmins/contour/releases/download/${tag}/contour-${tag#v}-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar xz -C /usr/local/bin
 
       - name: List DDM presets (asserts every TOML parses)
         if: hashFiles('ddm/*.toml') != ''

@@ -165,17 +165,16 @@ new-crate.workspace = true
 
 ## Versioning
 
-All crates share one version (set in the workspace `[workspace.package]`).
-Current: **v0.2.0**. Release via `v*` tags:
+All crates share one version, set per crate in each `crates/*/Cargo.toml`
+(and in the path-dependency pins in the root `Cargo.toml`). Release via `v*` tags:
 
 ```bash
-# Bump in crates/contour/Cargo.toml (and any other crate that doesn't
-# inherit the workspace version yet) — verify with:
+# Bump every crates/*/Cargo.toml and the root path-dependency pins — verify with:
 grep -E "^version = " Cargo.toml crates/*/Cargo.toml | sort -u
 
 # Tag and push
-git tag v0.2.0
-git push origin v0.2.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 # GitHub Actions builds Linux + macOS artifacts
 ```
 

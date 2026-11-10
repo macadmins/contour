@@ -1476,7 +1476,7 @@ pub fn build_meaning_md(
     );
     let _ = writeln!(
         out,
-        "- ProfileCreator manifests: <https://github.com/ProfileCreator/ProfileManifests>"
+        "- ProfileCreator manifests: <https://github.com/ProfileManifests/ProfileManifests>"
     );
 
     out
