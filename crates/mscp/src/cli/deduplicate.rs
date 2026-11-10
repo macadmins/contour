@@ -225,7 +225,7 @@ pub fn deduplicate_profiles(
 }
 
 /// Parse platform string to Platform enum
-fn parse_platform(platform_str: &str) -> Result<Platform> {
+pub(crate) fn parse_platform(platform_str: &str) -> Result<Platform> {
     match platform_str.to_lowercase().as_str() {
         "macos" => Ok(Platform::MacOS),
         "ios" | "ipados" => Ok(Platform::Ios),

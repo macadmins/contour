@@ -140,7 +140,7 @@ impl RuleExtractor {
         // A tailored baseline's `Excluded` section is not membership: mSCP's
         // generators skip it, and so does this (see `BaselineSection`).
         let all_rules = self.extract_all_rules()?;
-        let filtered: Vec<MscpRule> = match self.baseline_rule_ids(baseline_name)? {
+        let mut filtered: Vec<MscpRule> = match self.baseline_rule_ids(baseline_name)? {
             BaselineMembership::Explicit(ids, _) => {
                 let id_set: std::collections::HashSet<&str> =
                     ids.iter().map(String::as_str).collect();
@@ -176,7 +176,35 @@ impl RuleExtractor {
             filtered.len(),
             baseline_name
         );
+        fill_in_odv(&mut filtered, baseline_name, &self.custom_odvs());
         Ok(filtered)
+    }
+
+    /// `odv.custom` from every rule under `custom/rules/` — where mSCP reads
+    /// operator overrides, and where `generate --odv` seeds them.
+    fn custom_odvs(&self) -> std::collections::HashMap<String, yaml_serde::Value> {
+        #[derive(serde::Deserialize)]
+        struct CustomRule {
+            id: Option<String>,
+            odv: Option<yaml_serde::Value>,
+        }
+        walkdir::WalkDir::new(self.mscp_repo_path.join("custom").join("rules"))
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|x| x == "yaml" || x == "yml")
+            })
+            .filter_map(|e| {
+                let rule: CustomRule =
+                    yaml_serde::from_str(&fs::read_to_string(e.path()).ok()?).ok()?;
+                let id = rule
+                    .id
+                    .or_else(|| Some(e.path().file_stem()?.to_str()?.to_owned()))?;
+                Some((id, rule.odv?.get("custom")?.clone()))
+            })
+            .collect()
     }
 
     /// The baseline file's member rules in the order the file lists them,
@@ -465,9 +493,108 @@ impl RuleStats {
     }
 }
 
+/// mSCP's `_fill_in_odv`: replace `$ODV` in title, discussion, check, fix and
+/// result with the rule's value — custom override, else the baseline's own,
+/// else `recommended`. Without it the scripts carry a literal `$ODV`, which
+/// bash expands to "" (`Defaults timestamp_timeout=` into sudoers).
+fn fill_in_odv(
+    rules: &mut [MscpRule],
+    baseline_name: &str,
+    customs: &std::collections::HashMap<String, yaml_serde::Value>,
+) {
+    use yaml_serde::Value;
+    fn text(v: &Value) -> String {
+        match v {
+            Value::String(s) => s.clone(),
+            other => yaml_serde::to_string(other)
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
+        }
+    }
+    fn walk(v: &mut Value, odv: &Value, odv_text: &str) {
+        match v {
+            Value::String(s) if s == "$ODV" => *v = odv.clone(),
+            Value::String(s) if s.contains("$ODV") => *s = s.replace("$ODV", odv_text),
+            Value::Sequence(items) => items.iter_mut().for_each(|i| walk(i, odv, odv_text)),
+            Value::Mapping(m) => m.values_mut().for_each(|i| walk(i, odv, odv_text)),
+            _ => {}
+        }
+    }
+    for rule in rules {
+        let from_rule = |k: &str| rule.odv.as_ref().and_then(|o| o.get(k)).cloned();
+        let Some(odv) = customs
+            .get(&rule.id)
+            .cloned()
+            .or_else(|| from_rule(baseline_name))
+            .or_else(|| from_rule("recommended"))
+        else {
+            continue;
+        };
+        let odv_text = text(&odv);
+        for s in [&mut rule.title, &mut rule.discussion]
+            .into_iter()
+            .chain([&mut rule.check, &mut rule.fix].into_iter().flatten())
+        {
+            *s = s.replace("$ODV", &odv_text);
+        }
+        if let Some(result) = rule.result.as_mut() {
+            walk(result, &odv, &odv_text);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// custom > baseline > recommended, as mSCP's `_fill_in_odv`.
+    #[test]
+    fn odv_fills_scripts_with_the_baselines_value() {
+        let rule = || MscpRule {
+            id: "pwpolicy_history_enforce".into(),
+            check: Some("awk '{ if ($1 >= $ODV ) print }'".into()),
+            fix: Some("echo \"Defaults timestamp_timeout=$ODV\"".into()),
+            result: Some(yaml_serde::from_str("integer: $ODV").unwrap()),
+            odv: Some(yaml_serde::from_str("recommended: 5\ncis_lvl1: 24").unwrap()),
+            ..Default::default()
+        };
+        let none = std::collections::HashMap::new();
+
+        let mut rules = vec![rule()];
+        fill_in_odv(&mut rules, "cis_lvl1", &none);
+        assert_eq!(
+            rules[0].check.as_deref(),
+            Some("awk '{ if ($1 >= 24 ) print }'")
+        );
+        assert_eq!(
+            rules[0].fix.as_deref(),
+            Some("echo \"Defaults timestamp_timeout=24\"")
+        );
+        assert_eq!(
+            rules[0].result,
+            Some(yaml_serde::from_str("integer: 24").unwrap())
+        );
+
+        let mut rules = vec![rule()];
+        fill_in_odv(&mut rules, "800-171", &none);
+        assert_eq!(
+            rules[0].check.as_deref(),
+            Some("awk '{ if ($1 >= 5 ) print }'")
+        );
+
+        let custom = [(
+            "pwpolicy_history_enforce".to_string(),
+            yaml_serde::Value::from(9),
+        )]
+        .into();
+        let mut rules = vec![rule()];
+        fill_in_odv(&mut rules, "cis_lvl1", &custom);
+        assert_eq!(
+            rules[0].check.as_deref(),
+            Some("awk '{ if ($1 >= 9 ) print }'")
+        );
+    }
 
     /// The checkout named by `CONTOUR_MSCP_REPO`, as the other mSCP tests
     /// find theirs. Panics when asked to run without one: an ignored test

@@ -193,12 +193,51 @@ pub fn rules_from_embedded(baseline: &str, platform: &str) -> Result<Vec<MscpRul
     // Sort by id for deterministic output.
     rules.sort_by(|a, b| a.id.cmp(&b.id));
 
+    // The dataset's scripts are rendered with each rule's `recommended` ODV;
+    // it carries no `$ODV` template to re-render. Say which rules that makes
+    // wrong for this baseline rather than emit them silently.
+    let off: Vec<&str> = rules
+        .iter()
+        .filter(|r| odv_differs_from_recommended(r, baseline))
+        .map(|r| r.id.as_str())
+        .collect();
+    if !off.is_empty() {
+        tracing::warn!(
+            "embedded rule data: {} rule(s) carry the `recommended` value where baseline \
+             '{baseline}' sets its own: {}. Pass --mscp-repo for this baseline's exact values.",
+            off.len(),
+            off.join(", ")
+        );
+    }
+
     Ok(rules)
+}
+
+/// Whether `baseline` sets an ODV for this rule that is not `recommended`.
+fn odv_differs_from_recommended(rule: &MscpRule, baseline: &str) -> bool {
+    let Some(odv) = rule.odv.as_ref() else {
+        return false;
+    };
+    odv.get(baseline)
+        .is_some_and(|own| odv.get("recommended") != Some(own))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a baseline value that differs from `recommended` is worth a warning.
+    #[test]
+    fn odv_warning_fires_only_when_the_baseline_differs() {
+        let mut rule = rules_from_embedded("cis_lvl1", "macOS").unwrap().remove(0);
+        rule.odv = Some(yaml_serde::from_str("{recommended: 15, cis_lvl1: 15, stig: 3}").unwrap());
+        assert!(!odv_differs_from_recommended(&rule, "cis_lvl1"));
+        assert!(odv_differs_from_recommended(&rule, "stig"));
+        // A baseline with no value of its own falls back to `recommended`.
+        assert!(!odv_differs_from_recommended(&rule, "cisv8"));
+        rule.odv = None;
+        assert!(!odv_differs_from_recommended(&rule, "stig"));
+    }
 
     #[test]
     fn test_rules_from_embedded_cis_lvl1() {

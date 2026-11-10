@@ -78,7 +78,16 @@ impl MscpOutputExtractor {
                         Platform::MacOS
                     }
                 }
-            } else if let Some(p) = platform_from_baselines_dir(repo_path, &self.baseline_name) {
+            } else if let Some(p) = self
+                .build_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                // The build dir (`<name>_<os>_<version>`) names the platform;
+                // a bare name shared across OSes (`800-53r5_low`) resolves to
+                // whichever baselines/<os>/ is checked first, i.e. macOS.
+                .and_then(|n| platform_from_baselines_dir(repo_path, n))
+                .or_else(|| platform_from_baselines_dir(repo_path, &self.baseline_name))
+            {
                 tracing::info!("Detected platform: {} from baselines/ (mSCP 2.0)", p);
                 p
             } else {
