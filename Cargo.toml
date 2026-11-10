@@ -8,7 +8,7 @@ default-members = ["crates/contour"]
 authors = ["Mac Admins Open Source"]
 license = "Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 repository = "https://github.com/macadmins/contour"
 readme = "README.md"
 keywords = ["macos", "mdm", "mobileconfig", "configuration"]
@@ -75,8 +75,8 @@ csv = "1.4"
 cel-interpreter = "0.10"
 
 # Arrow/Parquet (for mdm-schema)
-arrow = "58"
-parquet = { version = "58", features = ["arrow"] }
+arrow = "60"
+parquet = { version = "60", features = ["arrow"] }
 bytes = "1"
 indexmap = { version = "2", features = ["serde"] }
 
