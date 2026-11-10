@@ -523,7 +523,7 @@ fn write_agent_md(root: &Path) -> Result<bool> {
     let content = "\
 # Contour CLI — Agent Reference
 
-This project uses [Contour](https://github.com/talkingtoaj/contour) for macOS MDM configuration management.
+This project uses [Contour](https://github.com/macadmins/contour) for macOS MDM configuration management.
 
 ## CLI Discovery
 
