@@ -246,9 +246,9 @@ pub fn generate_from_config(config: Config) -> Result<()> {
             false, // fragment - not supported in config-based generation
             opts.structure,
             Some(baseline_config.gitops_glob.clone()),
-            "macos".to_string(), // os
-            None,                // os_version
-            None,                // odv_path — auto-detects odv_<baseline>.yaml per baseline
+            baseline_config.os.clone(),
+            baseline_config.os_version.clone(),
+            None, // odv_path — auto-detects odv_<baseline>.yaml per baseline
             opts.osquery_options,
         )?;
     }
@@ -288,6 +288,8 @@ mod tests {
             name: "cis_lvl1".to_string(),
             enabled: true,
             branch: None,
+            os: "macos".to_string(),
+            os_version: None,
             fleet: fleet.map(str::to_string),
             labels: LabelConfig::default(),
             excluded_rules: vec![],

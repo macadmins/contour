@@ -1656,6 +1656,8 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             config: config_path,
             mscp_repo,
             keywords,
+            os,
+            os_version,
             output,
             use_uv,
             use_python3,
@@ -1766,6 +1768,8 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                     script_mode.into(),
                     fragment,
                     mscp::config::OutputStructure::default(),
+                    os.as_str(),
+                    os_version,
                 )?;
             }
         }
@@ -1851,14 +1855,19 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             } => {
                 mscp::cli::handle_schema_search(&query, platform.as_deref(), beta, output_mode)?;
             }
-            mscp::cli::SchemaAction::Rule { rule_id, beta } => {
-                mscp::cli::handle_schema_rule(&rule_id, beta, output_mode)?;
+            mscp::cli::SchemaAction::Rule {
+                rule_id,
+                platform,
+                beta,
+            } => {
+                mscp::cli::handle_schema_rule(&rule_id, platform.as_deref(), beta, output_mode)?;
             }
         },
 
         Commands::ExtractScripts {
             mscp_repo,
             keyword,
+            os,
             output,
             flat,
             dry_run,
@@ -1868,6 +1877,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             mscp::cli::extract_scripts(
                 mscp_repo,
                 keyword,
+                os.into(),
                 output,
                 flat,
                 dry_run,
@@ -1929,12 +1939,14 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 constraints,
                 mscp_repo,
                 keyword,
+                os,
             } => {
                 mscp::cli::constraints_add_script(
                     r#type,
                     constraints,
                     mscp_repo,
                     keyword,
+                    os.into(),
                     output_mode,
                 )?;
             }
@@ -1957,6 +1969,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                 constraints,
                 mscp_repo,
                 keyword,
+                os,
                 exclude,
             } => {
                 mscp::cli::constraints_add_categories(
@@ -1964,6 +1977,7 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
                     constraints,
                     mscp_repo,
                     keyword,
+                    os.into(),
                     exclude,
                     output_mode,
                 )?;
@@ -1974,16 +1988,18 @@ fn dispatch_mscp(action: mscp::cli::Commands, _verbose: bool, json: bool) -> Res
             OdvAction::Init {
                 mscp_repo,
                 keyword,
+                os,
                 output,
             } => {
-                mscp::cli::odv_init(mscp_repo, keyword, output, output_mode)?;
+                mscp::cli::odv_init(mscp_repo, keyword, os.into(), output, output_mode)?;
             }
             OdvAction::List {
                 mscp_repo,
                 keyword,
+                os,
                 overrides,
             } => {
-                mscp::cli::odv_list(mscp_repo, keyword, overrides, output_mode)?;
+                mscp::cli::odv_list(mscp_repo, keyword, os.into(), overrides, output_mode)?;
             }
             OdvAction::Edit { overrides } => {
                 mscp::cli::odv_edit(overrides, output_mode)?;

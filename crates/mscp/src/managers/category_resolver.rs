@@ -71,7 +71,11 @@ pub struct CategoryExclusionPlan {
 
 /// Discover available categories by scanning rule directories and extracting
 /// sub-category keywords from rule IDs in the baseline.
-pub fn discover_categories(mscp_repo: &Path, baseline: Option<&str>) -> Result<Vec<CategoryInfo>> {
+pub fn discover_categories(
+    mscp_repo: &Path,
+    extractor: &RuleExtractor,
+    baseline: Option<&str>,
+) -> Result<Vec<CategoryInfo>> {
     let rules_dir = mscp_repo.join("rules");
     if !rules_dir.exists() {
         anyhow::bail!(
@@ -80,7 +84,6 @@ pub fn discover_categories(mscp_repo: &Path, baseline: Option<&str>) -> Result<V
         );
     }
 
-    let extractor = RuleExtractor::new(mscp_repo);
     let rules = if let Some(b) = baseline {
         extractor.extract_rules_for_baseline(b)?
     } else {
@@ -130,9 +133,11 @@ pub fn discover_categories(mscp_repo: &Path, baseline: Option<&str>) -> Result<V
 pub fn build_exclusion_plan(
     categories: &[String],
     mscp_repo: &Path,
+    // Built by the caller for the baseline's own platform and version: an
+    // extractor made here would read baselines/macos/ for every OS.
+    extractor: &RuleExtractor,
     baseline: &str,
 ) -> Result<CategoryExclusionPlan> {
-    let extractor = RuleExtractor::new(mscp_repo);
     let all_baseline_rules = extractor
         .extract_rules_for_baseline(baseline)
         .with_context(|| format!("Failed to extract rules for baseline '{baseline}'"))?;
@@ -317,10 +322,11 @@ fn finalize_exclusion_plan(
 /// whole life.
 pub fn build_rule_exclusion_plan(
     rule_ids: &[String],
-    mscp_repo: &Path,
+    // Built by the caller for the baseline's own platform and version: an
+    // extractor made here would read baselines/macos/ for every OS.
+    extractor: &RuleExtractor,
     baseline: &str,
 ) -> Result<CategoryExclusionPlan> {
-    let extractor = RuleExtractor::new(mscp_repo);
     let all_baseline_rules = extractor
         .extract_rules_for_baseline(baseline)
         .with_context(|| format!("Failed to extract rules for baseline '{baseline}'"))?;

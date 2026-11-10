@@ -293,6 +293,15 @@ pub struct BaselineConfig {
     /// If not specified, uses the checkout's current branch.
     pub branch: Option<String>,
 
+    /// Target OS: `macos` (the default), `ios` or `visionos` — which
+    /// `baselines/<os>/` file mSCP builds. One name may be listed once per
+    /// OS; the output is named `<name>_<os>`, so they do not collide.
+    #[serde(default = "default_os")]
+    pub os: String,
+
+    /// OS version (e.g. "27.0"). Defaults to the highest version available.
+    pub os_version: Option<String>,
+
     /// Optional fleet name override
     pub fleet: Option<String>,
 
@@ -322,6 +331,10 @@ pub struct BaselineConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_os() -> String {
+    "macos".to_string()
 }
 
 /// Label configuration for targeting

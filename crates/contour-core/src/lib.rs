@@ -37,7 +37,7 @@ pub use codesign::{
 pub use completions::generate_completions;
 pub use config::{ConfigSettings, ContourConfig, resolve_name, resolve_org};
 pub use errors::{ContourError, ContourResult};
-pub use fleet_layout::{FleetLayout, FleetLayoutVersion};
+pub use fleet_layout::FleetLayout;
 pub use logging::init_logging;
 pub use output::{
     CommandResult, OutputMode, classify_error, format_elapsed, print_error, print_error_json,

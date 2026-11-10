@@ -5,8 +5,15 @@ use std::path::PathBuf;
 /// Represents the output structure from mSCP baseline generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MscpBaseline {
-    /// Baseline name (e.g., "`cis_lvl1`", "800-53r5_high")
+    /// Output name: the mSCP name plus the platform (`cis_lvl1_macos`,
+    /// `800-53r5_low_ios`). Every generated path, fleet and label is named
+    /// from this, because mSCP 2.0 reuses one baseline name across macOS, iOS
+    /// and visionOS and the bare name would collide in one output.
     pub name: String,
+
+    /// The baseline's name in mSCP (`cis_lvl1`, `800-53r5_low`): the key for
+    /// anything read from the mSCP tree — rules, baseline file, ODV values.
+    pub mscp_name: String,
 
     /// Path to the mSCP build directory (e.g., ./`macos_security/build/cis_lvl1`)
     pub build_path: PathBuf,
@@ -42,6 +49,21 @@ pub enum Platform {
 }
 
 impl Platform {
+    /// The output name for an mSCP baseline on this platform — see
+    /// [`MscpBaseline::name`].
+    pub fn output_name(self, mscp_name: &str) -> String {
+        format!("{mscp_name}_{}", self.mscp_dir_name())
+    }
+
+    /// The platform as the embedded mSCP dataset spells it.
+    pub fn schema_name(self) -> &'static str {
+        match self {
+            Platform::MacOS => "macOS",
+            Platform::Ios => "iOS",
+            Platform::VisionOS => "visionOS",
+        }
+    }
+
     /// The `baselines/<os>/` directory name mSCP 2.0 uses for this platform,
     /// and the `_<os>_` token inside its baseline file names
     /// (`cis_lvl1_macos_27.0.yaml`).

@@ -34,11 +34,17 @@ pub fn deduplicate_profiles(
     // Parse platform
     let platform = parse_platform(&platform_str)?;
 
-    // Auto-detect baselines if not specified
+    // One platform per run: its profiles folder is the one scanned.
+    let os = platform.mscp_dir_name();
+    let deduplicator = ProfileDeduplicator::new(&output_path).for_os(os);
+
+    // Auto-detect baselines if not specified — those of this platform only.
     let baselines = if let Some(names) = baseline_names {
         names
     } else {
-        auto_detect_baselines(&output_path)?
+        let mut found = auto_detect_baselines(&output_path)?;
+        found.retain(|b| deduplicator.profiles_dir(b).exists());
+        found
     };
 
     if baselines.is_empty() {
@@ -53,7 +59,6 @@ pub fn deduplicate_profiles(
     }
 
     // Scan for duplicates
-    let deduplicator = ProfileDeduplicator::new(&output_path);
     let report = deduplicator.scan_baselines(&baselines)?;
 
     // Collect statistics
@@ -193,7 +198,7 @@ pub fn deduplicate_profiles(
     if output_mode == OutputMode::Human {
         println!("{}", "Cleaning up duplicate profiles...".cyan());
     }
-    library.cleanup_baseline_profiles(&mapping)?;
+    library.cleanup_baseline_profiles(&mapping, os)?;
 
     // Update final statistics
     result.profiles_deduplicated = mapping.shared_profiles.len();

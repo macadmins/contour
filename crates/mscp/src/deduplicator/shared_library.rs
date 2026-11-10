@@ -116,19 +116,25 @@ impl SharedProfileLibrary {
     }
 
     /// Remove baseline-specific profiles that have been moved to shared library
-    pub fn cleanup_baseline_profiles(&self, mapping: &DeduplicationMapping) -> Result<()> {
+    ///
+    /// `os` is the platform that was scanned (`macos`, `ios`).
+    pub fn cleanup_baseline_profiles(
+        &self,
+        mapping: &DeduplicationMapping,
+        os: &str,
+    ) -> Result<()> {
         tracing::info!("Cleaning up baseline-specific duplicate profiles");
 
         let mut removed_count = 0;
 
-        // Fleet v4.83+: per-baseline profiles live at
-        // platforms/macos/configuration-profiles/{baseline}/, NOT in mscp/{baseline}/profiles/.
-        let layout = FleetLayout::default();
+        // Per-baseline profiles live at
+        // platforms/<os>/configuration-profiles/{baseline}/, NOT in mscp/{baseline}/profiles/.
+        let profiles_subdir = FleetLayout::default().apple_profiles_subdir(os);
         for (baseline, profiles) in &mapping.baseline_mappings {
             for original_filename in profiles.keys() {
                 let baseline_profile = self
                     .output_base
-                    .join(layout.macos_profiles_subdir)
+                    .join(profiles_subdir)
                     .join(baseline)
                     .join(original_filename);
 

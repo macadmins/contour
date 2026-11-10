@@ -69,33 +69,35 @@ fn prompt_bool(message: &str, default: bool) -> Result<bool> {
 
 /// Discover available baselines from an mSCP repository.
 ///
-/// Reads `{mscp_path}/baselines/macos/*.yaml`, filters out template/example files,
-/// and returns `(name, description)` pairs sorted alphabetically.
-pub fn discover_baselines(mscp_path: &Path) -> Result<Vec<(String, String)>> {
+/// Reads `{mscp_path}/baselines/<os>/*.yaml` for every platform, filters out
+/// template/example files, and returns `(name, os, description)` sorted by
+/// platform (macOS first) then name.
+pub fn discover_baselines(mscp_path: &Path) -> Result<Vec<(String, &'static str, String)>> {
     // Layout-aware: on a 2.0 tree `baselines/` holds only `ios/ macos/ visionos/`
     // and listing it directly found no YAML at all — an empty answer that
     // read as "no baselines". The layout owns the file grammar.
     let layout = crate::layout::MscpLayout::detect(mscp_path)
         .with_context(|| format!("detecting mSCP layout in {}", mscp_path.display()))?;
-    // init is a macOS-first flow; on 2.0 the same name recurs per OS, so one
-    // OS is enough to enumerate names without duplicates.
-    let entries = layout.list_baselines(mscp_path, "macos")?;
-
-    let mut seen = std::collections::HashSet::new();
     let mut baselines = Vec::new();
-    for (name, _version, path) in entries {
-        // Skip template/example files
-        if name.contains("template") || name.contains("example") {
+    for os in ["macos", "ios", "visionos"] {
+        // A checkout need not carry every platform directory.
+        let Ok(entries) = layout.list_baselines(mscp_path, os) else {
             continue;
+        };
+        // One entry per name: the same baseline recurs per OS version.
+        let mut seen = std::collections::HashSet::new();
+        for (name, _version, path) in entries {
+            // Skip template/example files
+            if name.contains("template") || name.contains("example") {
+                continue;
+            }
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let description = read_baseline_description(&path).unwrap_or_default();
+            baselines.push((name, os, description));
         }
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        let description = read_baseline_description(&path).unwrap_or_default();
-        baselines.push((name, description));
     }
-
-    baselines.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(baselines)
 }
 
@@ -450,11 +452,11 @@ pub fn init_project<P: AsRef<Path>>(
         println!();
         println!("{}:", "Next steps".cyan());
         if sync {
+            // `name:os` → `name --os os`, the spelling `generate` takes.
             let example_baseline = selected_baselines
                 .as_ref()
                 .and_then(|b| b.first())
-                .map(|s| s.as_str())
-                .unwrap_or("cis_lvl1");
+                .map_or("cis_lvl1".to_string(), |s| s.replacen(':', " --os ", 1));
             println!("  1. Review and edit mscp.toml");
             println!(
                 "  2. Run: {} generate --config ./mscp.toml --mscp-repo ./macos_security --keyword {} --output ./output",
@@ -489,14 +491,15 @@ fn pick_baselines(mscp_path: &Path, branch: &str) -> Result<Vec<String>> {
         anyhow::bail!("No baselines found in {}", mscp_path.display());
     }
 
-    // Build display strings: "name — description"
+    // Build display strings: "name:os — description". `name:os` is also what
+    // `--keywords` takes and what the template splits back apart.
     let options: Vec<String> = available
         .iter()
-        .map(|(name, desc)| {
+        .map(|(name, os, desc)| {
             if desc.is_empty() {
-                name.clone()
+                format!("{name}:{os}")
             } else {
-                format!("{name} — {desc}")
+                format!("{name}:{os} — {desc}")
             }
         })
         .collect();
@@ -505,11 +508,13 @@ fn pick_baselines(mscp_path: &Path, branch: &str) -> Result<Vec<String>> {
     let defaults: Vec<usize> = available
         .iter()
         .enumerate()
-        .filter_map(
-            |(i, (name, _))| {
-                if name == "cis_lvl1" { Some(i) } else { None }
-            },
-        )
+        .filter_map(|(i, (name, os, _))| {
+            if name == "cis_lvl1" && *os == "macos" {
+                Some(i)
+            } else {
+                None
+            }
+        })
         .collect();
 
     let (platform, version) = super::generate::parse_branch_info(branch);
@@ -705,5 +710,125 @@ mod tests {
         assert!(created.is_empty());
         // The fleets dir is also not created when there's nothing to write.
         assert!(!tmp.path().join("output").join("fleets").exists());
+    }
+
+    /// Run `init` non-interactively and load the `mscp.toml` it wrote back
+    /// through the same loader `generate` uses.
+    fn init_and_load(baselines: &[&str]) -> Result<crate::config::Config> {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(
+            tmp.path(),
+            Some("com.acme".into()),
+            Some("Acme".into()),
+            true,
+            true,
+            false,
+            false,
+            false,
+            "main",
+            Some(baselines.iter().map(ToString::to_string).collect()),
+            true,
+        )?;
+        crate::config::load_config(tmp.path().join("mscp.toml"))
+    }
+
+    /// `name` is macOS, `name:os` is that platform, and a name shared across
+    /// platforms can be listed once per platform.
+    #[test]
+    fn init_writes_each_baselines_os_into_mscp_toml() {
+        let config = init_and_load(&[
+            "cis_lvl1",
+            "800-53r5_low",
+            "800-53r5_low:ios",
+            "cis_lvl1_byod:ios",
+            "cisv8:visionos",
+        ])
+        .unwrap();
+        let got: Vec<(&str, &str)> = config
+            .baselines
+            .iter()
+            .map(|b| (b.name.as_str(), b.os.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("cis_lvl1", "macos"),
+                ("800-53r5_low", "macos"),
+                ("800-53r5_low", "ios"),
+                ("cis_lvl1_byod", "ios"),
+                ("cisv8", "visionos"),
+            ]
+        );
+        assert!(config.baselines.iter().all(|b| b.enabled));
+        assert!(config.settings.fleet.enabled);
+        assert_eq!(config.settings.organization.domain, "com.acme");
+    }
+
+    /// The default template (no baselines chosen) must load too.
+    #[test]
+    fn init_without_baselines_writes_a_config_that_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_project(
+            tmp.path(),
+            Some("com.acme".into()),
+            Some("Acme".into()),
+            true,
+            false,
+            false,
+            false,
+            false,
+            "main",
+            None,
+            true,
+        )
+        .unwrap();
+        let config = crate::config::load_config(tmp.path().join("mscp.toml")).unwrap();
+        assert!(config.baselines.iter().all(|b| b.os == "macos"));
+    }
+
+    /// init refuses what `generate` would refuse, before writing the file.
+    #[test]
+    fn init_refuses_an_unknown_os_and_a_repeated_baseline() {
+        let err = init_and_load(&["cis_lvl1:tvos"]).unwrap_err().to_string();
+        assert!(err.contains("tvos"), "{err}");
+        let err = init_and_load(&["cis_lvl1", "cis_lvl1:macos"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("listed twice"), "{err}");
+    }
+
+    /// The picker offers every platform's baselines, one entry per name, and
+    /// skips the example/template files.
+    #[test]
+    fn discover_baselines_lists_every_platform() {
+        let tmp = tempfile::tempdir().unwrap();
+        let write = |rel: &str, body: &str| {
+            let p = tmp.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        };
+        write("rules/os/os_x.yaml", "id: os_x\nplatforms: {}\n");
+        write(
+            "baselines/macos/cis_lvl1_macos_26.0.yaml",
+            "title: CIS 26\n",
+        );
+        write(
+            "baselines/macos/cis_lvl1_macos_27.0.yaml",
+            "title: CIS 27\n",
+        );
+        write("baselines/macos/example_macos_27.0.yaml", "title: x\n");
+        write("baselines/ios/cis_lvl1_byod_ios_27.0.yaml", "title: BYOD\n");
+        write("baselines/visionos/cisv8_visionos_27.0.yaml", "title: v8\n");
+
+        let got = discover_baselines(tmp.path()).unwrap();
+        let pairs: Vec<(&str, &str)> = got.iter().map(|(n, os, _)| (n.as_str(), *os)).collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("cis_lvl1", "macos"),
+                ("cis_lvl1_byod", "ios"),
+                ("cisv8", "visionos"),
+            ]
+        );
     }
 }

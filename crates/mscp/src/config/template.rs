@@ -38,6 +38,9 @@ pub fn generate_template_with_options<P: AsRef<Path>>(
     let output_path = output_path.as_ref();
 
     let template = create_template_config(options);
+    // Never write a config that `load_config` would refuse (unknown `os`,
+    // the same baseline twice).
+    super::parser::validate_config(&template)?;
     let toml_str = toml::to_string_pretty(&template)?;
 
     // Add comments to make it more user-friendly
@@ -85,10 +88,14 @@ fn create_template_config(options: &InitOptions) -> Config {
     let baselines = if let Some(ref selected) = options.baselines {
         selected
             .iter()
-            .map(|baseline_name| BaselineConfig {
-                name: baseline_name.clone(),
+            // `name` or `name:os`; a bare name is macOS.
+            .map(|entry| entry.split_once(':').unwrap_or((entry, "macos")))
+            .map(|(name, os)| BaselineConfig {
+                name: name.to_string(),
                 enabled: true,
                 branch: None,
+                os: os.to_string(),
+                os_version: None,
                 fleet: None,
                 labels: LabelConfig {
                     // Empty, deliberately. contour creates `mscp-<baseline>` and
@@ -112,6 +119,8 @@ fn create_template_config(options: &InitOptions) -> Config {
                 name: "cis_lvl1".to_string(),
                 enabled: true,
                 branch: None,
+                os: "macos".to_string(),
+                os_version: None,
                 // Default: no Fleet aggregation. Set to a fleet name (e.g.
                 // "workstations") to have `mscp generate` append this
                 // baseline's profiles + scripts to `fleets/<name>.yml`.
@@ -135,6 +144,8 @@ fn create_template_config(options: &InitOptions) -> Config {
                 name: "800-53r5_moderate".to_string(),
                 enabled: false,
                 branch: None,
+                os: "macos".to_string(),
+                os_version: None,
                 fleet: None,
                 labels: LabelConfig {
                     include_all: vec![],

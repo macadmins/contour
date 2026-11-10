@@ -158,13 +158,11 @@ pub fn process_baseline(
     // says nothing; contour keeps the same value and says so.
     if let Some(ref repo_path) = mscp_repo_path {
         let extractor = rule_extractor_for(&baseline, repo_path);
-        let rules = extractor.extract_rules_for_baseline(&baseline.name)?;
-        let order = extractor.baseline_rule_order(&baseline.name)?;
-        let conflicts =
-            crate::baseline_to_recipe::find_conflicts(&baseline.name, &rules, &order)?;
+        let rules = extractor.extract_rules_for_baseline(&baseline.mscp_name)?;
+        let order = extractor.baseline_rule_order(&baseline.mscp_name)?;
+        let conflicts = crate::baseline_to_recipe::find_conflicts(&baseline.name, &rules, &order)?;
         if !conflicts.is_empty() {
-            let mut report =
-                crate::baseline_to_recipe::conflict_report(&baseline.name, &conflicts);
+            let mut report = crate::baseline_to_recipe::conflict_report(&baseline.name, &conflicts);
             let excluded = excluded_rules.as_deref().unwrap_or_default();
             for c in &conflicts {
                 for rule in [&c.previous_rule, &c.winning_rule] {
@@ -219,14 +217,15 @@ pub fn process_baseline(
                  in place while nothing applies it is how it spent its first life."
             );
         };
-        let plan = build_rule_exclusion_plan(rules, repo_path, &baseline.name)?;
+        let extractor = rule_extractor_for(&baseline, repo_path);
+        let plan = build_rule_exclusion_plan(rules, &extractor, &baseline.mscp_name)?;
 
         // An ID that matches nothing is a typo, and excluding nothing is
         // indistinguishable from excluding correctly unless it is said.
         if !plan.unresolved.is_empty() {
             let mut near: Vec<String> = Vec::new();
-            if let Ok(all) =
-                rule_extractor_for(&baseline, repo_path).extract_rules_for_baseline(&baseline.name)
+            if let Ok(all) = rule_extractor_for(&baseline, repo_path)
+                .extract_rules_for_baseline(&baseline.mscp_name)
             {
                 for missing in &plan.unresolved {
                     let needle = missing.to_lowercase();
@@ -321,11 +320,20 @@ pub fn process_baseline(
         if let Some(ref repo_path) = mscp_repo_path {
             tracing::info!("Resolving category exclusions...");
 
-            let plan = build_exclusion_plan(categories, repo_path, &baseline.name)?;
+            let plan = build_exclusion_plan(
+                categories,
+                repo_path,
+                &rule_extractor_for(&baseline, repo_path),
+                &baseline.mscp_name,
+            )?;
 
             // Report unresolved categories
             if !plan.unresolved.is_empty() {
-                let available = discover_categories(repo_path, Some(&baseline.name))?;
+                let available = discover_categories(
+                    repo_path,
+                    &rule_extractor_for(&baseline, repo_path),
+                    Some(&baseline.mscp_name),
+                )?;
                 let available_names: Vec<String> =
                     available.iter().map(|c| c.name.clone()).collect();
                 anyhow::bail!(
@@ -492,6 +500,17 @@ pub fn process_baseline(
     );
     let is_fleet_output = effective_structure == OutputStructure::Pluggable;
 
+    // Fleet manages macOS, iOS and iPadOS, not visionOS: `fleetctl new` has no
+    // platforms/visionos/, and a label with `platform: visionos` matches no
+    // host. Writing the profiles under macOS would deploy them to Macs.
+    if is_fleet_output && baseline.platform == Platform::VisionOS {
+        anyhow::bail!(
+            "'{}' targets visionOS, which Fleet does not manage. Build it with \
+             --jamf or a flat/nested output structure, or leave it out of the Fleet config.",
+            baseline.mscp_name
+        );
+    }
+
     tracing::info!("Output structure: {}", effective_structure);
 
     // Transform profiles
@@ -612,10 +631,14 @@ pub fn process_baseline(
 
         // Extract rules from mSCP repository or embedded data
         let mut rules = if let Some(ref repo_path) = mscp_repo_path {
-            rule_extractor_for(&baseline, repo_path).extract_rules_for_baseline(&baseline.name)?
+            rule_extractor_for(&baseline, repo_path)
+                .extract_rules_for_baseline(&baseline.mscp_name)?
         } else {
             tracing::info!("No mSCP repo path — using embedded rule data");
-            crate::extractors::rules_from_embedded(&baseline.name, "macOS")?
+            crate::extractors::rules_from_embedded(
+                &baseline.mscp_name,
+                baseline.platform.schema_name(),
+            )?
         };
 
         // Rules excluded by `excluded_rules` or `--exclude` ship no script.
@@ -681,7 +704,7 @@ pub fn process_baseline(
     }
 
     // Transform DDM artifacts
-    let _ddm_mappings = if baseline.ddm_artifacts.is_empty() {
+    let ddm_mappings = if baseline.ddm_artifacts.is_empty() {
         Vec::new()
     } else {
         tracing::info!("Transforming DDM artifacts...");
@@ -735,14 +758,21 @@ pub fn process_baseline(
     // Categorized per-rule scripts (granular/bundled mode) — platform-agnostic, works for
     // both Fleet and Jamf. Emits self-contained bash scripts grouped by rule category
     // (audit/os/system_settings).
-    let should_generate_individual_scripts = script_mode != ScriptMode::Combined;
+    // macOS only: iOS and visionOS rules carry no shell check or fix, and the
+    // step would leave an empty platforms/macos/scripts/<baseline>/ behind.
+    let should_generate_individual_scripts =
+        script_mode != ScriptMode::Combined && baseline.platform == Platform::MacOS;
 
     if should_generate_individual_scripts {
         let mut rules = if let Some(ref repo_path) = mscp_repo_path {
-            rule_extractor_for(&baseline, repo_path).extract_rules_for_baseline(&baseline.name)?
+            rule_extractor_for(&baseline, repo_path)
+                .extract_rules_for_baseline(&baseline.mscp_name)?
         } else {
             tracing::info!("No mSCP repo path — using embedded rule data for scripts");
-            crate::extractors::rules_from_embedded(&baseline.name, "macOS")?
+            crate::extractors::rules_from_embedded(
+                &baseline.mscp_name,
+                baseline.platform.schema_name(),
+            )?
         };
         rules.retain(|r| !suppressed_scripts.contains(&r.id));
 
@@ -801,17 +831,21 @@ pub fn process_baseline(
     let mut policy_path: Option<PathBuf> = None;
     if is_fleet_output && !is_jamf_mode && !dry_run && baseline.platform == Platform::MacOS {
         let rules = if let Some(ref repo_path) = mscp_repo_path {
-            rule_extractor_for(&baseline, repo_path).extract_rules_for_baseline(&baseline.name)?
+            rule_extractor_for(&baseline, repo_path)
+                .extract_rules_for_baseline(&baseline.mscp_name)?
         } else {
             tracing::info!("No mSCP repo path — using embedded rule data for policies");
-            crate::extractors::rules_from_embedded(&baseline.name, "macOS")?
+            crate::extractors::rules_from_embedded(
+                &baseline.mscp_name,
+                baseline.platform.schema_name(),
+            )?
         };
         let rules: Vec<_> = rules
             .into_iter()
             .filter(|r| !excluded_rule_ids.contains(&r.id))
             .collect();
 
-        let policy_generator = FleetPolicyGenerator::new(&baseline.name);
+        let policy_generator = FleetPolicyGenerator::new(&baseline.mscp_name);
         // Fleet v4.83+ GitOps: platforms/macos/policies/{baseline}/
         let layout = contour_core::fleet_layout::FleetLayout::default();
         let policies_dir = output_path
@@ -868,9 +902,12 @@ pub fn process_baseline(
             OsqueryPlan::Build => {
                 let rules = if let Some(ref repo_path) = mscp_repo_path {
                     rule_extractor_for(&baseline, repo_path)
-                        .extract_rules_for_baseline(&baseline.name)?
+                        .extract_rules_for_baseline(&baseline.mscp_name)?
                 } else {
-                    crate::extractors::rules_from_embedded(&baseline.name, "macOS")?
+                    crate::extractors::rules_from_embedded(
+                        &baseline.mscp_name,
+                        baseline.platform.schema_name(),
+                    )?
                 };
                 let rules: Vec<_> = rules
                     .into_iter()
@@ -888,7 +925,7 @@ pub fn process_baseline(
             })?;
 
                 // managed_policies SQL via the existing generator (no duplication).
-                let mp_gen = FleetPolicyGenerator::new(&baseline.name);
+                let mp_gen = FleetPolicyGenerator::new(&baseline.mscp_name);
                 let art = crate::osquery::build(&rules, org_domain, &baseline.name, scope, |r| {
                     mp_gen.managed_policies_query(r)
                 });
@@ -1026,7 +1063,9 @@ pub fn process_baseline(
 
     // Generate Fleet-specific GitOps files (skip for plain mode, Jamf mode, and dry-run)
     if is_fleet_output && !is_jamf_mode && !dry_run {
-        let gitops_generator = FleetGitOpsGenerator::new_default(&output_path);
+        let gitops_generator = FleetGitOpsGenerator::new_default(&output_path)
+            .for_os(baseline.platform.mscp_dir_name())
+            .with_declarations(ddm_mappings.iter().map(|(_, dest)| dest.clone()).collect());
         let profile_dest_paths: Vec<PathBuf> = profile_mappings
             .iter()
             .map(|(_, dest)| dest.clone())
@@ -1141,23 +1180,32 @@ pub fn process_baseline(
             gitops_generator.generate_fragment_default_yml(&label_paths)?;
 
             // Collect profile entries for fragment.toml
-            let profile_entries: Vec<contour_core::fragment::ProfileEntry> = profile_dest_paths
-                .iter()
-                .map(|p| {
-                    let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or_default();
-                    let label_name = format!("mscp-{}", baseline.name);
-                    contour_core::fragment::ProfileEntry {
-                        path: format!(
-                            "../{}/{}/{filename}",
-                            layout.macos_profiles_subdir, baseline.name
-                        ),
-                        labels_include_all: Some(vec![label_name]),
-                        labels_include_any: None,
-                        labels_exclude_any: None,
-                        activation: None,
-                    }
-                })
-                .collect();
+            // Profiles and declarations, each from its own platform folder —
+            // the same entries the fleet YAML's `custom_settings` carries.
+            let os = baseline.platform.mscp_dir_name();
+            let entries_in = |subdir: &str, paths: Vec<&PathBuf>| {
+                paths
+                    .into_iter()
+                    .map(|p| {
+                        let filename = p.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+                        contour_core::fragment::ProfileEntry {
+                            path: format!("../{subdir}/{}/{filename}", baseline.name),
+                            labels_include_all: Some(vec![format!("mscp-{}", baseline.name)]),
+                            labels_include_any: None,
+                            labels_exclude_any: None,
+                            activation: None,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let mut profile_entries = entries_in(
+                &layout.apple_profiles_subdir(os),
+                profile_dest_paths.iter().collect(),
+            );
+            profile_entries.extend(entries_in(
+                &layout.apple_declarations_subdir(os),
+                ddm_mappings.iter().map(|(_, dest)| dest).collect(),
+            ));
 
             let policy_entries: Vec<contour_core::fragment::SimpleEntry> = if let Some(ref p) =
                 policy_path
@@ -1494,7 +1542,7 @@ fn apply_script_subfolder_placement(
 /// built, not from the newest file in the checkout. A 1.x build path has no
 /// suffix; the version stays unset and the extractor picks as before.
 fn rule_extractor_for(baseline: &crate::models::MscpBaseline, repo_path: &Path) -> RuleExtractor {
-    let version = build_version(&baseline.name, baseline.platform, &baseline.build_path);
+    let version = build_version(&baseline.mscp_name, baseline.platform, &baseline.build_path);
     RuleExtractor::new(repo_path).with_os(baseline.platform, version)
 }
 

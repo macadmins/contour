@@ -1314,6 +1314,8 @@ pub fn generate_all_baselines(
     script_mode: ScriptMode,
     fragment: bool,
     output_structure: OutputStructure,
+    os: &str,
+    os_version: Option<String>,
 ) -> Result<()> {
     use crate::output::GenerateAllResult;
 
@@ -1369,9 +1371,9 @@ pub fn generate_all_baselines(
                     // (so there is no gitops_glob to read) and exposes no
                     // --osquery flag (so there is nothing to pass). The config
                     // path is `generate_from_config`, and it wires both.
-                    None,                // glob_config
-                    "macos".to_string(), // os
-                    None,                // os_version
+                    None, // glob_config
+                    os.to_string(),
+                    os_version.clone(),
                     None, // odv_path — generate-all auto-detects odv_<baseline>.yaml per baseline
                     None, // osquery
                 );
@@ -1433,11 +1435,11 @@ pub fn generate_all_baselines(
                 // See the note in the parallel branch above: None by
                 // construction, because this mode has neither an mscp.toml
                 // nor an --osquery flag.
-                None,                // glob_config
-                "macos".to_string(), // os
-                None,                // os_version
-                None,                // odv_path — auto-detects odv_<baseline>.yaml per baseline
-                None,                // osquery
+                None, // glob_config
+                os.to_string(),
+                os_version.clone(),
+                None, // odv_path — auto-detects odv_<baseline>.yaml per baseline
+                None, // osquery
             ) {
                 Ok(()) => {
                     all_result.processed += 1;

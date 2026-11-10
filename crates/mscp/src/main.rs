@@ -361,9 +361,9 @@ fn main() -> Result<()> {
                     fragment,
                     opts.structure,
                     Some(baseline_config.gitops_glob.clone()),
-                    "macos".to_string(), // os
-                    None,                // os_version
-                    odv.clone(),         // --odv override (else auto-detect odv_<keyword>.yaml)
+                    baseline_config.os.clone(),
+                    baseline_config.os_version.clone(),
+                    odv.clone(), // --odv override (else auto-detect odv_<keyword>.yaml)
                     crate::cli::config_generate::resolve_osquery_options(
                         &loaded_config,
                         osquery.then(|| crate::osquery::OsqueryGenOptions {
@@ -540,6 +540,8 @@ fn main() -> Result<()> {
             config: config_path,
             mscp_repo,
             keywords,
+            os,
+            os_version,
             output,
             use_uv,
             use_python3,
@@ -658,6 +660,8 @@ fn main() -> Result<()> {
                     script_mode.into(),
                     fragment,
                     crate::config::OutputStructure::default(),
+                    os.as_str(),
+                    os_version,
                 )?;
             }
         }
@@ -742,6 +746,7 @@ fn main() -> Result<()> {
         Commands::ExtractScripts {
             mscp_repo,
             keyword,
+            os,
             output,
             flat,
             dry_run,
@@ -756,6 +761,7 @@ fn main() -> Result<()> {
             cli::extract_scripts(
                 mscp_repo,
                 keyword,
+                os.into(),
                 output,
                 flat,
                 dry_run,
@@ -824,12 +830,14 @@ fn main() -> Result<()> {
                     constraints,
                     mscp_repo,
                     keyword,
+                    os,
                 } => {
                     cli::constraints_add_script(
                         r#type,
                         constraints,
                         mscp_repo,
                         keyword,
+                        os.into(),
                         output_mode,
                     )?;
                 }
@@ -852,6 +860,7 @@ fn main() -> Result<()> {
                     constraints,
                     mscp_repo,
                     keyword,
+                    os,
                     exclude,
                 } => {
                     cli::constraints_add_categories(
@@ -859,6 +868,7 @@ fn main() -> Result<()> {
                         constraints,
                         mscp_repo,
                         keyword,
+                        os.into(),
                         exclude,
                         output_mode,
                     )?;
@@ -877,16 +887,18 @@ fn main() -> Result<()> {
                 OdvAction::Init {
                     mscp_repo,
                     keyword,
+                    os,
                     output,
                 } => {
-                    cli::odv_init(mscp_repo, keyword, output, output_mode)?;
+                    cli::odv_init(mscp_repo, keyword, os.into(), output, output_mode)?;
                 }
                 OdvAction::List {
                     mscp_repo,
                     keyword,
+                    os,
                     overrides,
                 } => {
-                    cli::odv_list(mscp_repo, keyword, overrides, output_mode)?;
+                    cli::odv_list(mscp_repo, keyword, os.into(), overrides, output_mode)?;
                 }
                 OdvAction::Edit { overrides } => {
                     cli::odv_edit(overrides, output_mode)?;
@@ -925,8 +937,12 @@ fn main() -> Result<()> {
                 } => {
                     cli::handle_schema_search(&query, platform.as_deref(), beta, output_mode)?;
                 }
-                SchemaAction::Rule { rule_id, beta } => {
-                    cli::handle_schema_rule(&rule_id, beta, output_mode)?;
+                SchemaAction::Rule {
+                    rule_id,
+                    platform,
+                    beta,
+                } => {
+                    cli::handle_schema_rule(&rule_id, platform.as_deref(), beta, output_mode)?;
                 }
             }
         }

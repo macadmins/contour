@@ -1,4 +1,5 @@
 use crate::models::MscpBaseline;
+use crate::models::ddm::DdmDeclarationType;
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,17 +31,14 @@ impl DdmTransformer {
 
         let mut file_mappings = Vec::new();
 
+        if self.fleet_output && !self.jamf_mode {
+            return Ok(Self::fleet_mappings(&self.output_base, baseline));
+        }
+
         // Create base DDM directory based on mode
         let ddm_base = if self.jamf_mode {
             // Jamf mode: Direct structure {output}/{baseline_name}/declarative/
             self.output_base.join(&baseline.name).join("declarative")
-        } else if self.fleet_output {
-            // Fleet mode: GitOps structure lib/mscp/{baseline_name}/declarative/
-            self.output_base
-                .join("lib")
-                .join("mscp")
-                .join(&baseline.name)
-                .join("declarative")
         } else {
             // Plain mode: mscp/{baseline_name}/declarative/
             self.output_base
@@ -81,6 +79,36 @@ impl DdmTransformer {
         );
 
         Ok(file_mappings)
+    }
+
+    /// Fleet: configuration declarations only, flat in
+    /// `platforms/<os>/declaration-profiles/<baseline>/`, as `fleetctl new`
+    /// lays them out. Fleet writes its own activations, so mSCP's are not
+    /// shipped, and it takes no asset declarations.
+    fn fleet_mappings(output_base: &Path, baseline: &MscpBaseline) -> Vec<(PathBuf, PathBuf)> {
+        let dir = output_base
+            .join(
+                contour_core::fleet_layout::FleetLayout::default()
+                    .apple_declarations_subdir(baseline.platform.mscp_dir_name()),
+            )
+            .join(&baseline.name);
+        baseline
+            .ddm_artifacts
+            .iter()
+            .filter(|a| {
+                if a.declaration_type == DdmDeclarationType::Asset {
+                    tracing::warn!(
+                        "Skipping asset declaration {} — Fleet does not accept asset declarations",
+                        a.json_path.display()
+                    );
+                }
+                a.declaration_type == DdmDeclarationType::Configuration
+            })
+            .filter_map(|a| {
+                let name = a.json_path.file_name()?;
+                Some((a.json_path.clone(), dir.join(name)))
+            })
+            .collect()
     }
 
     /// Copy the DDM files to their destinations

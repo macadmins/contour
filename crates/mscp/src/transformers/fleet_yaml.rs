@@ -328,7 +328,8 @@ mod tests {
     fn an_ios_baseline_lists_its_profiles_under_apple_settings() {
         let generator = FleetYamlGenerator::new("/tmp/test");
         let baseline = MscpBaseline {
-            name: "ios_cis_lvl1".into(),
+            name: "cis_lvl1_ios".into(),
+            mscp_name: "cis_lvl1".into(),
             build_path: "/tmp/test/build".into(),
             platform: Platform::Ios,
             mobileconfigs: Vec::new(),

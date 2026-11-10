@@ -298,16 +298,28 @@ pub fn search_rules(query: &str, platform: Option<&str>, beta: bool) -> Result<V
 }
 
 /// Get full detail for a single rule.
-pub fn get_rule_detail(rule_id: &str, beta: bool) -> Result<Option<RuleDetail>> {
+///
+/// `platform` (case-insensitive) picks that platform's latest variant and
+/// returns `None` if the rule has none there. Without it, macOS is preferred.
+pub fn get_rule_detail(
+    rule_id: &str,
+    platform: Option<&str>,
+    beta: bool,
+) -> Result<Option<RuleDetail>> {
     let rules = mscp_schema::rules_versioned::read(rules_versioned_bytes(beta))?;
     // Prefer the latest macOS variant — in mSCP 2.0 the shell check is macOS-only,
     // so it's the richest row to surface; fall back to any platform otherwise.
-    let rule = rules
-        .iter()
-        .filter(|r| r.rule_id == rule_id && r.platform == "macOS")
-        .max_by(|a, b| a.os_version.cmp(&b.os_version))
-        .or_else(|| rules.iter().find(|r| r.rule_id == rule_id))
-        .cloned();
+    let latest_on = |p: &str| {
+        rules
+            .iter()
+            .filter(|r| r.rule_id == rule_id && r.platform.eq_ignore_ascii_case(p))
+            .max_by(|a, b| a.os_version.cmp(&b.os_version))
+    };
+    let rule = match platform {
+        Some(p) => latest_on(p),
+        None => latest_on("macOS").or_else(|| rules.iter().find(|r| r.rule_id == rule_id)),
+    }
+    .cloned();
     let Some(rule) = rule else {
         return Ok(None);
     };
@@ -348,7 +360,8 @@ mod tests {
         const PREVIEW_RULE: &str = "os_apple_intelligence_pcc_disable";
 
         if mscp_schema::beta_dataset_is_carried() {
-            let detail = get_rule_detail(PREVIEW_RULE, true).expect("get_rule_detail beta failed");
+            let detail =
+                get_rule_detail(PREVIEW_RULE, None, true).expect("get_rule_detail beta failed");
             assert!(detail.is_some(), "beta channel should carry the PCC rule");
             let hits = search_rules("intelligence", None, true).expect("beta search failed");
             assert!(
@@ -365,10 +378,18 @@ mod tests {
                 .map(|r| r.rule_id)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(ids(true), ids(false), "between previews --beta search is stable's");
         assert_eq!(
-            get_rule_detail(PREVIEW_RULE, true).expect("beta lookup").map(|d| d.rule.rule_id),
-            get_rule_detail(PREVIEW_RULE, false).expect("stable lookup").map(|d| d.rule.rule_id),
+            ids(true),
+            ids(false),
+            "between previews --beta search is stable's"
+        );
+        assert_eq!(
+            get_rule_detail(PREVIEW_RULE, None, true)
+                .expect("beta lookup")
+                .map(|d| d.rule.rule_id),
+            get_rule_detail(PREVIEW_RULE, None, false)
+                .expect("stable lookup")
+                .map(|d| d.rule.rule_id),
             "between previews --beta rule detail is stable's"
         );
     }
@@ -528,7 +549,8 @@ mod tests {
 
     #[test]
     fn test_get_rule_detail_exists() {
-        let detail = get_rule_detail("os_airdrop_disable", false).expect("get_rule_detail failed");
+        let detail =
+            get_rule_detail("os_airdrop_disable", None, false).expect("get_rule_detail failed");
         assert!(detail.is_some(), "Expected Some for os_airdrop_disable");
         let detail = detail.unwrap();
         assert!(
@@ -539,7 +561,17 @@ mod tests {
 
     #[test]
     fn test_get_rule_detail_missing() {
-        let detail = get_rule_detail("nonexistent", false).expect("get_rule_detail failed");
+        let detail = get_rule_detail("nonexistent", None, false).expect("get_rule_detail failed");
         assert!(detail.is_none(), "Expected None for nonexistent rule");
+    }
+
+    /// `--platform` picks that platform's variant, and says so when the rule
+    /// has none there instead of answering with another platform's.
+    #[test]
+    fn rule_detail_honours_the_requested_platform() {
+        let rule = |p| get_rule_detail("os_airdrop_disable", p, false).unwrap();
+        assert_eq!(rule(None).unwrap().rule.platform, "macOS");
+        assert_eq!(rule(Some("ios")).unwrap().rule.platform, "iOS");
+        assert!(rule(Some("tvOS")).is_none());
     }
 }

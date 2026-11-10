@@ -336,6 +336,7 @@ pub fn constraints_add_script(
     constraints_path: Option<PathBuf>,
     mscp_repo: Option<PathBuf>,
     baseline: Option<String>,
+    os: crate::models::Platform,
     output_mode: OutputMode,
 ) -> Result<()> {
     let mut manager = Constraints::load(constraint_type, constraints_path)?;
@@ -355,7 +356,7 @@ pub fn constraints_add_script(
     }
 
     // Discover available scripts
-    let all_scripts = Constraints::discover_scripts(&mscp, baseline.as_deref())
+    let all_scripts = Constraints::discover_scripts(&mscp, baseline.as_deref(), os)
         .context("Failed to discover scripts from mSCP repository")?;
 
     if all_scripts.is_empty() {
@@ -648,6 +649,7 @@ pub fn constraints_add_categories(
     constraints_path: Option<PathBuf>,
     mscp_repo: Option<PathBuf>,
     baseline: String,
+    os: crate::models::Platform,
     exclude: Option<Vec<String>>,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -662,6 +664,7 @@ pub fn constraints_add_categories(
             mscp.display()
         );
     }
+    let extractor = crate::extractors::RuleExtractor::new(&mscp).with_os(os, None);
 
     // If --exclude provided, skip discovery and picker entirely
     let selected_names = if let Some(names) = exclude {
@@ -675,7 +678,7 @@ pub fn constraints_add_categories(
             );
         }
 
-        let categories = discover_categories(&mscp, Some(&baseline))
+        let categories = discover_categories(&mscp, &extractor, Some(&baseline))
             .context("Failed to discover categories from mSCP repository")?;
 
         if categories.is_empty() {
@@ -763,7 +766,7 @@ pub fn constraints_add_categories(
     }
 
     // Build exclusion plan
-    let plan = build_exclusion_plan(&selected_names, &mscp, &baseline)
+    let plan = build_exclusion_plan(&selected_names, &mscp, &extractor, &baseline)
         .context("Failed to build exclusion plan")?;
 
     // Print resolution details

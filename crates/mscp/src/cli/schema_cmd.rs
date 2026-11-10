@@ -438,8 +438,13 @@ fn truncate_lines(s: &str, max_lines: usize) -> String {
 }
 
 /// Show full detail for a specific rule.
-pub fn handle_schema_rule(rule_id: &str, beta: bool, mode: OutputMode) -> Result<()> {
-    let detail = crate::api::get_rule_detail(rule_id, beta)?;
+pub fn handle_schema_rule(
+    rule_id: &str,
+    platform: Option<&str>,
+    beta: bool,
+    mode: OutputMode,
+) -> Result<()> {
+    let detail = crate::api::get_rule_detail(rule_id, platform, beta)?;
 
     let Some(detail) = detail else {
         match mode {

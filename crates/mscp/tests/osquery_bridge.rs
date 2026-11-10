@@ -17,6 +17,8 @@ use std::process::Command;
 
 /// The baseline this test generates.
 const BASELINE: &str = "cis_lvl1";
+/// What its output is named: `<baseline>_<os>`.
+const OUT: &str = "cis_lvl1_macos";
 
 /// The mSCP 2.0 checkout named by `CONTOUR_MSCP_REPO`, when it has `rules/`.
 fn repo() -> Option<String> {
@@ -88,21 +90,21 @@ fn osquery_slim_fleet_emits_queries_audit_and_coverage() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let oq = out.path().join("osquery").join(BASELINE);
+    let oq = out.path().join("osquery").join(OUT);
     assert!(
-        oq.join(format!("{BASELINE}.policies.yml")).exists(),
+        oq.join(format!("{OUT}.policies.yml")).exists(),
         "expected Fleet policies.yml"
     );
     assert!(
-        oq.join(format!("{BASELINE}-audit.sh")).exists(),
+        oq.join(format!("{OUT}-audit.sh")).exists(),
         "expected audit script"
     );
     assert!(
-        oq.join(format!("{BASELINE}.osquery-coverage.md")).exists(),
+        oq.join(format!("{OUT}.osquery-coverage.md")).exists(),
         "expected coverage report"
     );
 
-    let cov = std::fs::read_to_string(oq.join(format!("{BASELINE}.osquery-coverage.md"))).unwrap();
+    let cov = std::fs::read_to_string(oq.join(format!("{OUT}.osquery-coverage.md"))).unwrap();
     assert!(
         cov.contains("Tier-1"),
         "coverage report must mention Tier-1; got:\n{cov}"
@@ -110,7 +112,7 @@ fn osquery_slim_fleet_emits_queries_audit_and_coverage() {
 
     // Slim scope: the audit script covers residual rules only — it must not be
     // empty, and the coverage report should account for the tier split.
-    let sh = std::fs::read_to_string(oq.join(format!("{BASELINE}-audit.sh"))).unwrap();
+    let sh = std::fs::read_to_string(oq.join(format!("{OUT}-audit.sh"))).unwrap();
     assert!(
         sh.contains("#!/bin/bash"),
         "audit script must be a shell script"
@@ -127,7 +129,7 @@ fn osquery_slim_fleet_emits_queries_audit_and_coverage() {
         })
         .filter_map(|rest| rest.split('"').next())
         .collect();
-    let policies = std::fs::read_to_string(oq.join(format!("{BASELINE}.policies.yml"))).unwrap();
+    let policies = std::fs::read_to_string(oq.join(format!("{OUT}.policies.yml"))).unwrap();
     for line in policies.lines() {
         if let Some(after) = line.split("FROM plist").nth(1) {
             if let Some(key) = after
