@@ -666,11 +666,6 @@ fn insert_label_entry(content: &str, entry_line: &str) -> Option<String> {
         }
     }
 
-    // If insert_idx is past the end, append
-    if insert_idx >= lines.len() {
-        result.push(format!("{indent}{entry_line}"));
-    }
-
     Some(result.join("\n") + "\n")
 }
 
@@ -928,6 +923,16 @@ mod tests {
 #[cfg(test)]
 mod baseline_label_tests {
     use super::*;
+
+    /// `labels:` as the file's last section: the loop already inserts after
+    /// the last line, and a second "past the end" append listed every label
+    /// after the first twice in default.yml.
+    #[test]
+    fn a_label_at_the_end_of_default_yml_is_listed_once() {
+        let content = "org_settings: {}\nlabels:\n  - path: ./labels/a.yml\n";
+        let out = insert_label_entry(content, "- path: ./labels/b.yml").unwrap();
+        assert_eq!(out.matches("./labels/b.yml").count(), 1, "{out}");
+    }
 
     fn generator() -> FleetGitOpsGenerator {
         FleetGitOpsGenerator::new_default("/tmp/does-not-need-to-exist")

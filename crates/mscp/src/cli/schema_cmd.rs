@@ -146,7 +146,6 @@ struct CompatReport {
     script_diffs: Vec<RuleDiff>,
     mobileconfig_diffs: Vec<String>,
     title_diffs: Vec<String>,
-    severity_diffs: Vec<String>,
 }
 
 /// Compare embedded parquet rule data against mSCP YAML rules on disk.
@@ -160,8 +159,12 @@ pub fn handle_schema_compare(
     let embedded_rules = crate::extractors::rules_from_embedded(baseline, platform)?;
 
     // 2. Load rules from YAML files on disk.
-    let disk_rules =
-        crate::extractors::RuleExtractor::new(mscp_repo).extract_rules_for_baseline(baseline)?;
+    //    Without `with_os` the extractor reads baselines/macos/, so an iOS or
+    //    visionOS compare came back empty or matched against macOS rules.
+    let os = crate::cli::deduplicate::parse_platform(platform)?;
+    let disk_rules = crate::extractors::RuleExtractor::new(mscp_repo)
+        .with_os(os, None)
+        .extract_rules_for_baseline(baseline)?;
 
     // 3. Index both sets by rule_id.
     let embedded_ids: BTreeSet<&str> = embedded_rules.iter().map(|r| r.id.as_str()).collect();
@@ -187,7 +190,6 @@ pub fn handle_schema_compare(
     let mut script_diffs = Vec::new();
     let mut mobileconfig_diffs = Vec::new();
     let mut title_diffs = Vec::new();
-    let mut severity_diffs = Vec::new();
 
     for rule_id in &common_ids {
         let emb = embedded_map[rule_id];
@@ -201,8 +203,12 @@ pub fn handle_schema_compare(
             });
         }
 
-        // Compare fix scripts.
-        if normalize_opt(&emb.fix) != normalize_opt(&dsk.fix) {
+        // Compare fix scripts. A 2.0 rule with no shell fix carries its
+        // `additional_info` note in `fix` on disk and nothing in the dataset;
+        // that is not a script difference.
+        if (emb.has_executable_fix() || dsk.has_executable_fix())
+            && normalize_opt(&emb.fix) != normalize_opt(&dsk.fix)
+        {
             script_diffs.push(RuleDiff {
                 rule_id: (*rule_id).to_owned(),
                 field: "fix".to_owned(),
@@ -219,10 +225,8 @@ pub fn handle_schema_compare(
             title_diffs.push((*rule_id).to_owned());
         }
 
-        // Compare severity.
-        if emb.severity != dsk.severity {
-            severity_diffs.push((*rule_id).to_owned());
-        }
+        // Severity is not compared: mSCP 2.0 sets it per benchmark, the
+        // dataset stores one per rule, so every difference was noise.
     }
 
     let report = CompatReport {
@@ -236,7 +240,6 @@ pub fn handle_schema_compare(
         script_diffs,
         mobileconfig_diffs,
         title_diffs,
-        severity_diffs,
     };
 
     match mode {
@@ -320,12 +323,6 @@ fn print_human_report(report: &CompatReport) {
         println!("    {}", rule_id.yellow());
     }
 
-    // Severity diffs
-    print_kv("  Severity diffs", &report.severity_diffs.len().to_string());
-    for rule_id in &report.severity_diffs {
-        println!("    {}", rule_id.yellow());
-    }
-
     println!();
 }
 
@@ -353,7 +350,6 @@ fn print_json_report(report: &CompatReport) -> Result<()> {
         "script_diffs": script_diff_entries,
         "mobileconfig_diffs": report.mobileconfig_diffs,
         "title_diffs": report.title_diffs,
-        "severity_diffs": report.severity_diffs,
     }))?;
     println!("{json}");
     Ok(())

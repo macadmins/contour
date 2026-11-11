@@ -4,7 +4,7 @@ This document covers development workflows for contributors to the Contour proje
 
 ## Prerequisites
 
-- Rust 1.85+ (stable) via `rust-toolchain.toml`
+- Rust 1.88+ (stable) via `rust-toolchain.toml`
 - `uv` for Python (mSCP generation pipeline)
 
 ## Workspace Structure
