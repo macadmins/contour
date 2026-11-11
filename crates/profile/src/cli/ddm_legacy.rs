@@ -27,7 +27,10 @@ use crate::ddm::predicate::extract_predicate_keys;
 use crate::output::OutputMode;
 
 /// Collect `.mobileconfig` inputs from files and/or directories.
-fn collect_profiles(paths: &[String], recursive: bool) -> Result<(Vec<PathBuf>, Option<PathBuf>)> {
+pub(crate) fn collect_profiles(
+    paths: &[String],
+    recursive: bool,
+) -> Result<(Vec<PathBuf>, Option<PathBuf>)> {
     let mut out = Vec::new();
     // The root is used for `{path}` expansion. With a single directory input it
     // is that directory; otherwise relative paths would be meaningless and
@@ -67,7 +70,7 @@ fn collect_profiles(paths: &[String], recursive: bool) -> Result<(Vec<PathBuf>, 
 /// `compose` builds `{org}.{kind}.{intent}`, so this becomes the tail of every
 /// identifier for the profile — it must be stable across runs or a re-convert
 /// would silently mint new identifiers and orphan what is deployed.
-fn intent_name(profile: &Path) -> String {
+pub(crate) fn intent_name(profile: &Path) -> String {
     profile
         .file_stem()
         .map(|s| s.to_string_lossy().to_lowercase())

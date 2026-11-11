@@ -1354,6 +1354,23 @@ pub fn dispatch(
             DdmAction::Map { name } => {
                 crate::cli::ddm::handle_ddm_map(name.as_deref(), output_mode)?;
             }
+            DdmAction::Migrate {
+                paths,
+                recursive,
+                org,
+                output,
+                write,
+            } => {
+                crate::cli::ddm_migrate::handle_ddm_migrate(
+                    &paths,
+                    recursive,
+                    org.as_deref(),
+                    output.as_deref(),
+                    write,
+                    config.as_ref(),
+                    output_mode,
+                )?;
+            }
             DdmAction::Coverage { beta } => {
                 crate::cli::ddm::handle_ddm_coverage(channel.or_beta(beta), output_mode)?;
             }

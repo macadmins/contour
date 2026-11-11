@@ -13,6 +13,7 @@ pub mod ddm_app_control;
 pub mod ddm_app_privacy;
 pub mod ddm_beta;
 pub mod ddm_legacy;
+pub mod ddm_migrate;
 pub mod ddm_reidentify;
 pub mod ddm_service_config;
 pub mod ddm_status;
@@ -1685,6 +1686,36 @@ pub enum DdmAction {
     Map {
         #[arg(help = "Legacy MDM payload type (omit to list all mappings)")]
         name: Option<String>,
+    },
+
+    #[command(
+        about = "Experimental: give each payload of a .mobileconfig a DDM verdict; convert passcode payloads",
+        long_about = "Experimental: verdicts and output may change. Read classic profiles and \
+                      say, per payload, what its declarative \
+                      future is: native (converted), partial (some keys have no \
+                      declaration key), refused (converting would change what devices \
+                      enforce), manual (a declaration exists; not converted yet), legacy \
+                      (stays a profile) or not-assessed.\n\n\
+                      Passcode payloads become com.apple.configuration.passcode.settings. \
+                      Every key is reported as carried, renamed, inverted or left behind. \
+                      The source profile is never changed.\n\n\
+                      Dry-run by default; pass --write to write the declarations. Exits \
+                      non-zero when a payload is partial or refused.\n\n\
+                      Examples:\n  \
+                      contour profile ddm migrate profiles/ -r\n  \
+                      contour profile ddm migrate passcode.mobileconfig --org com.acme -o ddm --write"
+    )]
+    Migrate {
+        #[arg(required = true, help = "Profile file(s) or directory")]
+        paths: Vec<String>,
+        #[arg(short, long, help = "Recurse into subdirectories")]
+        recursive: bool,
+        #[arg(long, help = "Organization reverse domain (e.g., com.yourorg)")]
+        org: Option<String>,
+        #[arg(short, long, help = "Output directory for the declarations")]
+        output: Option<String>,
+        #[arg(long, help = "Apply (default is a dry-run preview)")]
+        write: bool,
     },
 
     #[command(

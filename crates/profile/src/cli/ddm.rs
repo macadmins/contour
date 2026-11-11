@@ -2010,6 +2010,23 @@ pub fn handle_ddm_map(name: Option<&str>, output_mode: OutputMode) -> Result<()>
             println!("  {} {} {}", old.yellow(), "→".dimmed(), new.cyan());
         }
     }
+    if !m.inverted_keys.is_empty() {
+        println!(
+            "\n{} ({}) — the boolean's sense flips:",
+            "Inverted keys".yellow().bold(),
+            m.inverted_keys.len(),
+        );
+        for (old, new) in m.inverted_keys {
+            println!("  {old} → {new}");
+        }
+    }
+    if let Some((key, reason)) = m.requires_true {
+        println!(
+            "\n{} — `ddm migrate` refuses a payload where {key} is not true:",
+            "Guard".red().bold(),
+        );
+        println!("  {reason}");
+    }
     if !m.unsupported_keys.is_empty() {
         println!(
             "\n{} ({}) {}",

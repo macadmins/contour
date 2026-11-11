@@ -58,6 +58,11 @@ pub struct MigrationMapping {
     pub transformed_keys: &'static [(&'static str, &'static str)],
     /// Keys not supported in DDM
     pub unsupported_keys: &'static [&'static str],
+    /// Boolean keys whose sense flips: `(old, new)` with `new = !old`
+    pub inverted_keys: &'static [(&'static str, &'static str)],
+    /// `(key, reason)`: the declaration behaves as if `key` were true, so a
+    /// payload that does not set it true must not be converted
+    pub requires_true: Option<(&'static str, &'static str)>,
 }
 
 /// Registry of all known MDM to DDM mappings
@@ -97,6 +102,8 @@ impl MigrationRegistry {
                     ("CalDAVPassword", "AuthenticationCredentialsAssetReference"),
                 ],
                 unsupported_keys: &["CalDAVUseSSL", "VPNUUID"],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -119,6 +126,8 @@ impl MigrationRegistry {
                     ("CardDAVPassword", "AuthenticationCredentialsAssetReference"),
                 ],
                 unsupported_keys: &["CardDAVUseSSL", "CommunicationServiceRules", "VPNUUID"],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -183,6 +192,8 @@ impl MigrationRegistry {
                     ),
                 ],
                 unsupported_keys: &[],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -220,6 +231,8 @@ impl MigrationRegistry {
                     ("EnableNotes", "NotesServiceActive"),
                 ],
                 unsupported_keys: &[],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -245,6 +258,8 @@ impl MigrationRegistry {
                     ),
                 ],
                 unsupported_keys: &["SubCalAccountUseSSL", "VPNUUID"],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -271,6 +286,8 @@ impl MigrationRegistry {
                     ("LDAPSearchSettings", "SearchSettings"),
                 ],
                 unsupported_keys: &["LDAPAccountUseSSL", "VPNUUID"],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -302,9 +319,17 @@ impl MigrationRegistry {
                     ("maxPINAgeInDays", "MaximumPasscodeAgeInDays"),
                     ("pinHistory", "PasscodeReuseLimit"),
                     ("changeAtNextAuth", "ChangeAtNextAuth"),
+                    // The inner keys differ too (passwordContentRegex →
+                    // Regex), so `ddm migrate` does not carry it.
                     ("customRegex", "CustomRegex"),
                 ],
                 unsupported_keys: &[],
+                inverted_keys: &[("allowSimple", "RequireComplexPasscode")],
+                requires_true: Some((
+                    "forcePIN",
+                    "the declaration requires a passcode whenever any passcode setting is \
+                     managed; this payload does not, so converting it would start requiring one",
+                )),
             },
         );
 
@@ -323,6 +348,8 @@ impl MigrationRegistry {
                 direct_keys: &[],
                 transformed_keys: &[("PayloadContent", "Reference.DataURL")],
                 unsupported_keys: &[],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -338,6 +365,8 @@ impl MigrationRegistry {
                 direct_keys: &[],
                 transformed_keys: &[],
                 unsupported_keys: &[],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -352,6 +381,8 @@ impl MigrationRegistry {
                 direct_keys: &[],
                 transformed_keys: &[("PayloadContent", "Reference.DataURL")],
                 unsupported_keys: &[],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -378,6 +409,8 @@ impl MigrationRegistry {
                     ),
                 ],
                 unsupported_keys: &["CatalogURL", "AutomaticCheckEnabled"],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -399,6 +432,8 @@ impl MigrationRegistry {
                 direct_keys: &[],
                 transformed_keys: &[],
                 unsupported_keys: &["allowCamera", "allowScreenShot", "allowAirDrop"],
+                inverted_keys: &[],
+                requires_true: None,
             },
         );
 
@@ -430,6 +465,8 @@ impl MigrationRegistry {
                     direct_keys: &[],
                     transformed_keys: &[],
                     unsupported_keys: &[],
+                    inverted_keys: &[],
+                    requires_true: None,
                 },
             );
         }
@@ -590,7 +627,15 @@ mod tests {
                     ));
                 }
             }
-            for (from, to) in m.transformed_keys {
+            if let Some((key, _)) = m.requires_true {
+                if !has_key(m.mdm_type, key) {
+                    problems.push(format!(
+                        "{}: guard key {key} not in the profile payload",
+                        m.mdm_type
+                    ));
+                }
+            }
+            for (from, to) in m.transformed_keys.iter().chain(m.inverted_keys) {
                 if !has_key(m.mdm_type, from) {
                     problems.push(format!(
                         "{}: transformed key {from} not in the profile payload",
