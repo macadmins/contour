@@ -24,9 +24,6 @@ pub fn handle_status(
         return handle_errors(query, platform, output_mode);
     }
     let bytes = if channel.is_beta() {
-        if !mdm_schema::beta_dataset_is_carried() {
-            anyhow::bail!(mdm_schema::BETA_DISABLED_MESSAGE);
-        }
         mdm_schema::embedded_status_items_beta()
     } else {
         mdm_schema::embedded_status_items()

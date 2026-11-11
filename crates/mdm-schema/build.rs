@@ -19,9 +19,27 @@ fn main() {
         url_var: "CONTOUR_MDM_SCHEMA_BETA_URL",
         files: SEED_SCHEMA_FILES,
         optional: &[],
-    }) {
+    }) && !beta_matches_release()
+    {
         println!("cargo:rustc-cfg=seed_dataset");
     }
+}
+
+/// Between seeds the dataset ships the release as its beta archive, so the
+/// pin can keep its beta line. Byte-identical Apple tables are no seed: the
+/// beta accessors serve the release's bytes and `--beta` answers as stable.
+fn beta_matches_release() -> bool {
+    let same = |f: &str| {
+        matches!(
+            (std::fs::read(Path::new("data").join(f)), std::fs::read(Path::new("data-beta").join(f))),
+            (Ok(a), Ok(b)) if a == b
+        )
+    };
+    let matches = same("capabilities.parquet") && same("skip_keys.parquet");
+    if matches {
+        println!("cargo:warning=mdm-schema-beta matches the release: --beta serves the release");
+    }
+    matches
 }
 
 /// The tables the seed archive carries: the Apple schema itself, and the

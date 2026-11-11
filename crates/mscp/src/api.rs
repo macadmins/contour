@@ -251,28 +251,10 @@ pub struct RuleDetail {
     pub baselines: Vec<String>,
 }
 
-/// Refuse a `--beta` query when no preview dataset is compiled in.
-///
-/// mSCP's `--beta` reaches its own tables, not the Apple schema registry, so
-/// it did not inherit that side's refusal: `mscp schema search <kw> --beta`
-/// went on returning stable rules with a 0 exit and no warning after the
-/// preview channel was retired. Every entry point that takes `beta` calls
-/// this first.
-///
-/// The predicate and the message are shared rather than restated — one
-/// channel, one answer, one explanation.
-fn require_beta_dataset(beta: bool) -> Result<()> {
-    if beta && !mscp_schema::beta_dataset_is_carried() {
-        if mdm_schema::SEED_DATASET {
-            anyhow::bail!(mdm_schema::MSCP_NO_SEED_MESSAGE);
-        }
-        anyhow::bail!(mdm_schema::BETA_DISABLED_MESSAGE);
-    }
-    Ok(())
-}
-
 /// Versioned-rules bytes for the requested channel: stable, or the
-/// OS-preview (beta) dataset built from the mSCP preview branch.
+/// OS-preview (beta) dataset built from the mSCP preview branch. With no
+/// preview the beta accessors are the stable bytes, so `--beta` answers
+/// exactly as stable does.
 fn rules_versioned_bytes(beta: bool) -> &'static [u8] {
     if beta {
         mscp_schema::embedded_rules_versioned_beta()
@@ -299,7 +281,6 @@ fn baseline_edges_bytes(beta: bool) -> &'static [u8] {
 
 /// Search rules by keyword across rule_id, title, and tags. Case-insensitive.
 pub fn search_rules(query: &str, platform: Option<&str>, beta: bool) -> Result<Vec<RuleVersioned>> {
-    require_beta_dataset(beta)?;
     let query_lower = query.to_lowercase();
     let rules = mscp_schema::rules_versioned::read(rules_versioned_bytes(beta))?;
     Ok(rules
@@ -318,7 +299,6 @@ pub fn search_rules(query: &str, platform: Option<&str>, beta: bool) -> Result<V
 
 /// Get full detail for a single rule.
 pub fn get_rule_detail(rule_id: &str, beta: bool) -> Result<Option<RuleDetail>> {
-    require_beta_dataset(beta)?;
     let rules = mscp_schema::rules_versioned::read(rules_versioned_bytes(beta))?;
     // Prefer the latest macOS variant — in mSCP 2.0 the shell check is macOS-only,
     // so it's the richest row to surface; fall back to any platform otherwise.
@@ -358,15 +338,13 @@ pub fn get_rule_detail(rule_id: &str, beta: bool) -> Result<Option<RuleDetail>> 
 mod tests {
     use super::*;
 
-    /// `--beta` reaches the preview channel, or refuses — never silently stable.
+    /// `--beta` reaches the preview channel, or answers exactly as stable.
     ///
     /// It follows the dataset. Carried: beta must resolve preview rules and
-    /// search must surface them. Not carried: both entry points must refuse,
-    /// because returning stable under beta's name would pass a test that
-    /// only checks beta resolves something — out of the stable table. When a new seed diverges the channels, re-add a
-    /// stable-negative on one of its preview-only rules to the carried arm.
+    /// search must surface them. Not carried: mSCP has no preview, so both
+    /// entry points return what stable returns.
     #[test]
-    fn beta_either_reaches_the_preview_channel_or_refuses() {
+    fn beta_reaches_the_preview_channel_or_answers_as_stable() {
         const PREVIEW_RULE: &str = "os_apple_intelligence_pcc_disable";
 
         if mscp_schema::beta_dataset_is_carried() {
@@ -380,31 +358,18 @@ mod tests {
             return;
         }
 
-        for err in [
-            get_rule_detail(PREVIEW_RULE, true).err(),
-            search_rules("intelligence", None, true).err(),
-        ] {
-            let e = err.expect(
-                "no preview dataset is carried, so a --beta query must refuse rather than \
-                 answer from the stable tables",
-            );
-            // With an Apple seed carried, mSCP says it has no pre-release
-            // branch; without one, that the channel is disabled.
-            let want = if mdm_schema::SEED_DATASET {
-                "no pre-release branch"
-            } else {
-                "disabled"
-            };
-            assert!(e.to_string().contains(want), "{e}");
-        }
-
-        // The stable path is untouched by any of this, and says so here so a
-        // failure above is not read as "rule lookup is broken".
-        assert!(
-            get_rule_detail(PREVIEW_RULE, false)
-                .expect("stable lookup")
-                .is_some(),
-            "the rule graduated to stable in 2026-09; it must still resolve there"
+        let ids = |beta| {
+            search_rules("intelligence", None, beta)
+                .expect("search")
+                .into_iter()
+                .map(|r| r.rule_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(true), ids(false), "between previews --beta search is stable's");
+        assert_eq!(
+            get_rule_detail(PREVIEW_RULE, true).expect("beta lookup").map(|d| d.rule.rule_id),
+            get_rule_detail(PREVIEW_RULE, false).expect("stable lookup").map(|d| d.rule.rule_id),
+            "between previews --beta rule detail is stable's"
         );
     }
 

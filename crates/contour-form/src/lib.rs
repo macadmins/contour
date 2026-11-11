@@ -348,9 +348,8 @@ impl SchemaRegistry {
     pub fn embedded_channel(channel: Channel) -> Result<Self> {
         match channel {
             Channel::Stable => Self::embedded(),
-            Channel::Beta if !Self::beta_dataset_is_carried() => {
-                anyhow::bail!(Self::beta_unavailable_message())
-            }
+            // Without a seed the beta accessors are the release's bytes, so
+            // beta answers exactly as stable does until the next seed.
             Channel::Beta => Self::embedded_beta(),
         }
     }
@@ -363,14 +362,6 @@ impl SchemaRegistry {
     /// registry; the reasoning lives with the bytes.
     pub fn beta_dataset_is_carried() -> bool {
         mdm_schema::beta_dataset_is_carried()
-    }
-
-    /// What to tell someone who asked for beta when it is not carried.
-    ///
-    /// One text, shared with mSCP's rule queries, because the channel is one
-    /// channel — and two surfaces describing it is how this went wrong.
-    pub fn beta_unavailable_message() -> String {
-        mdm_schema::BETA_DISABLED_MESSAGE.to_string()
     }
 
     /// Load from external ultra-compact directory
@@ -793,15 +784,7 @@ mod tests {
     }
 
     #[test]
-    fn suggest_other_channel_never_points_at_a_disabled_beta() {
-        // A hint that names a flag which refuses is worse than no hint: it
-        // sends someone to a second error for the same question. While no
-        // seed dataset is carried, `embedded_channel(Beta)` bails, so the
-        // beta direction yields nothing — and that is asserted rather than
-        // left to happen.
-        //
-        // The reverse direction still works and still matters: someone who
-        // passed --beta and missed gets told to drop it.
+    fn suggest_other_channel_stays_quiet_when_beta_is_the_release() {
         if SchemaRegistry::beta_dataset_is_carried() {
             // Beta is carried and is a superset of stable. A type both
             // channels have gets no hint either way: the fuzzy search used to
@@ -818,28 +801,20 @@ mod tests {
             return;
         }
 
+        // Between seeds beta is the release, so a type is in both channels or
+        // in neither, and a hint to switch would send someone to the same answer.
         for name in [
             "com.apple.configuration.app.settings",
             "com.apple.dock",
             "com.apple.totally.bogus.xyz",
         ] {
-            assert!(
-                suggest_other_channel(name, Channel::Stable, true).is_none(),
-                "{name}: suggested --beta while the beta channel refuses"
-            );
+            for current in [Channel::Stable, Channel::Beta] {
+                assert!(
+                    suggest_other_channel(name, current, false).is_none(),
+                    "{name}: hinted at the other channel while both are the release"
+                );
+            }
         }
-
-        // From beta towards stable the lookup is of the stable dataset, which
-        // is carried, so this arm is unaffected by beta being disabled.
-        let back = suggest_other_channel("com.apple.dock", Channel::Beta, false);
-        assert!(
-            back.as_deref().is_some_and(|h| h.contains("drop --beta")),
-            "a stable type queried under beta must still say to drop the flag"
-        );
-
-        assert!(
-            suggest_other_channel("com.apple.totally.bogus.xyz", Channel::Beta, false).is_none()
-        );
     }
     #[test]
     fn embedded_channel_routes_to_dataset() {
@@ -848,26 +823,12 @@ mod tests {
 
         // Beta follows the data. Carried: it must be a superset, since the
         // seed adds to the release branch and never subtracts. Not carried:
-        // it must REFUSE, because the failure this replaced was beta quietly
-        // resolving to the stable dataset — same rows, different name, no
-        // way for a caller to tell which question got answered.
-        match SchemaRegistry::embedded_channel(Channel::Beta) {
-            Ok(beta) => {
-                assert!(
-                    SchemaRegistry::beta_dataset_is_carried(),
-                    "beta loaded while no distinct seed dataset is carried — it is \
-                     serving stable under another name"
-                );
-                assert!(beta.len() >= stable.len());
-            }
-            Err(e) => {
-                assert!(
-                    !SchemaRegistry::beta_dataset_is_carried(),
-                    "beta refused although a seed dataset IS carried: {e}"
-                );
-                let msg = e.to_string();
-                assert!(msg.contains("disabled"), "{msg}");
-            }
+        // it is the release, so `--beta` keeps working between seeds.
+        let beta = SchemaRegistry::embedded_channel(Channel::Beta).expect("beta loads");
+        if SchemaRegistry::beta_dataset_is_carried() {
+            assert!(beta.len() >= stable.len());
+        } else {
+            assert_eq!(beta.len(), stable.len(), "between seeds beta is the release");
         }
     }
     #[test]

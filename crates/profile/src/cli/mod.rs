@@ -72,31 +72,31 @@ Getting started:
   contour completions zsh --install  enable <TAB> shell completion
   contour trainer profile            step-by-step interactive tutorial";
 
-/// `--channel` help: says "disabled" only in a build without a seed dataset.
+/// `--channel` help: says beta is the release only in a build without a seed.
 pub const CHANNEL_HELP: &str = if mdm_schema::SEED_DATASET {
     "Schema channel: stable (released), or beta (pre-release OS seed)"
 } else {
-    "Schema channel: stable (released), or beta (pre-release OS seed — currently disabled)"
+    "Schema channel: stable (released), or beta (pre-release OS seed; the release until the next seed)"
 };
 const BETA_SCHEMA_HELP: &str = if mdm_schema::SEED_DATASET {
     "Use the beta seed schema (shorthand for --channel beta)"
 } else {
-    "Use the beta seed schema (shorthand for --channel beta) — currently disabled"
+    "Use the beta seed schema (shorthand for --channel beta) — no seed open: same as stable"
 };
 const BETA_SEARCH_HELP: &str = if mdm_schema::SEED_DATASET {
     "Search the beta seed schema (shorthand for --channel beta)"
 } else {
-    "Search the beta seed schema (shorthand for --channel beta) — currently disabled"
+    "Search the beta seed schema (shorthand for --channel beta) — no seed open: same as stable"
 };
 const BETA_GENERATE_HELP: &str = if mdm_schema::SEED_DATASET {
     "Generate against the beta seed schema (shorthand for --channel beta)"
 } else {
-    "Generate against the beta seed schema (shorthand for --channel beta) — currently disabled"
+    "Generate against the beta seed schema (shorthand for --channel beta) — no seed open: same as stable"
 };
 const BETA_COUNT_HELP: &str = if mdm_schema::SEED_DATASET {
     "Count seed declaration types (shorthand for --channel beta)"
 } else {
-    "Count seed declaration types (shorthand for --channel beta) — currently disabled"
+    "Count seed declaration types (shorthand for --channel beta) — no seed open: same as stable"
 };
 
 #[derive(Debug, Parser)]
