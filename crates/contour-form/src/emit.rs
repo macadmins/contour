@@ -447,7 +447,16 @@ fn emit_mobileconfig(
     let mut buf = Vec::new();
     plist::to_writer_xml(&mut buf, &plist::Value::Dictionary(root))
         .map_err(|e| EmitError::Serialize(e.to_string()))?;
-    let body = String::from_utf8(buf).map_err(|e| EmitError::Serialize(e.to_string()))?;
+    // Escape like Apple's writers (& < > only); see contour_profiles::xml.
+    // Kept inline: contour-form stays free of native-only crates. Same guard
+    // as there: keep the edit only if it parses to the same value.
+    let text = String::from_utf8(buf).map_err(|e| EmitError::Serialize(e.to_string()))?;
+    let fixed = text.replace("&quot;", "\"").replace("&apos;", "'");
+    let parse = |s: &str| plist::from_bytes::<plist::Value>(s.as_bytes()).ok();
+    let body = match (parse(&fixed), parse(&text)) {
+        (Some(a), Some(b)) if a == b => fixed,
+        _ => text,
+    };
     Ok(vec![Emitted {
         label: None,
         identifier: root_id.clone(),

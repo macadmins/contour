@@ -125,7 +125,7 @@ impl ProfileBuilder {
         profile.insert("PayloadEnabled".to_string(), Value::Boolean(true));
 
         let mut buffer = Vec::new();
-        plist::to_writer_xml(&mut buffer, &Value::Dictionary(profile))
+        crate::to_writer_xml(&mut buffer, &Value::Dictionary(profile))
             .context("Failed to serialize profile")?;
 
         Ok(buffer)

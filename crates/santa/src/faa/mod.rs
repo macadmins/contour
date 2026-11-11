@@ -266,7 +266,7 @@ pub fn generate_plist(policies: &FaaPolicyFile) -> Result<Vec<u8>> {
     root.insert("WatchItems".to_string(), Value::Dictionary(watch_items));
 
     let mut buf = Vec::new();
-    plist::to_writer_xml(&mut buf, &Value::Dictionary(root))
+    contour_profiles::to_writer_xml(&mut buf, &Value::Dictionary(root))
         .context("Failed to serialize FAA plist")?;
     Ok(buf)
 }

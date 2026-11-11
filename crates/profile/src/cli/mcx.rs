@@ -210,6 +210,8 @@ pub fn handle_rename(
             Ok((new_text, applied)) => {
                 changed += 1;
                 if write {
+                    crate::profile::parser::ensure_plist(new_text.as_bytes())
+                        .with_context(|| format!("{}: left unchanged", file.display()))?;
                     std::fs::write(file, &new_text)
                         .with_context(|| format!("writing {}", file.display()))?;
                 }

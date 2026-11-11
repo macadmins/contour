@@ -252,7 +252,8 @@ exit 0
 
         // Write as XML plist
         let mut file = fs::File::create(path)?;
-        plist::to_writer_xml(&mut file, pkginfo).context("Failed to write pkginfo plist")?;
+        contour_profiles::to_writer_xml(&mut file, pkginfo)
+            .context("Failed to write pkginfo plist")?;
 
         Ok(())
     }
