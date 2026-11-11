@@ -131,7 +131,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app-manifest"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "arrow",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "app-policy-schema"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "arrow",
@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "btm"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "contour"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "app-manifest",
@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "contour-core"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -832,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "contour-form"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "contour-form-wasm"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "contour-form",
  "serde_json",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "contour-mcp"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -874,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "contour-profiles"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "plist",
@@ -2023,7 +2023,7 @@ dependencies = [
 
 [[package]]
 name = "mdm-schema"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "arrow",
@@ -2076,7 +2076,7 @@ dependencies = [
 
 [[package]]
 name = "mscp"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2110,7 +2110,7 @@ dependencies = [
 
 [[package]]
 name = "mscp-schema"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "arrow",
@@ -2147,7 +2147,7 @@ checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
 
 [[package]]
 name = "notifications"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2327,7 +2327,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "osquery-schema"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "arrow",
@@ -2460,7 +2460,7 @@ checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
 
 [[package]]
 name = "pppc"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2526,7 +2526,7 @@ dependencies = [
 
 [[package]]
 name = "profile"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2874,7 +2874,7 @@ dependencies = [
 
 [[package]]
 name = "santa"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3156,7 +3156,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "support"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3842,7 +3842,7 @@ dependencies = [
 
 [[package]]
 name = "windows-schema"
-version = "0.5.0-rc.1"
+version = "0.5.0-rc.2"
 dependencies = [
  "anyhow",
  "arrow",
