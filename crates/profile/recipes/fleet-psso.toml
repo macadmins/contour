@@ -1,0 +1,74 @@
+# Fleet Platform SSO for macOS — Password method, brokered by Fleet.
+#
+# Uses the PSSO extension built into Fleet Desktop
+# (`com.fleetdm.fleet-desktop.pssoextension`) to create the Mac's local
+# account during Setup Assistant and keep its password in sync with the
+# user's IdP password. For IdPs with OAuth ROPG and no native Platform SSO
+# integration; for Okta or Entra use `okta.toml` / `entra-psso*.toml`.
+#
+# Fleet is a broker, not the identity provider. It serves the Platform SSO
+# endpoints the extension talks to and checks each password against your
+# IdP over OAuth ROPG; your IdP stays the only source of identity.
+#
+# Requires Fleet Premium and macOS 26+ for password sync, and Fleet Desktop
+# installed as setup-experience software so the extension is present before
+# the sign-in screen.
+#
+# One profile, two payloads (Extensible SSO + Associated Domains), as in
+# Fleet's example. Do not scope it with labels: it must arrive before
+# Setup Assistant.
+#
+# `FLEET_DOMAIN` is the Fleet server's host name without a scheme
+# (`fleet.example.com`).
+#
+# References:
+#   - Deploying Apple account provisioning with Fleet:
+#     https://fleetdm.com/guides/deploying-apple-account-provisioning-with-fleet
+#   - Example profile:
+#     https://github.com/fleetdm/fleet/blob/main/docs/solutions/macos/configuration-profiles/fleet-sso-extension-example.mobileconfig
+
+[recipe]
+name = "fleet-psso"
+description = "Fleet Platform SSO for macOS (Password sync, brokered by Fleet)"
+vendor = "Fleet"
+variables = ["FLEET_DOMAIN"]
+
+[recipe.output]
+combined = true
+combined_filename = "fleet-psso.mobileconfig"
+
+[[profile]]
+filename = "fleet-psso-extension.mobileconfig"
+payload_type = "com.apple.extensiblesso"
+display_name = "Fleet Extensible Single Sign-On"
+description = "Configures the Fleet Desktop Platform SSO extension using the Password method"
+
+[profile.fields]
+Type = "Redirect"
+TeamIdentifier = "8VBZ3948LU"
+ExtensionIdentifier = "com.fleetdm.fleet-desktop.pssoextension"
+URLs = ["https://{{FLEET_DOMAIN}}"]
+ScreenLockedBehavior = "DoNotHandle"
+
+[profile.extra_fields]
+"PlatformSSO.AuthenticationMethod" = "Password"
+"PlatformSSO.UseSharedDeviceKeys" = true
+"PlatformSSO.EnableRegistrationDuringSetup" = true
+# IdP token claims used to name the local account. Edit these if your IdP
+# issues different claims.
+"PlatformSSO.TokenToUserMapping.AccountName" = "accountName"
+"PlatformSSO.TokenToUserMapping.FullName" = "name"
+# A Fleet variable, not a recipe placeholder: Fleet substitutes a per-device
+# token when it delivers the profile. Leave it as written.
+"RegistrationToken" = "$FLEET_VAR_PSSO_DEVICE_REGISTRATION_TOKEN"
+# The extension derives its endpoints from this one URL.
+"ExtensionData.BaseURL" = "https://{{FLEET_DOMAIN}}"
+
+[[profile]]
+filename = "fleet-psso-associated-domains.mobileconfig"
+payload_type = "com.apple.associated-domains"
+display_name = "Fleet Associated Domains"
+description = "Associates the Fleet server domain with Fleet Desktop and its Platform SSO extension"
+
+[profile.fields]
+Configuration = [{ApplicationIdentifier = "8VBZ3948LU.com.fleetdm.fleet-desktop", AssociatedDomains = ["authsrv:{{FLEET_DOMAIN}}"]}, {ApplicationIdentifier = "8VBZ3948LU.com.fleetdm.fleet-desktop.pssoextension", AssociatedDomains = ["authsrv:{{FLEET_DOMAIN}}"]}]

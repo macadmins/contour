@@ -1,0 +1,36 @@
+# Claude Code — managed settings as a configuration profile.
+#
+# Claude Code reads managed settings from the `com.anthropic.claudecode`
+# managed preferences domain. The keys are the top-level keys of
+# `managed-settings.json`; nested settings are dictionaries and lists are
+# arrays. Managed settings sit at the top of the precedence order: users
+# cannot override them.
+#
+# This recipe ships the same minimal policy as Anthropic's MDM example
+# (`permissions.disableBypassPermissionsMode`). Add your own keys under
+# `mcx_preference_settings`; the settings reference lists them.
+#
+# To confirm on a Mac: run `/status` in Claude Code and look for
+# `Enterprise managed settings (plist)` under Setting sources.
+#
+# References:
+#   - Deploy managed settings:
+#     https://code.claude.com/docs/en/managed-settings
+#   - Settings reference:
+#     https://code.claude.com/docs/en/settings-reference
+#   - Anthropic's MDM examples:
+#     https://github.com/anthropics/claude-code/tree/main/examples/mdm
+
+[recipe]
+name = "claude-code"
+description = "Claude Code managed settings (com.anthropic.claudecode)"
+vendor = "Anthropic"
+
+[[profile]]
+filename = "claude-code-managed-settings.mobileconfig"
+payload_type = "com.apple.ManagedClient.preferences"
+display_name = "Claude Code Managed Settings"
+description = "Configures managed settings for Claude Code"
+
+[profile.fields.PayloadContent."com.anthropic.claudecode"]
+Forced = [{ mcx_preference_settings = { permissions = { disableBypassPermissionsMode = "disable" } } }]
