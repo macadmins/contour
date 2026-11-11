@@ -136,6 +136,34 @@ NewUserAuthenticationMethods ∋ AccessKey → all three AccessKey keys present,
                                             NewUserAuthorizationMode Temporary, EnableAtLogin true
 ```
 
+## FLEET PLATFORM SSO (profile recipe, not DDM)
+
+For an IdP with OAuth ROPG and no native Platform SSO integration, Fleet Desktop
+ships its own extension (`com.fleetdm.fleet-desktop.pssoextension`). The
+`fleet-psso` recipe builds the one profile it needs: Extensible SSO (Password
+method, registration during setup) plus Associated Domains.
+
+Fleet is a broker, not the IdP: it serves the Platform SSO endpoints and checks
+each password against your IdP over OAuth ROPG. Your IdP stays the only source
+of identity.
+
+```
+contour profile generate --list-recipes --json        # pick: fleet-psso
+contour profile generate --recipe fleet-psso \
+  --set FLEET_DOMAIN=fleet.example.com --org {org} -o {output}
+ASSERT one file fleet-psso.mobileconfig with two payloads
+```
+
+- `FLEET_DOMAIN` is the host name only, no scheme.
+- `$FLEET_VAR_PSSO_DEVICE_REGISTRATION_TOKEN` is Fleet's variable; leave it as written.
+- Do not scope the profile with labels: it must arrive before Setup Assistant.
+- Needs Fleet Premium, macOS 26+ for password sync, and Fleet Desktop as
+  setup-experience software. Password sync only: no SSO to apps or websites.
+- Okta or Entra: use the `okta`, `entra-psso` or `entra-psso-password` recipes.
+- Own variant: a `fleet-psso.toml` in `--recipe-path` or `~/.contour/recipes/`
+  wins over the built-in. From scratch: `--create-recipe {name}
+  com.apple.extensiblesso com.apple.associated-domains`.
+
 ## SAFETY
 
 - `RequireAuthentication` with no grace period locks out every account the IdP

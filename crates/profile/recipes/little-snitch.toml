@@ -1,0 +1,54 @@
+# Little Snitch (Objective Development) — pre-approve the network filter.
+#
+# The vendor's enterprise deployment profile as a recipe: it lets macOS
+# activate Little Snitch's network extension and content filter without the
+# user approval dialogs. On a supervised Mac it installs without interaction.
+#
+# One profile, two payloads: content filter and system extension policy.
+#
+# Not covered here (see the vendor page): the app install, the license and
+# initial rules in `LittleSnitchMassDeploymentConfiguration.json`, and the
+# per-user defaults that skip the license and welcome prompts.
+#
+# The vendor's file has a third payload, `com.apple.networkextension.managed`.
+# Apple's schema has no such payload type, so it is left out here; it repeats
+# two keys the content filter payload already carries.
+#
+# Check for another vendor's content filter profile before deploying this.
+#
+# Reference:
+#   - Enterprise deployment (Little Snitch 6):
+#     https://help.obdev.at/littlesnitch6/adv-enterprise-deployment
+
+[recipe]
+name = "little-snitch"
+description = "Little Snitch network filter and system extension pre-approval"
+vendor = "Objective Development"
+
+[recipe.output]
+combined = true
+combined_filename = "little-snitch.mobileconfig"
+
+[[profile]]
+filename = "little-snitch-content-filter.mobileconfig"
+payload_type = "com.apple.webcontent-filter"
+display_name = "Allow Little Snitch Network Filter"
+description = "Enables the Little Snitch socket filter"
+
+[profile.fields]
+FilterType = "Plugin"
+FilterGrade = "firewall"
+FilterSockets = true
+FilterDataProviderBundleIdentifier = "at.obdev.littlesnitch.networkextension"
+FilterDataProviderDesignatedRequirement = 'identifier "at.obdev.littlesnitch.networkextension" and anchor apple generic and certificate leaf[subject.OU] = MLZF7K7B5R'
+PluginBundleID = "at.obdev.littlesnitch"
+UserDefinedName = "Little Snitch"
+
+[[profile]]
+filename = "little-snitch-system-extension.mobileconfig"
+payload_type = "com.apple.system-extension-policy"
+display_name = "Allow Little Snitch Network Extension"
+description = "Approves the Little Snitch system extension"
+
+[profile.fields.AllowedSystemExtensions]
+MLZF7K7B5R = ["at.obdev.littlesnitch.networkextension"]

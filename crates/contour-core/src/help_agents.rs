@@ -412,7 +412,7 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
     )?;
     writeln!(
         buf,
-        "- Platform SSO, PSSO, Touch ID at login, guest mode, Tap to Login, extensible-sso → `--sop platform-sso`"
+        "- Platform SSO, PSSO, Fleet PSSO, Touch ID at login, guest mode, Tap to Login, extensible-sso → `--sop platform-sso`"
     )?;
     writeln!(
         buf,
