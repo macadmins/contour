@@ -129,14 +129,32 @@ impl DeduplicationReport {
 pub struct ProfileDeduplicator {
     /// Output base path (e.g., ./London-GitOps)
     output_base: PathBuf,
+    /// Per-baseline profiles directory of the platform being deduplicated.
+    profiles_subdir: &'static str,
 }
 
 impl ProfileDeduplicator {
-    /// Create a new profile deduplicator
+    /// Create a new profile deduplicator (macOS until [`Self::for_os`]).
     pub fn new<P: AsRef<Path>>(output_base: P) -> Self {
         Self {
             output_base: output_base.as_ref().to_path_buf(),
+            profiles_subdir: FleetLayout::default().macos_profiles_subdir,
         }
+    }
+
+    /// Scan `os`'s profiles (`macos`, `ios`). Platforms are deduplicated one
+    /// at a time: a shared profile gets one label, and a label has one platform.
+    #[must_use]
+    pub fn for_os(mut self, os: &str) -> Self {
+        self.profiles_subdir = FleetLayout::default().apple_profiles_subdir(os);
+        self
+    }
+
+    /// Where `baseline_name`'s profiles live for this platform.
+    pub fn profiles_dir(&self, baseline_name: &str) -> PathBuf {
+        self.output_base
+            .join(self.profiles_subdir)
+            .join(baseline_name)
     }
 
     /// Scan all baselines and detect duplicates
@@ -184,13 +202,9 @@ impl ProfileDeduplicator {
 
     /// Scan a single baseline for profiles.
     ///
-    /// Fleet v4.83+: profiles live at `platforms/macos/configuration-profiles/{name}/`.
+    /// Profiles live at `platforms/<os>/configuration-profiles/{name}/`.
     fn scan_baseline(&self, baseline_name: &str) -> Result<Vec<ProfileEntry>> {
-        let layout = FleetLayout::default();
-        let profiles_dir = self
-            .output_base
-            .join(layout.macos_profiles_subdir)
-            .join(baseline_name);
+        let profiles_dir = self.profiles_dir(baseline_name);
 
         if !profiles_dir.exists() {
             tracing::warn!(
@@ -344,5 +358,38 @@ mod tests {
 
         assert!(!group.is_duplicate());
         assert_eq!(group.get_unique_baselines().len(), 1);
+    }
+
+    /// Each platform is scanned in its own folder: an iOS run must not count
+    /// (or later delete) the macOS copy of an identical profile.
+    #[test]
+    fn a_scan_stays_inside_the_requested_platform() {
+        let tmp = tempfile::tempdir().unwrap();
+        for dir in [
+            "platforms/ios/configuration-profiles/a_ios",
+            "platforms/ios/configuration-profiles/b_ios",
+            "platforms/macos/configuration-profiles/a_macos",
+        ] {
+            let d = tmp.path().join(dir);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("x.mobileconfig"), "same").unwrap();
+        }
+        let names: Vec<String> = ["a_ios", "b_ios", "a_macos"].map(String::from).into();
+
+        let ios = ProfileDeduplicator::new(tmp.path()).for_os("ios");
+        let report = ios.scan_baselines(&names).unwrap();
+        assert_eq!(report.total_profiles, 2);
+        assert_eq!(report.get_shared_profiles().len(), 1);
+
+        let macos = ProfileDeduplicator::new(tmp.path());
+        assert_eq!(macos.scan_baselines(&names).unwrap().total_profiles, 1);
+
+        let library = crate::deduplicator::SharedProfileLibrary::new(tmp.path());
+        let mapping = library.deduplicate_profiles(&report).unwrap();
+        library.cleanup_baseline_profiles(&mapping, "ios").unwrap();
+        let left = |p: &str| tmp.path().join(p).join("x.mobileconfig").exists();
+        assert!(!left("platforms/ios/configuration-profiles/a_ios"));
+        assert!(left("platforms/macos/configuration-profiles/a_macos"));
+        assert!(left("mscp/profiles"));
     }
 }

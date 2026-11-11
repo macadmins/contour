@@ -70,7 +70,8 @@ fn configure_baseline(baseline: &mut BaselineConfig, mscp_repo: &Path) -> Result
     // derived downstream. For the interactive UX we treat the rule ID as
     // the user-facing identifier; subfolder placement is applied to the
     // generated audit/remediate pair if their filenames contain the rule ID.
-    let scripts = Constraints::discover_scripts(mscp_repo, Some(&baseline.name))
+    let scripts = crate::cli::deduplicate::parse_platform(&baseline.os)
+        .and_then(|os| Constraints::discover_scripts(mscp_repo, Some(&baseline.name), os))
         .unwrap_or_default()
         .into_iter()
         .map(|s| format!("{}.sh", s.rule_id))

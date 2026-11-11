@@ -134,7 +134,9 @@ contour mscp generate -m ./macos_security -k disa_stig -o out \
 
 ## Output
 
-Written to `<out>/osquery/<baseline>/`:
+Written to `<out>/osquery/<baseline>/`, where `<baseline>` is the output
+name `<keyword>_macos` (osquery output is macOS-only; see "Output naming" in
+`--sop mscp`):
 
 | File | Purpose |
 |---|---|

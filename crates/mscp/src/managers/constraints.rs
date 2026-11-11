@@ -397,8 +397,12 @@ impl Constraints {
     }
 
     /// Discover scripts from mSCP repository
-    pub fn discover_scripts(mscp_repo: &Path, baseline: Option<&str>) -> Result<Vec<ScriptInfo>> {
-        let extractor = RuleExtractor::new(mscp_repo);
+    pub fn discover_scripts(
+        mscp_repo: &Path,
+        baseline: Option<&str>,
+        os: crate::models::Platform,
+    ) -> Result<Vec<ScriptInfo>> {
+        let extractor = RuleExtractor::new(mscp_repo).with_os(os, None);
 
         let rules = if let Some(b) = baseline {
             extractor.extract_rules_for_baseline(b)?

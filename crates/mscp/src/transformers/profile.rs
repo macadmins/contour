@@ -33,9 +33,12 @@ impl ProfileTransformer {
             // Jamf mode: Direct structure {output}/{baseline_name}/
             self.output_base.join(&baseline.name)
         } else if self.fleet_output {
-            // Fleet v4.83+ GitOps: platforms/macos/configuration-profiles/{baseline}/
+            // Fleet v4.83+ GitOps: platforms/<os>/configuration-profiles/{baseline}/
             self.output_base
-                .join(self.layout.macos_profiles_subdir)
+                .join(
+                    self.layout
+                        .apple_profiles_subdir(baseline.platform.mscp_dir_name()),
+                )
                 .join(&baseline.name)
         } else {
             // Plain mode: mscp/{baseline_name}/profiles/

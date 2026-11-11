@@ -70,6 +70,7 @@ pub struct ExtractionResult {
 pub fn extract_scripts(
     mscp_repo: Option<PathBuf>,
     baseline: String,
+    os: crate::models::Platform,
     output: PathBuf,
     flat_output: bool,
     dry_run: bool,
@@ -79,13 +80,13 @@ pub fn extract_scripts(
 ) -> Result<()> {
     // Get rules for this baseline from repo or embedded data
     let rules = if let Some(ref repo_path) = mscp_repo {
-        let extractor = RuleExtractor::new(repo_path);
+        let extractor = RuleExtractor::new(repo_path).with_os(os, None);
         extractor
             .extract_rules_for_baseline(&baseline)
             .with_context(|| format!("Failed to extract rules for baseline '{baseline}'"))?
     } else {
         tracing::info!("No mSCP repo path — using embedded rule data");
-        crate::extractors::rules_from_embedded(&baseline, "macOS")
+        crate::extractors::rules_from_embedded(&baseline, os.schema_name())
             .with_context(|| format!("Failed to load embedded rules for baseline '{baseline}'"))?
     };
 

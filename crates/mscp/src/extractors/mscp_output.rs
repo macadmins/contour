@@ -123,8 +123,16 @@ impl MscpOutputExtractor {
             i32::from(compliance_script.is_some())
         );
 
+        // Accept the build directory's own name (`cis_lvl1_macos_27.0`) as
+        // well as the bare one.
+        let mscp_name = self
+            .baseline_name
+            .split_once(&format!("_{}_", platform.mscp_dir_name()))
+            .map_or(self.baseline_name.as_str(), |(bare, _)| bare)
+            .to_owned();
         Ok(MscpBaseline {
-            name: self.baseline_name.clone(),
+            name: platform.output_name(&mscp_name),
+            mscp_name,
             build_path: self.build_path.clone(),
             platform,
             mobileconfigs,

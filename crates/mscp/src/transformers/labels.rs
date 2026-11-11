@@ -54,7 +54,11 @@ impl LabelGenerator {
         baseline_name: &str,
         platform: Platform,
     ) -> Result<Vec<FleetLabel>> {
-        let platform_str = platform.to_fleet_label_platform();
+        // mSCP's iOS baselines are iOS *and* iPadOS, which Fleet counts as two
+        // platforms, so `platform: ios` would shut iPads out. These labels are
+        // manual (membership is the host list), so iOS ones name no platform.
+        let platform_str =
+            (platform != Platform::Ios).then(|| platform.to_fleet_label_platform().to_string());
 
         let label_name = format!("mscp-{baseline_name}");
         let remediate_label_name = format!("mscp-{baseline_name}-remediate");
@@ -68,7 +72,7 @@ impl LabelGenerator {
                     description: format!(
                         "Hosts enrolled in mSCP {baseline_name} baseline compliance program"
                     ),
-                    platform: Some(platform_str.to_string()),
+                    platform: platform_str.clone(),
                     label_membership_type: "manual".to_string(),
                     query: None,
                     hosts: None,
@@ -82,7 +86,7 @@ impl LabelGenerator {
                     description: format!(
                         "Hosts authorized for automatic remediation of mSCP {baseline_name} baseline violations"
                     ),
-                    platform: Some(platform_str.to_string()),
+                    platform: platform_str.clone(),
                     label_membership_type: "manual".to_string(),
                     query: None,
                     hosts: None,
@@ -126,5 +130,16 @@ mod tests {
         assert_eq!(labels[0].spec.name, "mscp-800-53r5_high");
         assert_eq!(labels[1].spec.name, "mscp-800-53r5_high-remediate");
         assert_eq!(labels[0].spec.platform, Some("darwin".to_string()));
+    }
+
+    /// An iOS baseline covers iPadOS too, so its labels are not tied to `ios`.
+    #[test]
+    fn ios_baseline_labels_name_no_platform() {
+        let labels = LabelGenerator::new("/tmp/test")
+            .generate_baseline_labels("cis_lvl1_byod_ios", Platform::Ios)
+            .unwrap();
+        assert!(labels.iter().all(|l| l.spec.platform.is_none()));
+        let yaml = yaml_serde::to_string(&labels[0].spec).unwrap();
+        assert!(!yaml.contains("platform"), "{yaml}");
     }
 }

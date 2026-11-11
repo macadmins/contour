@@ -64,8 +64,9 @@ impl OdvOverrides {
     pub fn discover_odvs(
         mscp_repo: impl AsRef<Path>,
         baseline: &str,
+        os: crate::models::Platform,
     ) -> Result<Vec<OdvDefinition>> {
-        let extractor = RuleExtractor::new(mscp_repo.as_ref());
+        let extractor = RuleExtractor::new(mscp_repo.as_ref()).with_os(os, None);
         let rules = extractor.extract_rules_for_baseline(baseline)?;
 
         let mut odvs = Vec::new();
@@ -118,9 +119,10 @@ impl OdvOverrides {
     pub fn create_override_file(
         mscp_repo: impl AsRef<Path>,
         baseline: &str,
+        os: crate::models::Platform,
         output_path: impl AsRef<Path>,
     ) -> Result<PathBuf> {
-        let odvs = Self::discover_odvs(mscp_repo, baseline)?;
+        let odvs = Self::discover_odvs(mscp_repo, baseline, os)?;
 
         // Build overrides from discovered ODVs
         let overrides: Vec<OdvOverride> = odvs

@@ -121,7 +121,9 @@ pub enum Commands {
         #[arg(long, default_value = "main")]
         branch: String,
 
-        /// Baselines to enable (comma-separated, used with --sync)
+        /// Baselines to enable (comma-separated, used with --sync). A bare
+        /// name is macOS; write `name:os` for another platform, e.g.
+        /// `cis_lvl1,cis_lvl1_byod:ios`.
         #[arg(long = "keywords", visible_alias = "baselines", value_delimiter = ',')]
         keywords: Option<Vec<String>>,
     },
@@ -624,6 +626,17 @@ pub enum Commands {
         )]
         keywords: Option<Vec<String>>,
 
+        /// OS target for every baseline in this run: `macos`, `ios`, or
+        /// `visionos` (ignored if --config is used — set `os` per baseline
+        /// there to build several platforms into one output).
+        #[arg(long, value_enum, default_value_t = OsArg::Macos)]
+        os: OsArg,
+
+        /// OS version (e.g. `27.0`). Defaults to the highest version
+        /// available for each baseline (ignored if --config is used).
+        #[arg(long)]
+        os_version: Option<String>,
+
         /// Output directory for Fleet `GitOps` structure (ignored if --config is used)
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -808,6 +821,10 @@ pub enum Commands {
             short_alias = 'b'
         )]
         keyword: String,
+
+        /// OS target: `macos`, `ios`, or `visionos`.
+        #[arg(long, value_enum, default_value_t = OsArg::Macos)]
+        os: OsArg,
 
         /// Output directory for scripts
         #[arg(short, long)]
@@ -1082,6 +1099,10 @@ pub enum SchemaAction {
     Rule {
         /// Rule ID (e.g., os_airdrop_disable)
         rule_id: String,
+        /// Platform whose variant to show (macOS, iOS, visionOS). Default:
+        /// macOS when the rule has one, else whichever platform carries it.
+        #[arg(long)]
+        platform: Option<String>,
         /// Query the OS-preview (beta) dataset
         #[arg(long)]
         beta: bool,
@@ -1231,6 +1252,10 @@ pub enum ConstraintsAction {
             short_alias = 'b'
         )]
         keyword: Option<String>,
+
+        /// OS target: `macos`, `ios`, or `visionos`.
+        #[arg(long, value_enum, default_value_t = OsArg::Macos)]
+        os: OsArg,
     },
 
     /// Remove scripts from exclusion list
@@ -1304,6 +1329,10 @@ pub enum ConstraintsAction {
         )]
         keyword: String,
 
+        /// OS target: `macos`, `ios`, or `visionos`.
+        #[arg(long, value_enum, default_value_t = OsArg::Macos)]
+        os: OsArg,
+
         /// Categories to exclude (comma-separated, skips interactive picker)
         #[arg(short, long, value_delimiter = ',')]
         exclude: Option<Vec<String>>,
@@ -1328,6 +1357,10 @@ pub enum OdvAction {
         )]
         keyword: String,
 
+        /// OS target: `macos`, `ios`, or `visionos`.
+        #[arg(long, value_enum, default_value_t = OsArg::Macos)]
+        os: OsArg,
+
         /// Output directory for ODV override file
         #[arg(short, long, default_value = ".")]
         output: PathBuf,
@@ -1347,6 +1380,10 @@ pub enum OdvAction {
             short_alias = 'b'
         )]
         keyword: String,
+
+        /// OS target: `macos`, `ios`, or `visionos`.
+        #[arg(long, value_enum, default_value_t = OsArg::Macos)]
+        os: OsArg,
 
         /// Path to ODV override file (auto-detected as `odv_<baseline>.yaml` if not specified)
         #[arg(short = 'O', long)]

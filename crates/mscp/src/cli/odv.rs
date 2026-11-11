@@ -10,6 +10,7 @@ use std::path::PathBuf;
 pub fn odv_init(
     mscp_repo: PathBuf,
     baseline: String,
+    os: crate::models::Platform,
     output: PathBuf,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -20,7 +21,7 @@ pub fn odv_init(
     }
 
     // Create override file
-    let file_path = OdvOverrides::create_override_file(&mscp_repo, &baseline, &output)?;
+    let file_path = OdvOverrides::create_override_file(&mscp_repo, &baseline, os, &output)?;
 
     // Load to get count
     let manager = OdvOverrides::load(&baseline, Some(file_path.clone()))?;
@@ -72,11 +73,12 @@ pub fn odv_init(
 pub fn odv_list(
     mscp_repo: PathBuf,
     baseline: String,
+    os: crate::models::Platform,
     overrides_path: Option<PathBuf>,
     output_mode: OutputMode,
 ) -> Result<()> {
     // Discover ODVs from mSCP repo
-    let discovered_odvs = OdvOverrides::discover_odvs(&mscp_repo, &baseline)?;
+    let discovered_odvs = OdvOverrides::discover_odvs(&mscp_repo, &baseline, os)?;
 
     // Load override file if it exists
     let override_manager = OdvOverrides::try_load(&baseline, overrides_path.clone());

@@ -179,6 +179,8 @@ One table per baseline to generate. Repeat the `[[baselines]]` header for each.
 | `name` | string | **required** | Baseline name (e.g. `cis_lvl1`, `800-53r5_high`). |
 | `enabled` | bool | `true` | Whether `generate-all` processes this baseline. |
 | `branch` | string | current branch | Git branch to build from — the rule SOURCE, not the target. `main` carries every platform; an OS-preview branch such as `dev_28` carries the next release early. Use `os` / `os_version` to choose the target. |
+| `os` | string | `macos` | Target platform: `macos`, `ios` or `visionos` — which `baselines/<os>/` file is built. A name may be listed once per OS; output is named `<name>_<os>`. visionOS is refused for Fleet output. |
+| `os_version` | string | highest available | OS version to build (e.g. `27.0`). |
 | `fleet` | string | — | Fleet name override for this baseline. |
 | `excluded_rules` | string[] | `[]` | Rule IDs to drop from this baseline. |
 
@@ -420,7 +422,7 @@ contour mscp init [flags]
 | `--munki` | Enable Munki integration (sets `output.structure = "nested"`) | `false` |
 | `--sync` | Clone/sync mSCP repository | `false` |
 | `--branch <BRANCH>` | mSCP branch to clone (`main` = mSCP 2.0; the `tahoe` / macOS-version branches are the deprecated 1.x layout and are refused) | `main` |
-| `--keywords <BASELINES>` | Baselines to enable (comma-separated, used with `--sync`) | none |
+| `--keywords <BASELINES>` | Baselines to enable (comma-separated, used with `--sync`). A bare name is macOS; `name:os` picks another platform (`cis_lvl1,cis_lvl1_byod:ios`) and is written to `mscp.toml` as `os` | none |
 | `--force` | Overwrite existing configuration | `false` |
 
 ```bash
@@ -589,6 +591,8 @@ contour mscp generate-all [flags]
 | `-c, --config <CONFIG>` | Path to configuration file | none |
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository (ignored if `--config`) | none |
 | `-k, --keywords <NAMES>` | Baselines to generate (comma-separated, ignored if `--config`) | none |
+| `--os <OS>` | Target platform for every keyword: `macos`, `ios`, `visionos` (ignored if `--config`; set `os` per `[[baselines]]` there) | `macos` |
+| `--os-version <X.Y>` | OS version (ignored if `--config`) | highest available |
 | `-o, --output <DIR>` | Output directory (ignored if `--config`) | none |
 | `--no-parallel` | Disable parallel processing | `false` |
 | `--dry-run` | Preview without writing files | `false` |
@@ -809,7 +813,7 @@ contour mscp deduplicate [flags]
 |------|-------------|---------|
 | `-o, --output <DIR>` | Output directory containing GitOps structure | **required** |
 | `-k, --keywords <NAMES>` | Baselines to deduplicate (comma-separated) | all baselines |
-| `-p, --platform <PLATFORM>` | Platform (`macOS`, `iOS`, `visionOS`) | `macOS` |
+| `-p, --platform <PLATFORM>` | Platform to deduplicate (`macOS`, `iOS`). One platform per run: only that platform's `platforms/<os>/configuration-profiles/` is scanned | `macOS` |
 | `--jamf-mode` | Also emit Jamf Smart Group scoping templates (the Jamf counterpart to Fleet labels) for the deduplicated baselines | `false` |
 | `--dry-run` | Preview without making changes | `false` |
 
@@ -898,6 +902,7 @@ contour mscp constraints add-categories [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-k, --keyword <NAME>` | Baseline to resolve categories against | **required** |
+| `--os <OS>` | Platform whose baseline to read: `macos`, `ios`, `visionos` | `macos` |
 | `-e, --exclude <CATEGORIES>` | Categories to exclude (comma-separated, skips interactive picker) | interactive |
 | `-t, --type <TYPE>` | Constraint type: `fleet`, `jamf`, `munki` | `fleet` |
 | `-c, --constraints <PATH>` | Path to constraints file | auto-detected |
@@ -925,6 +930,7 @@ contour mscp constraints add-script [flags]
 | `-c, --constraints <PATH>` | Path to constraints file | auto-detected |
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | none |
 | `-k, --keyword <NAME>` | Baseline to scan | all baselines |
+| `--os <OS>` | Platform whose baseline to read: `macos`, `ios`, `visionos` | `macos` |
 
 #### `mscp constraints list` / `mscp constraints list-scripts`
 
@@ -964,6 +970,7 @@ contour mscp odv init [flags]
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | **required** |
 | `-k, --keyword <NAME>` | Baseline name | **required** |
+| `--os <OS>` | Platform whose baseline to read: `macos`, `ios`, `visionos` | `macos` |
 | `-o, --output <DIR>` | Output directory for override file | `.` |
 
 ```bash
@@ -983,6 +990,7 @@ contour mscp odv list [flags]
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | **required** |
 | `-k, --keyword <NAME>` | Baseline name | **required** |
+| `--os <OS>` | Platform whose baseline to read: `macos`, `ios`, `visionos` | `macos` |
 | `-O, --overrides <PATH>` | ODV override file | auto-detected as `odv_<baseline>.yaml` |
 
 ```bash
@@ -1017,6 +1025,7 @@ contour mscp extract-scripts [flags]
 |------|-------------|---------|
 | `-m, --mscp-repo <PATH>` | Path to mSCP repository | **required** |
 | `-k, --keyword <NAME>` | Baseline name | **required** |
+| `--os <OS>` | Platform whose baseline to read: `macos`, `ios`, `visionos` | `macos` |
 | `-o, --output <DIR>` | Output directory for scripts | **required** |
 | `--flat` | Flat output (no category subdirectories) | `false` |
 | `--constraints <PATH>` | Constraints file for script exclusions | none |
@@ -1160,12 +1169,13 @@ contour mscp schema search filevault --platform macOS --json
 Show full detail for a specific rule — including `has_odv`, `odv_options`, `mobileconfig_info`, `check_script`, and `enforcement_type`.
 
 ```
-contour mscp schema rule <RULE_ID> [--json]
+contour mscp schema rule <RULE_ID> [--platform <PLATFORM>] [--json]
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `<RULE_ID>` | Rule ID (e.g., `os_airdrop_disable`) | **required** |
+| `--platform <PLATFORM>` | Variant to show: `macOS`, `iOS`, `visionOS` | macOS if the rule has one, else whichever platform carries it |
 
 ```bash
 contour mscp schema rule os_airdrop_disable --json
@@ -1320,10 +1330,13 @@ contour mscp list --output ./output
 contour mscp verify --output ./output
 ```
 
-Expected artifacts for `cis_lvl1` (macOS, current OS version): 14
-configuration profiles, 6 bundled scripts, and 13 DDM `.json`
+Expected artifacts for `cis_lvl1` (macOS 27.0): 14 configuration
+profiles (13 with Fleet conflict filtering, which drops
+`com.apple.SoftwareUpdate`), 6 bundled scripts, and 5 DDM configuration
 declarations under
-`output/lib/mscp/cis_lvl1/declarative/{activations,configurations,assets}/`.
+`output/platforms/macos/declaration-profiles/cis_lvl1_macos/`, listed in
+`fleets/cis_lvl1_macos.yml`. mSCP's activation declarations are not shipped:
+Fleet generates its own.
 The summary panel reports all three artifact classes — if **DDM
 Artifacts** is absent, `--generate-ddm` wasn't passed.
 
@@ -1435,36 +1448,55 @@ The `output.structure` setting in `mscp.toml` (or `--fleet-mode` / `--jamf-mode`
 
 ### `pluggable` — Fleet GitOps
 
-Default structure. Produces a full Fleet GitOps repository (Fleet v4.83+
-layout) with fleet YAMLs, labels, policies, and a `default.yml` entry
-point.
+Default structure. Produces a full Fleet GitOps repository in the layout
+`fleetctl new` generates (Fleet v4.83+; the older `lib/` and v4.82 layouts
+are not written) with fleet YAMLs, labels, policies, and a `default.yml`
+entry point.
+
+Everything is named `<baseline>_<os>`: mSCP 2.0 uses one baseline name on
+several platforms, and the OS keeps them apart in one output. Shown for
+`cis_lvl1` on macOS and `cis_lvl1_byod` on iOS:
 
 ```
 output/
-  default.yml                                   # Default fleet (labels, agent options)
+  default.yml                                   # Default fleet (labels)
   fleets/
-    cis_lvl1.yml                                # Fleet YAML referencing profiles/scripts
+    cis_lvl1_macos.yml                          # Fleet YAML referencing profiles/declarations/scripts
+    cis_lvl1_byod_ios.yml
     unassigned.yml                              # Unassigned hosts
   labels/
-    mscp-cis_lvl1.labels.yml                    # Label definitions for targeting
+    mscp-cis_lvl1_macos.labels.yml              # Label definitions for targeting
+    mscp-cis_lvl1_byod_ios.labels.yml           # iOS labels set no `platform` (they cover iPadOS)
   mscp/
-    cis_lvl1/
+    cis_lvl1_macos/
       baseline.toml                             # Baseline metadata
     versions/
       manifest.json                             # Version tracking
   platforms/
-    all/
-      agent-options.yml
     macos/
       configuration-profiles/
-        cis_lvl1/                               # .mobileconfig files
-      scripts/
-        cis_lvl1/                               # Remediation scripts (bundled by category)
-      policies/
-        cis_lvl1/                               # Fleet policies (YAML)
+        cis_lvl1_macos/                         # .mobileconfig files
       declaration-profiles/
-        cis_lvl1/                               # DDM declarations (if --generate-ddm)
+        cis_lvl1_macos/                         # DDM configuration declarations (if --generate-ddm)
+      scripts/
+        cis_lvl1_macos/                         # Remediation scripts (macOS only)
+      policies/
+        cis_lvl1_macos/                         # Fleet policies (macOS only)
+    ios/
+      configuration-profiles/
+        cis_lvl1_byod_ios/
+      declaration-profiles/
+        cis_lvl1_byod_ios/
 ```
+
+visionOS baselines are refused for this structure: Fleet does not manage
+visionOS. Use `flat` or `nested` for them.
+
+> **Breaking in 0.5.0:** macOS output was named by the bare baseline
+> (`fleets/cis_lvl1.yml`, label `mscp-cis_lvl1`). After regenerating, move
+> hosts of a manual label into `mscp-<baseline>_macos` before
+> `fleetctl gitops`, and delete the old fleet file, label and
+> `mscp/<baseline>/` in the same commit.
 
 Set via: `output.structure = "pluggable"`, `--fleet` during init, or `--fleet-mode` CLI flag.
 
@@ -1474,7 +1506,7 @@ Simple directory per baseline. No Fleet artifacts. Jamf postprocessing (determin
 
 ```
 output/
-  cis_lvl1/
+  cis_lvl1_macos/
     profiles/                        # .mobileconfig files (Jamf-ready)
     scripts/                         # Remediation scripts
     declarative/                     # DDM declarations (if --generate-ddm)

@@ -39,10 +39,26 @@ takes the bare name (`cis_lvl1`, `800-53r5_high`). Seven (`indigo_*`,
 `ios_*`, `nlmapgov_*`, `mscp`) exist only as rule tags, without a file.
 A name neither a file nor any rule knows is an error.
 
-**Operator flags** (on `mscp recipe` and friends):
+**Operator flags** (`generate`, `generate-all`, `recipe`):
 
 - `--os <macos|ios|visionos>` — default `macos`
 - `--os-version <X.Y>` — default: highest version present in the rule set
+
+In `mscp.toml`: `os` / `os_version` per `[[baselines]]`; a name may repeat once per OS.
+
+## Output naming and layout
+
+Output is named `<baseline>_<os>` (`fleets/800-53r5_low_ios.yml`, label
+`mscp-800-53r5_low_ios`); `mscp clean`/`list` take that name. Layout is
+`fleetctl new` only (no `lib/`): profiles in
+`platforms/<os>/configuration-profiles/<name>/`, DDM configuration
+declarations in `platforms/<os>/declaration-profiles/<name>/`. Scripts,
+policies, osquery: macOS only. visionOS + Fleet: refused.
+
+Non-macOS: `init --keywords name:os`; elsewhere `--os` / `--platform`.
+
+**Breaking (0.5.0):** `cis_lvl1` → `cis_lvl1_macos`: new fleet, empty
+label; move hosts first.
 
 ## ERROR-CODE ENUM
 
@@ -115,9 +131,8 @@ INPUT:
                 Unknown names silently emit no rules.
   org         : reverse-domain identifier (com.acme). REQUIRED.
   mscp_repo   : usnistgov/macos_security checkout (Python pipeline runs there).
-  output_dir  : v4.83 GitOps layout: platforms/macos/{configuration-profiles,
-                scripts,policies}/{baseline}/, mscp/{baseline}/baseline.toml,
-                labels/, fleets/.
+  os          : macos | ios | visionos (default macos)
+  output_dir  : `fleetctl new` layout, named {name} = {baseline}_{os}.
 
 PRECONDITIONS:
   ASSERT baseline matches /^[a-z0-9_]+(-r[0-9]+)?(_[a-z0-9]+)*$/
@@ -131,10 +146,7 @@ PRECONDITIONS:
   ASSERT output_dir exists OR can be created
     AUTO_FIX: mkdir -p {output_dir}
 
-  # Confirm the baseline BEFORE the slow Python pipeline.
-  baselines = contour mscp schema baselines --json
-  ASSERT baseline in baselines.map(b -> b.baseline)
-    HALT "unknown baseline '{baseline}'; run `contour mscp schema baselines`"
+  ASSERT baseline in `contour mscp schema baselines --json`   # before the slow pipeline
 
 STEP 1 — ODV resolution:
   rules = contour mscp schema rules --baseline {baseline} --json
@@ -147,8 +159,9 @@ STEP 1 — ODV resolution:
     # Otherwise the generator silently uses odv_default.
 
 STEP 2 — Generation:
-  result = contour mscp generate --baseline {baseline} --mscp-repo {mscp_repo} \
-             --output {output_dir} --org {org} --json
+  result = contour mscp generate --baseline {baseline} --os {os} \
+             --mscp-repo {mscp_repo} --output {output_dir} --org {org} --json
+  # $ODV resolves as mSCP: custom (--odv) > baseline > recommended.
 
   # Failure: JSON envelope on stderr with error_code.
   if result.exit_code == 2:
@@ -156,11 +169,12 @@ STEP 2 — Generation:
   if result.exit_code != 0:
     HALT "{result.error_code}: {result.error}"
 
-STEP 3 — Verify output layout (Fleet v4.83+), under {output_dir}:
-  ASSERT mscp/{baseline}/baseline.toml exists
-  ASSERT platforms/macos/configuration-profiles/{baseline}/*.mobileconfig exist
-  ASSERT platforms/macos/scripts/{baseline}/*.sh exist
-  ASSERT labels/mscp-{baseline}.labels.yml exists
+STEP 3 — Verify output layout, under {output_dir}:
+  ASSERT mscp/{name}/baseline.toml exists
+  ASSERT platforms/{os}/configuration-profiles/{name}/*.mobileconfig exist
+  ASSERT platforms/macos/scripts/{name}/*.sh exist     # macOS only
+  ASSERT labels/mscp-{name}.labels.yml exists
+  ASSERT no lib/ and no literal "$ODV" in the output
   # Any failure here is a contour bug — file an issue.
 
 STEP 4 — Validate the emitted set:
@@ -170,7 +184,6 @@ STEP 4 — Validate the emitted set:
 CROSS-FILE INVARIANT (after STEP 4):
   ASSERT every fleet yaml in {output_dir}/fleets/ that references {baseline}
          points at files that exist on disk
-    # Warnings here mean the fleet yaml has stale paths.
 
 INVARIANTS:
   # Identical {baseline, org, mscp_repo} MUST produce identical output
@@ -256,7 +269,7 @@ POSTCONDITIONS:
 ```
 
 
-## Other operations (prose recipes; not yet migrated)
+## Other operations
 
 ### List available baselines
 
@@ -282,8 +295,8 @@ contour mscp schema search <keyword> --json
 ### Compare embedded data vs an mSCP repo
 
 ```
-contour mscp schema compare <mscp_repo_path> <baseline> --json
-# Diffs contour's embedded data against a (possibly newer) repo.
+contour mscp schema compare <mscp_repo_path> <baseline> --platform iOS --json
+# Membership should match 100%.
 ```
 
 ### Generate from mscp.toml config
@@ -292,6 +305,7 @@ contour mscp schema compare <mscp_repo_path> <baseline> --json
 contour mscp generate-all --config ./mscp.toml
 # Multi-baseline batch. `contour mscp init` scaffolds mscp.toml and
 # fleet-constraints.yml and clones the mSCP repo.
+contour mscp generate-all -m R -k cis_lvl1_byod,ios_stig --os ios -o O
 ```
 
 ### Inspect the v4.83 output layout

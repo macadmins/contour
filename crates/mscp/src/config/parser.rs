@@ -49,7 +49,7 @@ pub fn load_config_or_default<P: AsRef<Path>>(path: P) -> Config {
 }
 
 /// Validate configuration
-fn validate_config(config: &Config) -> Result<()> {
+pub(super) fn validate_config(config: &Config) -> Result<()> {
     // Validate python_method
     match config.settings.python_method.as_str() {
         "auto" | "uv" | "python3" => {}
@@ -62,6 +62,24 @@ fn validate_config(config: &Config) -> Result<()> {
     for (i, baseline) in config.baselines.iter().enumerate() {
         if baseline.name.is_empty() {
             anyhow::bail!("Baseline {i} has empty name");
+        }
+        if !matches!(baseline.os.as_str(), "macos" | "ios" | "visionos") {
+            anyhow::bail!(
+                "[[baselines]] name = {:?}: os = {:?} — must be \"macos\", \"ios\" or \"visionos\"",
+                baseline.name,
+                baseline.os
+            );
+        }
+        let earlier = &config.baselines[..i];
+        if earlier
+            .iter()
+            .any(|b| b.name == baseline.name && b.os == baseline.os)
+        {
+            anyhow::bail!(
+                "[[baselines]] name = {:?}, os = {:?} is listed twice",
+                baseline.name,
+                baseline.os
+            );
         }
     }
 
