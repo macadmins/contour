@@ -135,3 +135,6 @@ jobs:
             artifacts/checksums-*/checksums-*.txt
             checksums-linux.txt
           generate_release_notes: true
+          # v0.5.0-rc.2, -beta.3: a tag with a hyphen is a pre-release, and a
+          # pre-release never becomes "Latest".
+          prerelease: ${{ contains(github.ref_name, '-') }}
