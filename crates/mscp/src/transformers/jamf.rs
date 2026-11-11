@@ -98,7 +98,7 @@ impl ProfilePostprocessor {
 
         // Write back
         let file = fs::File::create(path).context(format!("Failed to write {}", path.display()))?;
-        plist::to_writer_xml(file, &plist)
+        contour_profiles::to_writer_xml(file, &plist)
             .context(format!("Failed to serialize {}", path.display()))?;
 
         tracing::debug!(
@@ -261,7 +261,7 @@ impl JamfPostprocessor {
 
         // Write back
         let file = fs::File::create(path).context(format!("Failed to write {}", path.display()))?;
-        plist::to_writer_xml(file, &plist)
+        contour_profiles::to_writer_xml(file, &plist)
             .context(format!("Failed to serialize {}", path.display()))?;
 
         tracing::debug!("Jamf processing complete for {}", path.display());

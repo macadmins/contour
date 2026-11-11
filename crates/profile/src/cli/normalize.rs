@@ -8,7 +8,7 @@ use crate::ddm::rename::{DdmBundleRename, rename_ddm_bundle, rename_declaration_
 use crate::output::OutputMode;
 use crate::profile::{normalizer, parser, validator};
 use crate::uuid::{self, UuidConfig};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 use rayon::prelude::*;
 use std::fs;
@@ -36,6 +36,13 @@ fn restore_and_rewrite(
         let restored = parser::restore_comments(&text, comments);
         content = restored.into_bytes();
     }
+    parser::ensure_plist(&content).with_context(|| {
+        format!(
+            "{}: restoring placeholders/comments broke the profile; \
+             the file still holds the unrestored output",
+            path.display()
+        )
+    })?;
     fs::write(path, content)?;
     Ok(())
 }

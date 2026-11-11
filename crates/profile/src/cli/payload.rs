@@ -225,7 +225,7 @@ pub fn handle_payload_extract(
             });
 
         let mut buf = Vec::new();
-        plist::to_writer_xml(&mut buf, &plist::Value::Dictionary(dict))?;
+        contour_profiles::to_writer_xml(&mut buf, &plist::Value::Dictionary(dict))?;
         std::fs::write(&output_path, &buf)
             .with_context(|| format!("Failed to write to {output_path}"))?;
 
@@ -288,7 +288,7 @@ pub fn handle_payload_extract(
     // Write profile
     let plist_data = plist::to_value(&new_profile)?;
     let mut buf = Vec::new();
-    plist::to_writer_xml(&mut buf, &plist_data)?;
+    contour_profiles::to_writer_xml(&mut buf, &plist_data)?;
     std::fs::write(&output_path, &buf)
         .with_context(|| format!("Failed to write to {output_path}"))?;
 

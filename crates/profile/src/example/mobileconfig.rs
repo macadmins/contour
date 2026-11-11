@@ -35,5 +35,6 @@ pub fn transform_mobileconfig(xml: &str, org_domain: &str) -> Result<String> {
     let out = parser::restore_placeholders(out.as_bytes(), &fr.placeholder_mapping);
     let out = String::from_utf8(out)?;
     let out = parser::restore_comments(&out, &fr.comments);
+    parser::ensure_plist(out.as_bytes())?;
     Ok(out)
 }

@@ -612,7 +612,7 @@ fn reformat_xml(data: &[u8]) -> Result<Vec<u8>> {
     let value: plist::Value = plist::from_bytes(data).context("Failed to parse XML as plist")?;
 
     let mut buffer = Vec::new();
-    plist::to_writer_xml(&mut buffer, &value).context("Failed to reformat XML")?;
+    contour_profiles::to_writer_xml(&mut buffer, &value).context("Failed to reformat XML")?;
 
     Ok(buffer)
 }

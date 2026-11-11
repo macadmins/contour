@@ -150,7 +150,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
 
     // Serialize to XML plist
     let mut buffer = Vec::new();
-    plist::to_writer_xml(
+    contour_profiles::to_writer_xml(
         &mut buffer,
         &Value::Dictionary(profile.into_iter().collect()),
     )
@@ -231,7 +231,7 @@ pub fn generate_payload_plist(rules: &RuleSet, options: &GeneratorOptions) -> Re
     );
 
     let mut buffer = Vec::new();
-    plist::to_writer_xml(
+    contour_profiles::to_writer_xml(
         &mut buffer,
         &Value::Dictionary(payload.into_iter().collect()),
     )

@@ -135,7 +135,7 @@ fn reidentify_one(
     if write && report.changed {
         let value = profile.to_plist_value();
         let mut cursor = std::io::Cursor::new(Vec::new());
-        plist::to_writer_xml(&mut cursor, &value).context("serialize profile")?;
+        contour_profiles::to_writer_xml(&mut cursor, &value).context("serialize profile")?;
         std::fs::write(path, cursor.into_inner())
             .with_context(|| format!("write {}", path.display()))?;
     }

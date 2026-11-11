@@ -54,16 +54,28 @@ pub fn substitute_placeholders(xml: &[u8]) -> PlaceholderResult {
     let mut mapping: Vec<(String, String)> = Vec::new();
     let mut result = text.to_string();
 
-    for (i, p) in placeholders.iter().enumerate() {
-        let sentinel = format!("CONTOUR_PH_{i}");
+    // Longest first, so `$EXTENSIONATTRIBUTE_1` cannot claim the front of
+    // `$EXTENSIONATTRIBUTE_10`. The trailing `_` keeps one sentinel from
+    // being a prefix of another: `CONTOUR_PH_1` was one of `CONTOUR_PH_10`,
+    // and the eleventh placeholder came back as a different variable.
+    let mut longest_first: Vec<&String> = placeholders.iter().collect();
+    longest_first.sort_by_key(|p| std::cmp::Reverse(p.len()));
+
+    for (i, p) in longest_first.into_iter().enumerate() {
+        let sentinel = format!("CONTOUR_PH_{i}_");
         let data_sentinel = format!("CONTOUR_DATA_PH_{i}");
         let data_b64 = base64::engine::general_purpose::STANDARD.encode(&data_sentinel);
 
-        // First handle <data>placeholder</data> — need valid base64
-        let data_pattern = format!("<data>{p}</data>");
-        if result.contains(&data_pattern) {
+        // First handle <data>placeholder</data> — need valid base64.
+        // Whitespace-tolerant: the plist writer puts <data> content on its
+        // own line, so contour's own output has to match here too.
+        let data_pattern = Regex::new(&format!(r"<data>\s*{}\s*</data>", regex::escape(p)))
+            .expect("escaped literal is a valid regex");
+        if data_pattern.is_match(&result) {
             let data_replacement = format!("<data>{data_b64}</data>");
-            result = result.replace(&data_pattern, &data_replacement);
+            result = data_pattern
+                .replace_all(&result, regex::NoExpand(&data_replacement))
+                .into_owned();
             mapping.push((data_b64, p.clone()));
         }
 
@@ -88,6 +100,19 @@ pub fn restore_placeholders(xml: &[u8], mapping: &[(String, String)]) -> Vec<u8>
         text = text.replace(sentinel.as_str(), original.as_str());
     }
     text.into_bytes()
+}
+
+/// Fails unless `xml` still parses as a plist, placeholders allowed.
+///
+/// For text edited after serializing (placeholders, comments, renames): the
+/// profile was validated in memory, and nothing else reads the final bytes.
+pub fn ensure_plist(xml: &[u8]) -> Result<()> {
+    if plist::from_bytes::<plist::Value>(xml).is_ok() {
+        return Ok(());
+    }
+    plist::from_bytes::<plist::Value>(&substitute_placeholders(xml).substituted)
+        .map(drop)
+        .context("the edited profile is no longer a valid plist")
 }
 
 /// An XML comment extracted from raw profile XML, anchored to the next line for re-insertion.
@@ -155,11 +180,12 @@ pub fn restore_comments(xml: &str, comments: &[XmlComment]) -> String {
 
     for comment in comments {
         // Find the first unused line whose trimmed content matches the anchor.
-        if let Some(idx) = lines
-            .iter()
-            .enumerate()
-            .position(|(i, line)| !used[i] && line.trim() == comment.anchor_line)
-        {
+        // Compared with quotes unescaped: the source may spell `"` as
+        // `&quot;` while the output never does.
+        let anchor = contour_profiles::unescape_quotes(&comment.anchor_line);
+        if let Some(idx) = lines.iter().enumerate().position(|(i, line)| {
+            !used[i] && contour_profiles::unescape_quotes(line.trim()) == anchor
+        }) {
             used[idx] = true;
             // Derive indentation from the anchor line.
             let indent: String = lines[idx]
@@ -252,7 +278,7 @@ pub fn write_profile_xml(profile: &ConfigurationProfile, path: &Path) -> Result<
     let file = File::create(path)
         .with_context(|| format!("Failed to create output file: {}", path.display()))?;
 
-    plist::to_writer_xml(file, profile)
+    contour_profiles::to_writer_xml(file, profile)
         .with_context(|| "Failed to write XML configuration profile")?;
 
     Ok(())
@@ -282,7 +308,7 @@ pub fn parse_profile_with_format(path: &str) -> Result<(ConfigurationProfile, Pl
 #[allow(dead_code, reason = "reserved for future use")]
 pub fn profile_to_xml_string(profile: &ConfigurationProfile) -> Result<String> {
     let mut buffer = Vec::new();
-    plist::to_writer_xml(&mut buffer, profile)
+    contour_profiles::to_writer_xml(&mut buffer, profile)
         .with_context(|| "Failed to serialize profile to XML")?;
     String::from_utf8(buffer).with_context(|| "Invalid UTF-8 in XML output")
 }
@@ -1800,5 +1826,68 @@ mod tests {
 
         // Too short
         assert!(!is_signed_profile(&[0x30, 0x81]));
+    }
+
+    /// Placeholders and sentinels that are prefixes of each other: with
+    /// eleven or more, `$EXTENSIONATTRIBUTE_10` came back as `$POSITION`.
+    #[test]
+    fn prefix_related_placeholders_restore_to_themselves() {
+        let names = [
+            "EXTENSIONATTRIBUTE_1",
+            "DEVICENAME",
+            "SERIALNUMBER",
+            "UDID",
+            "USERNAME",
+            "FULLNAME",
+            "EMAIL",
+            "PHONE",
+            "ROOM",
+            "POSITION",
+            "EXTENSIONATTRIBUTE_10",
+            "EXTENSIONATTRIBUTE_12",
+        ];
+        let mut xml = String::from("<plist version=\"1.0\"><dict>\n");
+        xml.push_str("<key>Cert</key><data>$JPS_CERT</data>\n");
+        for n in names {
+            xml.push_str(&format!("<key>K_{n}</key><string>${n}</string>\n"));
+        }
+        xml.push_str("<key>Mix</key><string>{{device}}0 and %HostName%1</string>\n");
+        xml.push_str("</dict></plist>\n");
+
+        let pr = substitute_placeholders(xml.as_bytes());
+        assert_eq!(pr.placeholders.len(), 15);
+        plist::from_bytes::<plist::Value>(&pr.substituted).expect("substituted text parses");
+        let restored = restore_placeholders(&pr.substituted, &pr.mapping);
+        assert_eq!(String::from_utf8(restored).unwrap(), xml);
+    }
+
+    /// The plist writer puts `<data>` content on its own line, so a profile
+    /// contour wrote has to be readable by contour again.
+    #[test]
+    fn data_placeholder_on_its_own_line_still_parses() {
+        let xml = "<plist version=\"1.0\"><dict><key>Cert</key>\n\t<data>\n\t$FLEET_VAR_CERT\n\t</data>\n</dict></plist>";
+        assert!(plist::from_bytes::<plist::Value>(xml.as_bytes()).is_err());
+        ensure_plist(xml.as_bytes()).expect("parses once the placeholder is substituted");
+        assert!(ensure_plist(b"<plist version=\"1.0\"><dict><key>K</key></dict></plist>").is_err());
+    }
+
+    /// A comment is re-attached by its next line. That line must match
+    /// whether the source wrote `"` or `&quot;`; the output writes `"`.
+    #[test]
+    fn comments_reattach_across_quote_spellings() {
+        let out = "<dict>\n\t<string>identifier \"com.acme.daemon\"</string>\n</dict>\n";
+        for anchor in [
+            "<string>identifier \"com.acme.daemon\"</string>",
+            "<string>identifier &quot;com.acme.daemon&quot;</string>",
+        ] {
+            let comments = vec![XmlComment {
+                text: "<!-- keep me -->".into(),
+                anchor_line: anchor.into(),
+            }];
+            assert!(
+                restore_comments(out, &comments).contains("\t<!-- keep me -->\n\t<string>"),
+                "comment lost for anchor {anchor}"
+            );
+        }
     }
 }

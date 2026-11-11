@@ -4,6 +4,7 @@ pub mod recipe_writer;
 pub mod service_management;
 pub mod tcc;
 pub mod uuid;
+pub mod xml;
 
 pub use builder::ProfileBuilder;
 pub use notifications::build_notification_entry;
@@ -16,3 +17,4 @@ pub use tcc::{
     build_tcc_entry_with_type,
 };
 pub use uuid::deterministic_uuid;
+pub use xml::{to_writer_xml, unescape_quotes};

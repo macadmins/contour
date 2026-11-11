@@ -253,7 +253,7 @@ fn build_combined_profile_bytes(
     profile.insert("PayloadEnabled".to_string(), Value::Boolean(true));
 
     let mut buffer = Vec::new();
-    plist::to_writer_xml(&mut buffer, &Value::Dictionary(profile))
+    contour_profiles::to_writer_xml(&mut buffer, &Value::Dictionary(profile))
         .context("Failed to serialize combined profile")?;
     Ok(buffer)
 }
@@ -815,7 +815,7 @@ pub fn handle_generate(
     let (output_bytes, default_ext) = if is_plist {
         // Raw plist — just the payload dictionary, no mobileconfig envelope
         let mut buf = Vec::new();
-        plist::to_writer_xml(&mut buf, &Value::Dictionary(payload_content))?;
+        contour_profiles::to_writer_xml(&mut buf, &Value::Dictionary(payload_content))?;
         (buf, "plist")
     } else {
         // Full mobileconfig envelope.
@@ -1178,7 +1178,7 @@ pub fn handle_generate_recipe(
 
         let profile_bytes = if is_plist {
             let mut buf = Vec::new();
-            plist::to_writer_xml(&mut buf, &Value::Dictionary(payload_content))?;
+            contour_profiles::to_writer_xml(&mut buf, &Value::Dictionary(payload_content))?;
             buf
         } else {
             let short = spec

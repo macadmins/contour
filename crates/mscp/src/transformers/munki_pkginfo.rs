@@ -176,7 +176,7 @@ impl MunkiPkginfoGenerator {
         let file = fs::File::create(output_path)
             .context(format!("Failed to create {}", output_path.display()))?;
 
-        plist::to_writer_xml(file, pkginfo)
+        contour_profiles::to_writer_xml(file, pkginfo)
             .context(format!("Failed to write {}", output_path.display()))?;
 
         tracing::debug!("Wrote pkginfo to: {}", output_path.display());

@@ -275,7 +275,7 @@ fn generate_brand(common: &CommonSettings, brand: &BrandEntry) -> Result<Generat
     // --- 3. Raw plist (same keys as default, no mobileconfig envelope) ---
     let raw_dict = build_default_payload(&settings);
     let mut raw_buffer = Vec::new();
-    plist::to_writer_xml(&mut raw_buffer, &Value::Dictionary(raw_dict))?;
+    contour_profiles::to_writer_xml(&mut raw_buffer, &Value::Dictionary(raw_dict))?;
 
     Ok(GeneratedBrand {
         name: brand.name.clone(),

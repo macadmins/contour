@@ -308,7 +308,8 @@ pub fn handle_command_generate(
 
     // Serialize to XML plist
     let mut plist_bytes = Vec::new();
-    plist::to_writer_xml(&mut plist_bytes, &root).context("Failed to serialize command plist")?;
+    contour_profiles::to_writer_xml(&mut plist_bytes, &root)
+        .context("Failed to serialize command plist")?;
 
     let plist_string =
         String::from_utf8(plist_bytes).context("Generated plist is not valid UTF-8")?;
@@ -780,7 +781,8 @@ pub fn handle_command_generate_interactive(output_mode: OutputMode) -> Result<()
 
     // Step 6: Generate
     let mut plist_bytes = Vec::new();
-    plist::to_writer_xml(&mut plist_bytes, &root).context("Failed to serialize command plist")?;
+    contour_profiles::to_writer_xml(&mut plist_bytes, &root)
+        .context("Failed to serialize command plist")?;
 
     let plist_string =
         String::from_utf8(plist_bytes).context("Generated plist is not valid UTF-8")?;

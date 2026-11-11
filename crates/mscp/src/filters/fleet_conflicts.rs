@@ -187,7 +187,7 @@ impl FleetConflictFilter {
             let file = std::fs::File::create(profile_path)
                 .with_context(|| format!("Failed to write profile: {}", profile_path.display()))?;
 
-            plist::to_writer_xml(file, &plist).with_context(|| {
+            contour_profiles::to_writer_xml(file, &plist).with_context(|| {
                 format!("Failed to serialize profile: {}", profile_path.display())
             })?;
         }

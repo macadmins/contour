@@ -49,7 +49,7 @@ pub fn diff_profiles(
 
 fn serialize_for_diff(profile: &ConfigurationProfile) -> Result<String> {
     let mut buffer = Vec::new();
-    plist::to_writer_xml(&mut buffer, profile)?;
+    contour_profiles::to_writer_xml(&mut buffer, profile)?;
     Ok(String::from_utf8(buffer)?)
 }
 

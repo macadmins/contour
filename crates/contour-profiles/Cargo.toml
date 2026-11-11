@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 plist.workspace = true
+serde.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
 toml.workspace = true
