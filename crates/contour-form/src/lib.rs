@@ -78,13 +78,13 @@ pub enum Channel {
     Beta,
 }
 
-/// `--channel beta`'s line in the possible values: says "disabled" only in a
-/// build without a seed dataset.
+/// `--channel beta`'s line in the possible values: says it is the release in
+/// a build without a seed dataset.
 #[cfg(feature = "cli")]
 const BETA_VALUE_HELP: &str = if mdm_schema::SEED_DATASET {
     "Apple's pre-release OS seed schema"
 } else {
-    "DISABLED: no seed dataset in this build; commands refuse rather than return stable"
+    "No OS seed is open in this build: same as stable"
 };
 
 impl Channel {
