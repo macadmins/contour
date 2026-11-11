@@ -133,4 +133,4 @@ binary has been upgraded since, run `contour census` (add `--json`) — it
 counts the bytes the binary actually carries, so it is never stale. Quote it,
 not this line, when a number matters.
 
-`--beta` and `--channel beta` serve Apple's pre-release OS seed when the binary carries one, and refuse otherwise rather than return the stable dataset under another name. Which it is depends on the build, so check before suggesting the flag: `contour census` reports it, and `--sop beta` opens with the current state. mSCP has no pre-release branch; its `--beta` always refuses.
+`--beta` and `--channel beta` serve Apple's pre-release OS seed when the binary carries one, and the release otherwise, so they answer exactly as stable does between seeds. Which it is depends on the build, so check before suggesting the flag: `contour census` reports it, and `--sop beta` opens with the current state. mSCP has no pre-release branch; its `--beta` returns the same rules as stable.

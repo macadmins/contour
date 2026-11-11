@@ -20,9 +20,9 @@ use mscp::generators::{FleetGitOpsGenerator, GlobPlan};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-/// The pin: the schema Fleet ships in fleet-v4.92.2 (69c2103f) — contour
+/// The pin: the schema Fleet ships in fleet-v4.94.1 (7e7d17b7) — contour
 /// targets Fleet 4.92 and later.
-const SCHEMA_SHA256: &str = "05b5b67de9eade852f2ed06e98cee1ba766bc25c21b8541e1e7e19288ec59055";
+const SCHEMA_SHA256: &str = "c3c4d09f39ecf66d663eee7ba25bbc9b55097aa946c1cb5e343f264cdce34a70";
 
 fn schema_bytes() -> &'static [u8] {
     mscp_schema::embedded_fleet_gitops_schema().expect(

@@ -1,17 +1,17 @@
 //! The beta SOP must describe the beta channel that exists.
 //!
-//! With no seed dataset carried, every `*_beta` accessor returns the stable
-//! bytes. A SOP or help text still promising "seed-only declarations and
-//! keys" would have an agent tell someone to pass `--beta` to find a type
-//! that is not there.
+//! With no seed dataset carried, every `*_beta` accessor returns the release's
+//! bytes, and `--beta` answers exactly as stable does: scripts that pass the
+//! flag keep running between seeds. A SOP or help text still promising
+//! "seed-only declarations and keys" would have an agent tell someone to pass
+//! `--beta` to find a type that is not there.
 //!
 //! This is `sop_traps_windows.rs` in mirror image: there a SOP must not deny
 //! a command that exists; here it must not promise a dataset that is absent.
 //! Same failure, opposite sign: prose and binary drifting apart with nothing
 //! holding them together.
 //!
-//! So the SOP's claim is tied to the bytes. Beta is dormant rather than
-//! removed — a future seed brings it back — and these tests follow the data
+//! So the SOP's claim is tied to the bytes, and these tests follow the data
 //! in both directions rather than hardcoding today's answer.
 
 use assert_cmd::Command;
@@ -35,65 +35,36 @@ fn beta_is_carried() -> bool {
     contour_form::SchemaRegistry::beta_dataset_is_carried()
 }
 
+fn run(args: &[&str]) -> std::process::Output {
+    Command::cargo_bin("contour")
+        .unwrap()
+        .args(args)
+        .output()
+        .unwrap()
+}
+
 #[test]
 fn the_beta_sop_says_whether_beta_works() {
     let text = sop("beta");
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if beta_is_carried() {
         assert!(
-            !flat.contains("The beta channel is DISABLED right now"),
+            !flat.contains("No OS seed is open right now"),
             "a seed dataset is carried again, but the beta SOP still opens by saying \
-             the channel is disabled — drop the banner and the warning in \
-             sop-beta.md, and re-check the --channel help strings"
+             the channel serves the release"
         );
     } else {
         assert!(
-            flat.contains("The beta channel is DISABLED right now"),
-            "no seed dataset is carried, so `--beta` refuses — but the beta SOP does \
-             not say so. An agent reading it will tell someone to pass a flag that \
-             errors."
+            flat.contains("No OS seed is open right now"),
+            "no seed dataset is carried, so `--beta` serves the release, but the beta \
+             SOP does not say so"
         );
         assert!(
-            flat.contains("Do not tell anyone to pass `--beta` today"),
-            "the SOP is read by agents that act on it; the disabled banner has to \
-             say what NOT to recommend, not only what is true"
+            flat.contains("Passing `--beta` today gains nothing"),
+            "the SOP is read by agents that act on it; the banner has to say the flag \
+             adds nothing today, not only what is true"
         );
     }
-}
-
-/// The flag's behaviour matches what the SOP says about it.
-///
-/// Reads the binary rather than the source: whatever the SOP claims, this is
-/// what someone typing the flag actually gets.
-#[test]
-fn the_beta_flag_refuses_rather_than_serving_stable() {
-    if beta_is_carried() {
-        return;
-    }
-    let out = Command::cargo_bin("contour")
-        .unwrap()
-        .args(["--channel", "beta", "profile", "info", "com.apple.dock"])
-        .output()
-        .unwrap();
-    assert!(
-        !out.status.success(),
-        "--channel beta succeeded while no seed dataset is carried; it served the \
-         stable schema under another name, which is the defect this file exists for"
-    );
-    let msg = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        msg.contains("beta channel is disabled"),
-        "the refusal must say the channel is disabled, not fail obscurely: {msg}"
-    );
-    assert!(
-        msg.contains("dormant") || msg.contains("comes back") || msg.contains("again"),
-        "the refusal must say beta returns with a future seed — otherwise it reads \
-         as a feature that was removed: {msg}"
-    );
 }
 
 /// The help text agrees with the flag.
@@ -102,35 +73,23 @@ fn the_beta_flag_refuses_rather_than_serving_stable() {
 /// it advertised "includes seed-only declarations and keys" for months after
 /// there were none.
 #[test]
-fn the_help_text_does_not_advertise_a_disabled_channel() {
+fn the_help_text_says_beta_is_the_release_between_seeds() {
     if beta_is_carried() {
         return;
     }
-    let out = Command::cargo_bin("contour")
-        .unwrap()
-        .arg("--help")
-        .output()
-        .unwrap();
+    let out = run(&["profile", "--help"]);
     let help = String::from_utf8_lossy(&out.stdout).to_string();
     let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        flat.contains("currently disabled") || flat.contains("DISABLED"),
-        "`contour --help` describes the beta channel without saying it is \
-         disabled:\n{help}"
+        flat.contains("the release until the next seed") || flat.contains("same as stable"),
+        "`contour profile --help` describes the beta channel without saying it serves \
+         the release today:\n{help}"
     );
 }
 
-/// `SKILL.md` is the first thing an agent reads, and it had this right.
-///
-/// Before the flag refused, that file already said beta "still work[s] but
-/// currently return[s] the **stable** dataset" and told agents not to claim
-/// otherwise — while `--help` advertised "seed-only declarations and keys"
-/// and the SOP described a superset. Three surfaces, one dataset, two of
-/// them wrong. The accurate one is now the stale one, in the other
-/// direction: beta no longer returns stable, it declines.
-///
-/// So the file is checked rather than remembered. It is installed by
-/// `setup-agent`, so the test reads what an agent is actually handed.
+/// `SKILL.md` is the first thing an agent reads, so it is checked rather than
+/// remembered. It is installed by `setup-agent`, so the test reads what an
+/// agent is actually handed.
 #[test]
 fn the_skill_file_states_the_beta_channel_correctly() {
     let dir = tempfile::tempdir().unwrap();
@@ -150,119 +109,80 @@ fn the_skill_file_states_the_beta_channel_correctly() {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
     // SKILL.md is installed as static text, while whether a seed is carried
-    // depends on the build. So it must state the rule, not today's answer:
-    // beta refuses without a seed, and an agent checks before suggesting it.
+    // depends on the build. So it must state the rule, not today's answer.
     assert!(
-        flat.contains("refuse otherwise"),
-        "SKILL.md must say the beta flags refuse when no seed is carried:\n{text}"
+        flat.contains("and the release otherwise"),
+        "SKILL.md must say the beta flags serve the release when no seed is carried:\n{text}"
     );
     assert!(
         flat.contains("`contour census` reports it"),
         "SKILL.md must send agents to `contour census` before suggesting --beta"
     );
     assert!(
-        !flat.contains("are **disabled** and refuse"),
-        "SKILL.md states one build's beta state as if it were every build's"
-    );
-    assert!(
-        !flat.contains("still work but currently return the **stable** dataset"),
-        "SKILL.md still describes the OLD behaviour — beta silently returning stable. \
-         That is what the refusal replaced."
+        !flat.contains("refuse otherwise"),
+        "SKILL.md still says the beta flags refuse without a seed"
     );
 }
 
-/// Every command that takes `--beta` refuses, not just the Apple ones.
+/// Every command that takes `--beta` answers as stable does between seeds.
 ///
-/// The first pass at this fixed `contour_form::SchemaRegistry`, which is the
-/// Apple schema path, and left `mscp schema search --beta` returning stable
-/// rules with exit 0 — the same defect, one crate over, surviving a fix
-/// aimed at it. The lesson is that "the beta channel" is not one code path:
-/// mSCP reaches its own tables through `mscp::api`, and any future dataset
-/// with a seed will reach its own too.
-///
-/// So this walks the flag, not the implementation. Each command below is one
-/// an operator or an agent would actually type.
+/// "The beta channel" is not one code path: mSCP reaches its own tables
+/// through `mscp::api`, the Apple schema through `contour_form`, so this walks
+/// the flag, not the implementation. Each pair is a command an operator or an
+/// agent would actually type, with and without the flag.
 #[test]
-fn every_beta_entry_point_refuses_while_beta_is_disabled() {
+fn every_beta_entry_point_answers_as_stable_between_seeds() {
     if beta_is_carried() {
         return;
     }
-    let cases: &[&[&str]] = &[
-        &["--channel", "beta", "profile", "info", "com.apple.dock"],
-        &["--channel", "beta", "profile", "search", "dock"],
-        &["mscp", "schema", "search", "siri", "--beta"],
-        &[
-            "mscp",
-            "schema",
-            "rule",
-            "os_apple_intelligence_pcc_disable",
-            "--beta",
-        ],
+    let cases: &[(&[&str], &[&str])] = &[
+        (
+            &["--channel", "beta", "profile", "info", "com.apple.dock"],
+            &["profile", "info", "com.apple.dock"],
+        ),
+        (
+            &["--channel", "beta", "profile", "search", "dock"],
+            &["profile", "search", "dock"],
+        ),
+        (
+            &["mscp", "schema", "search", "siri", "--beta"],
+            &["mscp", "schema", "search", "siri"],
+        ),
+        (
+            &[
+                "mscp",
+                "schema",
+                "rule",
+                "os_apple_intelligence_pcc_disable",
+                "--beta",
+            ],
+            &[
+                "mscp",
+                "schema",
+                "rule",
+                "os_apple_intelligence_pcc_disable",
+            ],
+        ),
     ];
-    let mut leaked = Vec::new();
-    for args in cases {
-        let out = Command::cargo_bin("contour")
-            .unwrap()
-            .args(*args)
-            .output()
-            .unwrap();
-        let combined = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        if out.status.success() || !combined.contains("beta channel is disabled") {
-            leaked.push(format!(
-                "  contour {} — exit {:?}, did not refuse",
-                args.join(" "),
-                out.status.code()
+    let mut differ = Vec::new();
+    for (beta, stable) in cases {
+        let (b, s) = (run(beta), run(stable));
+        if !b.status.success() || b.stdout != s.stdout {
+            differ.push(format!(
+                "  contour {} (exit {:?}{})",
+                beta.join(" "),
+                b.status.code(),
+                if b.stdout != s.stdout {
+                    ", output differs from stable"
+                } else {
+                    ""
+                }
             ));
         }
     }
     assert!(
-        leaked.is_empty(),
-        "these --beta entry points answered from the stable dataset instead of \
-         refusing:\n{}\n\n\
-         Route them through the same check: mdm_schema::beta_dataset_is_carried() / \
-         mscp_schema::beta_dataset_is_carried(), refusing with \
-         mdm_schema::BETA_DISABLED_MESSAGE.",
-        leaked.join("\n")
-    );
-}
-
-/// One channel, one explanation.
-///
-/// Both refusals print `mdm_schema::BETA_DISABLED_MESSAGE`. Two texts
-/// describing one channel is how the SOP and `--help` drifted apart from the
-/// dataset and from each other in the first place.
-#[test]
-fn every_refusal_gives_the_same_explanation() {
-    if beta_is_carried() {
-        return;
-    }
-    let apple = Command::cargo_bin("contour")
-        .unwrap()
-        .args(["--channel", "beta", "profile", "info", "com.apple.dock"])
-        .output()
-        .unwrap();
-    let mscp = Command::cargo_bin("contour")
-        .unwrap()
-        .args(["mscp", "schema", "search", "siri", "--beta"])
-        .output()
-        .unwrap();
-    let text = |o: &std::process::Output| {
-        format!(
-            "{}{}",
-            String::from_utf8_lossy(&o.stdout),
-            String::from_utf8_lossy(&o.stderr)
-        )
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-    };
-    assert_eq!(
-        text(&apple),
-        text(&mscp),
-        "the Apple and mSCP refusals disagree about why beta is off"
+        differ.is_empty(),
+        "with no seed carried, these --beta entry points did not answer as stable:\n{}",
+        differ.join("\n")
     );
 }

@@ -39,7 +39,7 @@ BETA-AWARE (accept --beta, and honor the global --channel beta):
   contour profile ddm status <kw>       --beta
 
 NOT beta-aware (stable schema only):
-  contour mscp schema ... --beta        # refuses: mSCP has no pre-release branch
+  contour mscp schema ... --beta        # same rules as stable: no mSCP pre-release branch
   contour santa ...                     # no beta channel
   contour mscp recipe / baselines ...   # reads a repo checkout, not the
                                         # embedded dataset — --beta does not apply
@@ -160,8 +160,7 @@ commit the tables were read from. Without a seed these fields are empty.
 
 mSCP's OS-27 preview branch was merged into `main` upstream, so mSCP's rules are
 the same on both channels. `contour mscp schema search <kw> --beta` and
-`schema rule <id> --beta` refuse and say so rather than return the stable rules
-under beta's name. Use them without the flag.
+`schema rule <id> --beta` return the same rules as without the flag.
 
 ## SAFETY — beta is pre-release
 

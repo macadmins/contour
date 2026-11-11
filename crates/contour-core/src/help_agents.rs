@@ -548,20 +548,20 @@ fn with_beta_state(sop: &str) -> std::borrow::Cow<'_, str> {
         format!(
             "> **This binary carries the {}.** `--beta` / `--channel beta` serve its \
              declarations, keys and status items, which may still change before the OS \
-             ships. mSCP has no pre-release branch, so its `--beta` refuses and says so. \
-             `contour census` reports what is carried.",
+             ships. mSCP has no pre-release branch, so its `--beta` returns the same rules \
+             as stable. `contour census` reports what is carried.",
             mdm_schema::seed_label()
         )
     } else {
-        "> **The beta channel is DISABLED right now.** No seed dataset is compiled into \
-         the binary, and `--beta` / `--channel beta` refuse with an explanation rather \
-         than returning the stable dataset under another name. Everything below \
-         describes how the channel works when a seed is carried.\n>\n\
+        "> **No OS seed is open right now: the beta channel serves the release.** \
+         `--beta` / `--channel beta` work and answer exactly as stable does, so scripts \
+         that pass the flag keep running between seeds. Everything below describes what \
+         the channel adds when a seed is carried.\n>\n\
          > How contour knows: it compares the embedded beta table to the stable one. \
-         They are the same bytes, which is what \"no seed dataset\" means in practice. \
+         They are the same bytes, which is what \"no seed\" means in practice. \
          `contour census` reports the state.\n>\n\
-         > **Do not tell anyone to pass `--beta` today.** It will fail. If you are here \
-         because a type was not found in stable, it is not in beta either."
+         > **Passing `--beta` today gains nothing.** If you are here because a type was \
+         not found in stable, it is not in beta either."
             .to_string()
     };
     std::borrow::Cow::Owned(sop.replace(BETA_STATE_MARKER, &banner))

@@ -764,27 +764,3 @@ pub fn seed_label() -> String {
 /// [`beta_dataset_is_carried`], which reads the bytes.
 pub const SEED_DATASET: bool = cfg!(seed_dataset);
 
-/// What mSCP's `--beta` says when an Apple seed is carried but mSCP has no
-/// pre-release branch: its rules are the same on both channels, and serving
-/// them under beta's name would answer a different question.
-pub const MSCP_NO_SEED_MESSAGE: &str = "mSCP has no pre-release branch for this OS seed: its \
-     rules are the same on both channels, so `--beta` has nothing different to show. \
-     Re-run without the flag. The Apple schema's beta channel (profile and ddm \
-     commands) does carry the seed.";
-
-/// What to tell someone who asked for beta when no seed dataset is carried.
-///
-/// One copy, because two surfaces describing one channel is how this went
-/// wrong in the first place: `--help` promised seed-only keys, the SOP
-/// promised a superset, and the dataset had neither. Every refusal — the
-/// Apple schema registry and mSCP's rule queries alike — prints this.
-pub const BETA_DISABLED_MESSAGE: &str = "the beta channel is disabled in this build: no pre-release seed dataset is \
-     compiled in.\n\n\
-     It is dormant rather than removed. The dataset pipeline builds beta from Apple's OS seed \
-     schema when a seed holds additions over the release branch. When a future seed carries seed-only declarations, keys or \
-     rules, they are published and this flag starts working again with no change \
-     here.\n\n\
-     Until then `--beta` and `--channel beta` refuse rather than return the stable \
-     dataset under a different name: a command that silently answers a question you \
-     did not ask is worse than one that declines. Re-run without the flag for the \
-     stable dataset, which is what this binary carries.";
