@@ -259,6 +259,28 @@ contour profile ddm map com.apple.mail.managed --json
 # (no DDM equivalent). With no <type>: the whole table + coverage stats.
 ```
 
+### Check real profiles against DDM, and convert passcode payloads (experimental)
+
+```bash
+contour profile ddm migrate profiles/ -r --json
+contour profile ddm migrate passcode.mobileconfig --org com.acme -o ddm --write
+```
+
+One verdict per payload:
+
+| Verdict | Meaning |
+|---|---|
+| `native` | Converted. Passcode payloads become `com.apple.configuration.passcode.settings` |
+| `partial` | A key has no declaration key; nothing is written and the keys are listed |
+| `refused` | Converting would change what devices enforce (passcode keys without `forcePIN`: the declaration then requires a passcode); nothing is written |
+| `manual` | A declaration exists (see `ddm map`), but `migrate` does not build it |
+| `legacy` | No declaration exists: keep the profile, or wrap it with `ddm legacy convert` |
+| `not-assessed` | The type is not in the mapping |
+
+Dry-run by default. Exits non-zero when a payload is `partial` or `refused`.
+The source profile is never changed: remove it from the MDM once the
+declaration is active, or both manage the same settings.
+
 ### Report DDM migration coverage (what is declarative vs. still legacy)
 
 ```
