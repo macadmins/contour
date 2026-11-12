@@ -356,6 +356,11 @@ pub const EXTENSION_TABLES: &[&str] = &["osquery_labels", "santa_rules"];
 /// ponytail: not per-platform — Linux `extended_attributes` reads only `path`.
 pub const ANY_OF_REQUIRED_TABLES: &[&str] = &["extended_attributes", "file", "hash", "windows_eventlog"];
 
+/// Tables whose schema marks a column `required` although the table supplies
+/// a default when it is absent (`falconctl_options` queries every allowed
+/// option). Their required columns are not checked.
+pub const DEFAULTED_REQUIRED_TABLES: &[&str] = &["falconctl_options"];
+
 /// Platform names Fleet and osquery use.
 pub const KNOWN_PLATFORMS: &[&str] = &["darwin", "linux", "windows", "chrome"];
 
@@ -525,7 +530,8 @@ pub fn check_query(sql: &str, platform: &str, index: &SchemaIndex) -> Vec<Proble
                 });
             }
         }
-        if ANY_OF_REQUIRED_TABLES.contains(&table.as_str()) {
+        if DEFAULTED_REQUIRED_TABLES.contains(&table.as_str()) {
+        } else if ANY_OF_REQUIRED_TABLES.contains(&table.as_str()) {
             if !info.required.is_empty() && info.required.is_disjoint(&constrained) {
                 out.push(Problem::RequiredAnyUnconstrained {
                     table: table.clone(),
@@ -568,20 +574,18 @@ const SQL_WORDS: &[&str] = &[
 /// Strip `--` comments and blank the inside of single-quoted literals, so no
 /// literal text is mistaken for an identifier. Lower-cases the result.
 fn scrub(sql: &str) -> String {
-    let mut out = String::with_capacity(sql.len());
-    for line in sql.lines() {
-        let code = line.split_once("--").map_or(line, |(code, _)| code);
-        out.push_str(code);
-        out.push('\n');
-    }
-    let mut cleaned = String::with_capacity(out.len());
+    let mut cleaned = String::with_capacity(sql.len());
     let mut in_literal = false;
-    for ch in out.chars() {
+    let mut chars = sql.chars().peekable();
+    while let Some(ch) = chars.next() {
         if ch == '\'' {
             in_literal = !in_literal;
             cleaned.push(ch);
         } else if in_literal {
             cleaned.push(' ');
+        } else if ch == '-' && chars.peek() == Some(&'-') {
+            // A comment runs to end of line; `--` inside a literal is text.
+            while chars.next_if(|c| *c != '\n').is_some() {}
         } else {
             cleaned.push(ch);
         }
@@ -666,32 +670,19 @@ pub fn extract_columns(sql: &str) -> BTreeSet<String> {
     out
 }
 
-/// Columns that appear on the left of a comparison in WHERE / ON clauses,
-/// qualifier stripped (`s.path = a.path` yields `path`).
+/// Columns compared in any WHERE / ON clause — subqueries, CTEs and UNION
+/// arms included — on either side (`'/x' = path`), qualifier stripped
+/// (`s.path = a.path` yields `path`). GROUP BY, HAVING, ORDER BY and LIMIT
+/// are not constraints; function names (`lower(...)`) are not columns.
 pub fn constrained_columns(sql: &str) -> BTreeSet<String> {
     let s = scrub(sql);
     let mut out = BTreeSet::new();
-    // Everything after the first WHERE or ON, up to GROUP/ORDER/LIMIT.
-    let starts: Vec<usize> = [" where ", " on ", "\nwhere ", "\non "]
-        .iter()
-        .filter_map(|k| s.find(k))
-        .collect();
-    let Some(&start) = starts.iter().min() else {
-        return out;
-    };
-    let tail = &s[start..];
-    let end = [" group by", " order by", " limit ", ";"]
-        .iter()
-        .filter_map(|k| tail.find(k))
-        .min()
-        .unwrap_or(tail.len());
-    let clause = &tail[..end];
 
-    // Tokenise: identifier runs, operator runs, everything else single.
+    // Tokenise: identifier runs, operator runs and `(`; everything else separates.
     let mut tokens: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut kind = 0u8; // 0 none, 1 ident, 2 op
-    for ch in clause.chars() {
+    for ch in s.chars() {
         let k = if ch.is_alphanumeric() || ch == '_' || ch == '.' || ch == '"' || ch == '`' {
             1
         } else if "=!<>".contains(ch) {
@@ -707,17 +698,30 @@ pub fn constrained_columns(sql: &str) -> BTreeSet<String> {
         }
         if k != 0 {
             cur.push(ch);
+        } else if ch == '(' {
+            tokens.push("(".into());
         }
     }
     if !cur.is_empty() {
         tokens.push(cur);
     }
     const OPS: &[&str] = &["in", "like", "glob", "regexp", "is", "between", "not"];
-    for i in 1..tokens.len() {
-        let op = tokens[i].as_str();
-        let is_op = op.starts_with(['=', '!', '<', '>']) || OPS.contains(&op);
-        if is_op && let Some(col) = as_column(&tokens[i - 1]) {
-            out.insert(col);
+    let is_op = |t: &str| t.starts_with(['=', '!', '<', '>']) || OPS.contains(&t);
+    let mut active = false;
+    for (i, t) in tokens.iter().enumerate() {
+        match t.as_str() {
+            "where" | "on" => active = true,
+            "group" | "order" | "limit" => active = false,
+            op if active && is_op(op) => {
+                if let Some(col) = i.checked_sub(1).and_then(|j| as_column(&tokens[j])) {
+                    out.insert(col);
+                }
+                let call = tokens.get(i + 2).is_some_and(|n| n == "(");
+                if !call && let Some(col) = tokens.get(i + 1).and_then(|n| as_column(n)) {
+                    out.insert(col);
+                }
+            }
+            _ => {}
         }
     }
     out
@@ -977,6 +981,11 @@ spec:
         // All-of tables still flag each missing column.
         let p = check_query("SELECT sha256 FROM device_hash WHERE device = '/dev/disk1' AND partition = '1';", "darwin", &idx);
         assert_eq!(p, vec![Problem::RequiredUnconstrained { table: "device_hash".into(), column: "inode".into() }]);
+
+        // Marked required but defaulted by the table: never flagged.
+        idx.insert("falconctl_options".into(), t(&["options", "aid"], &["options"]));
+        let p = check_query("SELECT aid FROM falconctl_options;", "darwin", &idx);
+        assert!(p.is_empty(), "{p:?}");
     }
 
     #[test]
@@ -1042,6 +1051,27 @@ spec:
         assert!(!cols.contains("count") && !cols.contains("team") && !cols.contains("1"));
         let w = constrained_columns("SELECT 1 FROM plist WHERE path = 'a = b' AND key IN ('x') AND value IS NOT NULL");
         assert_eq!(w, ["path", "key", "value"].into_iter().map(String::from).collect());
+    }
+
+    /// Real policy shapes that constrain `path` but were read as unconstrained.
+    #[test]
+    fn constrained_columns_reads_every_where_and_on() {
+        for sql in [
+            "SELECT 1 FROM plist WHERE\n  path = '/x';",
+            "SELECT 1 FROM plist\nWHERE\npath = '/x';",
+            "SELECT 1 FROM plist\tWHERE\tpath = '/x';",
+            "SELECT 1 FROM plist WHERE(path = '/x');",
+            "SELECT 1 FROM plist WHERE '/x' = path;",
+            "SELECT '--' AS x FROM plist WHERE path = '/x';",
+            "SELECT 1 FROM users WHERE uid = 0 GROUP BY uid UNION SELECT 1 FROM plist WHERE path = '/x';",
+            "SELECT 1 FROM (SELECT uid FROM users WHERE uid > 500 GROUP BY uid) u JOIN plist p ON p.path = '/x';",
+            "WITH u AS (SELECT uid FROM users WHERE uid >= 500 LIMIT 5) SELECT 1 FROM u JOIN plist p ON p.path = '/x';",
+        ] {
+            assert!(constrained_columns(sql).contains("path"), "{sql}");
+        }
+        // Function calls and HAVING/ORDER BY are not constraints.
+        let w = constrained_columns("SELECT 1 FROM plist WHERE key = lower('x') GROUP BY key HAVING n > 1 ORDER BY value = 1;");
+        assert_eq!(w, ["key"].into_iter().map(String::from).collect());
     }
 
     #[test]
