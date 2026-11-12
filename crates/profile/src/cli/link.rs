@@ -162,7 +162,11 @@ pub fn handle_link(
     if merge {
         handle_merge(&profiles, output, &link_config, output_mode)?;
     } else {
-        handle_link_separate(&profiles, output, &link_config, output_mode)?;
+        // Separate files: -o (a directory here) → profile.toml `[output] directory`.
+        let config_dir = config
+            .and_then(ProfileConfig::output_dir)
+            .map(|d| d.display().to_string());
+        handle_link_separate(&profiles, output.or(config_dir.as_deref()), &link_config, output_mode)?;
     }
 
     Ok(())

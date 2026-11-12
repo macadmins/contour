@@ -1036,6 +1036,7 @@ mod tests {
             output: OutputConfig::default(),
             processing: None,
             fleet: None,
+            base_dir: None,
         };
 
         let result = handle_info(Some(&config), OutputMode::Json);

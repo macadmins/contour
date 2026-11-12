@@ -868,8 +868,8 @@ pub fn handle_generate(
         || {
             let file = format!("{slug}.{default_ext}");
             config
-                .and_then(|c| c.output.directory.as_deref())
-                .map_or(file.clone(), |d| Path::new(d).join(&file).display().to_string())
+                .and_then(ProfileConfig::output_dir)
+                .map_or(file.clone(), |d| d.join(&file).display().to_string())
         },
         std::string::ToString::to_string,
     );
@@ -1111,8 +1111,11 @@ pub fn handle_generate_recipe(
     let org_name = resolve_org_name(config, &domain);
 
     // Output directory: -o → profile.toml `[output] directory` → recipe name.
+    let config_dir = config
+        .and_then(ProfileConfig::output_dir)
+        .map(|d| d.display().to_string());
     let out_dir = output_dir
-        .or_else(|| config.and_then(|c| c.output.directory.as_deref()))
+        .or(config_dir.as_deref())
         .unwrap_or(&r.recipe.name);
     if !Path::new(out_dir).exists() {
         std::fs::create_dir_all(out_dir)?;

@@ -2574,8 +2574,14 @@ pub fn handle_ddm_generate(
         .to_lowercase()
         .replace([' ', ':'], "-")
         .replace("--", "-");
+    // -o → profile.toml `[output] directory`/<file> → ./<file>
     let output_path = output.map_or_else(
-        || format!("{slug}-declaration.json"),
+        || {
+            let file = format!("{slug}-declaration.json");
+            config
+                .and_then(ProfileConfig::output_dir)
+                .map_or(file.clone(), |d| d.join(&file).display().to_string())
+        },
         std::string::ToString::to_string,
     );
 

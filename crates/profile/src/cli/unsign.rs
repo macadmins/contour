@@ -280,8 +280,11 @@ fn compute_output_path(
     let suffix = config.map_or("-unsigned", |c| c.output.unsigned_suffix.as_str());
     let filename = format!("{stem}{suffix}.mobileconfig");
 
+    // -o → profile.toml `[output] directory` → next to the input
     if let Some(dir) = output_dir {
         Path::new(dir).join(&filename)
+    } else if let Some(dir) = config.and_then(ProfileConfig::output_dir) {
+        dir.join(&filename)
     } else {
         input.parent().unwrap_or(Path::new(".")).join(&filename)
     }
@@ -446,15 +449,16 @@ fn handle_unsign_single(
         );
     }
 
-    let default_output;
     let output_path = if let Some(out) = output {
         out.to_string()
+    } else if config.and_then(ProfileConfig::output_dir).is_some() {
+        compute_output_path(Path::new(file), None, config).display().to_string()
     } else {
+        // No directory configured: the single file lands in the CWD, as before.
         let path = Path::new(file);
         let stem = path.file_stem().unwrap().to_str().unwrap();
         let suffix = config.map_or("-unsigned", |c| c.output.unsigned_suffix.as_str());
-        default_output = format!("{stem}{suffix}.mobileconfig");
-        default_output.clone()
+        format!("{stem}{suffix}.mobileconfig")
     };
 
     let output_path_ref = Path::new(&output_path);
@@ -683,5 +687,22 @@ mod tests {
         assert!(out.starts_with(b"<?xml"));
         let v: plist::Value = plist::from_bytes(&out).unwrap();
         assert!(v.as_dictionary().is_some());
+    }
+
+    /// `-o`, then profile.toml `[output] directory` (with the configured
+    /// suffix), then next to the input.
+    #[test]
+    fn compute_output_path_prefers_cli_then_configured_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("profile.toml"),
+            "[organization]\ndomain = \"com.acme\"\n[output]\ndirectory = \"out\"\nunsigned_suffix = \"-plain\"\n",
+        )
+        .unwrap();
+        let (cfg, _) = ProfileConfig::load_from(&dir.path().join("profile.toml")).unwrap();
+        let input = Path::new("in/p.mobileconfig");
+        assert_eq!(compute_output_path(input, Some("cli"), Some(&cfg)), Path::new("cli/p-plain.mobileconfig"));
+        assert_eq!(compute_output_path(input, None, Some(&cfg)), dir.path().join("out/p-plain.mobileconfig"));
+        assert_eq!(compute_output_path(input, None, None), Path::new("in/p-unsigned.mobileconfig"));
     }
 }

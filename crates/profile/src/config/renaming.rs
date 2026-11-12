@@ -38,8 +38,8 @@ impl<'a> ProfileRenamer<'a> {
     ) -> PathBuf {
         let filename = self.generate_filename(profile, original_path);
 
-        if let Some(dir) = &self.config.output.directory {
-            Path::new(dir).join(filename)
+        if let Some(dir) = self.config.output_dir() {
+            dir.join(filename)
         } else if let Some(original) = original_path {
             if let Some(parent) = original.parent() {
                 parent.join(filename)
@@ -151,6 +151,7 @@ mod tests {
             output: OutputConfig::default(),
             processing: None,
             fleet: None,
+            base_dir: None,
         }
     }
 
