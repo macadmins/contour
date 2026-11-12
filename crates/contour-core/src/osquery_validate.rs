@@ -353,8 +353,23 @@ pub const EXTENSION_TABLES: &[&str] = &["osquery_labels", "santa_rules"];
 /// it lives in each table's generate function — so it is listed by hand,
 /// checked against osquery's sources. Every other table needs all of its
 /// required columns (`device_hash` needs device, partition and inode).
-/// ponytail: not per-platform — Linux `extended_attributes` reads only `path`.
+/// Linux `extended_attributes` reads only `path`; [`check_query`] handles that.
 pub const ANY_OF_REQUIRED_TABLES: &[&str] = &["extended_attributes", "file", "hash", "windows_eventlog"];
+
+/// Tables that expand `LIKE` on their required columns (osquery's
+/// `expandConstraints`, Fleet's glob helpers). Every other table reads only
+/// `=` and `IN`, so any other comparison leaves it empty.
+pub const LIKE_REQUIRED_TABLES: &[&str] = &[
+    "authenticode", "executable_hashes", "extended_attributes", "file", "file_contents",
+    "file_lines", "hash", "mdls", "parse_ini", "parse_json", "parse_jsonl", "parse_xml",
+    "plist", "signature", "yara_file",
+];
+
+const YARA_SIGNATURES: &[&str] = &["sig_group", "sigfile", "sigrule", "sigurl"];
+
+/// Columns the schema does not mark required, but the table still needs one
+/// of them (read with `=` / `IN`): yara errors without a signature.
+pub const ALSO_ONE_OF: &[(&str, &[&str])] = &[("yara_file", YARA_SIGNATURES), ("yara_process", YARA_SIGNATURES)];
 
 /// Tables whose schema marks a column `required` although the table supplies
 /// a default when it is absent (`falconctl_options` queries every allowed
@@ -402,6 +417,9 @@ pub enum Problem {
     RequiredUnconstrained { table: String, column: String },
     /// An [`ANY_OF_REQUIRED_TABLES`] table with none of its required columns constrained.
     RequiredAnyUnconstrained { table: String, columns: Vec<String> },
+    /// A required column compared with an operator the table does not read.
+    /// `like` says whether the table accepts `LIKE` too.
+    RequiredOperator { table: String, column: String, like: bool },
 }
 
 impl Problem {
@@ -462,6 +480,11 @@ impl std::fmt::Display for Problem {
                 "'{table}' needs one of {} in WHERE; without it the table returns nothing",
                 columns.join(", ")
             ),
+            Problem::RequiredOperator { table, column, like } => write!(
+                f,
+                "'{table}.{column}' is only read from {}; any other comparison returns nothing",
+                if *like { "=, IN or LIKE" } else { "= or IN" }
+            ),
         }
     }
 }
@@ -487,7 +510,8 @@ pub fn check_query(sql: &str, platform: &str, index: &SchemaIndex) -> Vec<Proble
         }
     }
 
-    let constrained = constrained_columns(sql);
+    let ops = constraint_ops(sql);
+    let constrained: BTreeSet<String> = ops.iter().map(|(c, _)| c.clone()).collect();
     let lowered = sql.to_lowercase();
     let single_table_plain =
         tables.len() == 1 && !lowered.contains("with ") && !lowered.contains("(select");
@@ -530,22 +554,51 @@ pub fn check_query(sql: &str, platform: &str, index: &SchemaIndex) -> Vec<Proble
                 });
             }
         }
+        // Columns compared with an operator osquery hands to the table.
+        let reads = |like: bool| -> BTreeSet<String> {
+            ops.iter()
+                .filter(|(_, op)| matches!(op.as_str(), "=" | "==" | "in") || (like && op == "like"))
+                .map(|(c, _)| c.clone())
+                .collect()
+        };
+        let like = LIKE_REQUIRED_TABLES.contains(&table.as_str());
+        let read = reads(like);
+        let wrong_op = |c: &String| {
+            (constrained.contains(c) && !read.contains(c)).then(|| Problem::RequiredOperator {
+                table: table.clone(),
+                column: c.clone(),
+                like,
+            })
+        };
+        let linux_xattr = table == "extended_attributes" && explicit && declared.iter().any(|p| p == "linux");
         if DEFAULTED_REQUIRED_TABLES.contains(&table.as_str()) {
-        } else if ANY_OF_REQUIRED_TABLES.contains(&table.as_str()) {
-            if !info.required.is_empty() && info.required.is_disjoint(&constrained) {
-                out.push(Problem::RequiredAnyUnconstrained {
-                    table: table.clone(),
-                    columns: info.required.iter().cloned().collect(),
-                });
+        } else if ANY_OF_REQUIRED_TABLES.contains(&table.as_str()) && !linux_xattr {
+            if !info.required.is_empty() && info.required.is_disjoint(&read) {
+                out.push(info.required.iter().find_map(wrong_op).unwrap_or_else(|| {
+                    Problem::RequiredAnyUnconstrained {
+                        table: table.clone(),
+                        columns: info.required.iter().cloned().collect(),
+                    }
+                }));
             }
         } else {
-            for r in &info.required {
-                if !constrained.contains(r) {
-                    out.push(Problem::RequiredUnconstrained {
+            let required = if linux_xattr { BTreeSet::from(["path".to_string()]) } else { info.required.clone() };
+            for r in &required {
+                if !read.contains(r) {
+                    out.push(wrong_op(r).unwrap_or_else(|| Problem::RequiredUnconstrained {
                         table: table.clone(),
                         column: r.clone(),
-                    });
+                    }));
                 }
+            }
+        }
+        for (_, cols) in ALSO_ONE_OF.iter().filter(|(t, _)| t == table) {
+            let eq = reads(false);
+            if !cols.iter().any(|c| eq.contains(*c)) {
+                out.push(Problem::RequiredAnyUnconstrained {
+                    table: table.clone(),
+                    columns: cols.iter().map(|c| (*c).to_string()).collect(),
+                });
             }
         }
         if single_table_plain {
@@ -675,8 +728,14 @@ pub fn extract_columns(sql: &str) -> BTreeSet<String> {
 /// (`s.path = a.path` yields `path`). GROUP BY, HAVING, ORDER BY and LIMIT
 /// are not constraints; function names (`lower(...)`) are not columns.
 pub fn constrained_columns(sql: &str) -> BTreeSet<String> {
+    constraint_ops(sql).into_iter().map(|(col, _)| col).collect()
+}
+
+/// [`constrained_columns`] with the operator each column is compared by
+/// (`=`, `in`, `like`, `!=`, ...); `NOT IN` yields `not`.
+fn constraint_ops(sql: &str) -> Vec<(String, String)> {
     let s = scrub(sql);
-    let mut out = BTreeSet::new();
+    let mut out = Vec::new();
 
     // Tokenise: identifier runs, operator runs and `(`; everything else separates.
     let mut tokens: Vec<String> = Vec::new();
@@ -714,11 +773,11 @@ pub fn constrained_columns(sql: &str) -> BTreeSet<String> {
             "group" | "order" | "limit" => active = false,
             op if active && is_op(op) => {
                 if let Some(col) = i.checked_sub(1).and_then(|j| as_column(&tokens[j])) {
-                    out.insert(col);
+                    out.push((col, op.to_string()));
                 }
                 let call = tokens.get(i + 2).is_some_and(|n| n == "(");
                 if !call && let Some(col) = tokens.get(i + 1).and_then(|n| as_column(n)) {
-                    out.insert(col);
+                    out.push((col, op.to_string()));
                 }
             }
             _ => {}
@@ -986,6 +1045,51 @@ spec:
         idx.insert("falconctl_options".into(), t(&["options", "aid"], &["options"]));
         let p = check_query("SELECT aid FROM falconctl_options;", "darwin", &idx);
         assert!(p.is_empty(), "{p:?}");
+    }
+
+    /// osquery only reads `=` / `IN` (and `LIKE` where the table expands it);
+    /// yara also needs a signature; Linux xattr reads `path` only.
+    #[test]
+    fn check_query_holds_required_columns_to_what_the_table_reads() {
+        let mut idx = index();
+        let t = |platforms: &[&str], cols: &[&str], req: &[&str]| TableInfo {
+            in_osquery: true,
+            in_fleet: true,
+            platforms: platforms.iter().map(|s| (*s).to_string()).collect(),
+            columns: cols.iter().map(|s| (*s).to_string()).collect(),
+            required: req.iter().map(|s| (*s).to_string()).collect(),
+        };
+        idx.insert("curl".into(), t(&["darwin"], &["url", "result"], &["url"]));
+        idx.insert("windows_eventlog".into(), t(&["windows"], &["channel", "xpath", "data"], &["channel", "xpath"]));
+        idx.insert("yara_file".into(), t(&["darwin"], &["path", "matches", "sig_group", "sigfile", "sigrule", "sigurl"], &["path"]));
+        idx.insert("extended_attributes".into(), t(&["darwin", "linux"], &["path", "directory", "key"], &["path", "directory"]));
+        let op = |table: &str, column: &str, like: bool| Problem::RequiredOperator { table: table.into(), column: column.into(), like };
+
+        // Equality and IN are read; LIKE only where the table expands it.
+        assert!(check_query("SELECT result FROM curl WHERE url = 'https://x';", "darwin", &idx).is_empty());
+        assert!(check_query("SELECT result FROM curl WHERE url IN ('https://x');", "darwin", &idx).is_empty());
+        assert_eq!(check_query("SELECT result FROM curl WHERE url LIKE 'https://%';", "darwin", &idx), vec![op("curl", "url", false)]);
+        assert!(check_query("SELECT key FROM plist WHERE path LIKE '/Users/%/Library/x.plist';", "darwin", &idx).is_empty());
+        let p = check_query("SELECT key FROM plist WHERE path != '/x';", "darwin", &idx);
+        assert_eq!(p, vec![op("plist", "path", true)]);
+        assert!(p[0].to_string().contains("LIKE"));
+        assert_eq!(check_query("SELECT data FROM windows_eventlog WHERE channel LIKE 'Sec%';", "windows", &idx), vec![op("windows_eventlog", "channel", false)]);
+
+        // yara needs a signature as well as the path.
+        let sigs: Vec<String> = ["sig_group", "sigfile", "sigrule", "sigurl"].map(String::from).to_vec();
+        assert_eq!(
+            check_query("SELECT matches FROM yara_file WHERE path = '/x';", "darwin", &idx),
+            vec![Problem::RequiredAnyUnconstrained { table: "yara_file".into(), columns: sigs }]
+        );
+        assert!(check_query("SELECT matches FROM yara_file WHERE path = '/x' AND sigrule = 'rule r { condition: true }';", "darwin", &idx).is_empty());
+
+        // extended_attributes on Linux reads only `path`.
+        let dir_only = "SELECT key FROM extended_attributes WHERE directory = '/Applications';";
+        assert!(check_query(dir_only, "darwin", &idx).is_empty());
+        assert_eq!(
+            check_query(dir_only, "darwin,linux", &idx),
+            vec![Problem::RequiredUnconstrained { table: "extended_attributes".into(), column: "path".into() }]
+        );
     }
 
     #[test]
