@@ -870,9 +870,14 @@ pub fn generate_sop_section(tool: &str, heading: &str, writer: &mut impl Write) 
     let mut lines = content.lines().peekable();
     let mut capturing: Option<usize> = None; // heading level being captured
     let mut out = String::new();
+    let mut in_code = false;
     for line in lines.by_ref() {
         let t = line.trim_start();
-        let level = if t.starts_with("### ") {
+        // A `# comment` inside a code block is not a heading.
+        let fence = t.starts_with("```");
+        let level = if in_code || fence {
+            None
+        } else if t.starts_with("### ") {
             Some(3)
         } else if t.starts_with("## ") {
             Some(2)
@@ -881,6 +886,9 @@ pub fn generate_sop_section(tool: &str, heading: &str, writer: &mut impl Write) 
         } else {
             None
         };
+        if fence {
+            in_code = !in_code;
+        }
         match capturing {
             None => {
                 if let Some(_lvl) = level
@@ -2068,6 +2076,38 @@ mod tests {
         assert!(text.to_lowercase().contains("preset"));
         // Not the whole doc — the top-of-file ERROR-CODE ENUM must be excluded.
         assert!(!text.contains("ERROR-CODE ENUM"));
+    }
+
+    /// A `# comment` inside a code block is not a heading: it neither starts
+    /// a section nor ends the one being read.
+    #[test]
+    fn sop_section_ignores_hash_lines_in_code_blocks() {
+        let section = |tool: &str, heading: &str| {
+            let mut out = Vec::new();
+            generate_sop_section(tool, heading, &mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        let text = section("btm", "Scan launch items");
+        assert!(text.contains("existing entries."), "cut at the code comment: {text}");
+        assert!(!text.contains("Merge rules"), "ran into the next section: {text}");
+
+        // `required` appears only on `#` lines inside code in the osquery SOP.
+        let mut out = Vec::new();
+        assert!(generate_sop_section("osquery", "\"required\", \"hidden\"", &mut out).is_err());
+    }
+
+    /// Every heading `--search` offers opens as that section, so a search hit
+    /// never points at a code comment or a section that cannot be read.
+    #[test]
+    fn every_searchable_sop_heading_opens_as_its_section() {
+        for s in flatten_sops() {
+            let mut out = Vec::new();
+            generate_sop_section(s.sop, &s.heading, &mut out)
+                .unwrap_or_else(|e| panic!("{} / {}: {e}", s.sop, s.heading));
+            let text = String::from_utf8(out).unwrap();
+            let first = text.lines().next().unwrap_or_default();
+            assert!(first.starts_with('#'), "{} / {}: opened at {first:?}", s.sop, s.heading);
+        }
     }
 
     #[test]

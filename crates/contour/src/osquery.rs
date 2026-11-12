@@ -165,6 +165,18 @@ fn handle_search(
 ) -> Result<()> {
     let entries = osquery_entries();
     let q = query.to_lowercase();
+    // The validator's platform names and message: `macos` is an error that
+    // says `darwin`, not "No matches".
+    let platform_owned = platform.map(|p| p.trim().to_lowercase()).filter(|p| p != "all");
+    if let Some(p) = &platform_owned
+        && !contour_core::osquery_validate::KNOWN_PLATFORMS.contains(&p.as_str())
+    {
+        anyhow::bail!(
+            "{}",
+            contour_core::osquery_validate::Problem::UnknownPlatform { platform: p.clone() }
+        );
+    }
+    let platform = platform_owned.as_deref();
     // Fleet-only tables are real and queryable under Fleet's agent, so a
     // search that hides them answers the wrong question. They are listed
     // after the upstream hits and labelled, never mixed in silently.
@@ -252,7 +264,14 @@ fn handle_search(
         grouped.entry(&entry.table_name).or_default().push(entry);
     }
 
-    for (table, cols) in &grouped {
+    // The table the query names first, then names containing it, then the
+    // rest — alphabetical within each.
+    let mut ranked: Vec<(&&str, &Vec<&osquery_schema::OsqueryEntry>)> = grouped.iter().collect();
+    ranked.sort_by_key(|(table, _)| {
+        let name = table.to_lowercase();
+        (u8::from(name != q) + u8::from(!name.contains(&q)), **table)
+    });
+    for (table, cols) in ranked {
         let first = cols[0];
         let desc = first.table_description.as_deref().unwrap_or("-");
         let platforms = &first.platforms;
@@ -335,6 +354,7 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
             "table_description": first.table_description,
             "platforms": first.platforms,
             "evented": first.evented,
+            "where": where_rule(table_name, table_entries.iter().filter(|e| e.required).map(|e| e.column_name.as_str())),
             "columns": table_entries.iter().map(|e| serde_json::json!({
                 "column_name": e.column_name,
                 "column_description": e.column_description,
@@ -370,6 +390,9 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
     writeln!(out, "  Description: {desc}")?;
     writeln!(out, "  Platforms:   {}", first.platforms)?;
     writeln!(out, "  Evented:     {}", first.evented)?;
+    if let Some(rule) = where_rule(table_name, table_entries.iter().filter(|e| e.required).map(|e| e.column_name.as_str())) {
+        writeln!(out, "  Where:       {rule}")?;
+    }
     if let Some(f) = fleet_for(table_name).next() {
         write_fleet_facts(f, out)?;
     }
@@ -421,6 +444,17 @@ fn write_fleet_facts(f: &osquery_schema::fleet::FleetEntry, out: &mut impl Write
 /// A table only Fleet describes. Rendered with the same shape as an
 /// upstream table, and labelled: the query will not run under plain
 /// `osqueryi`.
+/// How WHERE must constrain `table`, from its required columns — the rules
+/// `osquery validate` checks.
+fn where_rule<'a>(table: &str, required: impl Iterator<Item = &'a str>) -> Option<String> {
+    let required: BTreeSet<String> = required.map(str::to_lowercase).collect();
+    contour_core::osquery_validate::where_rule(table, &required)
+}
+
+fn fleet_required(fleet: &[osquery_schema::fleet::FleetEntry]) -> impl Iterator<Item = &str> {
+    fleet.iter().filter(|e| e.required == Some(true)).filter_map(|e| e.column_name.as_deref())
+}
+
 fn handle_fleet_only_table(
     table_name: &str,
     fleet: &[osquery_schema::fleet::FleetEntry],
@@ -435,6 +469,7 @@ fn handle_fleet_only_table(
             "platforms": first.platforms,
             "source": "fleet",
             "note": TableSource::FleetOnly.note(),
+            "where": where_rule(table_name, fleet_required(fleet)),
             "columns": fleet.iter().filter(|e| e.column_name.is_some()).map(|e| serde_json::json!({
                 "column_name": e.column_name,
                 "column_description": e.column_description,
@@ -455,6 +490,9 @@ fn handle_fleet_only_table(
     }
     if let Some(p) = &first.platforms {
         writeln!(out, "  Platforms:   {p}")?;
+    }
+    if let Some(rule) = where_rule(table_name, fleet_required(fleet)) {
+        writeln!(out, "  Where:       {rule}")?;
     }
     if let Some(u) = &first.url {
         writeln!(out, "  Docs:        {u}")?;
