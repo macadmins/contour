@@ -488,6 +488,7 @@ fn process_extracted_profile(
         let uuid_config = UuidConfig {
             org_domain: org_domain.map(String::from),
             predictable,
+            uppercase: config.is_none_or(|c| c.uuid.uppercase),
         };
 
         profile.payload_uuid = uuid::regenerate_uuid(

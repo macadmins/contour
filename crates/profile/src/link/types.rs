@@ -190,6 +190,8 @@ pub struct LinkConfig {
     pub org_domain: Option<String>,
     /// Use predictable UUIDs (v5 based on identifier)
     pub predictable: bool,
+    /// Write UUIDs in uppercase
+    pub uppercase: bool,
     /// Merge all profiles into one output profile
     #[allow(dead_code, reason = "reserved for future use")]
     pub merge: bool,
@@ -202,6 +204,7 @@ impl Default for LinkConfig {
         Self {
             org_domain: None,
             predictable: false,
+            uppercase: true,
             merge: false,
             validate: true,
         }

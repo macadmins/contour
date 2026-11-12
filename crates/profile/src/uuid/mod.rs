@@ -13,10 +13,12 @@ pub struct UuidConfig {
     pub org_domain: Option<String>,
     /// Use predictable v5 UUIDs instead of random v4.
     pub predictable: bool,
+    /// Write UUIDs in uppercase (`[uuid] uppercase`, default true).
+    pub uppercase: bool,
 }
 
 pub fn generate_uuid(config: &UuidConfig, identifier: &str) -> Result<String> {
-    if config.predictable {
+    let uuid = if config.predictable {
         let Some(org_domain) = &config.org_domain else {
             anyhow::bail!(
                 "predictable UUIDs require an organization domain: pass --org <domain>, \
@@ -24,11 +26,11 @@ pub fn generate_uuid(config: &UuidConfig, identifier: &str) -> Result<String> {
             );
         };
         let namespace = create_namespace_from_domain(org_domain);
-        let uuid = Uuid::new_v5(&namespace, identifier.as_bytes());
-        Ok(uuid.to_string().to_uppercase())
+        Uuid::new_v5(&namespace, identifier.as_bytes()).to_string()
     } else {
-        Ok(Uuid::new_v4().to_string().to_uppercase())
-    }
+        Uuid::new_v4().to_string()
+    };
+    Ok(if config.uppercase { uuid.to_uppercase() } else { uuid })
 }
 
 fn create_namespace_from_domain(domain: &str) -> Uuid {
@@ -91,6 +93,7 @@ mod tests {
         let config = UuidConfig {
             org_domain: Some("com.example".to_string()),
             predictable: true,
+            uppercase: true,
         };
 
         let uuid1 = generate_uuid(&config, "test.identifier").unwrap();
@@ -105,6 +108,7 @@ mod tests {
         let config = UuidConfig {
             org_domain: None,
             predictable: true,
+            uppercase: true,
         };
 
         let err = generate_uuid(&config, "test.identifier").unwrap_err();
@@ -119,6 +123,7 @@ mod tests {
         let config = UuidConfig {
             org_domain: None,
             predictable: false,
+            uppercase: true,
         };
 
         let uuid1 = generate_uuid(&config, "test.identifier").unwrap();
@@ -134,6 +139,7 @@ mod tests {
         let config = UuidConfig {
             org_domain: None,
             predictable: false,
+            uppercase: true,
         };
 
         let existing = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D";
@@ -181,6 +187,7 @@ mod tests {
         let cfg = UuidConfig {
             org_domain: Some("com.example".to_string()),
             predictable: true,
+            uppercase: true,
         };
         let v5 = generate_uuid(&cfg, "test.identifier").unwrap();
         assert!(is_valid_uuid(&v5));
@@ -201,6 +208,7 @@ mod tests {
         let config = UuidConfig {
             org_domain: Some("com.example".to_string()),
             predictable: true,
+            uppercase: true,
         };
 
         let existing = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D";
@@ -210,5 +218,24 @@ mod tests {
         assert_eq!(regen1, regen2);
         assert_ne!(existing, regen1);
         assert!(is_valid_uuid(&regen1));
+    }
+
+    /// `[uuid] uppercase` picks the case; the value is the same UUID either way.
+    #[test]
+    fn uppercase_setting_picks_the_case() {
+        for predictable in [true, false] {
+            let cfg = |uppercase| UuidConfig {
+                org_domain: Some("com.example".to_string()),
+                predictable,
+                uppercase,
+            };
+            let upper = generate_uuid(&cfg(true), "test.identifier").unwrap();
+            let lower = generate_uuid(&cfg(false), "test.identifier").unwrap();
+            assert_eq!(upper, upper.to_uppercase(), "predictable={predictable}");
+            assert_eq!(lower, lower.to_lowercase(), "predictable={predictable}");
+            if predictable {
+                assert_eq!(upper.to_lowercase(), lower);
+            }
+        }
     }
 }

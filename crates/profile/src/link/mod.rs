@@ -17,6 +17,7 @@
 //! let config = LinkConfig {
 //!     org_domain: Some("com.example".to_string()),
 //!     predictable: true,
+//!     uppercase: true,
 //!     merge: false,
 //!     validate: true,
 //! };

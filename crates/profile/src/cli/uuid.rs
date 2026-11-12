@@ -180,6 +180,7 @@ fn uuid_single_file_internal(
     let uuid_config = UuidConfig {
         org_domain: effective_org_domain.map(String::from),
         predictable: effective_predictable,
+        uppercase: config.is_none_or(|c| c.uuid.uppercase),
     };
 
     profile.payload_uuid = uuid::regenerate_uuid(
@@ -236,6 +237,7 @@ fn handle_uuid_single(
     let uuid_config = UuidConfig {
         org_domain: effective_org_domain.map(String::from),
         predictable: effective_predictable,
+        uppercase: config.is_none_or(|c| c.uuid.uppercase),
     };
 
     if output_mode == OutputMode::Human {

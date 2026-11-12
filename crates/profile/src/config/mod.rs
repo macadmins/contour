@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Main configuration for Profile CLI tool.
 ///
@@ -33,6 +33,22 @@ pub struct ProfileConfig {
 
     #[serde(default)]
     pub fleet: Option<FleetConfig>,
+
+    /// Folder holding the loaded profile.toml; relative paths in it resolve here.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
+}
+
+/// Collect the dotted paths of keys in `raw` that `known` does not have.
+fn unknown_keys(raw: &toml::Table, known: &toml::Table, prefix: &str, out: &mut Vec<String>) {
+    for (key, value) in raw {
+        let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        match (value, known.get(key)) {
+            (_, None) => out.push(path),
+            (toml::Value::Table(r), Some(toml::Value::Table(k))) => unknown_keys(r, k, &path, out),
+            _ => {}
+        }
+    }
 }
 
 /// Organization-specific configuration.
@@ -41,7 +57,8 @@ pub struct OrganizationConfig {
     /// Reverse domain notation (e.g., "com.yourorg")
     pub domain: String,
 
-    /// Short organization name for templates (e.g., "yourorg")
+    /// Organization name: written as PayloadOrganization, and (filename-safe)
+    /// as `{org}` in renaming templates (e.g., "Your Org")
     #[serde(default)]
     pub name: Option<String>,
 }
@@ -149,21 +166,41 @@ impl Default for OutputConfig {
 impl ProfileConfig {
     /// Load config from project directory (profile.toml)
     pub fn load() -> Result<Option<Self>> {
-        let config_path = Self::find_config_file()?;
-
-        if let Some(path) = config_path {
-            let contents = fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-
-            let config: ProfileConfig =
-                toml::from_str(&contents).with_context(|| "Failed to parse TOML configuration")?;
-
-            config.validate()?;
-
-            Ok(Some(config))
-        } else {
-            Ok(None)
+        let Some(path) = Self::find_config_file()? else {
+            return Ok(None);
+        };
+        let (config, unknown) = Self::load_from(&path)?;
+        for key in unknown {
+            eprintln!("warning: {}: unknown key '{key}' is ignored", path.display());
         }
+        Ok(Some(config))
+    }
+
+    /// Parse and validate one profile.toml. Also returns the keys it does not
+    /// know (dotted paths) — a typo there would otherwise fall back silently.
+    pub fn load_from(path: &Path) -> Result<(Self, Vec<String>)> {
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+        let mut config: ProfileConfig =
+            toml::from_str(&contents).with_context(|| "Failed to parse TOML configuration")?;
+        config.validate()?;
+        config.base_dir = path.parent().map(Path::to_path_buf);
+
+        // Whatever does not survive a parse/serialize round trip was ignored.
+        let raw: toml::Table = toml::from_str(&contents)?;
+        let known = toml::Table::try_from(&config)?;
+        let mut unknown = Vec::new();
+        unknown_keys(&raw, &known, "", &mut unknown);
+        Ok((config, unknown))
+    }
+
+    /// `[output] directory`, a relative one resolved against profile.toml's folder.
+    pub fn output_dir(&self) -> Option<PathBuf> {
+        let dir = Path::new(self.output.directory.as_deref()?);
+        Some(match &self.base_dir {
+            Some(base) if dir.is_relative() => base.join(dir),
+            _ => dir.to_path_buf(),
+        })
     }
 
     /// Find profile.toml in current directory or parent directories
@@ -315,6 +352,7 @@ mod tests {
             output: OutputConfig::default(),
             processing: None,
             fleet: None,
+            base_dir: None,
         };
 
         assert_eq!(config.renaming.scheme, "display-name");
@@ -333,8 +371,44 @@ mod tests {
             output: OutputConfig::default(),
             processing: None,
             fleet: None,
+            base_dir: None,
         };
 
         assert_eq!(config.org_name(), "corp");
+    }
+
+    fn write_config(dir: &Path, body: &str) -> PathBuf {
+        let path = dir.join("profile.toml");
+        fs::write(&path, format!("[organization]\ndomain = \"com.acme\"\n{body}")).unwrap();
+        path
+    }
+
+    /// `[output] directory` is relative to profile.toml, not to the CWD, so
+    /// running from a subfolder writes to the same place.
+    #[test]
+    fn output_dir_is_relative_to_profile_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, _) = ProfileConfig::load_from(&write_config(dir.path(), "[output]\ndirectory = \"./generated\"\n")).unwrap();
+        assert_eq!(config.output_dir().unwrap(), dir.path().join("./generated"));
+
+        let abs = dir.path().join("abs");
+        let body = format!("[output]\ndirectory = \"{}\"\n", abs.display());
+        let (config, _) = ProfileConfig::load_from(&write_config(dir.path(), &body)).unwrap();
+        assert_eq!(config.output_dir().unwrap(), abs);
+
+        let (config, _) = ProfileConfig::load_from(&write_config(dir.path(), "")).unwrap();
+        assert!(config.output_dir().is_none());
+    }
+
+    /// A typo is reported instead of silently falling back to a default.
+    #[test]
+    fn load_reports_unknown_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "nmae = \"Acme\"\n\n[ouput]\ndirectory = \"x\"\n\n[uuid]\npredictable = true\nupercase = false\n\n[fleet]\ngitops_root = \"/tmp/x\"\ntarget = \"global\"\n\n[fleet.merge_map]\ndefault = \"base\"\nany-key = \"ok\"\n";
+        let (_, unknown) = ProfileConfig::load_from(&write_config(dir.path(), body)).unwrap();
+        assert_eq!(unknown, ["organization.nmae", "ouput", "uuid.upercase"]);
+
+        let (_, unknown) = ProfileConfig::load_from(&write_config(dir.path(), "name = \"Acme\"\n[output]\ndirectory = \"x\"\n")).unwrap();
+        assert!(unknown.is_empty(), "{unknown:?}");
     }
 }

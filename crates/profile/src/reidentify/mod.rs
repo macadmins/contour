@@ -134,6 +134,7 @@ fn reidentify_pattern(
     let uuid_cfg = UuidConfig {
         org_domain: Some(to.to_string()),
         predictable: true,
+        uppercase: true,
     };
     let mut mapping = UuidMapping::new();
 
@@ -328,6 +329,7 @@ fn reidentify_name(profile: &mut ConfigurationProfile, org: &str) -> Result<Reid
     let uuid_cfg = UuidConfig {
         org_domain: Some(org.to_string()),
         predictable: true,
+        uppercase: true,
     };
     let mut mapping = UuidMapping::new();
 

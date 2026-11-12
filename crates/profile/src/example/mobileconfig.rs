@@ -24,6 +24,7 @@ pub fn transform_mobileconfig(xml: &str, org_domain: &str) -> Result<String> {
     let ucfg = UuidConfig {
         org_domain: Some(org_domain.to_string()),
         predictable: false,
+        uppercase: true,
     };
     profile.payload_uuid =
         uuid::regenerate_uuid(&profile.payload_uuid, &ucfg, &profile.payload_identifier)?;

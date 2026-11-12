@@ -134,6 +134,20 @@ fn resolve_generate_org(
         })
 }
 
+/// PayloadOrganization for generated profiles: `organization.name` in
+/// profile.toml, then `.contour/config.toml`'s name when its domain is the
+/// one in use, then the domain itself.
+fn resolve_org_name(config: Option<&ProfileConfig>, domain: &str) -> String {
+    config
+        .and_then(|c| c.organization.name.clone())
+        .or_else(|| {
+            contour_core::config::ContourConfig::load_nearest()
+                .filter(|c| c.organization.domain == domain)
+                .map(|c| c.organization.name)
+        })
+        .unwrap_or_else(|| domain.to_string())
+}
+
 /// One inner payload of a combined (multi-payload) recipe render.
 struct CombinedEntry {
     payload_type: String,
@@ -165,9 +179,11 @@ fn build_combined_profile_bytes(
     outer_description: &str,
     outer_removal_disallowed: bool,
     inner_payloads: &[CombinedEntry],
+    uppercase: bool,
 ) -> Result<Vec<u8>> {
     use contour_profiles::uuid::deterministic_uuid;
 
+    let case = |u: String| if uppercase { u } else { u.to_lowercase() };
     let mut seen_ids = std::collections::HashSet::new();
     let mut payload_array: Vec<Value> = Vec::with_capacity(inner_payloads.len());
     for entry in inner_payloads {
@@ -181,7 +197,7 @@ fn build_combined_profile_bytes(
                  PayloadIdentifier)"
             );
         }
-        let inner_uuid = deterministic_uuid(&inner_payload_id);
+        let inner_uuid = case(deterministic_uuid(&inner_payload_id));
 
         let mut payload = Dictionary::new();
         for (k, v) in &entry.content {
@@ -216,7 +232,7 @@ fn build_combined_profile_bytes(
         payload_array.push(Value::Dictionary(payload));
     }
 
-    let outer_uuid = deterministic_uuid(outer_identifier);
+    let outer_uuid = case(deterministic_uuid(outer_identifier));
 
     let mut profile = Dictionary::new();
     profile.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
@@ -836,7 +852,8 @@ pub fn handle_generate(
             manifest.description.clone()
         };
 
-        let bytes = ProfileBuilder::new(&domain, &identifier)
+        let bytes = ProfileBuilder::new(&resolve_org_name(config, &domain), &identifier)
+            .uppercase(config.is_none_or(|c| c.uuid.uppercase))
             .display_name(&manifest.title)
             .description(&description)
             .build(&manifest.payload_type, payload_content)?;
@@ -849,8 +866,14 @@ pub fn handle_generate(
         .to_lowercase()
         .replace([' ', ':'], "-")
         .replace("--", "-");
+    // -o → profile.toml `[output] directory`/<slug> → ./<slug>
     let output_path = output.map_or_else(
-        || format!("{slug}.{default_ext}"),
+        || {
+            let file = format!("{slug}.{default_ext}");
+            config
+                .and_then(ProfileConfig::output_dir)
+                .map_or(file.clone(), |d| d.join(&file).display().to_string())
+        },
         std::string::ToString::to_string,
     );
 
@@ -1088,8 +1111,16 @@ pub fn handle_generate_recipe(
         })?
     };
 
-    // Output directory
-    let out_dir = output_dir.unwrap_or(&r.recipe.name);
+    let org_name = resolve_org_name(config, &domain);
+    let uppercase = config.is_none_or(|c| c.uuid.uppercase);
+
+    // Output directory: -o → profile.toml `[output] directory` → recipe name.
+    let config_dir = config
+        .and_then(ProfileConfig::output_dir)
+        .map(|d| d.display().to_string());
+    let out_dir = output_dir
+        .or(config_dir.as_deref())
+        .unwrap_or(&r.recipe.name);
     if !Path::new(out_dir).exists() {
         std::fs::create_dir_all(out_dir)?;
     }
@@ -1188,7 +1219,8 @@ pub fn handle_generate_recipe(
                 .unwrap_or("profile");
             let identifier = format!("{domain}.{short}");
 
-            ProfileBuilder::new(&domain, &identifier)
+            ProfileBuilder::new(&org_name, &identifier)
+                .uppercase(uppercase)
                 .display_name(&spec.display_name)
                 .description(&spec.description)
                 .removal_disallowed(spec.removal_disallowed)
@@ -1254,12 +1286,13 @@ pub fn handle_generate_recipe(
         // Removal_disallowed at the bundle level: set if any inner asked for it.
         let any_removal_locked = combined_buffer.iter().any(|e| e.removal_disallowed);
         let bytes = build_combined_profile_bytes(
-            &domain,
+            &org_name,
             &outer_identifier,
             &r.recipe.name,
             &r.recipe.description,
             any_removal_locked,
             &combined_buffer,
+            uppercase,
         )?;
 
         for p in find_placeholders(&String::from_utf8_lossy(&bytes)) {
@@ -2344,6 +2377,7 @@ mod tests {
             "",
             false,
             &entries,
+            true,
         )
         .unwrap();
 
@@ -2371,6 +2405,7 @@ mod tests {
             "",
             false,
             &entries,
+            true,
         )
         .unwrap_err();
         assert!(
@@ -2944,6 +2979,123 @@ mod tests {
             err.contains("--org is required"),
             "error should mention --org requirement, got: {err}"
         );
+    }
+
+    /// Render the App Store recipe with a profile.toml and return each
+    /// written profile's (PayloadOrganization outer, inner, PayloadIdentifier).
+    fn render_with_profile_toml(
+        dir: &Path,
+        output_dir: Option<&str>,
+        combined: bool,
+        extra_toml: &str,
+    ) -> Vec<(std::path::PathBuf, String, String, String, [String; 2])> {
+        let recipe = dir.join("store.toml");
+        std::fs::write(
+            &recipe,
+            "[recipe]\nname = \"store\"\ndescription = \"Store\"\n\n[[profile]]\n\
+             filename = \"appstore.mobileconfig\"\npayload_type = \"com.apple.appstore\"\n\
+             display_name = \"App Store\"\ndescription = \"\"\n\n\
+             [profile.fields]\nrestrict-store-softwareupdate-only = true\n",
+        )
+        .unwrap();
+        let cfg: ProfileConfig = toml::from_str(&format!(
+            "[organization]\ndomain = \"com.acme\"\nname = \"Acmé Örg AB\"\n\n\
+             [output]\ndirectory = \"{}\"\n{extra_toml}",
+            dir.join("generated").display()
+        ))
+        .unwrap();
+        handle_generate_recipe(
+            recipe.to_str().unwrap(),
+            None,
+            output_dir,
+            None,
+            false,
+            false,
+            None,
+            Some(&cfg),
+            &[],
+            OutputMode::Json,
+            "mobileconfig",
+            Some(combined),
+            false,
+        )
+        .unwrap();
+        let out = output_dir.map_or_else(|| dir.join("generated"), std::path::PathBuf::from);
+        std::fs::read_dir(&out)
+            .unwrap_or_else(|e| panic!("no output in {}: {e}", out.display()))
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|x| x == "mobileconfig"))
+            .map(|p| {
+                let v = Value::from_file(&p).unwrap();
+                let d = v.as_dictionary().unwrap();
+                let s = |d: &Dictionary, k: &str| d.get(k).and_then(Value::as_string).unwrap().to_string();
+                let inner = d.get("PayloadContent").and_then(Value::as_array).unwrap()[0]
+                    .as_dictionary()
+                    .unwrap()
+                    .clone();
+                let uuids = [s(d, "PayloadUUID"), s(&inner, "PayloadUUID")];
+                (p, s(d, "PayloadOrganization"), s(&inner, "PayloadOrganization"), s(d, "PayloadIdentifier"), uuids)
+            })
+            .collect()
+    }
+
+    /// profile.toml's `[organization] name` is the PayloadOrganization;
+    /// `domain` stays the identifier prefix; `[output] directory` is where
+    /// files go when `-o` is not given.
+    #[test]
+    fn recipe_honours_profile_toml_org_name_and_output_directory() {
+        for combined in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let written = render_with_profile_toml(dir.path(), None, combined, "");
+            assert_eq!(written.len(), 1, "combined={combined}: {written:?}");
+            let (_, outer, inner, id, uuids) = &written[0];
+            assert_eq!(outer, "Acmé Örg AB", "combined={combined}");
+            assert_eq!(inner, "Acmé Örg AB", "combined={combined}");
+            assert!(id.starts_with("com.acme."), "combined={combined}: {id}");
+            assert!(uuids.iter().all(|u| *u == u.to_uppercase()), "combined={combined}");
+        }
+    }
+
+    /// `[uuid] uppercase = false` lowercases generated UUIDs: recipe,
+    /// combined recipe and single payload.
+    #[test]
+    fn generate_honours_profile_toml_uuid_case() {
+        for combined in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let written = render_with_profile_toml(dir.path(), None, combined, "\n[uuid]\nuppercase = false\n");
+            let uuids = &written[0].4;
+            assert!(uuids.iter().all(|u| *u == u.to_lowercase()), "combined={combined}");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("single.mobileconfig");
+        let cfg: ProfileConfig =
+            toml::from_str("[organization]\ndomain = \"com.acme\"\n[uuid]\nuppercase = false\n").unwrap();
+        handle_generate(
+            "com.apple.appstore",
+            Some(out.to_str().unwrap()),
+            None,
+            false,
+            None,
+            Some(&cfg),
+            OutputMode::Json,
+            "mobileconfig",
+            Channel::Stable,
+            false,
+        )
+        .unwrap();
+        let v = Value::from_file(&out).unwrap();
+        let uuid = v.as_dictionary().unwrap()["PayloadUUID"].as_string().unwrap().to_string();
+        assert_eq!(uuid, uuid.to_lowercase());
+    }
+
+    #[test]
+    fn recipe_cli_output_dir_beats_profile_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join("cli-out");
+        let written = render_with_profile_toml(dir.path(), Some(cli.to_str().unwrap()), false, "");
+        assert_eq!(written.len(), 1);
+        assert!(!dir.path().join("generated").exists());
     }
 }
 

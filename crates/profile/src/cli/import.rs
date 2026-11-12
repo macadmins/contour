@@ -252,7 +252,11 @@ pub fn handle_import(
     }
 
     // Resolve output directory
-    let effective_output = output_dir.unwrap_or("./imported");
+    // -o → profile.toml `[output] directory` → ./imported
+    let config_dir = config
+        .and_then(ProfileConfig::output_dir)
+        .map(|d| d.display().to_string());
+    let effective_output = output_dir.or(config_dir.as_deref()).unwrap_or("./imported");
 
     // Resolve org domain: CLI --org → profile.toml → .contour/config.toml
     let contour_domain;
@@ -852,6 +856,7 @@ fn import_single_profile(
         let uuid_config = UuidConfig {
             org_domain: org_domain.map(String::from),
             predictable,
+            uppercase: config.is_none_or(|c| c.uuid.uppercase),
         };
 
         profile.payload_uuid = uuid::regenerate_uuid(

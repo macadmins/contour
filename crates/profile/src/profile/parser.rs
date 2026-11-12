@@ -275,6 +275,10 @@ pub fn write_profile(profile: &ConfigurationProfile, path: &Path) -> Result<()> 
 
 /// Write profile as XML plist (default)
 pub fn write_profile_xml(profile: &ConfigurationProfile, path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create output directory: {}", parent.display()))?;
+    }
     let file = File::create(path)
         .with_context(|| format!("Failed to create output file: {}", path.display()))?;
 
@@ -1143,6 +1147,16 @@ mod tests {
         let content = std::fs::read_to_string(file.path()).unwrap();
         assert!(content.contains("<?xml"));
         assert!(content.contains("com.test.profile"));
+    }
+
+    /// A configured output directory need not exist yet (`profile uuid`
+    /// with `[output] directory` failed on a fresh checkout).
+    #[test]
+    fn write_profile_creates_missing_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("generated/nested/p.mobileconfig");
+        write_profile(&create_test_profile(), &path).unwrap();
+        assert!(path.exists());
     }
 
     #[test]

@@ -38,8 +38,8 @@ impl<'a> ProfileRenamer<'a> {
     ) -> PathBuf {
         let filename = self.generate_filename(profile, original_path);
 
-        if let Some(dir) = &self.config.output.directory {
-            Path::new(dir).join(filename)
+        if let Some(dir) = self.config.output_dir() {
+            dir.join(filename)
         } else if let Some(original) = original_path {
             if let Some(parent) = original.parent() {
                 parent.join(filename)
@@ -64,7 +64,7 @@ impl<'a> ProfileRenamer<'a> {
 
     /// Template-based naming: {org}-{type}-{name}.mobileconfig
     fn template_based(&self, profile: &ConfigurationProfile) -> String {
-        let org = self.config.org_name();
+        let org = self.sanitize_for_filename(&self.config.org_name());
         let payload_type = self.extract_type(profile);
         let name = self.sanitize_for_filename(&profile.payload_display_name);
         let identifier = &profile.payload_identifier;
@@ -151,6 +151,7 @@ mod tests {
             output: OutputConfig::default(),
             processing: None,
             fleet: None,
+            base_dir: None,
         }
     }
 
@@ -200,6 +201,17 @@ mod tests {
 
         let filename = renamer.generate_filename(&profile, None);
         assert_eq!(filename, "acme-servicemanagement-BTM-OSQuery.mobileconfig");
+    }
+
+    /// `name` is also PayloadOrganization, so it may be a display name;
+    /// `{org}` gets the same filename cleanup as `{name}`.
+    #[test]
+    fn test_template_org_display_name_is_filename_safe() {
+        let mut config = create_test_config("template", "{org}-{type}-{name}");
+        config.organization.name = Some("Acme Corp / IT".to_string());
+        let renamer = ProfileRenamer::new(&config);
+        let filename = renamer.generate_filename(&create_test_profile(), None);
+        assert_eq!(filename, "Acme-Corp-IT-servicemanagement-BTM-OSQuery.mobileconfig");
     }
 
     #[test]

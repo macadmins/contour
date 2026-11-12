@@ -14,6 +14,7 @@ pub struct ProfileBuilder {
     display_name: String,
     description: String,
     removal_disallowed: bool,
+    uppercase: bool,
 }
 
 impl ProfileBuilder {
@@ -27,6 +28,7 @@ impl ProfileBuilder {
             display_name: String::new(),
             description: String::new(),
             removal_disallowed: false,
+            uppercase: true,
         }
     }
 
@@ -51,6 +53,14 @@ impl ProfileBuilder {
         self
     }
 
+    /// Write PayloadUUIDs in uppercase (the default) or lowercase. The UUID
+    /// value is the same either way.
+    #[must_use]
+    pub fn uppercase(mut self, val: bool) -> Self {
+        self.uppercase = val;
+        self
+    }
+
     /// Build the profile, wrapping the given payload content dictionary
     /// into a complete mobileconfig XML plist.
     ///
@@ -62,8 +72,9 @@ impl ProfileBuilder {
     pub fn build(self, payload_type: &str, payload_content: Dictionary) -> Result<Vec<u8>> {
         let payload_id = format!("{}.payload", self.identifier);
 
-        let profile_uuid = deterministic_uuid(&self.identifier);
-        let payload_uuid = deterministic_uuid(&payload_id);
+        let case = |u: String| if self.uppercase { u } else { u.to_lowercase() };
+        let profile_uuid = case(deterministic_uuid(&self.identifier));
+        let payload_uuid = case(deterministic_uuid(&payload_id));
 
         // Build inner payload: specific content first, then metadata
         let mut payload = Dictionary::new();
@@ -178,6 +189,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(result1, result2);
+    }
+
+    /// Uppercase by default; `.uppercase(false)` writes the same UUIDs in lowercase.
+    #[test]
+    fn test_profile_builder_uuid_case() {
+        let uuids = |builder: ProfileBuilder| -> Vec<String> {
+            let bytes = builder.build("com.example.type", Dictionary::new()).unwrap();
+            let v = Value::from_reader(std::io::Cursor::new(bytes)).unwrap();
+            let d = v.as_dictionary().unwrap();
+            let inner = d["PayloadContent"].as_array().unwrap()[0].as_dictionary().unwrap();
+            [d, inner].map(|d| d["PayloadUUID"].as_string().unwrap().to_string()).to_vec()
+        };
+        let upper = uuids(ProfileBuilder::new("Example", "com.example.case"));
+        let lower = uuids(ProfileBuilder::new("Example", "com.example.case").uppercase(false));
+        assert_eq!(upper, upper.iter().map(|u| u.to_uppercase()).collect::<Vec<_>>());
+        assert_eq!(lower, upper.iter().map(|u| u.to_lowercase()).collect::<Vec<_>>());
     }
 
     #[test]
