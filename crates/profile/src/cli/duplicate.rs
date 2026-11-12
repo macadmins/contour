@@ -61,6 +61,7 @@ pub fn handle_duplicate(
     let uuid_config = profile_uuid::UuidConfig {
         org_domain: org.map(String::from),
         predictable,
+        uppercase: true,
     };
 
     // 5. Regenerate profile-level UUID

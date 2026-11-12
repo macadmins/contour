@@ -85,6 +85,7 @@ pub fn handle_link(
     let link_config = LinkConfig {
         org_domain: effective_domain,
         predictable: effective_predictable,
+        uppercase: config.is_none_or(|c| c.uuid.uppercase),
         merge,
         validate: !no_validate,
     };

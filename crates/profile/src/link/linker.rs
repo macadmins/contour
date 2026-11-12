@@ -68,6 +68,7 @@ fn generate_uuid_mapping(
     let uuid_config = UuidConfig {
         org_domain: config.org_domain.clone(),
         predictable: config.predictable,
+        uppercase: config.uppercase,
     };
 
     for (_, profile) in profiles {
@@ -288,6 +289,7 @@ pub fn merge_profiles_v2(
     let uuid_config = UuidConfig {
         org_domain: config.org_domain.clone(),
         predictable: config.predictable,
+        uppercase: config.uppercase,
     };
     merged.payload_uuid = uuid::generate_uuid(&uuid_config, &merged_identifier)?;
     merged.payload_identifier = merged_identifier;
@@ -377,6 +379,7 @@ mod tests {
         let config = LinkConfig {
             org_domain: Some("com.test".to_string()),
             predictable: true,
+            uppercase: true,
             merge: false,
             validate: true,
         };
@@ -439,6 +442,7 @@ mod tests {
         let config = LinkConfig {
             org_domain: Some("com.test".to_string()),
             predictable: true,
+            uppercase: true,
             merge: true,
             validate: false,
         };
@@ -488,6 +492,7 @@ mod tests {
         let config = LinkConfig {
             org_domain: None,
             predictable: false,
+            uppercase: true,
             merge: true,
             validate: false,
         };
@@ -530,6 +535,7 @@ mod tests {
         let config = LinkConfig {
             org_domain: Some("com.test".to_string()),
             predictable: true,
+            uppercase: true,
             merge: false,
             validate: false,
         };

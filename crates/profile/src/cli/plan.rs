@@ -276,6 +276,7 @@ fn regenerate_predictable_uuids(
     let cfg = UuidConfig {
         org_domain: org.map(str::to_string),
         predictable: true,
+        uppercase: true,
     };
     profile.payload_uuid =
         regenerate_uuid(&profile.payload_uuid, &cfg, &profile.payload_identifier)?;

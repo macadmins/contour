@@ -122,6 +122,7 @@ pub fn handle_normalize_pasteboard(
         let uuid_config = UuidConfig {
             org_domain: effective_org.map(String::from),
             predictable,
+            uppercase: config.is_none_or(|c| c.uuid.uppercase),
         };
 
         profile.payload_uuid = uuid::regenerate_uuid(
@@ -679,6 +680,7 @@ fn normalize_single_file_internal(
         let uuid_config = UuidConfig {
             org_domain: effective_org_domain.map(String::from),
             predictable,
+            uppercase: config.is_none_or(|c| c.uuid.uppercase),
         };
 
         profile.payload_uuid = uuid::regenerate_uuid(
@@ -793,6 +795,7 @@ fn handle_normalize_single(
         let uuid_config = UuidConfig {
             org_domain: effective_org_domain.map(String::from),
             predictable,
+            uppercase: config.is_none_or(|c| c.uuid.uppercase),
         };
 
         profile.payload_uuid = uuid::regenerate_uuid(
