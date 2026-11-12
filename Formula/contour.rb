@@ -1,24 +1,24 @@
 class Contour < Formula
   desc "Device management configuration toolkit for Apple MDM, Fleet GitOps, and mSCP"
   homepage "https://github.com/macadmins/contour"
-  version "0.5.0-rc.1"
+  version "0.5.0-rc.2"
   license "Apache-2.0"
 
   on_macos do
     on_arm do
-      url "https://github.com/macadmins/contour/releases/download/v0.5.0-rc.1/contour-0.5.0-rc.1-macos-arm64.zip"
-      sha256 "194d81e9597f74d201e74e074e59eeb67a585ab9de2ea6dd838082afcd76136c"
+      url "https://github.com/macadmins/contour/releases/download/v0.5.0-rc.2/contour-0.5.0-rc.2-macos-arm64.zip"
+      sha256 "111940ed29bf5de6be5c0a44caddc6646bb0fe493661c50d99492d27377b3a1a"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/macadmins/contour/releases/download/v0.5.0-rc.1/contour-0.5.0-rc.1-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "dc61d26050c2cf9d400ea72cea58d8584024a59f594d95567c311a1789896e82"
+      url "https://github.com/macadmins/contour/releases/download/v0.5.0-rc.2/contour-0.5.0-rc.2-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "624bbb13597f850c450637123d2007755e3ac9a7f2c58cbe973bd4bf831aab4c"
     end
     on_intel do
-      url "https://github.com/macadmins/contour/releases/download/v0.5.0-rc.1/contour-0.5.0-rc.1-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "d11e5f0fcc8f2225892b4920f6790f77994ee30f9e7b867205f3feabe0a197d1"
+      url "https://github.com/macadmins/contour/releases/download/v0.5.0-rc.2/contour-0.5.0-rc.2-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "81ddfe1de2d6e9129a5ac8bd444315bec49f92ec41b39a30d2cfad072935bd8d"
     end
   end
 
