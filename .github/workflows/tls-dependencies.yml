@@ -1,6 +1,7 @@
 name: Verify locked TLS dependencies
 
 on:
+  workflow_dispatch:
   pull_request:
     paths: [Cargo.toml, Cargo.lock, 'crates/**/Cargo.toml', .github/workflows/tls-dependencies.yml]
   push:

@@ -12,6 +12,7 @@ env:
   CONTOUR_SCHEMA_ZIP_BASE: ${{ secrets.CONTOUR_SCHEMA_ZIP_BASE }}
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - "crates/contour-form/**"
