@@ -348,6 +348,14 @@ pub type SchemaIndex = std::collections::BTreeMap<String, TableInfo>;
 /// absent from the index, so a dataset that starts carrying one shrinks this.
 pub const EXTENSION_TABLES: &[&str] = &["osquery_labels", "santa_rules"];
 
+/// Tables whose `required` columns are alternatives: constraining any one is
+/// enough (`file` takes `path` or `directory`). The schema cannot say this —
+/// it lives in each table's generate function — so it is listed by hand,
+/// checked against osquery's sources. Every other table needs all of its
+/// required columns (`device_hash` needs device, partition and inode).
+/// ponytail: not per-platform — Linux `extended_attributes` reads only `path`.
+pub const ANY_OF_REQUIRED_TABLES: &[&str] = &["extended_attributes", "file", "hash", "windows_eventlog"];
+
 /// Platform names Fleet and osquery use.
 pub const KNOWN_PLATFORMS: &[&str] = &["darwin", "linux", "windows", "chrome"];
 
@@ -387,6 +395,8 @@ pub enum Problem {
     NoPlatform { table: String, has: Vec<String> },
     UnknownColumn { table: String, column: String },
     RequiredUnconstrained { table: String, column: String },
+    /// An [`ANY_OF_REQUIRED_TABLES`] table with none of its required columns constrained.
+    RequiredAnyUnconstrained { table: String, columns: Vec<String> },
 }
 
 impl Problem {
@@ -441,6 +451,11 @@ impl std::fmt::Display for Problem {
             Problem::RequiredUnconstrained { table, column } => write!(
                 f,
                 "'{table}.{column}' is a required column; without it in WHERE the table returns nothing"
+            ),
+            Problem::RequiredAnyUnconstrained { table, columns } => write!(
+                f,
+                "'{table}' needs one of {} in WHERE; without it the table returns nothing",
+                columns.join(", ")
             ),
         }
     }
@@ -510,12 +525,21 @@ pub fn check_query(sql: &str, platform: &str, index: &SchemaIndex) -> Vec<Proble
                 });
             }
         }
-        for r in &info.required {
-            if !constrained.contains(r) {
-                out.push(Problem::RequiredUnconstrained {
+        if ANY_OF_REQUIRED_TABLES.contains(&table.as_str()) {
+            if !info.required.is_empty() && info.required.is_disjoint(&constrained) {
+                out.push(Problem::RequiredAnyUnconstrained {
                     table: table.clone(),
-                    column: r.clone(),
+                    columns: info.required.iter().cloned().collect(),
                 });
+            }
+        } else {
+            for r in &info.required {
+                if !constrained.contains(r) {
+                    out.push(Problem::RequiredUnconstrained {
+                        table: table.clone(),
+                        column: r.clone(),
+                    });
+                }
             }
         }
         if single_table_plain {
@@ -922,6 +946,37 @@ spec:
         assert!(p.contains(&Problem::RequiredUnconstrained { table: "plist".into(), column: "path".into() }));
         let ok = check_query("SELECT key AS rule, value AS compliant FROM plist WHERE path = '/L/p.plist';", "darwin", &idx);
         assert!(ok.is_empty(), "{ok:?}");
+    }
+
+    /// `file` takes `path` or `directory`; either alone is enough. Tables that
+    /// truly need every required column (`device_hash`) stay strict.
+    #[test]
+    fn check_query_accepts_either_required_column_for_any_of_tables() {
+        let mut idx = index();
+        let t = |cols: &[&str], req: &[&str]| TableInfo {
+            in_osquery: true,
+            in_fleet: true,
+            platforms: ["darwin".to_string()].into_iter().collect(),
+            columns: cols.iter().map(|s| (*s).to_string()).collect(),
+            required: req.iter().map(|s| (*s).to_string()).collect(),
+        };
+        idx.insert("file".into(), t(&["path", "directory", "filename"], &["path", "directory"]));
+        idx.insert("device_hash".into(), t(&["device", "partition", "inode", "sha256"], &["device", "partition", "inode"]));
+
+        // A policy that checks one installed file by path.
+        let p = check_query("SELECT 1 FROM file WHERE path = '/usr/local/bin/example.sh';", "darwin", &idx);
+        assert!(p.is_empty(), "{p:?}");
+        let p = check_query("SELECT filename FROM file WHERE directory = '/Applications';", "darwin", &idx);
+        assert!(p.is_empty(), "{p:?}");
+
+        // Neither constrained: one problem naming both, not one per column.
+        let p = check_query("SELECT filename FROM file;", "darwin", &idx);
+        assert_eq!(p, vec![Problem::RequiredAnyUnconstrained { table: "file".into(), columns: vec!["directory".into(), "path".into()] }]);
+        assert!(p[0].to_string().contains("one of directory, path"));
+
+        // All-of tables still flag each missing column.
+        let p = check_query("SELECT sha256 FROM device_hash WHERE device = '/dev/disk1' AND partition = '1';", "darwin", &idx);
+        assert_eq!(p, vec![Problem::RequiredUnconstrained { table: "device_hash".into(), column: "inode".into() }]);
     }
 
     #[test]
