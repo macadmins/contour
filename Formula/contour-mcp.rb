@@ -7,18 +7,18 @@ class ContourMcp < Formula
   on_macos do
     on_arm do
       url "https://github.com/macadmins/contour/releases/download/v0.5.0-rc.2/contour-mcp-0.5.0-rc.2-macos-arm64.zip"
-      sha256 "d77f33dde3040bf27d74b414d6aa0e88dd2fc73e77398e18006617da2b465fd7"
+      sha256 "359c916c494aafc4a70dbd27db26982cbfb2f2472041e2973168772e0e3bec3e"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/macadmins/contour/releases/download/v0.5.0-rc.2/contour-mcp-0.5.0-rc.2-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "fa5af164b02c4d508e7ac8a4e713a3c337d5bf3d0e08b308bb4711df3713667d"
+      sha256 "bb71ee93b592e626b4f2cc30eed58d09674628a1e65052b366b05ae0dc6da2bf"
     end
     on_intel do
       url "https://github.com/macadmins/contour/releases/download/v0.5.0-rc.2/contour-mcp-0.5.0-rc.2-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "2a42ebcd84598b08c2b458e6d8beb7536dac4ed9a36b28665789663585c0df10"
+      sha256 "4b3e96ca246e45564c33b7f88b85d61bff4f3372c543f19ca2c2f4604022f885"
     end
   end
 
