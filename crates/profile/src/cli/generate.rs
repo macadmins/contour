@@ -3052,7 +3052,7 @@ mod tests {
             assert_eq!(outer, "Acmé Örg AB", "combined={combined}");
             assert_eq!(inner, "Acmé Örg AB", "combined={combined}");
             assert!(id.starts_with("com.acme."), "combined={combined}: {id}");
-            assert!(uuids.iter().all(|u| *u == u.to_uppercase()), "combined={combined}: {uuids:?}");
+            assert!(uuids.iter().all(|u| *u == u.to_uppercase()), "combined={combined}");
         }
     }
 
@@ -3064,7 +3064,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let written = render_with_profile_toml(dir.path(), None, combined, "\n[uuid]\nuppercase = false\n");
             let uuids = &written[0].4;
-            assert!(uuids.iter().all(|u| *u == u.to_lowercase()), "combined={combined}: {uuids:?}");
+            assert!(uuids.iter().all(|u| *u == u.to_lowercase()), "combined={combined}");
         }
 
         let dir = tempfile::tempdir().unwrap();
