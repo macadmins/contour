@@ -41,7 +41,8 @@ pub struct OrganizationConfig {
     /// Reverse domain notation (e.g., "com.yourorg")
     pub domain: String,
 
-    /// Short organization name for templates (e.g., "yourorg")
+    /// Organization name: written as PayloadOrganization, and (filename-safe)
+    /// as `{org}` in renaming templates (e.g., "Your Org")
     #[serde(default)]
     pub name: Option<String>,
 }
