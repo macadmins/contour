@@ -179,9 +179,11 @@ fn build_combined_profile_bytes(
     outer_description: &str,
     outer_removal_disallowed: bool,
     inner_payloads: &[CombinedEntry],
+    uppercase: bool,
 ) -> Result<Vec<u8>> {
     use contour_profiles::uuid::deterministic_uuid;
 
+    let case = |u: String| if uppercase { u } else { u.to_lowercase() };
     let mut seen_ids = std::collections::HashSet::new();
     let mut payload_array: Vec<Value> = Vec::with_capacity(inner_payloads.len());
     for entry in inner_payloads {
@@ -195,7 +197,7 @@ fn build_combined_profile_bytes(
                  PayloadIdentifier)"
             );
         }
-        let inner_uuid = deterministic_uuid(&inner_payload_id);
+        let inner_uuid = case(deterministic_uuid(&inner_payload_id));
 
         let mut payload = Dictionary::new();
         for (k, v) in &entry.content {
@@ -230,7 +232,7 @@ fn build_combined_profile_bytes(
         payload_array.push(Value::Dictionary(payload));
     }
 
-    let outer_uuid = deterministic_uuid(outer_identifier);
+    let outer_uuid = case(deterministic_uuid(outer_identifier));
 
     let mut profile = Dictionary::new();
     profile.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
@@ -851,6 +853,7 @@ pub fn handle_generate(
         };
 
         let bytes = ProfileBuilder::new(&resolve_org_name(config, &domain), &identifier)
+            .uppercase(config.is_none_or(|c| c.uuid.uppercase))
             .display_name(&manifest.title)
             .description(&description)
             .build(&manifest.payload_type, payload_content)?;
@@ -1109,6 +1112,7 @@ pub fn handle_generate_recipe(
     };
 
     let org_name = resolve_org_name(config, &domain);
+    let uppercase = config.is_none_or(|c| c.uuid.uppercase);
 
     // Output directory: -o → profile.toml `[output] directory` → recipe name.
     let config_dir = config
@@ -1216,6 +1220,7 @@ pub fn handle_generate_recipe(
             let identifier = format!("{domain}.{short}");
 
             ProfileBuilder::new(&org_name, &identifier)
+                .uppercase(uppercase)
                 .display_name(&spec.display_name)
                 .description(&spec.description)
                 .removal_disallowed(spec.removal_disallowed)
@@ -1287,6 +1292,7 @@ pub fn handle_generate_recipe(
             &r.recipe.description,
             any_removal_locked,
             &combined_buffer,
+            uppercase,
         )?;
 
         for p in find_placeholders(&String::from_utf8_lossy(&bytes)) {
@@ -2371,6 +2377,7 @@ mod tests {
             "",
             false,
             &entries,
+            true,
         )
         .unwrap();
 
@@ -2398,6 +2405,7 @@ mod tests {
             "",
             false,
             &entries,
+            true,
         )
         .unwrap_err();
         assert!(
@@ -2979,7 +2987,8 @@ mod tests {
         dir: &Path,
         output_dir: Option<&str>,
         combined: bool,
-    ) -> Vec<(std::path::PathBuf, String, String, String)> {
+        extra_toml: &str,
+    ) -> Vec<(std::path::PathBuf, String, String, String, [String; 2])> {
         let recipe = dir.join("store.toml");
         std::fs::write(
             &recipe,
@@ -2991,7 +3000,7 @@ mod tests {
         .unwrap();
         let cfg: ProfileConfig = toml::from_str(&format!(
             "[organization]\ndomain = \"com.acme\"\nname = \"Acmé Örg AB\"\n\n\
-             [output]\ndirectory = \"{}\"\n",
+             [output]\ndirectory = \"{}\"\n{extra_toml}",
             dir.join("generated").display()
         ))
         .unwrap();
@@ -3024,7 +3033,8 @@ mod tests {
                     .as_dictionary()
                     .unwrap()
                     .clone();
-                (p, s(d, "PayloadOrganization"), s(&inner, "PayloadOrganization"), s(d, "PayloadIdentifier"))
+                let uuids = [s(d, "PayloadUUID"), s(&inner, "PayloadUUID")];
+                (p, s(d, "PayloadOrganization"), s(&inner, "PayloadOrganization"), s(d, "PayloadIdentifier"), uuids)
             })
             .collect()
     }
@@ -3036,20 +3046,54 @@ mod tests {
     fn recipe_honours_profile_toml_org_name_and_output_directory() {
         for combined in [false, true] {
             let dir = tempfile::tempdir().unwrap();
-            let written = render_with_profile_toml(dir.path(), None, combined);
+            let written = render_with_profile_toml(dir.path(), None, combined, "");
             assert_eq!(written.len(), 1, "combined={combined}: {written:?}");
-            let (_, outer, inner, id) = &written[0];
+            let (_, outer, inner, id, uuids) = &written[0];
             assert_eq!(outer, "Acmé Örg AB", "combined={combined}");
             assert_eq!(inner, "Acmé Örg AB", "combined={combined}");
             assert!(id.starts_with("com.acme."), "combined={combined}: {id}");
+            assert!(uuids.iter().all(|u| *u == u.to_uppercase()), "combined={combined}: {uuids:?}");
         }
+    }
+
+    /// `[uuid] uppercase = false` lowercases generated UUIDs: recipe,
+    /// combined recipe and single payload.
+    #[test]
+    fn generate_honours_profile_toml_uuid_case() {
+        for combined in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let written = render_with_profile_toml(dir.path(), None, combined, "\n[uuid]\nuppercase = false\n");
+            let uuids = &written[0].4;
+            assert!(uuids.iter().all(|u| *u == u.to_lowercase()), "combined={combined}: {uuids:?}");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("single.mobileconfig");
+        let cfg: ProfileConfig =
+            toml::from_str("[organization]\ndomain = \"com.acme\"\n[uuid]\nuppercase = false\n").unwrap();
+        handle_generate(
+            "com.apple.appstore",
+            Some(out.to_str().unwrap()),
+            None,
+            false,
+            None,
+            Some(&cfg),
+            OutputMode::Json,
+            "mobileconfig",
+            Channel::Stable,
+            false,
+        )
+        .unwrap();
+        let v = Value::from_file(&out).unwrap();
+        let uuid = v.as_dictionary().unwrap()["PayloadUUID"].as_string().unwrap().to_string();
+        assert_eq!(uuid, uuid.to_lowercase());
     }
 
     #[test]
     fn recipe_cli_output_dir_beats_profile_toml() {
         let dir = tempfile::tempdir().unwrap();
         let cli = dir.path().join("cli-out");
-        let written = render_with_profile_toml(dir.path(), Some(cli.to_str().unwrap()), false);
+        let written = render_with_profile_toml(dir.path(), Some(cli.to_str().unwrap()), false, "");
         assert_eq!(written.len(), 1);
         assert!(!dir.path().join("generated").exists());
     }
