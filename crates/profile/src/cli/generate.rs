@@ -134,6 +134,20 @@ fn resolve_generate_org(
         })
 }
 
+/// PayloadOrganization for generated profiles: `organization.name` in
+/// profile.toml, then `.contour/config.toml`'s name when its domain is the
+/// one in use, then the domain itself.
+fn resolve_org_name(config: Option<&ProfileConfig>, domain: &str) -> String {
+    config
+        .and_then(|c| c.organization.name.clone())
+        .or_else(|| {
+            contour_core::config::ContourConfig::load_nearest()
+                .filter(|c| c.organization.domain == domain)
+                .map(|c| c.organization.name)
+        })
+        .unwrap_or_else(|| domain.to_string())
+}
+
 /// One inner payload of a combined (multi-payload) recipe render.
 struct CombinedEntry {
     payload_type: String,
@@ -836,7 +850,7 @@ pub fn handle_generate(
             manifest.description.clone()
         };
 
-        let bytes = ProfileBuilder::new(&domain, &identifier)
+        let bytes = ProfileBuilder::new(&resolve_org_name(config, &domain), &identifier)
             .display_name(&manifest.title)
             .description(&description)
             .build(&manifest.payload_type, payload_content)?;
@@ -849,8 +863,14 @@ pub fn handle_generate(
         .to_lowercase()
         .replace([' ', ':'], "-")
         .replace("--", "-");
+    // -o → profile.toml `[output] directory`/<slug> → ./<slug>
     let output_path = output.map_or_else(
-        || format!("{slug}.{default_ext}"),
+        || {
+            let file = format!("{slug}.{default_ext}");
+            config
+                .and_then(|c| c.output.directory.as_deref())
+                .map_or(file.clone(), |d| Path::new(d).join(&file).display().to_string())
+        },
         std::string::ToString::to_string,
     );
 
@@ -1088,8 +1108,12 @@ pub fn handle_generate_recipe(
         })?
     };
 
-    // Output directory
-    let out_dir = output_dir.unwrap_or(&r.recipe.name);
+    let org_name = resolve_org_name(config, &domain);
+
+    // Output directory: -o → profile.toml `[output] directory` → recipe name.
+    let out_dir = output_dir
+        .or_else(|| config.and_then(|c| c.output.directory.as_deref()))
+        .unwrap_or(&r.recipe.name);
     if !Path::new(out_dir).exists() {
         std::fs::create_dir_all(out_dir)?;
     }
@@ -1188,7 +1212,7 @@ pub fn handle_generate_recipe(
                 .unwrap_or("profile");
             let identifier = format!("{domain}.{short}");
 
-            ProfileBuilder::new(&domain, &identifier)
+            ProfileBuilder::new(&org_name, &identifier)
                 .display_name(&spec.display_name)
                 .description(&spec.description)
                 .removal_disallowed(spec.removal_disallowed)
@@ -1254,7 +1278,7 @@ pub fn handle_generate_recipe(
         // Removal_disallowed at the bundle level: set if any inner asked for it.
         let any_removal_locked = combined_buffer.iter().any(|e| e.removal_disallowed);
         let bytes = build_combined_profile_bytes(
-            &domain,
+            &org_name,
             &outer_identifier,
             &r.recipe.name,
             &r.recipe.description,
@@ -2944,6 +2968,87 @@ mod tests {
             err.contains("--org is required"),
             "error should mention --org requirement, got: {err}"
         );
+    }
+
+    /// Render the App Store recipe with a profile.toml and return each
+    /// written profile's (PayloadOrganization outer, inner, PayloadIdentifier).
+    fn render_with_profile_toml(
+        dir: &Path,
+        output_dir: Option<&str>,
+        combined: bool,
+    ) -> Vec<(std::path::PathBuf, String, String, String)> {
+        let recipe = dir.join("store.toml");
+        std::fs::write(
+            &recipe,
+            "[recipe]\nname = \"store\"\ndescription = \"Store\"\n\n[[profile]]\n\
+             filename = \"appstore.mobileconfig\"\npayload_type = \"com.apple.appstore\"\n\
+             display_name = \"App Store\"\ndescription = \"\"\n\n\
+             [profile.fields]\nrestrict-store-softwareupdate-only = true\n",
+        )
+        .unwrap();
+        let cfg: ProfileConfig = toml::from_str(&format!(
+            "[organization]\ndomain = \"com.acme\"\nname = \"Acmé Örg AB\"\n\n\
+             [output]\ndirectory = \"{}\"\n",
+            dir.join("generated").display()
+        ))
+        .unwrap();
+        handle_generate_recipe(
+            recipe.to_str().unwrap(),
+            None,
+            output_dir,
+            None,
+            false,
+            false,
+            None,
+            Some(&cfg),
+            &[],
+            OutputMode::Json,
+            "mobileconfig",
+            Some(combined),
+            false,
+        )
+        .unwrap();
+        let out = output_dir.map_or_else(|| dir.join("generated"), std::path::PathBuf::from);
+        std::fs::read_dir(&out)
+            .unwrap_or_else(|e| panic!("no output in {}: {e}", out.display()))
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|x| x == "mobileconfig"))
+            .map(|p| {
+                let v = Value::from_file(&p).unwrap();
+                let d = v.as_dictionary().unwrap();
+                let s = |d: &Dictionary, k: &str| d.get(k).and_then(Value::as_string).unwrap().to_string();
+                let inner = d.get("PayloadContent").and_then(Value::as_array).unwrap()[0]
+                    .as_dictionary()
+                    .unwrap()
+                    .clone();
+                (p, s(d, "PayloadOrganization"), s(&inner, "PayloadOrganization"), s(d, "PayloadIdentifier"))
+            })
+            .collect()
+    }
+
+    /// profile.toml's `[organization] name` is the PayloadOrganization;
+    /// `domain` stays the identifier prefix; `[output] directory` is where
+    /// files go when `-o` is not given.
+    #[test]
+    fn recipe_honours_profile_toml_org_name_and_output_directory() {
+        for combined in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let written = render_with_profile_toml(dir.path(), None, combined);
+            assert_eq!(written.len(), 1, "combined={combined}: {written:?}");
+            let (_, outer, inner, id) = &written[0];
+            assert_eq!(outer, "Acmé Örg AB", "combined={combined}");
+            assert_eq!(inner, "Acmé Örg AB", "combined={combined}");
+            assert!(id.starts_with("com.acme."), "combined={combined}: {id}");
+        }
+    }
+
+    #[test]
+    fn recipe_cli_output_dir_beats_profile_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join("cli-out");
+        let written = render_with_profile_toml(dir.path(), Some(cli.to_str().unwrap()), false);
+        assert_eq!(written.len(), 1);
+        assert!(!dir.path().join("generated").exists());
     }
 }
 
