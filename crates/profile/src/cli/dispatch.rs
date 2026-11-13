@@ -238,7 +238,8 @@ pub fn dispatch(
                 name.as_deref(),
                 output.as_deref(),
                 org.as_deref(),
-                predictable,
+                predictable || config.as_ref().is_some_and(|c| c.uuid.predictable),
+                config.as_ref().is_none_or(|c| c.uuid.uppercase),
                 dry_run,
                 output_mode,
             )?;
@@ -318,7 +319,7 @@ pub fn dispatch(
             let org = if from_prefix.is_some() {
                 org.unwrap_or_default()
             } else {
-                contour_core::resolve_org(org)?
+                crate::config::resolve_org(org.as_deref(), config.as_ref())?
             };
             let scheme = crate::cli::reidentify::resolve_scheme(
                 &scheme,
@@ -351,7 +352,7 @@ pub fn dispatch(
         } => {
             let scheme = crate::cli::reidentify::parse_scheme(&identity_scheme)?;
             let org = if sync_identity {
-                Some(contour_core::resolve_org(org)?)
+                Some(crate::config::resolve_org(org.as_deref(), config.as_ref())?)
             } else {
                 None
             };
@@ -843,7 +844,7 @@ pub fn dispatch(
             crate::cli::synthesize::handle_synthesize(
                 &paths,
                 output.as_deref(),
-                org.as_deref(),
+                &crate::config::resolve_org(org.as_deref(), config.as_ref())?,
                 validate,
                 dry_run,
                 interactive,

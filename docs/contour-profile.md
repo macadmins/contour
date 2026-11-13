@@ -453,7 +453,7 @@ contour profile reidentify <PATHS>... --org <DOMAIN> [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `<PATHS>...` | Profile file(s) or directory to process | **required** |
-| `--org <DOMAIN>` | Organization reverse domain (identifier prefix) | from `.contour/config.toml` |
+| `--org <DOMAIN>` | Organization reverse domain (identifier prefix) | from `profile.toml`, `CONTOUR_ORG` or `.contour/config.toml` |
 | `--scheme <SCHEME>` | `uuid` (sync identifier to `PayloadUUID`) or `name` (derive from display name) | `uuid` |
 | `-r, --recursive` | Process directories recursively | `false` |
 | `--max-depth <N>` | Maximum directory depth (requires `--recursive`) | unlimited |

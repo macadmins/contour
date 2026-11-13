@@ -19,6 +19,7 @@ pub fn handle_duplicate(
     output: Option<&str>,
     org: Option<&str>,
     predictable: bool,
+    uppercase: bool,
     dry_run: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -60,7 +61,7 @@ pub fn handle_duplicate(
     // 4. UUID config
     let uuid_config = profile_uuid::UuidConfig {
         predictable,
-        uppercase: true,
+        uppercase,
     };
 
     // 5. Regenerate profile-level UUID
@@ -380,6 +381,7 @@ mod tests {
             Some(output_path.to_str().unwrap()),
             None,
             false,
+            true,
             false,
             OutputMode::Human,
         )
@@ -421,6 +423,7 @@ mod tests {
             Some(output_path.to_str().unwrap()),
             Some("com.acme"),
             false,
+            true,
             false,
             OutputMode::Human,
         )
@@ -449,6 +452,7 @@ mod tests {
             Some(out1.to_str().unwrap()),
             Some("com.example"),
             true,
+            true,
             false,
             OutputMode::Human,
         )
@@ -459,6 +463,7 @@ mod tests {
             Some("Kiosk"),
             Some(out2.to_str().unwrap()),
             Some("com.example"),
+            true,
             true,
             false,
             OutputMode::Human,
@@ -491,6 +496,7 @@ mod tests {
             Some(output_path.to_str().unwrap()),
             None,
             false,
+            true,
             true, // dry_run
             OutputMode::Human,
         )
@@ -514,6 +520,7 @@ mod tests {
             None,
             None,
             false,
+            true,
             false,
             OutputMode::Human,
         )
