@@ -95,13 +95,10 @@ pub fn handle_normalize_pasteboard(
         None
     };
 
-    // Resolve org name: CLI --name → profile.toml → .contour/config.toml
+    // CLI --name → the name every generator writes for this domain
     let effective_org_name = org_name
         .map(String::from)
-        .or_else(|| config.map(super::super::config::ProfileConfig::org_name))
-        .or_else(|| {
-            contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.name)
-        });
+        .or_else(|| effective_org.map(|d| crate::config::org_name_for(config, d)));
 
     let normalizer_config = normalizer::NormalizerConfig {
         org_domain: effective_org.map(String::from),
@@ -650,19 +647,13 @@ fn normalize_single_file_internal(
         ));
     }
 
-    // Get org domain from config or CLI (config takes precedence)
-    let effective_org_domain = if let Some(cfg) = config {
-        Some(cfg.organization.domain.as_str())
-    } else {
-        org_domain
-    };
-    // CLI --name → profile.toml → .contour/config.toml
+    // CLI --org → profile.toml, as in handle_normalize
+    let effective_org_domain =
+        org_domain.or_else(|| config.map(|c| c.organization.domain.as_str()));
+    // CLI --name → the name every generator writes for this domain
     let effective_org_name = org_name
         .map(String::from)
-        .or_else(|| config.map(super::super::config::ProfileConfig::org_name))
-        .or_else(|| {
-            contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.name)
-        });
+        .or_else(|| effective_org_domain.map(|d| crate::config::org_name_for(config, d)));
 
     let normalizer_config = normalizer::NormalizerConfig {
         org_domain: effective_org_domain.map(String::from),
@@ -760,19 +751,13 @@ fn handle_normalize_single(
         println!("{}", "✓ Profile parsed successfully".green());
     }
 
-    // Get org domain from config or CLI (config takes precedence)
-    let effective_org_domain = if let Some(cfg) = config {
-        Some(cfg.organization.domain.as_str())
-    } else {
-        org_domain
-    };
-    // CLI --name → profile.toml → .contour/config.toml
+    // CLI --org → profile.toml, as in handle_normalize
+    let effective_org_domain =
+        org_domain.or_else(|| config.map(|c| c.organization.domain.as_str()));
+    // CLI --name → the name every generator writes for this domain
     let effective_org_name = org_name
         .map(String::from)
-        .or_else(|| config.map(super::super::config::ProfileConfig::org_name))
-        .or_else(|| {
-            contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.name)
-        });
+        .or_else(|| effective_org_domain.map(|d| crate::config::org_name_for(config, d)));
 
     let normalizer_config = normalizer::NormalizerConfig {
         org_domain: effective_org_domain.map(String::from),

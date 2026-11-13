@@ -247,6 +247,36 @@ pub fn resolve_org_with_anchor(
     )
 }
 
+/// `PayloadOrganization` for profiles of `domain`: the `[organization] name`
+/// of the nearest `profile.toml`, then `.contour/config.toml`, when that
+/// file's domain is `domain`; otherwise the domain itself. Every generator
+/// and `profile normalize` use this, so they write the same value.
+pub fn org_name_for(domain: &str) -> String {
+    #[derive(Deserialize)]
+    struct ProfileToml {
+        organization: Org,
+    }
+    #[derive(Deserialize)]
+    struct Org {
+        domain: String,
+        name: Option<String>,
+    }
+    let profile_toml = std::env::current_dir().ok().and_then(|cwd| {
+        let path = cwd.ancestors().map(|d| d.join("profile.toml")).find(|p| p.exists())?;
+        toml::from_str::<ProfileToml>(&std::fs::read_to_string(path).ok()?).ok()
+    });
+    profile_toml
+        .map(|t| t.organization)
+        .filter(|o| o.domain == domain)
+        .and_then(|o| o.name)
+        .or_else(|| {
+            ContourConfig::load_nearest()
+                .filter(|c| c.organization.domain == domain && !c.organization.name.is_empty())
+                .map(|c| c.organization.name)
+        })
+        .unwrap_or_else(|| domain.to_string())
+}
+
 /// Merge the `[vars]` table from configs anchored at CWD and at
 /// `anchor`, layering the CWD config over the anchor config (so the
 /// operator's project overrides a preset folder's defaults). The

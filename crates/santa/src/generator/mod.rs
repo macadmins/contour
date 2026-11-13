@@ -137,7 +137,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     );
     profile.insert(
         "PayloadOrganization".to_string(),
-        Value::String(options.org.clone()),
+        Value::String(contour_core::org_name_for(&options.org)),
     );
     profile.insert(
         "PayloadScope".to_string(),

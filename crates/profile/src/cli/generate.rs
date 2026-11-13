@@ -110,20 +110,6 @@ fn toml_to_plist(val: &toml::Value) -> Value {
     }
 }
 
-/// PayloadOrganization for generated profiles: `organization.name` in
-/// profile.toml, then `.contour/config.toml`'s name when its domain is the
-/// one in use, then the domain itself.
-fn resolve_org_name(config: Option<&ProfileConfig>, domain: &str) -> String {
-    config
-        .and_then(|c| c.organization.name.clone())
-        .or_else(|| {
-            contour_core::config::ContourConfig::load_nearest()
-                .filter(|c| c.organization.domain == domain)
-                .map(|c| c.organization.name)
-        })
-        .unwrap_or_else(|| domain.to_string())
-}
-
 /// One inner payload of a combined (multi-payload) recipe render.
 struct CombinedEntry {
     payload_type: String,
@@ -828,7 +814,7 @@ pub fn handle_generate(
             manifest.description.clone()
         };
 
-        let bytes = ProfileBuilder::new(&resolve_org_name(config, &domain), &identifier)
+        let bytes = ProfileBuilder::new(&crate::config::org_name_for(config, &domain), &identifier)
             .uppercase(config.is_none_or(|c| c.uuid.uppercase))
             .display_name(&manifest.title)
             .description(&description)
@@ -1087,7 +1073,7 @@ pub fn handle_generate_recipe(
         })?
     };
 
-    let org_name = resolve_org_name(config, &domain);
+    let org_name = crate::config::org_name_for(config, &domain);
     let uppercase = config.is_none_or(|c| c.uuid.uppercase);
 
     // Output directory: -o → profile.toml `[output] directory` → recipe name.

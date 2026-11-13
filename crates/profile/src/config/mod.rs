@@ -352,6 +352,15 @@ pub fn resolve_org(org: Option<&str>, config: Option<&ProfileConfig>) -> Result<
     })
 }
 
+/// `PayloadOrganization` for `domain`: the loaded profile.toml's name when
+/// its domain matches, then [`contour_core::org_name_for`].
+pub fn org_name_for(config: Option<&ProfileConfig>, domain: &str) -> String {
+    config
+        .filter(|c| c.organization.domain == domain)
+        .and_then(|c| c.organization.name.clone())
+        .unwrap_or_else(|| contour_core::org_name_for(domain))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

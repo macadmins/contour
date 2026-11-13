@@ -134,7 +134,7 @@ pub fn generate_config(config: &SantaConfig) -> Result<Vec<u8>> {
     );
     profile.insert(
         "PayloadOrganization".to_string(),
-        Value::String(config.org.clone()),
+        Value::String(contour_core::org_name_for(&config.org)),
     );
     profile.insert(
         "PayloadScope".to_string(),

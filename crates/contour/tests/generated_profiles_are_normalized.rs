@@ -41,10 +41,8 @@ fn normalize_leaves_generated_profiles_unchanged() {
     contour(root, &["profile", "generate", "com.apple.appstore", "--output", "out/single.mobileconfig"]);
     contour(root, &["santa", "prep", "--org", "com.acme", "-o", "out/santa"]);
 
-    // santa prep (like btm, pppc, notifications, support) still writes the
-    // domain as PayloadOrganization; pin the name so only order and UUIDs count.
     let mut checked = 0;
-    for (dir, name) in [("out", None), ("out/recipe", None), ("out/santa", Some("com.acme"))] {
+    for dir in ["out", "out/recipe", "out/santa"] {
         for entry in std::fs::read_dir(root.join(dir)).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_none_or(|e| e != "mobileconfig") {
@@ -52,15 +50,52 @@ fn normalize_leaves_generated_profiles_unchanged() {
             }
             let generated = std::fs::read_to_string(&path).unwrap();
             let rel = path.strip_prefix(root).unwrap().to_str().unwrap().to_string();
-            let mut args = vec!["profile", "normalize", "--output", "normalized.mobileconfig", &rel];
-            if let Some(name) = name {
-                args.extend(["--name", name]);
-            }
-            contour(root, &args);
+            assert!(generated.contains("<string>Acmé Örg AB</string>"), "{rel}: PayloadOrganization");
+            contour(root, &["profile", "normalize", "--output", "normalized.mobileconfig", &rel]);
             let normalized = std::fs::read_to_string(root.join("normalized.mobileconfig")).unwrap();
             assert_eq!(normalized, generated, "{rel}: normalize rewrote a generated profile");
             checked += 1;
         }
     }
     assert!(checked >= 8, "only {checked} profiles generated");
+}
+
+/// Without a name anywhere, every command writes the domain.
+#[test]
+fn without_a_name_generators_and_normalize_write_the_domain() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(
+        root.join("profile.toml"),
+        "[organization]\ndomain = \"com.acme\"\n\n[uuid]\npredictable = true\n",
+    )
+    .unwrap();
+    contour(root, &["profile", "generate", "com.apple.appstore", "--output", "a.mobileconfig"]);
+    contour(root, &["santa", "prep", "--org", "com.acme", "-o", "santa"]);
+    contour(root, &["profile", "normalize", "--output", "n.mobileconfig", "a.mobileconfig"]);
+    for path in ["a.mobileconfig", "n.mobileconfig", "santa/santa-tcc.mobileconfig"] {
+        let text = std::fs::read_to_string(root.join(path)).unwrap();
+        assert!(text.contains("<key>PayloadOrganization</key>\n\t<string>com.acme</string>"), "{path}");
+    }
+}
+
+/// `.contour/config.toml` alone (from `contour init`) names the org too.
+#[test]
+fn contour_config_names_the_org() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir(root.join(".contour")).unwrap();
+    std::fs::write(
+        root.join(".contour/config.toml"),
+        "[organization]\nname = \"Acmé Örg AB\"\ndomain = \"com.acme\"\n",
+    )
+    .unwrap();
+    contour(root, &["santa", "prep", "--org", "com.acme", "-o", "santa"]);
+    contour(root, &["profile", "generate", "com.apple.appstore", "--output", "a.mobileconfig"]);
+    contour(root, &["profile", "normalize", "--output", "n.mobileconfig", "santa/santa-tcc.mobileconfig"]);
+    for path in ["santa/santa-tcc.mobileconfig", "a.mobileconfig", "n.mobileconfig"] {
+        let text = std::fs::read_to_string(root.join(path)).unwrap();
+        assert!(text.contains("<string>Acmé Örg AB</string>"), "{path}");
+        assert!(!text.contains("<string>com.acme</string>"), "{path}: domain as PayloadOrganization");
+    }
 }

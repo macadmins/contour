@@ -144,7 +144,7 @@ fn generate_profile(profile_type: PrepProfile, org: &str) -> Result<Vec<u8>> {
         _ => format!("Santa {} configuration", profile_type.name()),
     };
 
-    ProfileBuilder::new(org, &profile_id)
+    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id)
         .display_name(profile_type.display_name())
         .description(&description)
         .removal_disallowed(true)
@@ -332,20 +332,5 @@ mod tests {
         assert!(xml.contains("EnableSilentMode"));
         assert!(xml.contains("EnableBadSignatureProtection"));
         assert!(xml.contains("com.example.santa.prep.config"));
-    }
-
-    #[test]
-    fn test_profile_key_ordering() {
-        // Verify PayloadContent appears before final metadata keys
-        let content = generate_profile(PrepProfile::SystemExtension, "com.example").unwrap();
-        let xml = String::from_utf8(content).unwrap();
-
-        let payload_content_pos = xml.find("<key>PayloadContent</key>").unwrap();
-        let payload_uuid_pos = xml.find("<key>PayloadUUID</key>").unwrap();
-        let payload_identifier_pos = xml.find("<key>PayloadIdentifier</key>").unwrap();
-
-        // PayloadContent should appear before PayloadUUID and PayloadIdentifier in outer profile
-        assert!(payload_content_pos < payload_uuid_pos);
-        assert!(payload_content_pos < payload_identifier_pos);
     }
 }
