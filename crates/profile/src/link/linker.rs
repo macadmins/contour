@@ -66,7 +66,6 @@ fn generate_uuid_mapping(
     let mut mapping = UuidMapping::new();
 
     let uuid_config = UuidConfig {
-        org_domain: config.org_domain.clone(),
         predictable: config.predictable,
         uppercase: config.uppercase,
     };
@@ -287,7 +286,6 @@ pub fn merge_profiles_v2(
     let merged_identifier = format!("{org_domain}.merged");
 
     let uuid_config = UuidConfig {
-        org_domain: config.org_domain.clone(),
         predictable: config.predictable,
         uppercase: config.uppercase,
     };

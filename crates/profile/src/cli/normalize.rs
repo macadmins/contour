@@ -120,7 +120,6 @@ pub fn handle_normalize_pasteboard(
         let predictable = config.is_some_and(|c| c.uuid.predictable);
 
         let uuid_config = UuidConfig {
-            org_domain: effective_org.map(String::from),
             predictable,
             uppercase: config.is_none_or(|c| c.uuid.uppercase),
         };
@@ -678,7 +677,6 @@ fn normalize_single_file_internal(
         let predictable = config.is_some_and(|c| c.uuid.predictable);
 
         let uuid_config = UuidConfig {
-            org_domain: effective_org_domain.map(String::from),
             predictable,
             uppercase: config.is_none_or(|c| c.uuid.uppercase),
         };
@@ -793,7 +791,6 @@ fn handle_normalize_single(
         let predictable = config.is_some_and(|c| c.uuid.predictable);
 
         let uuid_config = UuidConfig {
-            org_domain: effective_org_domain.map(String::from),
             predictable,
             uppercase: config.is_none_or(|c| c.uuid.uppercase),
         };

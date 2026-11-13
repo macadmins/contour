@@ -317,7 +317,8 @@ contour profile plan
 ## Anti-patterns
 
 - **Don't blanket-regenerate UUIDs as part of "normalize" runs.** Use
-  `--predictable` (v5 UUIDs from `(org, identifier)`, stable across runs);
+  `--predictable` (v5 UUIDs from each payload identifier, the scheme
+  `profile generate` writes, stable across runs);
   it defaults on when `--org` is set — do not override.
 - **Don't approve a profile PR off a text diff alone** for files with
   cross-references (SCEP/identity preferences, EAP/WiFi+root cert, IKEv2

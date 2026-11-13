@@ -426,7 +426,6 @@ contour profile uuid <PATHS>... [flags]
 |------|-------------|---------|
 | `<PATHS>...` | Profile file(s) or directory to process | **required** |
 | `-o, --output <PATH>` | Output file or directory | in-place |
-| `--org <DOMAIN>` | Organization reverse domain (for predictable UUIDs) | from `profile.toml` |
 | `-p, --predictable` | Generate deterministic v5 UUIDs | `false` |
 | `-r, --recursive` | Process directories recursively | `false` |
 | `--max-depth <N>` | Maximum directory depth (requires `--recursive`) | unlimited |
@@ -713,7 +712,7 @@ contour profile plan <BASELINE> <PROPOSED> [flags]
 | `<PROPOSED>` | Proposed profile (file or directory) | **required** |
 | `-r, --recursive` | Walk directory pairs recursively | `false` |
 | `--org <DOMAIN>` | Organization reverse domain (used with `--predictable`) | none |
-| `--predictable` | Normalize both sides with v5 UUIDs derived from `(org, identifier)` before classifying. Collapses cosmetic UUID churn so `REPLACE` only fires on real `PayloadIdentifier` renames | `false` |
+| `--predictable` | Normalize both sides with v5 UUIDs derived from each payload identifier (the scheme `profile generate` writes) before classifying. Collapses cosmetic UUID churn so `REPLACE` only fires on real `PayloadIdentifier` renames | `false` |
 | `--format <text\|json>` | Output format | `text` |
 | `--accept-replace` | Treat `REPLACE` as a warning instead of a blocker | `false` |
 | `--accept-scope-change` | Treat `SCOPE_BROADENED` as a warning | `false` |

@@ -464,18 +464,17 @@ pub fn dispatch(
         Commands::Uuid {
             paths,
             output,
-            org,
             predictable,
             recursive,
             max_depth,
             no_parallel,
             dry_run,
+            .. // --org: kept for old scripts, no longer used
         } => {
             let parallel = !no_parallel;
             crate::cli::uuid::handle_uuid(
                 &paths,
                 output.as_deref(),
-                org.as_deref(),
                 predictable,
                 config.as_ref(),
                 recursive,

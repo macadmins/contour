@@ -59,7 +59,6 @@ pub fn handle_duplicate(
 
     // 4. UUID config
     let uuid_config = profile_uuid::UuidConfig {
-        org_domain: org.map(String::from),
         predictable,
         uppercase: true,
     };
