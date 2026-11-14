@@ -51,7 +51,6 @@ fn main() -> Result<()> {
             org,
             identifier,
             display_name,
-            deterministic_uuids: _,
             no_deterministic_uuids,
             format,
             full_bundle,

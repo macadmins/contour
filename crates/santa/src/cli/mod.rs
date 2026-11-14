@@ -184,10 +184,6 @@ pub enum Commands {
         #[arg(long)]
         display_name: Option<String>,
 
-        /// Accepted for old scripts: UUIDs are deterministic by default
-        #[arg(long, hide = true)]
-        deterministic_uuids: bool,
-
         /// Random UUIDs instead of v5 of each payload identifier
         #[arg(long)]
         no_deterministic_uuids: bool,

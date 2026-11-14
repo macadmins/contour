@@ -434,7 +434,7 @@ contour profile uuid <PATHS>... [flags]
 
 ```bash
 # Regenerate UUIDs predictably for GitOps reproducibility
-contour profile uuid ./profiles -r -p --org com.acme
+contour profile uuid ./profiles -r -p
 ```
 
 ---
@@ -1918,7 +1918,7 @@ Initialize a project, normalize with predictable UUIDs for reproducible diffs, t
 ```bash
 contour profile init --org com.acme --name "Acme Corp"
 contour profile normalize ./profiles -r
-contour profile uuid ./profiles -r -p --org com.acme
+contour profile uuid ./profiles -r -p
 git add profiles/ profile.toml && git commit -m "Normalize profiles"
 ```
 

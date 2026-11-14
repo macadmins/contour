@@ -686,7 +686,6 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
             org,
             identifier,
             display_name,
-            deterministic_uuids: _,
             no_deterministic_uuids,
             format,
             full_bundle,

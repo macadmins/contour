@@ -470,7 +470,6 @@ pub fn dispatch(
             max_depth,
             no_parallel,
             dry_run,
-            .. // --org: kept for old scripts, no longer used
         } => {
             let parallel = !no_parallel;
             crate::cli::uuid::handle_uuid(

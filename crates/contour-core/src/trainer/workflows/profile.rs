@@ -294,15 +294,14 @@ impl TrainerWorkflow for ProfileWorkflow {
                     "Control UUID generation for reproducible builds.\n\n\
                      Options:\n\
                      - Random UUIDs (default): New UUID each time\n\
-                     - Predictable UUIDs (--predictable): Derived from content\n\n\
+                     - Predictable UUIDs (--predictable): v5 of each payload identifier\n\n\
                      Predictable UUIDs are useful for GitOps workflows where\n\
                      identical input should produce identical output.",
                 )
                 .with_commands(vec![CommandPreview::new(
                     format!(
-                        "contour profile uuid {} --predictable --org {}",
-                        profile_path.display(),
-                        org
+                        "contour profile uuid {} --predictable",
+                        profile_path.display()
                     ),
                     "Generate predictable UUIDs",
                 )])

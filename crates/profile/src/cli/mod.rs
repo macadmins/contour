@@ -835,11 +835,6 @@ pub enum Commands {
         )]
         output: Option<String>,
 
-        /// Kept so existing scripts run; predictable UUIDs derive from each
-        /// payload's identifier, which already carries the org.
-        #[arg(long, hide = true)]
-        org: Option<String>,
-
         #[arg(
             short,
             long,
