@@ -163,7 +163,7 @@ pub enum Commands {
         #[arg(long)]
         jamf_mode: bool,
 
-        /// Use deterministic UUIDs based on `PayloadType`
+        /// UUIDs are v5 of each `PayloadIdentifier`
         #[arg(long, help_heading = "Profile Options")]
         deterministic_uuids: bool,
 
@@ -388,7 +388,7 @@ pub enum Commands {
         #[arg(long, help_heading = "Jamf Pro Options")]
         jamf_mode: bool,
 
-        /// Use deterministic UUIDs based on `PayloadType`
+        /// UUIDs are v5 of each `PayloadIdentifier`
         #[arg(long, help_heading = "Profile Options")]
         deterministic_uuids: bool,
 
@@ -661,7 +661,7 @@ pub enum Commands {
         #[arg(long, help_heading = "Jamf Pro Options")]
         jamf_mode: bool,
 
-        /// Use deterministic UUIDs based on `PayloadType`
+        /// UUIDs are v5 of each `PayloadIdentifier`
         #[arg(long, help_heading = "Profile Options")]
         deterministic_uuids: bool,
 

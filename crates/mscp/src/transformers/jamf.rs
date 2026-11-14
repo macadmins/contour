@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use plist::{Dictionary, Value};
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
@@ -21,7 +20,7 @@ pub struct ProfileOptions {
     /// Custom `ConsentText` to use (overrides removal if set)
     pub consent_text: Option<String>,
 
-    /// Use deterministic UUIDs based on `PayloadType`
+    /// UUIDs are v5 of each `PayloadIdentifier`
     pub deterministic_uuids: bool,
 }
 
@@ -108,64 +107,19 @@ impl ProfilePostprocessor {
         Ok(())
     }
 
-    /// Process UUIDs — set deterministic `PayloadUUID` on top-level and each `PayloadContent` item.
+    /// Process UUIDs — set `PayloadUUID` on the envelope and each
+    /// `PayloadContent` item to v5 of its `PayloadIdentifier` (the scheme
+    /// every generator uses), in the case `[uuid] uppercase` asks for.
     fn process_uuids(&self, dict: &mut Dictionary) -> Result<()> {
-        let payload_type = dict
-            .get("PayloadType")
-            .and_then(|v| {
-                if let Value::String(s) = v {
-                    Some(s.clone())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "Configuration".to_string());
-
-        let uuid = Self::generate_deterministic_uuid(&payload_type);
-        dict.insert("PayloadUUID".to_string(), Value::String(uuid.clone()));
-        tracing::debug!("Set deterministic PayloadUUID: {uuid}");
-
-        // Process PayloadContent array
+        set_uuid(dict);
         if let Some(Value::Array(content_array)) = dict.get_mut("PayloadContent") {
             for item in content_array {
                 if let Value::Dictionary(item_dict) = item {
-                    let item_type = item_dict
-                        .get("PayloadType")
-                        .and_then(|v| {
-                            if let Value::String(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(|| "Item".to_string());
-
-                    let item_uuid = Self::generate_deterministic_uuid(&item_type);
-                    item_dict.insert("PayloadUUID".to_string(), Value::String(item_uuid.clone()));
+                    set_uuid(item_dict);
                 }
             }
         }
-
         Ok(())
-    }
-
-    /// Generate a deterministic UUID from a string using SHA256.
-    /// Format: 8-4-4-4-12 (standard UUID v5 format)
-    pub fn generate_deterministic_uuid(input: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(input.as_bytes());
-        let hash = hasher.finalize();
-
-        format!(
-            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-            u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]),
-            u16::from_be_bytes([hash[4], hash[5]]),
-            u16::from_be_bytes([hash[6], hash[7]]) & 0x0fff | 0x5000, // Version 5 UUID
-            u16::from_be_bytes([hash[8], hash[9]]) & 0x3fff | 0x8000, // Variant bits
-            u64::from_be_bytes([
-                hash[10], hash[11], hash[12], hash[13], hash[14], hash[15], 0, 0
-            ]) >> 16
-        )
     }
 
     /// Process `ConsentText` - remove or replace with custom text
@@ -199,6 +153,17 @@ impl ProfilePostprocessor {
 
         Ok(())
     }
+}
+
+/// Set `PayloadUUID` to v5 of this dict's `PayloadIdentifier` (left alone
+/// when there is no identifier).
+fn set_uuid(dict: &mut Dictionary) {
+    let Some(Value::String(id)) = dict.get("PayloadIdentifier") else {
+        return;
+    };
+    let uuid = contour_profiles::deterministic_uuid(id);
+    let uuid = if contour_core::uuid_uppercase() { uuid } else { uuid.to_lowercase() };
+    dict.insert("PayloadUUID".to_string(), Value::String(uuid));
 }
 
 /// Prefix the envelope and every payload `PayloadIdentifier` with `{org}.`.
@@ -484,28 +449,51 @@ mod tests {
         assert_eq!(dict, before);
     }
 
-    #[test]
-    fn test_deterministic_uuid_generation() {
-        let uuid1 =
-            ProfilePostprocessor::generate_deterministic_uuid("com.apple.security.firewall");
-        let uuid2 =
-            ProfilePostprocessor::generate_deterministic_uuid("com.apple.security.firewall");
+    fn profile(id: &str, payload_id: &str) -> Dictionary {
+        let mut payload = Dictionary::new();
+        payload.insert("PayloadType".into(), Value::String("com.apple.MCX".into()));
+        payload.insert("PayloadIdentifier".into(), Value::String(payload_id.into()));
+        let mut dict = Dictionary::new();
+        dict.insert("PayloadType".into(), Value::String("Configuration".into()));
+        dict.insert("PayloadIdentifier".into(), Value::String(id.into()));
+        dict.insert(
+            "PayloadContent".into(),
+            Value::Array(vec![Value::Dictionary(payload)]),
+        );
+        dict
+    }
 
-        // Same input should produce same UUID
-        assert_eq!(uuid1, uuid2);
-
-        // Should be valid UUID format
-        assert!(uuid1.len() > 30);
-        assert!(uuid1.contains('-'));
+    fn uuids(dict: &Dictionary) -> (String, String) {
+        let outer = dict.get("PayloadUUID").and_then(Value::as_string).unwrap();
+        let inner = match dict.get("PayloadContent") {
+            Some(Value::Array(a)) => a[0]
+                .as_dictionary()
+                .and_then(|d| d.get("PayloadUUID"))
+                .and_then(Value::as_string)
+                .unwrap(),
+            _ => panic!("payload"),
+        };
+        (outer.to_string(), inner.to_string())
     }
 
     #[test]
-    fn test_different_inputs_different_uuids() {
-        let uuid1 =
-            ProfilePostprocessor::generate_deterministic_uuid("com.apple.security.firewall");
-        let uuid2 =
-            ProfilePostprocessor::generate_deterministic_uuid("com.apple.security.password");
+    fn deterministic_uuids_are_v5_of_each_identifier() {
+        let post = ProfilePostprocessor::new(ProfileOptions::default());
+        let mut a = profile("com.acme.cis_lvl1.firewall", "com.acme.cis_lvl1.firewall.mcx");
+        let mut b = profile("com.acme.cis_lvl1.screensaver", "com.acme.cis_lvl1.screensaver.mcx");
+        post.process_uuids(&mut a).unwrap();
+        post.process_uuids(&mut b).unwrap();
 
-        assert_ne!(uuid1, uuid2);
+        // Same PayloadType, different profiles: the UUIDs must differ.
+        assert_ne!(uuids(&a).0, uuids(&b).0);
+        assert_ne!(uuids(&a).1, uuids(&b).1);
+        // The scheme every other generator uses.
+        assert_eq!(
+            uuids(&a),
+            (
+                contour_profiles::deterministic_uuid("com.acme.cis_lvl1.firewall"),
+                contour_profiles::deterministic_uuid("com.acme.cis_lvl1.firewall.mcx"),
+            )
+        );
     }
 }

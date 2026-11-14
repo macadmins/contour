@@ -26,6 +26,17 @@ pub fn generate_uuid(config: &UuidConfig, identifier: &str) -> Result<String> {
     Ok(if config.uppercase { uuid } else { uuid.to_lowercase() })
 }
 
+/// `uuid` in the case profile.toml's `[uuid] uppercase` asks for, for
+/// commands that run without a loaded `UuidConfig`.
+pub fn cased(uuid: String) -> String {
+    if contour_core::uuid_uppercase() { uuid } else { uuid.to_lowercase() }
+}
+
+/// v5 of `identifier` (the scheme every generator uses), cased.
+pub fn predictable(identifier: &str) -> String {
+    cased(contour_profiles::deterministic_uuid(identifier))
+}
+
 pub fn is_valid_uuid(uuid: &str) -> bool {
     Uuid::parse_str(uuid).is_ok()
 }

@@ -300,7 +300,7 @@ pub fn handle_command_generate(
     );
 
     if uuid {
-        let uuid_val = ::uuid::Uuid::new_v4().to_string().to_uppercase();
+        let uuid_val = crate::uuid::cased(::uuid::Uuid::new_v4().to_string().to_uppercase());
         root_dict.insert("CommandUUID".to_string(), plist::Value::String(uuid_val));
     }
 
@@ -766,7 +766,7 @@ pub fn handle_command_generate_interactive(output_mode: OutputMode) -> Result<()
         .context("UUID prompt cancelled")?;
 
     if add_uuid {
-        let uuid_val = ::uuid::Uuid::new_v4().to_string().to_uppercase();
+        let uuid_val = crate::uuid::cased(::uuid::Uuid::new_v4().to_string().to_uppercase());
         root_dict.insert("CommandUUID".to_string(), plist::Value::String(uuid_val));
     }
 
