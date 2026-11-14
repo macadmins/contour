@@ -311,7 +311,7 @@ fn count_services(policies: &[PppcPolicy]) -> Vec<(PppcService, usize)> {
         }
     }
     let mut sorted: Vec<_> = counts.into_values().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted.sort_by_key(|a| std::cmp::Reverse(a.1));
     sorted
 }
 

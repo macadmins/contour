@@ -627,14 +627,13 @@ mod tests {
                     ));
                 }
             }
-            if let Some((key, _)) = m.requires_true {
-                if !has_key(m.mdm_type, key) {
+            if let Some((key, _)) = m.requires_true
+                && !has_key(m.mdm_type, key) {
                     problems.push(format!(
                         "{}: guard key {key} not in the profile payload",
                         m.mdm_type
                     ));
                 }
-            }
             for (from, to) in m.transformed_keys.iter().chain(m.inverted_keys) {
                 if !has_key(m.mdm_type, from) {
                     problems.push(format!(

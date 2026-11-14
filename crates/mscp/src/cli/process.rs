@@ -208,7 +208,7 @@ pub fn process_baseline(
     let constraints_dir = output_path.join("mscp").join(&baseline.name);
     let constraints_record = |t: ConstraintType| constraints_dir.join(t.default_filename());
 
-    if let Some(ref rules) = excluded_rules.as_ref().filter(|r| !r.is_empty()) {
+    if let Some(rules) = excluded_rules.as_ref().filter(|r| !r.is_empty()) {
         let Some(ref repo_path) = mscp_repo_path else {
             anyhow::bail!(
                 "`excluded_rules` needs the mSCP repository to resolve rule IDs against \
@@ -1199,11 +1199,11 @@ pub fn process_baseline(
                     .collect::<Vec<_>>()
             };
             let mut profile_entries = entries_in(
-                &layout.apple_profiles_subdir(os),
+                layout.apple_profiles_subdir(os),
                 profile_dest_paths.iter().collect(),
             );
             profile_entries.extend(entries_in(
-                &layout.apple_declarations_subdir(os),
+                layout.apple_declarations_subdir(os),
                 ddm_mappings.iter().map(|(_, dest)| dest).collect(),
             ));
 
@@ -1428,7 +1428,7 @@ pub fn process_baseline(
                 if !artifacts.is_empty() {
                     println!();
                     println!("{}", "Artifacts Generated:".bold());
-                    artifacts.sort_by(|a, b| b.1.cmp(&a.1));
+                    artifacts.sort_by_key(|a| std::cmp::Reverse(a.1));
                     print_bar_chart(&artifacts);
                 }
             }

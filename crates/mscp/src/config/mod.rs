@@ -418,6 +418,7 @@ pub struct GlobException {
 
 /// Output configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct OutputConfig {
     /// Base directory structure: pluggable (Fleet), flat (Jamf), nested (Munki)
     #[serde(default)]
@@ -443,16 +444,6 @@ pub struct OutputConfig {
     pub versions_to_keep: Option<usize>,
 }
 
-impl Default for OutputConfig {
-    fn default() -> Self {
-        Self {
-            structure: OutputStructure::default(),
-            separate_baselines: None,
-            generate_diffs: None,
-            versions_to_keep: None,
-        }
-    }
-}
 
 /// Validation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

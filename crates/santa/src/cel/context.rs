@@ -364,7 +364,7 @@ impl AppRecordSet {
     /// Sort apps by device count (descending).
     pub fn sort_by_device_count(&mut self) {
         self.apps
-            .sort_by(|a, b| b.device_count.cmp(&a.device_count));
+            .sort_by_key(|a| std::cmp::Reverse(a.device_count));
     }
 
     /// Sort apps by app name.

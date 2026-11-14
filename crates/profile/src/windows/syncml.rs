@@ -756,13 +756,13 @@ pub fn render_admx_install(install_loc_uri: &str, admx_xml: &str) -> String {
 pub fn decode_admx(bytes: &[u8]) -> Result<String, String> {
     let text = if bytes.starts_with(&[0xFF, 0xFE]) {
         let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         String::from_utf16(&units).map_err(|e| format!("invalid UTF-16 LE: {e}"))?
     } else if bytes.starts_with(&[0xFE, 0xFF]) {
         let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .map(|c| u16::from_be_bytes([c[0], c[1]]))
             .collect();
         String::from_utf16(&units).map_err(|e| format!("invalid UTF-16 BE: {e}"))?
@@ -999,10 +999,10 @@ fn admx_wire_value(
             let n: i64 = s
                 .trim()
                 .parse()
-                .map_err(|_| format!("{s} is not {}", describe(e)))?;
-            let x = n as f64;
+                .map_err(|err| format!("{s} is not {} ({err})", describe(e)))?;
+            let value = n as f64;
             let (lo, hi) = numeric_bounds(e);
-            if x < lo || x > hi {
+            if value < lo || value > hi {
                 return Err(format!("{n} is outside {}", describe(e)));
             }
             Ok(n.to_string())
@@ -1326,7 +1326,7 @@ mod tests {
             "{msg}"
         );
         assert!(msg.contains("1024 characters; at most 1023"), "{msg}");
-        assert!(admx_element_values("P", &els, Some(&given("D = 9999\nT = \"ok\""))).is_ok());
+        admx_element_values("P", &els, Some(&given("D = 9999\nT = \"ok\""))).unwrap();
     }
 
     /// A TOML array is joined with the U+F000 separator Windows reads, and a

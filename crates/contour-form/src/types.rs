@@ -839,7 +839,7 @@ mod tests {
             os_support: HashMap::new(),
             apply_mode: None,
             category: "ddm-configuration".to_string(),
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             fields,
             field_order: vec![
                 "Allowed".to_string(),
@@ -973,7 +973,7 @@ mod tests {
             os_support: HashMap::new(),
             apply_mode: None,
             category: "apple".to_string(),
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             fields,
             field_order,
             segments: vec![],

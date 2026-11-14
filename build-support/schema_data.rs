@@ -393,6 +393,7 @@ fn pinned_release(manifest_dir: &Path) -> Option<String> {
 
 /// One schema crate's dataset: which archive, which override variable, which
 /// files it embeds, and which of those an older dataset may lack.
+#[derive(Debug)]
 pub struct DatasetSpec {
     /// Archive name without `.zip`, e.g. `mdm-schema`. The zip nests the
     /// files under `<archive>/data/`.
@@ -533,14 +534,12 @@ fn resolve_dataset_in(spec: &DatasetSpec, dir: &str, src_var: &str) {
             let ok = replace_data(data, spec, &wanted, |staging| {
                 download_zip_into(&url, staging, spec, &manifest_dir)
             });
-            if !ok {
-                panic!(
-                    "{a}.zip from {url} did not carry every file this crate embeds in \
-                     {dir}/: {files:?}. {dir}/ was left as it was.",
-                    a = spec.archive,
-                    files = spec.files
-                );
-            }
+            assert!(ok,
+                "{a}.zip from {url} did not carry every file this crate embeds in \
+                 {dir}/: {files:?}. {dir}/ was left as it was.",
+                a = spec.archive,
+                files = spec.files
+            )
         }
     }
 }
@@ -612,9 +611,7 @@ fn download_zip_into(url: &str, dest: &Path, spec: &DatasetSpec, manifest_dir: &
         .status()
         .expect("running curl — is it installed?")
         .success();
-    if !ok {
-        panic!("could not download {url}");
-    }
+    assert!(ok, "could not download {url}");
     // Panics with the full story on a mismatch; see its docs.
     verify_zip_sha256(&zip, manifest_dir, spec.archive, url);
 
@@ -626,9 +623,7 @@ fn download_zip_into(url: &str, dest: &Path, spec: &DatasetSpec, manifest_dir: &
         .status()
         .expect("running unzip — is it installed?")
         .success();
-    if !ok {
-        panic!("could not extract {url}");
-    }
+    assert!(ok, "could not extract {url}");
     // The archives nest their files at <archive>/data/. A flat zip is taken
     // as it is, as the per-crate copies of this did.
     let nested = tmp.join(spec.archive).join("data");
@@ -669,18 +664,16 @@ fn sync_local_src(data: &Path, spec: &DatasetSpec, src_var: &str) -> bool {
             missing.push(from.display().to_string());
         }
     }
-    if !missing.is_empty() {
-        panic!(
-            "{src_var} is set to {} but {} of {} file(s) are missing:\n  {}\n\
-             {} was left untouched. Build the dataset first, or unset {src_var} to \
-             build against the published data.",
-            src.display(),
-            missing.len(),
-            spec.files.len(),
-            missing.join("\n  "),
-            data.display()
-        );
-    }
+    assert!(missing.is_empty(),
+        "{src_var} is set to {} but {} of {} file(s) are missing:\n  {}\n\
+         {} was left untouched. Build the dataset first, or unset {src_var} to \
+         build against the published data.",
+        src.display(),
+        missing.len(),
+        spec.files.len(),
+        missing.join("\n  "),
+        data.display()
+    );
     let stamp = dataset_stamp("local", &src.display().to_string());
     let ok = replace_data(data, spec, &stamp, |staging| {
         spec.files.iter().all(|f| std::fs::copy(src.join(f), staging.join(f)).is_ok())

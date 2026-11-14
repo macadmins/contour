@@ -614,7 +614,7 @@ mod tests {
             select_tokens(&tokens, &["BBB".to_string()]).unwrap(),
             vec![tok("Security ring", "BBB")]
         );
-        assert!(select_tokens(&tokens, &[]).unwrap().len() == 2);
+        assert_eq!(select_tokens(&tokens, &[]).unwrap().len(), 2);
         let err = select_tokens(&tokens, &["nope".to_string()]).unwrap_err();
         assert!(err.to_string().contains("Pilot ring"), "lists options");
     }

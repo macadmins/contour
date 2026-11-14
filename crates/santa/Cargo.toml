@@ -41,15 +41,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 
 # Crypto
-sha2.workspace = true
 uuid.workspace = true
-
-# File system
-walkdir.workspace = true
-glob.workspace = true
-
-# Parallelism
-rayon.workspace = true
 
 # Logging
 tracing.workspace = true

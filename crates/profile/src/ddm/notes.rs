@@ -41,9 +41,7 @@ const NOTES: &[DeploymentNote] = &[
 /// True when the declaration type exists only in the beta seed (absent from stable).
 pub fn is_beta_only(declaration_type: &str) -> bool {
     let present = |c: Channel| {
-        SchemaRegistry::embedded_channel(c)
-            .ok()
-            .is_some_and(|r| r.get_by_name(declaration_type).is_some())
+        SchemaRegistry::embedded_channel(c).is_ok_and(|r| r.get_by_name(declaration_type).is_some())
     };
     present(Channel::Beta) && !present(Channel::Stable)
 }

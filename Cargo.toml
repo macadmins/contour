@@ -96,7 +96,6 @@ mimalloc = "0.1"
 contour-core = { path = "crates/contour-core", version = "0.5.0-rc.2" }
 contour-profiles = { path = "crates/contour-profiles", version = "0.5.0-rc.2" }
 contour-form = { path = "crates/contour-form", version = "0.5.0-rc.2" }
-contour-form-wasm = { path = "crates/contour-form-wasm", version = "0.5.0-rc.2" }
 app-manifest = { path = "crates/app-manifest", version = "0.5.0-rc.2" }
 mdm-schema = { path = "crates/mdm-schema", version = "0.5.0-rc.2" }
 mscp-schema = { path = "crates/mscp-schema", version = "0.5.0-rc.2" }
@@ -148,6 +147,7 @@ map_err_ignore = "warn"
 redundant_type_annotations = "warn"
 renamed_function_params = "warn"
 semicolon_if_nothing_returned = "allow" # conflicts with semicolon_outside_block
+assert_is_empty = "allow"               # its fix, assert_eq!(v, [] as [T; 0]), reads worse than assert!(v.is_empty())
 semicolon_outside_block = "warn"
 # string_to_string removed — clippy::implicit_clone covers it
 undocumented_unsafe_blocks = "warn"

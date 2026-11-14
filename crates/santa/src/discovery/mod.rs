@@ -329,7 +329,7 @@ impl DiscoveryResult {
     /// Sort patterns by device coverage (descending).
     pub fn sort_by_coverage(&mut self) {
         self.patterns
-            .sort_by(|a, b| b.device_count.cmp(&a.device_count));
+            .sort_by_key(|a| std::cmp::Reverse(a.device_count));
     }
 
     /// Convert patterns to bundle suggestions.

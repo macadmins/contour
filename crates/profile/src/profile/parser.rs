@@ -197,7 +197,7 @@ pub fn restore_comments(xml: &str, comments: &[XmlComment]) -> String {
     }
 
     // Sort insertions by index descending so earlier indices stay stable.
-    insertions.sort_by(|a, b| b.0.cmp(&a.0));
+    insertions.sort_by_key(|a| std::cmp::Reverse(a.0));
 
     let mut result: Vec<String> = lines.iter().map(|l| (*l).to_string()).collect();
     for (idx, text) in insertions {
@@ -1911,7 +1911,7 @@ mod tests {
     #[test]
     fn data_placeholder_on_its_own_line_still_parses() {
         let xml = "<plist version=\"1.0\"><dict><key>Cert</key>\n\t<data>\n\t$FLEET_VAR_CERT\n\t</data>\n</dict></plist>";
-        assert!(plist::from_bytes::<plist::Value>(xml.as_bytes()).is_err());
+        plist::from_bytes::<plist::Value>(xml.as_bytes()).unwrap_err();
         ensure_plist(xml.as_bytes()).expect("parses once the placeholder is substituted");
         assert!(ensure_plist(b"<plist version=\"1.0\"><dict><key>K</key></dict></plist>").is_err());
     }

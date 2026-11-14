@@ -103,7 +103,7 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
                 // payload is. So a merged key stays required only where every
                 // variant that shares the type requires it; letting the last
                 // variant win would reject every Okta and Entra SSO profile.
-                for (key, field) in existing.fields.iter_mut() {
+                for (key, field) in &mut existing.fields {
                     if !apple.fields.contains_key(key) {
                         field.flags.required = false;
                     }
@@ -221,7 +221,7 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
                     name: name.to_string(),
                     // Supplemental prefs are flat: the name is the path.
                     path: name.to_string(),
-                    field_type: ft.clone(),
+                    field_type: *ft,
                     flags: FieldFlags::default(),
                     title: name.to_string(),
                     description: fdesc.to_string(),
@@ -250,7 +250,7 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
             manifest_source: None,
             // Synthesized from a preferences domain; nothing states
             // availability.
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: payload_type.to_string(),
             // A preference domain, as its category says. Left None, these
             // were the only authorable schemas with no kind, and anything
@@ -575,7 +575,7 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
         fields_recording_availability: if records_availability {
             fields.keys().cloned().collect()
         } else {
-            Default::default()
+            std::collections::BTreeSet::default()
         },
         payload_type: cap.payload_type.clone(),
         kind: Some(cap.kind),

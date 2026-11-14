@@ -289,7 +289,7 @@ mod tests {
 
         assert_eq!(label, "com.example.daemon");
         assert_eq!(executable, Some(PathBuf::from("/usr/local/bin/example")));
-        assert!(bundle_ids.is_empty());
+        assert_eq!(bundle_ids, [] as [std::string::String; 0]);
     }
 
     #[test]

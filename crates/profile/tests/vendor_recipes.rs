@@ -203,7 +203,8 @@ fn little_snitch_renders_the_filter_and_extension_payloads() {
 #[test]
 fn okta_and_entra_psso_recipes_name_their_extension_and_method() {
     // (recipe, --set values, file, ExtensionIdentifier, TeamIdentifier, method)
-    let cases: [(&str, &[&str], &str, &str, &str, &str); 3] = [
+    type Case<'a> = (&'a str, &'a [&'a str], &'a str, &'a str, &'a str, &'a str);
+    let cases: [Case; 3] = [
         (
             "okta",
             &[

@@ -46,10 +46,13 @@ fn schema() -> serde_json::Value {
 /// measured against.
 #[test]
 fn the_embedded_schema_is_the_pinned_one() {
-    let got: String = Sha256::digest(schema_bytes())
+    let got = Sha256::digest(schema_bytes())
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+        .fold(String::new(), |mut hex, b| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{b:02x}");
+            hex
+        });
     assert_eq!(
         got, SCHEMA_SHA256,
         "the Fleet GitOps schema in mscp-schema changed. If the dataset re-pinned it \
@@ -183,7 +186,7 @@ fn every_emitted_gitops_file_conforms_to_fleets_schema() {
 fn the_schema_rejects_what_fleet_would_reject() {
     let validator = jsonschema::validator_for(&schema()).expect("Fleet's schema compiles");
 
-    let good: serde_json::Value = serde_json::json!({
+    let good = serde_json::json!({
         "name": "cis-lvl1",
         "controls": { "apple_settings": { "configuration_profiles": [
             { "path": "../p/a.mobileconfig", "labels_include_all": ["mscp-cis_lvl1"] }

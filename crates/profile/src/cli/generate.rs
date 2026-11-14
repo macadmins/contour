@@ -1413,9 +1413,7 @@ pub fn judge_recipe_renders(
         .iter()
         .flat_map(|r| r.offered.iter().map(String::as_str))
         .collect();
-    let unknown: Vec<String> = parse_vars(vars)?
-        .into_iter()
-        .map(|(k, _)| k)
+    let unknown: Vec<String> = parse_vars(vars)?.into_keys()
         .filter(|k| !offered.contains(&k.as_str()))
         .collect();
     if !unknown.is_empty() {
@@ -2198,7 +2196,7 @@ fn build_payload_from_schema(
                 .as_deref()
                 .and_then(parse_plist_date)
                 .map_or_else(|| Value::String(String::new()), Value::Date),
-            _ => Value::String(field.default.clone().unwrap_or_default()),
+            FieldType::String => Value::String(field.default.clone().unwrap_or_default()),
         }
     }
 
@@ -2456,7 +2454,7 @@ mod tests {
             deprecated_in: None,
             introduced_by_platform: std::collections::HashMap::new(),
             deprecated_by_platform: std::collections::HashMap::new(),
-            removed_by_platform: Default::default(),
+            removed_by_platform: HashMap::default(),
             combinetype: None,
         }
     }
@@ -2464,7 +2462,7 @@ mod tests {
     fn full_manifest(fields: Vec<FieldDefinition>) -> crate::schema::PayloadManifest {
         crate::schema::PayloadManifest {
             manifest_source: None,
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.example.full".to_string(),
             kind: None,
             title: "Full".to_string(),
@@ -2495,7 +2493,7 @@ mod tests {
                 &[],
             ),
         ]);
-        let dict = build_payload_from_schema(&m, &Default::default(), true, true);
+        let dict = build_payload_from_schema(&m, &std::collections::BTreeMap::default(), true, true);
         assert!(!dict.contains_key("RemovalDate"), "no date is invented");
         assert!(
             matches!(dict.get("NotBefore"), Some(Value::Date(_))),
@@ -2521,7 +2519,7 @@ mod tests {
             ),
             full_field("Name", FieldType::String, false, None, &[]),
         ]);
-        let dict = build_payload_from_schema(&m, &Default::default(), true, true);
+        let dict = build_payload_from_schema(&m, &std::collections::BTreeMap::default(), true, true);
         assert!(!dict.contains_key("Scope"), "no allowed value is picked");
         assert_eq!(dict.get("VPNType"), Some(&Value::String(String::new())));
         assert_eq!(dict.get("Mode"), Some(&Value::String("Auto".into())));
@@ -2537,9 +2535,9 @@ mod tests {
             ("com.apple.systempolicy.rule", &["Expiration"][..]),
         ] {
             let m = registry.get(ty).expect("type is described");
-            let dict = build_payload_from_schema(m, &Default::default(), true, true);
+            let dict = build_payload_from_schema(m, &std::collections::BTreeMap::default(), true, true);
             for d in dates {
-                assert!(!dict.contains_key(*d), "{ty}: {d} must not be scaffolded");
+                assert!(!dict.contains_key(d), "{ty}: {d} must not be scaffolded");
             }
         }
     }
@@ -2577,7 +2575,7 @@ mod tests {
             deprecated_in: None,
             introduced_by_platform: std::collections::HashMap::new(),
             deprecated_by_platform: std::collections::HashMap::new(),
-            removed_by_platform: Default::default(),
+            removed_by_platform: HashMap::default(),
             combinetype: None,
         };
 
@@ -2589,7 +2587,7 @@ mod tests {
         );
         let manifest = PayloadManifest {
             manifest_source: None,
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.apple.applicationaccess".to_string(),
             kind: None,
             title: "Restrictions".to_string(),
@@ -2631,7 +2629,7 @@ mod tests {
         // dicts. Nesting is `extra_fields`' job, applied by the caller.
         let manifest = PayloadManifest {
             manifest_source: None,
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.apple.loginwindow".to_string(),
             kind: None,
             title: "Login Window".to_string(),

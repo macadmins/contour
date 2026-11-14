@@ -1799,7 +1799,11 @@ mod tests {
             .flatten()
         {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("sop-") && name.ends_with(".md") {
+            if name.starts_with("sop-")
+                && std::path::Path::new(&name)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+            {
                 let budget = if name == "sop-routing.md" {
                     ROUTING_BUDGET
                 } else {

@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn a_manifest_with_no_properties_is_refused() {
         let doc = json!({"title": "Empty (com.example.empty)", "properties": {}});
-        assert!(render(&doc, Path::new("/tmp/com.example.empty.json"), None, None).is_err());
+        render(&doc, Path::new("/tmp/com.example.empty.json"), None, None).unwrap_err();
     }
 
     /// The header says what the file is and is not.

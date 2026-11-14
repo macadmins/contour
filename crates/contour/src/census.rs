@@ -272,7 +272,7 @@ mod tests {
         assert_eq!(commas(286), "286");
         assert_eq!(commas(1657), "1,657");
         assert_eq!(commas(14766), "14,766");
-        assert_eq!(commas(1000000), "1,000,000");
+        assert_eq!(commas(1_000_000), "1,000,000");
     }
 
     /// One English phrase, one number.

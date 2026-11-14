@@ -345,8 +345,7 @@ mod tests {
     fn a_missing_override_is_an_error_not_a_fallback() {
         let err =
             FleetConflictFilter::from_file(Some(Path::new("/nonexistent/fleet-constraints.yml")))
-                .err()
-                .expect("a missing override must not load anything");
+                .expect_err("a missing override must not load anything");
         assert!(err.to_string().contains("no fallback"), "{err}");
     }
 

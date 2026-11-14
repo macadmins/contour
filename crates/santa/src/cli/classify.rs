@@ -154,7 +154,7 @@ fn display_report(report: &CoverageReport, verbose: bool) {
         println!("{}", "-".repeat(40));
 
         let mut sorted = report.bundle_stats.clone();
-        sorted.sort_by(|a, b| b.app_count.cmp(&a.app_count));
+        sorted.sort_by_key(|a| std::cmp::Reverse(a.app_count));
 
         for stat in &sorted {
             let bar_len = ((stat.percentage / 100.0) * 30.0) as usize;

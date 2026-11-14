@@ -14,8 +14,8 @@
 #     across lib + bins + tests + examples
 #   * `cargo test --workspace --no-fail-fast` — the whole test suite
 #
-# Tests are gated here although no GitHub workflow runs them yet. Without
-# it, nothing ran them at all, and a test broken by an intentional change
+# Tests are gated here and in .github/workflows/ci.yml. Before that, nothing
+# ran them, and a test broken by an intentional change
 # stayed broken unnoticed: in September 2026 two traps sat failing for days
 # (a new preset collided with trap_79's import name; refusing `btm --ddm`
 # contradicted trap_31). The test-code lints that once kept tests out are

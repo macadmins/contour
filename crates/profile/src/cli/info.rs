@@ -1051,7 +1051,7 @@ mod os_support_tests {
     fn manifest() -> PayloadManifest {
         let mut m = PayloadManifest {
             manifest_source: None,
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.test.configuration.scopes".to_string(),
             kind: None,
             title: String::new(),

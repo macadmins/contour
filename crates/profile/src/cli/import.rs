@@ -577,7 +577,7 @@ fn build_payload_type_groups(discovered: &[DiscoveredProfile]) -> Vec<PayloadTyp
         .collect();
 
     // Sort by profile count descending
-    groups.sort_by(|a, b| b.profiles.len().cmp(&a.profiles.len()));
+    groups.sort_by_key(|a| std::cmp::Reverse(a.profiles.len()));
 
     groups
 }

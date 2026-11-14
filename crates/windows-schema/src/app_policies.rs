@@ -204,9 +204,7 @@ mod tests {
     #[test]
     fn non_ingestable_policies_carry_the_reason_and_the_document() {
         let all = read(crate::embedded_windows_app_policies()).unwrap();
-        if all.is_empty() {
-            panic!("dataset predates windows_app_policies; republish, do not skip");
-        }
+        assert!(!all.is_empty(), "dataset predates windows_app_policies; republish, do not skip");
         // Not a count: which policies Windows blocks is a judgement refined
         // against Microsoft's documentation, and a threshold here would call
         // a correction a regression. The property is what matters: the set

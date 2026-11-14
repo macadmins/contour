@@ -94,9 +94,7 @@ mod tests {
     #[test]
     fn value_meanings_dependencies_and_atomic_are_carried() {
         let all = read(crate::embedded_windows_node_details()).unwrap();
-        if all.is_empty() {
-            panic!("dataset predates windows_node_details; republish, do not skip");
-        }
+        assert!(!all.is_empty(), "dataset predates windows_node_details; republish, do not skip");
         let described = all
             .iter()
             .filter(|d| !d.value_descriptions.is_empty())

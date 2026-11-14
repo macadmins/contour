@@ -56,7 +56,7 @@ pub struct Tool {
 
 impl std::fmt::Debug for Tool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Tool").field("name", &self.name).finish()
+        f.debug_struct("Tool").field("name", &self.name).finish_non_exhaustive()
     }
 }
 
@@ -1289,7 +1289,7 @@ fn mscp_baseline(args: &Value) -> Result<Value, ToolError> {
         ));
     }
 
-    let mut sections: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    let mut sections: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::default();
     for e in &edges {
         sections
             .entry(e.section.clone())
@@ -1754,7 +1754,7 @@ mod tests {
 
     #[test]
     fn sop_unknown_topic_is_a_tool_error() {
-        assert!(sop(&json!({"topic": "definitely-not-a-sop"})).is_err());
+        sop(&json!({"topic": "definitely-not-a-sop"})).unwrap_err();
     }
 
     /// The table tool says how WHERE must constrain a table — the same rules

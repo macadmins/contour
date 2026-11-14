@@ -84,6 +84,8 @@ pub enum EmitError {
     /// installs and does nothing, so it is refused instead.
     NotBase64 {
         path: String,
+        /// The decoder's error.
+        reason: String,
     },
 }
 
@@ -106,10 +108,10 @@ impl std::fmt::Display for EmitError {
                  below a top-level key"
             ),
             EmitError::Serialize(e) => write!(f, "serialising the document: {e}"),
-            EmitError::NotBase64 { path } => write!(
+            EmitError::NotBase64 { path, reason } => write!(
                 f,
                 "'{path}' is typed <data> in the schema, so its value must be base64; \
-                 what was supplied does not decode. A <data> key given a <string> \
+                 what was supplied does not decode ({reason}). A <data> key given a <string> \
                  installs cleanly and has no effect, so this is refused rather than \
                  emitted"
             ),
@@ -158,7 +160,6 @@ pub fn emit(
         &Target {
             platform: opts.platform,
             os_version: opts.os_version.clone(),
-            ..Default::default()
         },
     );
     if diagnostics.iter().any(|d| d.blocks_emit) {
@@ -527,8 +528,9 @@ fn json_to_plist(
             if declared_type(m, path) == Some(FieldType::Data) {
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(s.trim())
-                    .map_err(|_| EmitError::NotBase64 {
+                    .map_err(|err| EmitError::NotBase64 {
                         path: path.to_string(),
+                        reason: err.to_string(),
                     })?;
                 plist::Value::Data(bytes)
             } else {
@@ -650,7 +652,7 @@ mod tests {
                     .any(|d| d.rule == "data-not-base64" && d.path.ends_with("CAFingerprint")),
                 "{ds:?}"
             ),
-            Err(EmitError::NotBase64 { path }) => {
+            Err(EmitError::NotBase64 { path, .. }) => {
                 assert!(path.ends_with("CAFingerprint"), "path was {path}");
             }
             Err(e) => panic!("wrong error: {e}"),
