@@ -1675,36 +1675,6 @@ fn trap_48_lint_policy_named_check_fires_only_that_check() {
 fn trap_49_lint_policy_all_fires_every_tier_2_check_on_matching_fixture() {
     // `--lint-policy all` enables every Tier-2 check. On a fixture
     // crafted to trip all four, all four should appear.
-    let mut profile = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("lint");
-    profile.push("all-tier-2.mobileconfig");
-    fs::write(
-        &profile,
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>PayloadType</key><string>Configuration</string>
-    <key>PayloadVersion</key><integer>1</integer>
-    <key>PayloadIdentifier</key><string>BareIdentifier</string>
-    <key>PayloadUUID</key><string>A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D</string>
-    <key>PayloadDisplayName</key><string>All Tier-2</string>
-    <key>PayloadScope</key><string>User</string>
-    <key>PayloadContent</key>
-    <array>
-        <dict>
-            <key>PayloadType</key><string>com.apple.MCXFileVault2</string>
-            <key>PayloadVersion</key><integer>1</integer>
-            <key>PayloadIdentifier</key><string>com.othervendor.fv</string>
-            <key>PayloadUUID</key><string>B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E</string>
-        </dict>
-    </array>
-</dict>
-</plist>"#,
-    )
-    .unwrap();
     let findings = lint_findings_with_args("all-tier-2", &["--lint-policy", "all"]);
     let names: std::collections::HashSet<&str> = findings
         .iter()
@@ -1721,7 +1691,6 @@ fn trap_49_lint_policy_all_fires_every_tier_2_check_on_matching_fixture() {
             "expected {required} in --lint-policy all output; got {names:?}"
         );
     }
-    let _ = fs::remove_file(&profile);
 }
 
 #[test]
