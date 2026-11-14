@@ -202,20 +202,16 @@ impl ContourConfig {
     }
 }
 
-/// Resolve organization domain from a CLI flag, falling back to `.contour/config.toml`.
-///
-/// Looks for the org in this order:
-/// 1. Explicit CLI `--org` flag value
-/// 2. `.contour/config.toml` found by walking up the directory tree
-/// 3. Error with guidance to use `contour init`
+/// Resolve organization domain: CLI flag → `profile.toml` → `CONTOUR_ORG` →
+/// `.contour/config.toml` walked up from CWD → error.
 pub fn resolve_org(org: Option<String>) -> anyhow::Result<String> {
     resolve_org_with_anchor(org, None)
 }
 
 /// Resolve organization domain with an optional path anchor.
 ///
-/// Precedence: CLI flag → `CONTOUR_ORG` env → CWD-walked config →
-/// anchor-walked config → error. The CWD-walked config wins over the
+/// Precedence: CLI flag → `profile.toml` → `CONTOUR_ORG` env → CWD-walked
+/// config → anchor-walked config → error. Every toolkit resolves the org here. The CWD-walked config wins over the
 /// anchor because the operator's project config represents the
 /// operator's identity, while a `.contour/config.toml` shipped inside
 /// a preset folder is a vendor-provided default.
@@ -225,6 +221,9 @@ pub fn resolve_org_with_anchor(
 ) -> anyhow::Result<String> {
     if let Some(o) = org {
         return Ok(o);
+    }
+    if let Some((domain, _)) = profile_toml_org() {
+        return Ok(domain);
     }
     if let Ok(env_org) = std::env::var("CONTOUR_ORG") {
         if !env_org.is_empty() {
@@ -242,16 +241,14 @@ pub fn resolve_org_with_anchor(
     anyhow::bail!(
         "--org is required. Set it via:\n  \
          • --org com.yourcompany (CLI flag)\n  \
+         • organization.domain in profile.toml\n  \
          • CONTOUR_ORG=com.yourcompany (env var, ideal for CI)\n  \
          • contour init (creates .contour/config.toml)"
     )
 }
 
-/// `PayloadOrganization` for profiles of `domain`: the `[organization] name`
-/// of the nearest `profile.toml`, then `.contour/config.toml`, when that
-/// file's domain is `domain`; otherwise the domain itself. Every generator
-/// and `profile normalize` use this, so they write the same value.
-pub fn org_name_for(domain: &str) -> String {
+/// `[organization]` of the nearest `profile.toml` walked up from CWD.
+fn profile_toml_org() -> Option<(String, Option<String>)> {
     #[derive(Deserialize)]
     struct ProfileToml {
         organization: Org,
@@ -261,14 +258,20 @@ pub fn org_name_for(domain: &str) -> String {
         domain: String,
         name: Option<String>,
     }
-    let profile_toml = std::env::current_dir().ok().and_then(|cwd| {
-        let path = cwd.ancestors().map(|d| d.join("profile.toml")).find(|p| p.exists())?;
-        toml::from_str::<ProfileToml>(&std::fs::read_to_string(path).ok()?).ok()
-    });
-    profile_toml
-        .map(|t| t.organization)
-        .filter(|o| o.domain == domain)
-        .and_then(|o| o.name)
+    let cwd = std::env::current_dir().ok()?;
+    let path = cwd.ancestors().map(|d| d.join("profile.toml")).find(|p| p.exists())?;
+    let org = toml::from_str::<ProfileToml>(&std::fs::read_to_string(path).ok()?).ok()?.organization;
+    Some((org.domain, org.name))
+}
+
+/// `PayloadOrganization` for profiles of `domain`: the `[organization] name`
+/// of the nearest `profile.toml`, then `.contour/config.toml`, when that
+/// file's domain is `domain`; otherwise the domain itself. Every generator
+/// and `profile normalize` use this, so they write the same value.
+pub fn org_name_for(domain: &str) -> String {
+    profile_toml_org()
+        .filter(|(d, _)| d == domain)
+        .and_then(|(_, name)| name)
         .or_else(|| {
             ContourConfig::load_nearest()
                 .filter(|c| c.organization.domain == domain && !c.organization.name.is_empty())

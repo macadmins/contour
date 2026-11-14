@@ -227,7 +227,7 @@ contour santa generate <INPUTS>... [flags]
 | `--org <ORG>` | Organization identifier prefix | `com.example` |
 | `--identifier <ID>` | Profile identifier | `{org}.santa.rules` |
 | `--display-name <NAME>` | Profile display name | auto-generated |
-| `--deterministic-uuids` | Use deterministic UUIDs for reproducible builds | `false` |
+| `--no-deterministic-uuids` | Random UUIDs instead of v5 of each payload identifier | `false` (deterministic by default) |
 | `--format <FMT>` | Output format: `mobileconfig`, `plist`, `plist-full` | `mobileconfig` |
 | `--fragment` | Generate Fleet GitOps fragment directory | `false` |
 | `--dry-run` | Preview without writing | `false` |
@@ -244,8 +244,8 @@ contour santa generate <INPUTS>... [flags]
 # Generate mobileconfig from rules
 contour santa generate rules.yaml -o santa-rules.mobileconfig --org com.acme
 
-# Generate with deterministic UUIDs for GitOps
-contour santa generate rules.yaml -o santa.mobileconfig --org com.acme --deterministic-uuids
+# Generate (UUIDs are deterministic by default)
+contour santa generate rules.yaml -o santa.mobileconfig --org com.acme
 
 # Generate WS1-compatible plist
 contour santa generate rules.yaml --format plist -o santa.plist
@@ -315,6 +315,7 @@ contour santa config [flags]
 | `--sync-url <URL>` | Sync server URL | none |
 | `--machine-owner-plist <PATH>` | Machine owner plist path | none |
 | `--block-usb` | Block USB mass storage | `false` |
+| `--org <DOMAIN>` | Identifier prefix: writes `{org}.santa.config` | from `profile.toml`, `CONTOUR_ORG` or `.contour/config.toml` |
 | `--dry-run` | Preview without writing | `false` |
 
 ```bash
@@ -695,7 +696,7 @@ contour santa merge vendors.yaml internal.yaml -o combined.yaml
 contour santa snip --source combined.yaml --dest google.yaml --identifier EQHXZ8M8AV
 
 # Regenerate profile
-contour santa generate combined.yaml -o santa.mobileconfig --org com.acme --deterministic-uuids
+contour santa generate combined.yaml -o santa.mobileconfig --org com.acme
 ```
 
 ### Deploying Santa from scratch
@@ -718,7 +719,7 @@ contour santa allow --input apps.csv --org com.acme -o santa-rules.mobileconfig
 
 ```bash
 contour santa validate rules.yaml --strict
-contour santa generate rules.yaml -o santa.mobileconfig --org com.acme --deterministic-uuids --json
+contour santa generate rules.yaml -o santa.mobileconfig --org com.acme --json
 ```
 
 ---

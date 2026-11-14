@@ -233,7 +233,12 @@ pub fn handle_synthesize(
         }
 
         // Build mobileconfig
-        let identifier = format!("{effective_org}.{}", plist_entry.domain);
+        // A domain already under the org (com.acme.thing) is its own identifier.
+        let identifier = if plist_entry.domain.starts_with(&format!("{effective_org}.")) {
+            plist_entry.domain.clone()
+        } else {
+            format!("{effective_org}.{}", plist_entry.domain)
+        };
         let display_name = plist_entry.title.clone();
         let builder = ProfileBuilder::new(&contour_core::org_name_for(effective_org), &identifier).display_name(&display_name);
         let xml = builder.build(&plist_entry.domain, plist_entry.dict.clone())?;

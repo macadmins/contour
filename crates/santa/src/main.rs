@@ -10,16 +10,11 @@ fn resolve_org(org: String) -> String {
     if org != "com.example" {
         return org;
     }
-    contour_core::config::ContourConfig::load_nearest()
-        .map(|c| c.organization.domain)
-        .unwrap_or(org)
+    contour_core::resolve_org(None).unwrap_or(org)
 }
 
 fn resolve_org_opt(org: Option<String>) -> Option<String> {
-    if org.is_some() {
-        return org;
-    }
-    contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
+    org.or_else(|| contour_core::resolve_org(None).ok())
 }
 
 #[global_allocator]
@@ -56,7 +51,8 @@ fn main() -> Result<()> {
             org,
             identifier,
             display_name,
-            deterministic_uuids,
+            deterministic_uuids: _,
+            no_deterministic_uuids,
             format,
             full_bundle,
             dry_run,
@@ -69,7 +65,7 @@ fn main() -> Result<()> {
                 &org,
                 identifier.as_deref(),
                 display_name.as_deref(),
-                deterministic_uuids,
+                !no_deterministic_uuids,
                 format,
                 full_bundle,
                 dry_run,
@@ -113,6 +109,7 @@ fn main() -> Result<()> {
             sync_url,
             machine_owner_plist,
             block_usb,
+            org,
             dry_run,
         } => santa::cli::config::run(
             output.as_deref(),
@@ -120,6 +117,7 @@ fn main() -> Result<()> {
             sync_url.as_deref(),
             machine_owner_plist.as_deref(),
             block_usb,
+            &resolve_org(org),
             dry_run,
             output_mode,
         ),

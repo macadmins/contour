@@ -221,22 +221,24 @@ fn scan_single_file(
         .collect();
 
     // Build simulation if requested
+    // Run the real normalizer on a copy, so the preview is what normalize writes.
     let simulation = if simulate {
-        let sim_envelope_id = format!(
-            "{}.profile.{}",
-            sim_domain,
-            sanitize_name(&profile.payload_display_name)
-        );
+        let mut normalized = profile.clone();
+        crate::profile::normalizer::normalize_profile(
+            &mut normalized,
+            &crate::profile::normalizer::NormalizerConfig {
+                org_domain: Some(sim_domain.to_string()),
+                org_name: None,
+                naming_convention: crate::profile::normalizer::NamingConvention::OrgDomainPrefix,
+            },
+        )?;
         let sim_payloads: Vec<IdentifierChange> = profile
             .payload_content
             .iter()
-            .map(|p| IdentifierChange {
+            .zip(normalized.payload_content)
+            .map(|(p, n)| IdentifierChange {
                 original: p.payload_identifier.clone(),
-                normalized: format!(
-                    "{}.{}",
-                    sim_domain,
-                    p.payload_type.split('.').next_back().unwrap_or("payload")
-                ),
+                normalized: n.payload_identifier,
             })
             .collect();
 
@@ -244,7 +246,7 @@ fn scan_single_file(
             domain: sim_domain.to_string(),
             envelope_identifier: IdentifierChange {
                 original: profile.payload_identifier.clone(),
-                normalized: sim_envelope_id,
+                normalized: normalized.payload_identifier,
             },
             payloads: sim_payloads,
         })
@@ -583,13 +585,4 @@ fn render_markdown_report(results: &[ScanResult]) -> String {
         }
     }
     md
-}
-
-/// Sanitize a name for use in identifier
-fn sanitize_name(name: &str) -> String {
-    name.chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-        .collect::<String>()
-        .to_lowercase()
-        .replace(' ', "-")
 }

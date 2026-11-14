@@ -9,7 +9,6 @@ use anyhow::{Context, Result};
 use clap::ValueEnum;
 use plist::Value;
 use std::path::Path;
-use uuid::Uuid;
 
 /// Santa client mode
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -40,7 +39,7 @@ pub struct SantaConfig {
     pub sync_url: Option<String>,
     pub machine_owner_plist: Option<String>,
     pub block_usb: bool,
-    pub identifier: String,
+    /// Org domain: identifier prefix; PayloadOrganization via `org_name_for`.
     pub org: String,
 }
 
@@ -51,109 +50,40 @@ impl Default for SantaConfig {
             sync_url: None,
             machine_owner_plist: None,
             block_usb: false,
-            identifier: "com.northpolesec.santa".to_string(),
-            org: "Example Org".to_string(),
+            org: "com.example".to_string(),
         }
     }
 }
 
-/// Generate Santa configuration mobileconfig
+/// Generate Santa configuration mobileconfig: `{org}.santa.config`, built
+/// like every other generator's profile.
 pub fn generate_config(config: &SantaConfig) -> Result<Vec<u8>> {
-    let profile_uuid = Uuid::new_v4();
-    let payload_uuid = Uuid::new_v4();
-
-    // Build Santa configuration payload content
     let mut santa_config = plist::Dictionary::new();
     santa_config.insert(
         "ClientMode".to_string(),
         Value::Integer(config.mode.as_int().into()),
     );
-
     if let Some(ref url) = config.sync_url {
         santa_config.insert("SyncBaseURL".to_string(), Value::String(url.clone()));
     }
-
     if let Some(ref plist_path) = config.machine_owner_plist {
         santa_config.insert(
             "MachineOwnerPlist".to_string(),
             Value::String(plist_path.clone()),
         );
     }
-
     if config.block_usb {
         santa_config.insert("BlockUSBMount".to_string(), Value::Boolean(true));
     }
 
-    // Build payload
-    let mut payload = plist::Dictionary::new();
-    payload.insert(
-        "PayloadType".to_string(),
-        Value::String("com.northpolesec.santa".to_string()),
-    );
-    payload.insert(
-        "PayloadIdentifier".to_string(),
-        Value::String(format!("{}.config", config.identifier)),
-    );
-    payload.insert(
-        "PayloadUUID".to_string(),
-        Value::String(payload_uuid.to_string().to_uppercase()),
-    );
-    payload.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
-    payload.insert(
-        "PayloadDisplayName".to_string(),
-        Value::String("Santa Configuration".to_string()),
-    );
-
-    // Merge santa config into payload
-    for (k, v) in santa_config {
-        payload.insert(k, v);
-    }
-
-    // Build profile
-    let mut profile = plist::Dictionary::new();
-    profile.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
-    profile.insert(
-        "PayloadType".to_string(),
-        Value::String("Configuration".to_string()),
-    );
-    profile.insert(
-        "PayloadIdentifier".to_string(),
-        Value::String(config.identifier.clone()),
-    );
-    profile.insert(
-        "PayloadUUID".to_string(),
-        Value::String(profile_uuid.to_string().to_uppercase()),
-    );
-    profile.insert(
-        "PayloadDisplayName".to_string(),
-        Value::String("Santa Configuration".to_string()),
-    );
-    profile.insert(
-        "PayloadDescription".to_string(),
-        Value::String("Santa binary authorization configuration".to_string()),
-    );
-    profile.insert(
-        "PayloadOrganization".to_string(),
-        Value::String(contour_core::org_name_for(&config.org)),
-    );
-    profile.insert(
-        "PayloadScope".to_string(),
-        Value::String("System".to_string()),
-    );
-    profile.insert(
-        "PayloadContent".to_string(),
-        Value::Array(vec![Value::Dictionary(payload.into_iter().collect())]),
-    );
-
-    // Serialize to XML plist
-    let mut buffer = Vec::new();
-    contour_profiles::to_writer_xml(
-        &mut buffer,
-        &Value::Dictionary(profile.into_iter().collect()),
+    contour_profiles::ProfileBuilder::new(
+        &contour_core::org_name_for(&config.org),
+        &format!("{}.santa.config", config.org),
     )
-    .context("Failed to serialize mobileconfig")?;
-
-    Ok(buffer)
+    .display_name("Santa Configuration")
+    .description("Santa binary authorization configuration")
+    .removal_disallowed(true)
+    .build("com.northpolesec.santa", santa_config)
 }
 
 /// Write Santa configuration to file
