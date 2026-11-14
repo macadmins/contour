@@ -1,8 +1,7 @@
-# Clippy over the whole workspace (libs, bins, tests, examples) with warnings
-# as errors: the same command scripts/ci-check.sh runs locally. The lint set
-# is [workspace.lints] in Cargo.toml. Runs on macOS, where contour is built
-# and released.
-name: clippy
+# Clippy and the test suite over the whole workspace: the same commands
+# scripts/ci-check.sh runs locally. The lint set is [workspace.lints] in
+# Cargo.toml. Runs on macOS, where contour is built and released.
+name: ci
 
 permissions:
   contents: read
@@ -28,3 +27,13 @@ jobs:
           components: clippy
       - name: cargo clippy --workspace --all-targets
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: cargo test
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # --no-fail-fast: report every failing test binary, not just the first.
+      - name: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
