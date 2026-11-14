@@ -326,13 +326,15 @@ fn policy_to_santa(p: &Policy) -> String {
     .to_string()
 }
 
-/// v5 of the payload identifier (the scheme every generator uses), or random.
+/// v5 of the payload identifier (the scheme every generator uses), or
+/// random; in the case `[uuid] uppercase` asks for.
 fn generate_uuid(deterministic: bool, identifier: &str) -> String {
-    if deterministic {
+    let uuid = if deterministic {
         contour_profiles::deterministic_uuid(identifier)
     } else {
         Uuid::new_v4().to_string().to_uppercase()
-    }
+    };
+    if contour_core::uuid_uppercase() { uuid } else { uuid.to_lowercase() }
 }
 
 #[cfg(test)]

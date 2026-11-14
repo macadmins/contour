@@ -80,6 +80,7 @@ pub fn generate_config(config: &SantaConfig) -> Result<Vec<u8>> {
         &contour_core::org_name_for(&config.org),
         &format!("{}.santa.config", config.org),
     )
+    .uppercase(contour_core::uuid_uppercase())
     .display_name("Santa Configuration")
     .description("Santa binary authorization configuration")
     .removal_disallowed(true)

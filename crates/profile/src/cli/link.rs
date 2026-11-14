@@ -72,15 +72,9 @@ pub fn handle_link(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Determine effective config: profile.toml → CLI --org → .contour/config.toml
-    let effective_domain = config
-        .map(|c| c.organization.domain.clone())
-        .or_else(|| org_domain.map(String::from))
-        .or_else(|| {
-            contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
-        });
-
-    let effective_predictable = config.map_or(predictable, |c| c.uuid.predictable);
+    // The shared lookup; only --merge needs a domain (`<org>.merged`).
+    let effective_domain = crate::config::resolve_org(org_domain, config).ok();
+    let effective_predictable = predictable || config.is_some_and(|c| c.uuid.predictable);
 
     let link_config = LinkConfig {
         org_domain: effective_domain,

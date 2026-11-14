@@ -144,7 +144,7 @@ fn generate_profile(profile_type: PrepProfile, org: &str) -> Result<Vec<u8>> {
         _ => format!("Santa {} configuration", profile_type.name()),
     };
 
-    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id)
+    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id).uppercase(contour_core::uuid_uppercase())
         .display_name(profile_type.display_name())
         .description(&description)
         .removal_disallowed(true)

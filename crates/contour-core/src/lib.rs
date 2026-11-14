@@ -35,7 +35,7 @@ pub use codesign::{
     get_bundle_id, get_bundle_versions, get_code_requirement, read_code_identity, requirement_flaw,
 };
 pub use completions::generate_completions;
-pub use config::{ConfigSettings, ContourConfig, org_name_for, resolve_name, resolve_org};
+pub use config::{ConfigSettings, ContourConfig, org_name_for, resolve_name, resolve_org, uuid_uppercase};
 pub use errors::{ContourError, ContourResult};
 pub use fleet_layout::FleetLayout;
 pub use logging::init_logging;

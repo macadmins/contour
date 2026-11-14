@@ -79,7 +79,7 @@ pub fn generate_notification_profile(app: &NotificationAppEntry, org: &str) -> R
         Value::Array(vec![Value::Dictionary(notification)]),
     );
 
-    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id)
+    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id).uppercase(contour_core::uuid_uppercase())
         .display_name(&format!("{} Notifications", app.name))
         .description(&format!("Notification settings for {}", app.name))
         .removal_disallowed(true)
@@ -103,7 +103,7 @@ pub fn generate_combined_notification_profile(
     payload_content.insert("NotificationSettings".to_string(), Value::Array(entries));
 
     let name = display_name.unwrap_or("Notification Settings");
-    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id)
+    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id).uppercase(contour_core::uuid_uppercase())
         .display_name(name)
         .description("Managed notification settings")
         .removal_disallowed(true)

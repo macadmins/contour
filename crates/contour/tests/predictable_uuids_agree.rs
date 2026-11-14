@@ -1,6 +1,6 @@
 //! Predictable UUIDs are one scheme: a profile written by `profile generate`
 //! keeps its UUIDs when `normalize`, `uuid -p` or `import` rewrites it, so an
-//! MDM does not see a change that is not there.
+//! MDM does not see a change that is not there. `link` too.
 
 use std::path::Path;
 
@@ -60,4 +60,10 @@ fn generate_then_rewrite_keeps_uuids() {
     std::fs::write(root.join("profile.toml"), "[organization]\ndomain = \"com.acme\"\n").unwrap();
     contour(root, &["profile", "uuid", "-p", "--output", "flag.mobileconfig", "generated/acme.mobileconfig"]);
     assert_eq!(uuids(&root.join("flag.mobileconfig")), generated, "uuid -p without [uuid] predictable");
+
+    std::fs::create_dir(root.join("to-link")).unwrap();
+    std::fs::copy(root.join("normalized.mobileconfig"), root.join("to-link/acme.mobileconfig")).unwrap();
+    contour(root, &["profile", "link", "-p", "--output", "linked", "to-link"]);
+    let linked = std::fs::read_dir(root.join("linked")).unwrap().next().unwrap().unwrap().path();
+    assert_eq!(uuids(&linked), generated, "link -p without [uuid] predictable");
 }

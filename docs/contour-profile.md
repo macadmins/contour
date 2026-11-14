@@ -38,7 +38,7 @@ template = "{org}-{type}-{name}"  # Only used with scheme = "template"
 
 [uuid]
 predictable = false          # Use deterministic v5 UUIDs
-uppercase = true             # Uppercase UUID output
+uppercase = true             # Uppercase UUID output (every generator)
 
 [output]
 directory = "./output"       # Default output directory
@@ -1021,12 +1021,11 @@ stale reference passes through silently.
 
 ##### How the new UUIDs are derived
 
-With `-p` / `--predictable` **and** `--org`, UUIDs are RFC 4122 v5, derived in
-two levels:
+With `-p` / `--predictable`, UUIDs are RFC 4122 v5 of each PayloadIdentifier,
+the scheme every contour generator uses (case from `[uuid] uppercase`):
 
 ```
-namespace = uuidv5(DNS,       <org domain>)
-new_uuid  = uuidv5(namespace, <PayloadIdentifier>)   # uppercased
+new_uuid = uuidv5(DNS, <PayloadIdentifier>)
 ```
 
 Reproducible outside contour, which makes it easy to assert in CI:
@@ -1034,18 +1033,17 @@ Reproducible outside contour, which makes it easy to assert in CI:
 ```bash
 python3 -c "
 import uuid
-ns = uuid.uuid5(uuid.NAMESPACE_DNS, 'com.acme')
-print(str(uuid.uuid5(ns, 'com.acme.scep.payload')).upper())
+print(str(uuid.uuid5(uuid.NAMESPACE_DNS, 'com.acme.scep.payload')).upper())
 "
-# 51F715A5-731C-535F-8B53-E52A574ADF15
+# 92947A38-7F7A-5640-BBCE-F81F40D4FCA8
 ```
 
 The merged envelope is derived the same way from `<org>.merged`.
 
-> **`-p` and `--merge` require an org domain.** The predictable path needs an
-> org domain to build its namespace, and the merged profile's identifier is
-> `<org>.merged` — so `link` errors out when neither `--org`, `profile.toml`,
-> nor `.contour/config.toml` provides one. There is no `com.example` fallback.
+> **`--merge` requires an org domain.** The merged profile's identifier is
+> `<org>.merged`, so `link --merge` errors out when neither `--org`,
+> `profile.toml`, `CONTOUR_ORG` nor `.contour/config.toml` provides one. There
+> is no `com.example` fallback.
 
 ##### Why predictable UUIDs matter
 

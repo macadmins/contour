@@ -58,7 +58,7 @@ pub fn generate_service_management_profile(app: &BtmAppEntry, org: &str) -> Resu
     let profile_id = format!("{}.service-management.{}", org, sanitize_id(&app.bundle_id));
     let payload_content = build_service_management_payload(app)?;
 
-    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id)
+    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id).uppercase(contour_core::uuid_uppercase())
         .display_name(&format!("{} Service Management", app.name))
         .description(&format!("Managed login items for {}", app.name))
         .removal_disallowed(true)
@@ -118,7 +118,7 @@ pub fn generate_combined_service_management_profile(
     let payload_content = build_combined_service_management_payload(apps)?;
     let name = display_name.unwrap_or("Service Management");
 
-    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id)
+    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id).uppercase(contour_core::uuid_uppercase())
         .display_name(name)
         .description("Managed login items and background tasks")
         .removal_disallowed(true)

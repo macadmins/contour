@@ -22,15 +22,32 @@ fn write(root: &Path, name: &str, text: &str) {
     std::fs::write(root.join(name), text).unwrap();
 }
 
-fn v5(identifier: &str) -> String {
-    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, identifier.as_bytes()).to_string().to_uppercase()
+fn v5(identifier: &str, uppercase: bool) -> String {
+    let uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, identifier.as_bytes()).to_string();
+    if uppercase { uuid.to_uppercase() } else { uuid }
 }
 
 #[test]
 fn every_generator_writes_what_normalize_writes() {
+    every_generator_agrees(true);
+}
+
+/// `[uuid] uppercase = false` reaches every generator, not only `profile`.
+#[test]
+fn every_generator_follows_uuid_case() {
+    every_generator_agrees(false);
+}
+
+fn every_generator_agrees(uppercase: bool) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    write(root, "profile.toml", "[organization]\ndomain = \"com.acme\"\nname = \"Acmé Örg AB\"\n\n[uuid]\npredictable = true\n");
+    write(
+        root,
+        "profile.toml",
+        &format!(
+            "[organization]\ndomain = \"com.acme\"\nname = \"Acmé Örg AB\"\n\n[uuid]\npredictable = true\nuppercase = {uppercase}\n"
+        ),
+    );
     write(root, "rules.yaml", "- identifier: EQHXZ8M8AV\n  rule_type: TEAMID\n  policy: ALLOWLIST\n");
     write(root, "pppc.toml", "[config]\norg = \"com.acme\"\n\n[[apps]]\nname = \"Slack\"\nbundle_id = \"com.tinyspeck.slackmacgap\"\ncode_requirement = \"anchor apple generic\"\nservices = [\"screen-capture\"]\n");
     write(root, "btm.toml", "[settings]\norg = \"com.acme\"\n\n[[apps]]\nname = \"Slack\"\nbundle_id = \"com.tinyspeck.slackmacgap\"\nteam_id = \"BQR82RBBHL\"\n\n[[apps.rules]]\nrule_type = \"TeamIdentifier\"\nrule_value = \"BQR82RBBHL\"\n");
@@ -68,11 +85,11 @@ fn every_generator_writes_what_normalize_writes() {
             let s = |d: &plist::Dictionary, k: &str| d[k].as_string().unwrap().to_string();
             let id = s(&profile, "PayloadIdentifier");
             assert!(id.starts_with("com.acme.") && !id.starts_with("com.acme.com.acme."), "{rel}: {id}");
-            assert_eq!(s(&profile, "PayloadUUID"), v5(&id), "{rel}: outer UUID");
+            assert_eq!(s(&profile, "PayloadUUID"), v5(&id, uppercase), "{rel}: outer UUID");
             assert_eq!(s(&profile, "PayloadOrganization"), "Acmé Örg AB", "{rel}");
             for payload in profile["PayloadContent"].as_array().unwrap() {
                 let p = payload.as_dictionary().unwrap();
-                assert_eq!(s(p, "PayloadUUID"), v5(&s(p, "PayloadIdentifier")), "{rel}: inner UUID");
+                assert_eq!(s(p, "PayloadUUID"), v5(&s(p, "PayloadIdentifier"), uppercase), "{rel}: inner UUID");
                 assert_eq!(s(p, "PayloadOrganization"), "Acmé Örg AB", "{rel}: inner");
             }
 

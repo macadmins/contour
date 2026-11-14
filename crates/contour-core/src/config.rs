@@ -247,21 +247,46 @@ pub fn resolve_org_with_anchor(
     )
 }
 
-/// `[organization]` of the nearest `profile.toml` walked up from CWD.
-fn profile_toml_org() -> Option<(String, Option<String>)> {
-    #[derive(Deserialize)]
-    struct ProfileToml {
-        organization: Org,
+/// The parts of the nearest `profile.toml` (walked up from CWD) that every
+/// toolkit honours, not only `contour profile`.
+#[derive(Deserialize)]
+struct ProfileToml {
+    organization: ProfileTomlOrg,
+    #[serde(default)]
+    uuid: ProfileTomlUuid,
+}
+#[derive(Deserialize)]
+struct ProfileTomlOrg {
+    domain: String,
+    name: Option<String>,
+}
+#[derive(Deserialize)]
+struct ProfileTomlUuid {
+    #[serde(default = "yes")]
+    uppercase: bool,
+}
+impl Default for ProfileTomlUuid {
+    fn default() -> Self {
+        Self { uppercase: true }
     }
-    #[derive(Deserialize)]
-    struct Org {
-        domain: String,
-        name: Option<String>,
-    }
+}
+fn yes() -> bool {
+    true
+}
+
+fn profile_toml() -> Option<ProfileToml> {
     let cwd = std::env::current_dir().ok()?;
     let path = cwd.ancestors().map(|d| d.join("profile.toml")).find(|p| p.exists())?;
-    let org = toml::from_str::<ProfileToml>(&std::fs::read_to_string(path).ok()?).ok()?.organization;
-    Some((org.domain, org.name))
+    toml::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+fn profile_toml_org() -> Option<(String, Option<String>)> {
+    profile_toml().map(|t| (t.organization.domain, t.organization.name))
+}
+
+/// `[uuid] uppercase` of the nearest `profile.toml`; true without one.
+pub fn uuid_uppercase() -> bool {
+    profile_toml().is_none_or(|t| t.uuid.uppercase)
 }
 
 /// `PayloadOrganization` for profiles of `domain`: the `[organization] name`

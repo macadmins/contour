@@ -659,7 +659,7 @@ pub fn generate_pppc_profile(
     let payload_content = build_pppc_payload(policies);
     let profile_display_name = display_name.unwrap_or("PPPC Profile");
 
-    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id)
+    ProfileBuilder::new(&contour_core::org_name_for(org), &profile_id).uppercase(contour_core::uuid_uppercase())
         .display_name(profile_display_name)
         .description("Privacy preferences for managed applications")
         .removal_disallowed(true)
