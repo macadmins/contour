@@ -371,6 +371,38 @@ const YARA_SIGNATURES: &[&str] = &["sig_group", "sigfile", "sigrule", "sigurl"];
 /// of them (read with `=` / `IN`): yara errors without a signature.
 pub const ALSO_ONE_OF: &[(&str, &[&str])] = &[("yara_file", YARA_SIGNATURES), ("yara_process", YARA_SIGNATURES)];
 
+/// How a WHERE clause must constrain `table` for osquery to return rows, in
+/// words — the rules [`check_query`] enforces. `required` is the schema's set
+/// of required columns. `None` when the table needs nothing.
+pub fn where_rule(table: &str, required: &BTreeSet<String>) -> Option<String> {
+    let list = |cols: &mut dyn Iterator<Item = &str>| cols.collect::<Vec<_>>().join(", ");
+    if DEFAULTED_REQUIRED_TABLES.contains(&table) {
+        return (!required.is_empty()).then(|| {
+            format!("{} not required: the table uses a default when it is absent", list(&mut required.iter().map(String::as_str)))
+        });
+    }
+    let ops = if LIKE_REQUIRED_TABLES.contains(&table) { "=, IN or LIKE" } else { "= or IN" };
+    let mut parts = Vec::new();
+    if !required.is_empty() {
+        let cols = list(&mut required.iter().map(String::as_str));
+        parts.push(if ANY_OF_REQUIRED_TABLES.contains(&table) {
+            format!("one of {cols} with {ops}")
+        } else if required.len() > 1 {
+            format!("each of {cols} with {ops}")
+        } else {
+            format!("{cols} with {ops}")
+        });
+    }
+    for (_, cols) in ALSO_ONE_OF.iter().filter(|(t, _)| *t == table) {
+        parts.push(format!("one of {} with = or IN", list(&mut cols.iter().copied())));
+    }
+    let mut rule = format!("WHERE must constrain {}", parts.join("; and "));
+    if table == "extended_attributes" {
+        rule.push_str(" (Linux reads only path)");
+    }
+    (!parts.is_empty()).then_some(rule)
+}
+
 /// Tables whose schema marks a column `required` although the table supplies
 /// a default when it is absent (`falconctl_options` queries every allowed
 /// option). Their required columns are not checked.
@@ -1045,6 +1077,28 @@ spec:
         idx.insert("falconctl_options".into(), t(&["options", "aid"], &["options"]));
         let p = check_query("SELECT aid FROM falconctl_options;", "darwin", &idx);
         assert!(p.is_empty(), "{p:?}");
+    }
+
+    /// The WHERE rule in words matches what `check_query` enforces.
+    #[test]
+    fn where_rule_describes_each_kind_of_table() {
+        let req = |cols: &[&str]| cols.iter().map(|c| (*c).to_string()).collect::<BTreeSet<_>>();
+        assert_eq!(
+            where_rule("file", &req(&["directory", "path"])).unwrap(),
+            "WHERE must constrain one of directory, path with =, IN or LIKE"
+        );
+        assert_eq!(
+            where_rule("device_hash", &req(&["device", "inode", "partition"])).unwrap(),
+            "WHERE must constrain each of device, inode, partition with = or IN"
+        );
+        assert_eq!(where_rule("curl", &req(&["url"])).unwrap(), "WHERE must constrain url with = or IN");
+        assert_eq!(
+            where_rule("yara_file", &req(&["path"])).unwrap(),
+            "WHERE must constrain path with =, IN or LIKE; and one of sig_group, sigfile, sigrule, sigurl with = or IN"
+        );
+        assert!(where_rule("extended_attributes", &req(&["directory", "path"])).unwrap().contains("Linux reads only path"));
+        assert!(where_rule("falconctl_options", &req(&["options"])).unwrap().contains("not required"));
+        assert!(where_rule("processes", &req(&[])).is_none());
     }
 
     /// osquery only reads `=` / `IN` (and `LIKE` where the table expands it);

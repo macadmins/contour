@@ -456,6 +456,20 @@ fn schema_search(args: &Value) -> Result<Value, ToolError> {
     let platform = optional_str(args, "platform").map(|p| p.to_lowercase());
     let limit = limit_of(args);
 
+    // A platform no record has is a typo, not an empty answer.
+    if let Some(p) = &platform {
+        let known: std::collections::BTreeSet<&str> = corpus(args)
+            .iter()
+            .flat_map(|c| c.supported_os.iter().map(|o| o.platform.as_str()))
+            .collect();
+        if !known.iter().any(|k| k.eq_ignore_ascii_case(p)) {
+            return Err(ToolError::new(format!(
+                "unknown platform `{p}`; known: {}",
+                known.into_iter().collect::<Vec<_>>().join(", ")
+            )));
+        }
+    }
+
     let mut hits: Vec<(MatchQuality, &Capability)> = corpus(args)
         .iter()
         .filter(|c| {
@@ -845,6 +859,9 @@ fn osquery_search_output() -> Value {
 
 /// One search hit, from either schema.
 struct TableHit {
+    /// 0 the name is the query, 1 the name contains it, 2 the description
+    /// does, 3 only a column does. Results sort on this, then on the name.
+    rank: u8,
     platforms: String,
     evented: bool,
     description: Option<String>,
@@ -853,9 +870,31 @@ struct TableHit {
 
 fn osquery_search(args: &Value) -> Result<Value, ToolError> {
     let query = required_str(args, "query")?.to_lowercase();
-    let platform = optional_str(args, "platform");
+    // The validator's platform names and message: `macos` is an error that
+    // says `darwin`, not an empty result.
+    let platform = match optional_str(args, "platform").map(|p| p.trim().to_lowercase()) {
+        Some(p) if p == "all" => None,
+        Some(p) if !contour_core::osquery_validate::KNOWN_PLATFORMS.contains(&p.as_str()) => {
+            return Err(ToolError::new(
+                contour_core::osquery_validate::Problem::UnknownPlatform { platform: p }.to_string(),
+            ));
+        }
+        p => p,
+    };
     let limit = limit_of(args);
     let sources = table_sources();
+    let rank_of = |name: &str, table_hit: bool| -> u8 {
+        let name = name.to_lowercase();
+        if name == query {
+            0
+        } else if name.contains(&query) {
+            1
+        } else if table_hit {
+            2
+        } else {
+            3
+        }
+    };
     let on_platform = |platforms: &str| platform.as_deref().is_none_or(|p| platforms.contains(p));
 
     let mut by_table: std::collections::BTreeMap<&str, TableHit> = std::collections::BTreeMap::new();
@@ -868,7 +907,9 @@ fn osquery_search(args: &Value) -> Result<Value, ToolError> {
         if (!table_hit && !col_hit) || !on_platform(&e.platforms) {
             continue;
         }
+        let rank = rank_of(&e.table_name, table_hit);
         let slot = by_table.entry(&e.table_name).or_insert_with(|| TableHit {
+            rank,
             platforms: e.platforms.clone(),
             evented: e.evented,
             description: e.table_description.clone(),
@@ -897,7 +938,9 @@ fn osquery_search(args: &Value) -> Result<Value, ToolError> {
         if (!table_hit && !col_hit) || !on_platform(&platforms) {
             continue;
         }
+        let rank = rank_of(&e.table_name, table_hit);
         let slot = by_table.entry(&e.table_name).or_insert_with(|| TableHit {
+            rank,
             platforms,
             evented: e.evented.unwrap_or(false),
             description: e.table_description.clone(),
@@ -910,8 +953,10 @@ fn osquery_search(args: &Value) -> Result<Value, ToolError> {
 
     let count = by_table.len();
     let truncated = count > limit;
-    let results: Vec<Value> = by_table
-        .iter()
+    let mut ranked: Vec<(&&str, &TableHit)> = by_table.iter().collect();
+    ranked.sort_by_key(|(table, hit)| (hit.rank, **table));
+    let results: Vec<Value> = ranked
+        .into_iter()
         .take(limit)
         .map(|(table, hit)| {
             json!({
@@ -952,6 +997,7 @@ fn osquery_table_output() -> Value {
             "examples": {"type": ["string", "null"], "description": "Fleet's worked SQL for this table"},
             "notes": {"type": ["string", "null"], "description": "Fleet's authoring notes"},
             "url": {"type": ["string", "null"], "description": "Fleet's documentation page"},
+            "where": {"type": ["string", "null"], "description": "How WHERE must constrain this table for it to return rows (the rules contour.osquery.validate checks); null when nothing is required"},
             "columns": {"type": "array", "items": {
                 "type": "object",
                 "properties": {
@@ -1033,6 +1079,11 @@ fn osquery_table(args: &Value) -> Result<Value, ToolError> {
             )
         };
     columns.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    let required: std::collections::BTreeSet<String> = columns
+        .iter()
+        .filter(|c| c["required"] == json!(true))
+        .filter_map(|c| c["name"].as_str().map(str::to_lowercase))
+        .collect();
 
     Ok(json!({
         "table": table,
@@ -1044,6 +1095,7 @@ fn osquery_table(args: &Value) -> Result<Value, ToolError> {
         "examples": fleet_first.and_then(|f| f.examples.clone()),
         "notes": fleet_first.and_then(|f| f.notes.clone()),
         "url": fleet_first.and_then(|f| f.url.clone()),
+        "where": contour_core::osquery_validate::where_rule(&table, &required),
         "columns": columns,
     }))
 }
@@ -1665,5 +1717,41 @@ mod tests {
     #[test]
     fn sop_unknown_topic_is_a_tool_error() {
         assert!(sop(&json!({"topic": "definitely-not-a-sop"})).is_err());
+    }
+
+    /// The table tool says how WHERE must constrain a table — the same rules
+    /// `contour.osquery.validate` applies — not only the schema's raw flags.
+    #[test]
+    fn osquery_table_explains_the_where_rule() {
+        let rule = |t: &str| osquery_table(&json!({"table": t})).unwrap()["where"].clone();
+        let file = rule("file");
+        assert!(file.as_str().is_some_and(|r| r.contains("one of directory, path") && r.contains("LIKE")), "{file}");
+        let yara = rule("yara_file");
+        assert!(yara.as_str().is_some_and(|r| r.contains("sigrule")), "{yara}");
+        let curl = rule("curl");
+        assert!(curl.as_str().is_some_and(|r| r.contains("url") && !r.contains("LIKE")), "{curl}");
+        assert!(rule("processes").is_null());
+    }
+
+    /// A table whose name is the query comes first, ahead of tables that only
+    /// mention it in a column or description.
+    #[test]
+    fn osquery_search_ranks_the_exact_table_first() {
+        for q in ["file", "users", "hash"] {
+            let v = osquery_search(&json!({"query": q})).unwrap();
+            assert_eq!(v["results"][0]["table"], q, "{q}");
+        }
+    }
+
+    /// Platform filters read like the validator: any case, and a wrong name is
+    /// an error that says the right one, not an empty result.
+    #[test]
+    fn search_platform_filters_reject_unknown_names() {
+        let upper = osquery_search(&json!({"query": "file", "platform": "Darwin"})).unwrap();
+        assert!(upper["count"].as_u64().unwrap() > 0);
+        let err = osquery_search(&json!({"query": "file", "platform": "macos"})).unwrap_err();
+        assert!(err.message.contains("darwin"), "{}", err.message);
+        let err = schema_search(&json!({"query": "passcode", "platform": "bogus"})).unwrap_err();
+        assert!(err.message.contains("macOS"), "{}", err.message);
     }
 }
