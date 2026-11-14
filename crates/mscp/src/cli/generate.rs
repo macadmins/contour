@@ -445,7 +445,7 @@ pub fn generate_baseline(
                     if !artifacts.is_empty() {
                         println!();
                         println!("{}", "Artifacts Generated:".bold());
-                        artifacts.sort_by(|a, b| b.1.cmp(&a.1));
+                        artifacts.sort_by_key(|a| std::cmp::Reverse(a.1));
                         print_bar_chart(&artifacts);
                     }
                 }

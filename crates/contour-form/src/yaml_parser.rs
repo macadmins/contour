@@ -186,7 +186,7 @@ pub fn parse_yaml_manifest(content: &str) -> Result<PayloadManifest> {
     Ok(PayloadManifest {
         manifest_source: Some("device-management".into()),
         // External schema: it does not state OS availability.
-        fields_recording_availability: Default::default(),
+        fields_recording_availability: std::collections::BTreeSet::default(),
         kind: None,
         payload_type,
         title: manifest.title,
@@ -317,7 +317,7 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
     Ok(PayloadManifest {
         manifest_source: Some("device-management".into()),
         // External schema: it does not state OS availability.
-        fields_recording_availability: Default::default(),
+        fields_recording_availability: std::collections::BTreeSet::default(),
         kind: None,
         payload_type,
         title: manifest.title,

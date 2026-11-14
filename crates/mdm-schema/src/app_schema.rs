@@ -39,7 +39,7 @@ fn opt_str(arr: &arrow::array::StringArray, row: usize) -> Option<String> {
 
 /// Keys a document lists outside its settable properties.
 pub mod keys {
-    use super::*;
+    use super::{Result, AppSchemaKey, Bytes, Context, ParquetRecordBatchReaderBuilder, AsArray, col, opt_str};
 
     /// Read App Schema key rows from Parquet bytes.
     ///
@@ -89,7 +89,7 @@ pub mod keys {
 
 /// Rules a document states.
 pub mod rules {
-    use super::*;
+    use super::{Result, AppSchemaRule, Bytes, Context, ParquetRecordBatchReaderBuilder, AsArray, col, opt_str};
 
     /// Read App Schema rules from Parquet bytes.
     ///

@@ -393,9 +393,10 @@ pub fn render_toml(file: &AppControlFile) -> Result<String> {
 }
 
 /// Validate every entry, collecting all problems, and return the binaries.
-pub fn to_binaries(
-    file: &AppControlFile,
-) -> Result<(Vec<(BinaryIdentifier, BinaryPolicy)>, Vec<String>)> {
+/// Each binary with its policy.
+pub type Binaries = Vec<(BinaryIdentifier, BinaryPolicy)>;
+
+pub fn to_binaries(file: &AppControlFile) -> Result<(Binaries, Vec<String>)> {
     let mut binaries = Vec::new();
     let mut problems = Vec::new();
     let mut warnings = Vec::new();

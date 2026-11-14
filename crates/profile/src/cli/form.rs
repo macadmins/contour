@@ -226,7 +226,6 @@ pub fn handle_emit(
         &crate::schema::form::Target {
             platform: opts.platform,
             os_version: opts.os_version.clone(),
-            ..Default::default()
         },
     )
     .into_iter()

@@ -207,7 +207,7 @@ pub fn validate_target(
 fn replacement_hint(description: &str) -> Option<String> {
     let at = description.find("Removed: ")?;
     let tail = description[at + "Removed: ".len()..].trim();
-    let sentence = tail.split_once("\n").map_or(tail, |(head, _)| head).trim();
+    let sentence = tail.split_once('\n').map_or(tail, |(head, _)| head).trim();
     if sentence.is_empty() {
         return None;
     }
@@ -772,8 +772,7 @@ mod tests {
                 ..Default::default()
             },
         )
-        .err()
-        .expect("emit refuses what validate blocks");
+        .expect_err("emit refuses what validate blocks");
         assert!(matches!(err, crate::emit::EmitError::Invalid(_)), "{err}");
     }
 
@@ -945,7 +944,6 @@ mod tests {
         Target {
             platform: Some(p),
             os_version: os.map(str::to_string),
-            ..Default::default()
         }
     }
 
@@ -1073,8 +1071,7 @@ mod tests {
                 ..Default::default()
             },
         )
-        .err()
-        .expect("refused");
+        .expect_err("refused");
         match err {
             crate::emit::EmitError::Invalid(ds) => {
                 assert!(

@@ -28,9 +28,6 @@ pub fn read(bytes: &[u8]) -> Result<Vec<RuleControlEdge>> {
                 .ok_or_else(|| anyhow::anyhow!("missing column '{n}' in Parquet schema"))?
                 .as_string::<i32>())
         };
-        let _opt = |a: &arrow::array::GenericStringArray<i32>, row: usize| {
-            (!a.is_null(row)).then(|| a.value(row).to_string())
-        };
         let json = |a: &arrow::array::GenericStringArray<i32>, row: usize| -> Option<Vec<String>> {
             (!a.is_null(row))
                 .then(|| serde_json::from_str(a.value(row)).ok())

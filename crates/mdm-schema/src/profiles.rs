@@ -9,7 +9,7 @@ use arrow::datatypes::{DataType, Field, Schema, UInt8Type};
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use crate::types::*;
+use crate::types::{PayloadSchema, PlatformFlags, MinVersions, ManifestField};
 
 fn col<'a>(
     batch: &'a arrow::record_batch::RecordBatch,
@@ -284,23 +284,23 @@ mod tests {
     #[test]
     fn test_schema_has_expected_columns() {
         let s = schema();
-        assert!(s.field_with_name("payload_type").is_ok());
-        assert!(s.field_with_name("category").is_ok());
-        assert!(s.field_with_name("key_name").is_ok());
-        assert!(s.field_with_name("sensitive").is_ok());
-        assert!(s.field_with_name("allowed_values").is_ok());
+        s.field_with_name("payload_type").unwrap();
+        s.field_with_name("category").unwrap();
+        s.field_with_name("key_name").unwrap();
+        s.field_with_name("sensitive").unwrap();
+        s.field_with_name("allowed_values").unwrap();
         // 2026.05.06.1 schema additions — assert each one so a future
         // accidental drop fails the test loudly instead of silently
         // breaking downstream consumers.
-        assert!(s.field_with_name("kind").is_ok());
-        assert!(s.field_with_name("manifest_source").is_ok());
-        assert!(s.field_with_name("apply_mode").is_ok());
-        assert!(s.field_with_name("deprecated_macos").is_ok());
-        assert!(s.field_with_name("parent_key").is_ok());
-        assert!(s.field_with_name("subtype").is_ok());
-        assert!(s.field_with_name("format").is_ok());
-        assert!(s.field_with_name("device_channel").is_ok());
-        assert!(s.field_with_name("user_channel").is_ok());
+        s.field_with_name("kind").unwrap();
+        s.field_with_name("manifest_source").unwrap();
+        s.field_with_name("apply_mode").unwrap();
+        s.field_with_name("deprecated_macos").unwrap();
+        s.field_with_name("parent_key").unwrap();
+        s.field_with_name("subtype").unwrap();
+        s.field_with_name("format").unwrap();
+        s.field_with_name("device_channel").unwrap();
+        s.field_with_name("user_channel").unwrap();
         assert_eq!(s.fields().len(), 35);
     }
 }

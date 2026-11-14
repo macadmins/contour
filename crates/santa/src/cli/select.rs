@@ -275,13 +275,13 @@ fn group_by_vendor(apps: &[AppRecord]) -> Vec<VendorGroup> {
 
     let mut vendors: Vec<_> = by_team.into_values().collect();
     // Sort by number of apps (most apps first)
-    vendors.sort_by(|a, b| b.apps.len().cmp(&a.apps.len()));
+    vendors.sort_by_key(|a| std::cmp::Reverse(a.apps.len()));
 
     // Sort apps within each vendor by device count
     for vendor in &mut vendors {
         vendor
             .apps
-            .sort_by(|a, b| b.device_count.cmp(&a.device_count));
+            .sort_by_key(|a| std::cmp::Reverse(a.device_count));
     }
 
     vendors

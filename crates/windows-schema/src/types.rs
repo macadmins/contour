@@ -173,9 +173,9 @@ impl AdmxPolicy {
 /// `<data id value/>` per element. Shared by in-box CSP policies and
 /// ingested third-party ones — the wire format does not know the
 /// difference.
-pub fn admx_payload(
+pub fn admx_payload<S: std::hash::BuildHasher>(
     elements: &[AdmxElement],
-    values: Option<&std::collections::HashMap<String, String>>,
+    values: Option<&std::collections::HashMap<String, String, S>>,
 ) -> String {
     let mut out = String::from("<enabled/>");
     for element in elements {

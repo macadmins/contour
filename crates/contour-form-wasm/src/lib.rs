@@ -85,6 +85,12 @@ impl Registry {
         self.inner.len()
     }
 
+    /// Whether no payload types are loaded.
+    #[wasm_bindgen(js_name = isEmpty)]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     /// One FormSpec, as JSON.
     pub fn form(
         &self,

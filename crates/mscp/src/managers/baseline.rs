@@ -447,7 +447,11 @@ impl BaselineIndex {
                 })?
                 .filter_map(|e| e.ok())
                 .map(|e| e.file_name().to_string_lossy().to_string())
-                .filter(|n| n.ends_with(".yml") || n.ends_with(".yaml"))
+                .filter(|n| {
+                    std::path::Path::new(n).extension().is_some_and(|e| {
+                        e.eq_ignore_ascii_case("yml") || e.eq_ignore_ascii_case("yaml")
+                    })
+                })
                 .collect();
             files.sort();
             if files.is_empty() {

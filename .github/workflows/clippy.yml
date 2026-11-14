@@ -1,0 +1,30 @@
+# Clippy over the whole workspace (libs, bins, tests, examples) with warnings
+# as errors: the same command scripts/ci-check.sh runs locally. The lint set
+# is [workspace.lints] in Cargo.toml. Runs on macOS, where contour is built
+# and released.
+name: clippy
+
+permissions:
+  contents: read
+
+# The schema crates' build scripts fetch their datasets from here.
+env:
+  CONTOUR_SCHEMA_ZIP_BASE: ${{ secrets.CONTOUR_SCHEMA_ZIP_BASE }}
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  clippy:
+    name: clippy -D warnings
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+      - name: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets -- -D warnings

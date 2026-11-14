@@ -235,6 +235,42 @@ fn parse_schema_versions(toml_str: &str) -> SchemaVersionInfo {
     }
 }
 
+/// Is a distinct pre-release seed dataset compiled in?
+///
+/// Beta is dormant, not abolished. The dataset pipeline builds it from
+/// Apple's seed schema when a seed holds additions over the release branch;
+/// a future seed brings it back.
+///
+/// This asks the bytes rather than a constant. The `*_beta` accessors above
+/// currently delegate to the stable ones, which makes the two slices the
+/// same memory; a real seed table would be a separate `include_bytes!` at a
+/// different address. So the answer follows the dataset, and every surface
+/// that reads it re-enables itself when beta returns.
+pub fn beta_dataset_is_carried() -> bool {
+    let stable = embedded_capabilities();
+    let beta = embedded_capabilities_beta();
+    !std::ptr::eq(stable.as_ptr(), beta.as_ptr()) || stable.len() != beta.len()
+}
+
+/// What to call the carried seed in a message: `OS 27.2 beta seed`, from the
+/// seed's own provenance row, or `beta seed` when the row does not say.
+pub fn seed_label() -> String {
+    let os = source_versions::read(embedded_source_versions_beta())
+        .ok()
+        .and_then(|rows| rows.into_iter().find(|v| v.source == "device-management"))
+        .map(|v| v.os)
+        .filter(|os| !os.is_empty());
+    match os {
+        Some(os) => format!("OS {os} beta seed"),
+        None => "beta seed".to_string(),
+    }
+}
+
+/// Whether this build embeds an OS seed dataset. Known at compile time, so
+/// help text can say it; everything that decides at run time asks
+/// [`beta_dataset_is_carried`], which reads the bytes.
+pub const SEED_DATASET: bool = cfg!(seed_dataset);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,7 +465,7 @@ mod tests {
             })
             .collect();
 
-        let batch = arrow::record_batch::RecordBatch::try_new(schema.clone(), arrays).unwrap();
+        let batch = arrow::record_batch::RecordBatch::try_new(std::sync::Arc::<arrow::datatypes::Schema>::clone(&schema), arrays).unwrap();
         let mut buf = Vec::new();
         let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buf, schema, None).unwrap();
         writer.write(&batch).unwrap();
@@ -727,40 +763,4 @@ release = "seed_OS_27_0"
         assert!(passcode.keys.iter().any(|k| k.name == "RequirePasscode"));
     }
 }
-
-/// Is a distinct pre-release seed dataset compiled in?
-///
-/// Beta is dormant, not abolished. The dataset pipeline builds it from
-/// Apple's seed schema when a seed holds additions over the release branch;
-/// a future seed brings it back.
-///
-/// This asks the bytes rather than a constant. The `*_beta` accessors above
-/// currently delegate to the stable ones, which makes the two slices the
-/// same memory; a real seed table would be a separate `include_bytes!` at a
-/// different address. So the answer follows the dataset, and every surface
-/// that reads it re-enables itself when beta returns.
-pub fn beta_dataset_is_carried() -> bool {
-    let stable = embedded_capabilities();
-    let beta = embedded_capabilities_beta();
-    !std::ptr::eq(stable.as_ptr(), beta.as_ptr()) || stable.len() != beta.len()
-}
-
-/// What to call the carried seed in a message: `OS 27.2 beta seed`, from the
-/// seed's own provenance row, or `beta seed` when the row does not say.
-pub fn seed_label() -> String {
-    let os = source_versions::read(embedded_source_versions_beta())
-        .ok()
-        .and_then(|rows| rows.into_iter().find(|v| v.source == "device-management"))
-        .map(|v| v.os)
-        .filter(|os| !os.is_empty());
-    match os {
-        Some(os) => format!("OS {os} beta seed"),
-        None => "beta seed".to_string(),
-    }
-}
-
-/// Whether this build embeds an OS seed dataset. Known at compile time, so
-/// help text can say it; everything that decides at run time asks
-/// [`beta_dataset_is_carried`], which reads the bytes.
-pub const SEED_DATASET: bool = cfg!(seed_dataset);
 

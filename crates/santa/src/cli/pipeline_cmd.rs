@@ -617,6 +617,6 @@ fn display_layer_stage_summary(summary: &LayerStageSummary, verbose: bool) {
 /// Convert a HashMap to sorted (label, count) pairs for bar chart display.
 fn to_bar_items(map: &HashMap<String, usize>) -> Vec<(&str, usize)> {
     let mut items: Vec<_> = map.iter().map(|(k, v)| (k.as_str(), *v)).collect();
-    items.sort_by(|a, b| b.1.cmp(&a.1));
+    items.sort_by_key(|a| std::cmp::Reverse(a.1));
     items
 }

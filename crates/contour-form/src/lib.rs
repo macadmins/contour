@@ -136,9 +136,7 @@ pub fn suggest_other_channel(name: &str, current: Channel, by_name: bool) -> Opt
     // too: `com.apple.softwareupdate` fuzzy-matches types both channels
     // carry, and was reported as seed-only.
     if !found_in(&SchemaRegistry::embedded_channel(other).ok()?)
-        || SchemaRegistry::embedded_channel(current)
-            .ok()
-            .is_some_and(|r| found_in(&r))
+        || SchemaRegistry::embedded_channel(current).is_ok_and(|r| found_in(&r))
     {
         return None;
     }
@@ -767,6 +765,8 @@ impl SchemaRegistry {
     }
 }
 
+pub use path::{FieldPath, PathConflict};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -819,7 +819,7 @@ mod tests {
     #[test]
     fn embedded_channel_routes_to_dataset() {
         let stable = SchemaRegistry::embedded_channel(Channel::Stable).expect("stable loads");
-        assert!(stable.len() > 0);
+        assert!(!stable.is_empty());
 
         // Beta follows the data. Carried: it must be a superset, since the
         // seed adds to the release branch and never subtracts. Not carried:
@@ -1143,4 +1143,4 @@ mod tests {
         assert_eq!(stats.total, 0);
     }
 }
-pub use path::{FieldPath, PathConflict};
+

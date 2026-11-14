@@ -1071,7 +1071,7 @@ mod tests {
                     deprecated_in: None,
                     introduced_by_platform: std::collections::HashMap::new(),
                     deprecated_by_platform: std::collections::HashMap::new(),
-                    removed_by_platform: Default::default(),
+                    removed_by_platform: HashMap::default(),
                     combinetype: None,
                 },
             );
@@ -1079,7 +1079,7 @@ mod tests {
         }
         PayloadManifest {
             manifest_source: None,
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: payload_type.to_string(),
             kind: None,
             title: String::new(),
@@ -1431,7 +1431,7 @@ mod tests {
                     deprecated_in: None,
                     introduced_by_platform: std::collections::HashMap::new(),
                     deprecated_by_platform: std::collections::HashMap::new(),
-                    removed_by_platform: Default::default(),
+                    removed_by_platform: HashMap::default(),
                     combinetype: None,
                 },
             );
@@ -1470,7 +1470,7 @@ mod tests {
 
         PayloadManifest {
             manifest_source: None,
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.apple.configuration.passcode.settings".to_string(),
             kind: None,
             title: "Passcode Settings".to_string(),

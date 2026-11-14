@@ -6,7 +6,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-use crate::types::*;
+use crate::types::{Capability, PayloadKind, ApplyMode, DdmCategory, Platform, OsSupport, PayloadKey};
 
 fn col<'a>(
     batch: &'a arrow::record_batch::RecordBatch,

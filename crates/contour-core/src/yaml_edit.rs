@@ -59,9 +59,7 @@ pub fn find_section_insert_point(lines: &[&str], section_key: &str) -> Option<In
         // Not "anything at or above the header's indent": contour writes list
         // items LEVEL with their key (`policies:` / `- path:`, both at column
         // 0), and that rule would end the section at the second item.
-        if trimmed.starts_with("- ") && indent == expected_indent {
-            last_item_end = i;
-        } else if indent > expected_indent {
+        if (trimmed.starts_with("- ") && indent == expected_indent) || indent > expected_indent {
             last_item_end = i;
         } else {
             break;

@@ -514,7 +514,7 @@ fn format_plist_value_depth(value: &plist::Value, depth: usize) -> String {
             if s.is_empty() {
                 "\"\"".to_string()
             } else if s.len() > 60 && depth == 0 {
-                format!("{}...", &s.chars().take(57).collect::<String>())
+                format!("{}...", s.chars().take(57).collect::<String>())
             } else {
                 s.clone()
             }

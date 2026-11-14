@@ -247,7 +247,7 @@ fn finalize_exclusion_plan(
 ) {
     // Determine which profiles can be fully excluded.
     // Group all baseline rules by their mobileconfig domain
-    let domain_rules = build_domain_rule_map(&all_baseline_rules);
+    let domain_rules = build_domain_rule_map(all_baseline_rules);
 
     // For each domain that has at least one excluded rule, check if ALL rules are excluded
     for (domain, rule_ids) in &domain_rules {

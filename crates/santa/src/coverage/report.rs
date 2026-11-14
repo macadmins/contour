@@ -85,7 +85,7 @@ impl CoverageReport {
             output.push_str(&format!("\nBundle Statistics\n{}\n", "-".repeat(40)));
 
             let mut sorted_stats = self.bundle_stats.clone();
-            sorted_stats.sort_by(|a, b| b.app_count.cmp(&a.app_count));
+            sorted_stats.sort_by_key(|a| std::cmp::Reverse(a.app_count));
 
             for stat in &sorted_stats {
                 output.push_str(&format!(
@@ -276,7 +276,7 @@ mod tests {
 
         // Should suggest bundle for ABC1234567 (3 apps) but not XYZ9876543 (1 app)
         assert_eq!(suggestions.len(), 1);
-        assert!(suggestions[0].team_id == "ABC1234567");
+        assert_eq!(suggestions[0].team_id, "ABC1234567");
     }
 
     #[test]

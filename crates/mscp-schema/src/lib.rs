@@ -158,6 +158,22 @@ pub fn embedded_envelope_meta_keys_beta() -> &'static [u8] {
     embedded_envelope_meta_keys()
 }
 
+/// Is a distinct mSCP preview dataset compiled in?
+///
+/// The mSCP half of the same question `mdm_schema::beta_dataset_is_carried`
+/// answers for Apple's schema. Asked separately because the crates carry
+/// different tables, and the mSCP preview and Apple's seed can open and close
+/// at different times.
+///
+/// Compares the bytes for the reason given there: the `*_beta` accessors
+/// delegate today, so the slices are the same memory, and a real preview
+/// table would be a separate `include_bytes!`.
+pub fn beta_dataset_is_carried() -> bool {
+    let stable = embedded_rules_versioned();
+    let beta = embedded_rules_versioned_beta();
+    !std::ptr::eq(stable.as_ptr(), beta.as_ptr()) || stable.len() != beta.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,20 +599,4 @@ mod tests {
             "Expected macOS + iOS + visionOS, got: {platforms:?}"
         );
     }
-}
-
-/// Is a distinct mSCP preview dataset compiled in?
-///
-/// The mSCP half of the same question `mdm_schema::beta_dataset_is_carried`
-/// answers for Apple's schema. Asked separately because the crates carry
-/// different tables, and the mSCP preview and Apple's seed can open and close
-/// at different times.
-///
-/// Compares the bytes for the reason given there: the `*_beta` accessors
-/// delegate today, so the slices are the same memory, and a real preview
-/// table would be a separate `include_bytes!`.
-pub fn beta_dataset_is_carried() -> bool {
-    let stable = embedded_rules_versioned();
-    let beta = embedded_rules_versioned_beta();
-    !std::ptr::eq(stable.as_ptr(), beta.as_ptr()) || stable.len() != beta.len()
 }

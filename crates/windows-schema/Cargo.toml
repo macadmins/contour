@@ -25,3 +25,6 @@ mscp-schema = { path = "../mscp-schema" }
 # Only for the test that every ADMX policy names a real CSP node; the
 # Windows capability data lives in mdm-schema.
 mdm-schema = { path = "../mdm-schema" }
+
+[lints]
+workspace = true

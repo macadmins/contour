@@ -960,7 +960,7 @@ mod tests {
         assert!(p.auto_advance_setup);
         assert!(p.keep.contains(&"Biometric"));
         assert!(p.keep.contains(&"Location"));
-        assert!(find_preset("shared-ipad").unwrap().platform == "iOS");
+        assert_eq!(find_preset("shared-ipad").unwrap().platform, "iOS");
         assert!(find_preset("nope").is_none());
     }
 

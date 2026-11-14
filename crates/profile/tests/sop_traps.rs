@@ -2254,7 +2254,7 @@ fn trap_55_docs_generate_stdout_writes_no_files() {
     assert!(
         stdout.starts_with("# "),
         "stdout must start with markdown header; got first 60 chars: {:?}",
-        &stdout.chars().take(60).collect::<String>()
+        stdout.chars().take(60).collect::<String>()
     );
     assert!(
         stdout.contains("safariAcceptCookies"),

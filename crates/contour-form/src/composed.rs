@@ -318,10 +318,8 @@ pub fn check(e: &Entry, s: &str, platform: Option<Platform>) -> Option<Finding> 
             ),
             (OffMacOs::Bare, None) => finding(
                 false,
-                format!(
-                    "is a composed identifier — correct for macOS; on iOS the key is the bare \
-                     bundle ID. Pass a target platform to check the right form"
-                ),
+                "is a composed identifier — correct for macOS; on iOS the key is the bare \
+                     bundle ID. Pass a target platform to check the right form".to_string(),
             ),
             _ => None,
         },

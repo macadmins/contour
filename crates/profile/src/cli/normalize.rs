@@ -973,7 +973,7 @@ fn generate_normalize_report(result: &BatchResult) -> String {
         writeln!(md, "|---|---|").unwrap();
         // Sort by count descending
         let mut sorted: Vec<_> = fixup_counts.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|a| std::cmp::Reverse(a.1));
         for (category, count) in &sorted {
             writeln!(md, "| {category} | {count} |").unwrap();
         }

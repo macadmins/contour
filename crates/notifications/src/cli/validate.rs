@@ -256,6 +256,6 @@ show_in_car_play = false
 
     #[test]
     fn a_document_that_does_not_parse_is_not_a_crash() {
-        assert!(unknown_key_warnings("this is not toml {{{").is_empty());
+        assert_eq!(unknown_key_warnings("this is not toml {{{"), [] as [std::string::String; 0]);
     }
 }

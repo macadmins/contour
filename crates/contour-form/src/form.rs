@@ -762,7 +762,6 @@ mod tests {
             &Target {
                 platform: Some(platform),
                 os_version: Some(os.into()),
-                ..Default::default()
             },
         )
         .unwrap()
@@ -1393,7 +1392,6 @@ mod tests {
             &Target {
                 platform: Some(Platform::MacOS),
                 os_version: Some("15.0".into()),
-                ..Default::default()
             },
         )
         .unwrap_or_else(|e| panic!("form builds for {subject}: {e}"));
@@ -1432,7 +1430,6 @@ mod tests {
             &Target {
                 platform: Some(Platform::MacOS),
                 os_version: Some("15.0".into()),
-                ..Default::default()
             },
         )
         .expect("form builds");

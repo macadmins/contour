@@ -4406,7 +4406,7 @@ mod enum_validation_tests {
                 deprecated_in: None,
                 introduced_by_platform: HashMap::new(),
                 deprecated_by_platform: HashMap::new(),
-                removed_by_platform: Default::default(),
+                removed_by_platform: HashMap::default(),
                 combinetype: None,
             }
         };
@@ -4432,7 +4432,7 @@ mod enum_validation_tests {
 
         SchemaRegistry::from_manifests_for_test(vec![PayloadManifest {
             manifest_source: None,
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.test.configuration.enumcheck".to_string(),
             kind: None,
             title: "Enum Check".to_string(),
@@ -4602,12 +4602,12 @@ mod scaffold_value_tests {
             deprecated_in: None,
             introduced_by_platform: HashMap::new(),
             deprecated_by_platform: HashMap::new(),
-            removed_by_platform: Default::default(),
+            removed_by_platform: HashMap::default(),
             combinetype: None,
         };
         let manifest = crate::schema::PayloadManifest {
             manifest_source: None,
-            fields_recording_availability: Default::default(),
+            fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.test.configuration.scaffold".to_string(),
             kind: None,
             title: "Scaffold".to_string(),

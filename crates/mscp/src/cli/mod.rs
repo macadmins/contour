@@ -1630,7 +1630,7 @@ mod fleet_flag_tests {
     fn the_refusal_names_the_replacement() {
         let e = refuse_retired_fleet_flag(true, "mscp init", "--fleet-gitops").unwrap_err();
         assert!(e.to_string().contains("--fleet-gitops"), "{e}");
-        assert!(refuse_retired_fleet_flag(false, "mscp init", "--fleet-gitops").is_ok());
+        refuse_retired_fleet_flag(false, "mscp init", "--fleet-gitops").unwrap();
     }
 
     /// `--fleet-gitops` and `--fleet-mode` are one switch.

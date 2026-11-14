@@ -294,7 +294,7 @@ impl BundleSet {
     /// Get bundles sorted by priority (highest first).
     pub fn by_priority(&self) -> Vec<&Bundle> {
         let mut sorted: Vec<_> = self.bundles.iter().collect();
-        sorted.sort_by(|a, b| b.priority.cmp(&a.priority));
+        sorted.sort_by_key(|a| std::cmp::Reverse(a.priority));
         sorted
     }
 
