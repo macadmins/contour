@@ -184,9 +184,9 @@ pub enum Commands {
         #[arg(long)]
         display_name: Option<String>,
 
-        /// Use deterministic UUIDs for reproducible builds
+        /// Random UUIDs instead of v5 of each payload identifier
         #[arg(long)]
-        deterministic_uuids: bool,
+        no_deterministic_uuids: bool,
 
         /// Output format
         #[arg(long, value_enum, default_value = "mobileconfig")]
@@ -273,6 +273,10 @@ pub enum Commands {
         /// Block USB mass storage
         #[arg(long)]
         block_usb: bool,
+
+        /// Organization identifier prefix (e.g., com.example)
+        #[arg(long, default_value = "com.example")]
+        org: String,
 
         /// Preview without writing
         #[arg(long)]

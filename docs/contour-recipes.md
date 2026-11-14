@@ -125,7 +125,7 @@ type = "com.apple.activation.simple"
 | `combined` / `combined_filename` | `[recipe.output]` | Bundle all profiles into one `.mobileconfig` (default: one file each). |
 | `[odv]` | top-level | Default values that replace `$ODV` placeholders at render time. |
 | `filename`, `payload_type`, `display_name`, `description` | `[[profile]]` | Output filename + the Apple `PayloadType` and identity. |
-| `removal_disallowed` | `[[profile]]` | Sets `PayloadRemovalDisallowed = true`. |
+| `removal_disallowed` | `[[profile]]` | Sets `PayloadRemovalDisallowed = true`; default `false`. The btm, pppc, notifications, support and santa generators always write `true`. |
 | `mcx_domain` | `[[profile]]` | Unwrap an MCX-wrapped preference domain into a flat payload. |
 | `[profile.fields]` | per profile | Schema-known payload keys. |
 | `[profile.extra_fields]` | per profile | Vendor/non-schema keys; dot-notation builds nested dicts. |

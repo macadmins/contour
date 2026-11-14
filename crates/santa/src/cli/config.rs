@@ -19,6 +19,7 @@ pub fn run(
     sync_url: Option<&str>,
     machine_owner_plist: Option<&str>,
     block_usb: bool,
+    org: &str,
     dry_run: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
@@ -27,7 +28,7 @@ pub fn run(
         sync_url: sync_url.map(|s| s.to_string()),
         machine_owner_plist: machine_owner_plist.map(|s| s.to_string()),
         block_usb,
-        ..Default::default()
+        org: org.to_string(),
     };
 
     let output_path = output

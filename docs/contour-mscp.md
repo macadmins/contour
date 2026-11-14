@@ -139,7 +139,7 @@ Jamf Pro post-processing. Auto-enabled when `output.structure = "flat"`.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | bool | `false` | Enable Jamf Pro mode. |
-| `deterministic_uuids` | bool | `false` | Derive UUIDs from `PayloadType` (stable across runs). |
+| `deterministic_uuids` | bool | `false` | UUIDs are v5 of each `PayloadIdentifier` (stable across runs). |
 | `no_creation_date` | bool | `false` | Strip creation dates from `PayloadDescription`. |
 | `identical_payload_uuid` | bool | `false` | Use one UUID for both `PayloadIdentifier` and `PayloadUUID`. |
 | `exclude_conflicts` | bool | `false` | Drop profiles that conflict with Jamf Pro native settings. |
@@ -479,7 +479,7 @@ contour mscp generate [flags]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--deterministic-uuids` | Use deterministic UUIDs based on PayloadType | `false` |
+| `--deterministic-uuids` | UUIDs are v5 of each `PayloadIdentifier` | `false` |
 | `--remove-consent-text` | Remove ConsentText from profiles | `false` |
 | `--consent-text <TEXT>` | Custom ConsentText (overrides `--remove-consent-text`) | none |
 

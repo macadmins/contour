@@ -452,6 +452,8 @@ pub enum Problem {
     /// A required column compared with an operator the table does not read.
     /// `like` says whether the table accepts `LIKE` too.
     RequiredOperator { table: String, column: String, like: bool },
+    /// The SQL does not start with a query keyword (`SELEC * FRM x`).
+    NotAQuery,
 }
 
 impl Problem {
@@ -477,6 +479,10 @@ impl std::fmt::Display for Problem {
             Problem::FleetOnlyTable { table } => write!(
                 f,
                 "'{table}' is a Fleet extension table; requires Fleet's agent, plain osqueryd returns nothing"
+            ),
+            Problem::NotAQuery => write!(
+                f,
+                "not a query: osquery SQL starts with SELECT or WITH"
             ),
             Problem::ExtensionTable { table } => write!(
                 f,
@@ -525,6 +531,25 @@ impl std::fmt::Display for Problem {
 ///
 /// `platform` is the policy's or report's declared platform (comma-separated;
 /// empty means every platform). The result is empty when nothing is wrong.
+/// Whether `sql`, after leading comments, starts with a statement osquery
+/// runs. A text check: it catches a mistyped keyword, not every syntax error.
+fn is_query(sql: &str) -> bool {
+    let mut rest = sql.trim_start();
+    loop {
+        if let Some(r) = rest.strip_prefix("--") {
+            rest = r.split_once('\n').map_or("", |(_, r)| r).trim_start();
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            rest = r.split_once("*/").map_or("", |(_, r)| r).trim_start();
+        } else {
+            break;
+        }
+    }
+    let word: String = rest.chars().take_while(char::is_ascii_alphabetic).collect();
+    ["SELECT", "WITH", "PRAGMA", "VALUES", "EXPLAIN"]
+        .iter()
+        .any(|k| word.eq_ignore_ascii_case(k))
+}
+
 pub fn check_query(sql: &str, platform: &str, index: &SchemaIndex) -> Vec<Problem> {
     let mut out = Vec::new();
     let known: BTreeSet<String> = index.keys().cloned().collect();
@@ -540,6 +565,10 @@ pub fn check_query(sql: &str, platform: &str, index: &SchemaIndex) -> Vec<Proble
                 platform: p.clone(),
             });
         }
+    }
+
+    if !is_query(sql) {
+        out.push(Problem::NotAQuery);
     }
 
     let ops = constraint_ops(sql);
@@ -1000,6 +1029,26 @@ spec:
     fn non_query_yaml_yields_nothing() {
         assert!(extract_fleet_queries("apiVersion: v1\nkind: config\n").is_empty());
         assert!(extract_fleet_queries("{{ not yaml at all").is_empty());
+    }
+
+    /// SQL that is not a query at all fails, instead of passing with only a
+    /// "no table" warning; a query without FROM is still fine.
+    #[test]
+    fn a_statement_that_is_not_a_query_is_an_error() {
+        let idx = index();
+        let bad = check_query("SELEC * FRM x", "", &idx);
+        assert!(bad.contains(&Problem::NotAQuery), "{bad:?}");
+        assert_eq!(Problem::NotAQuery.severity(), Severity::Error);
+        for ok in [
+            "SELECT 1",
+            "select 1;",
+            "  WITH x AS (SELECT 1) SELECT * FROM x",
+            "-- comment\nSELECT 1",
+            "/* c */ SELECT 1",
+            "PRAGMA table_info(users)",
+        ] {
+            assert!(!check_query(ok, "", &idx).contains(&Problem::NotAQuery), "{ok}");
+        }
     }
 
     fn index() -> SchemaIndex {

@@ -517,7 +517,7 @@ pub fn generate_sop(tool: &str, writer: &mut impl Write) -> Result<()> {
     }
     let sop = SOPS
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(canonical_sop_name(tool)))
+        .find(|(name, _)| Some(*name) == sop_name(tool))
         .map(|(_, content)| *content)
         .ok_or_else(|| {
             let mut names: Vec<&str> = SOPS.iter().map(|(n, _)| *n).collect();
@@ -572,6 +572,13 @@ fn with_beta_state(sop: &str) -> std::borrow::Cow<'_, str> {
 /// This maps names only, and `SOPS` alone says what exists — so a SOP that
 /// resolves is in the catalog by construction, and the "Available:" list is
 /// that catalog rather than a hand-kept copy that could drift from it.
+/// The SOP `tool` names, after aliases and case (`OSQUERY` → `osquery`).
+pub fn sop_name(tool: &str) -> Option<&'static str> {
+    SOPS.iter()
+        .map(|(name, _)| *name)
+        .find(|name| name.eq_ignore_ascii_case(canonical_sop_name(tool)))
+}
+
 fn canonical_sop_name(tool: &str) -> &str {
     let lower = tool.to_lowercase();
     match lower.as_str() {
@@ -822,36 +829,39 @@ struct SopSection {
 
 /// Flatten every SOP into its sections (heading + the body lines under it).
 fn flatten_sops() -> Vec<SopSection> {
+    SOPS.iter()
+        .flat_map(|(name, content)| sections_of(name, content))
+        .collect()
+}
+
+/// One SOP's `##`/`###` sections. Lines inside a code block are body text,
+/// as in [`generate_sop_section`].
+fn sections_of(name: &'static str, content: &str) -> Vec<SopSection> {
     let mut out = Vec::new();
-    for (name, content) in SOPS {
-        let mut cur: Option<(String, String)> = None;
-        for line in content.lines() {
-            let t = line.trim_start();
-            let heading = t
-                .strip_prefix("## ")
-                .or_else(|| t.strip_prefix("### "))
-                .filter(|_| !t.starts_with("#### "));
-            if let Some(h) = heading {
-                if let Some((heading, body)) = cur.take() {
-                    out.push(SopSection {
-                        sop: name,
-                        heading,
-                        body,
-                    });
-                }
-                cur = Some((h.trim().to_string(), String::new()));
-            } else if let Some((_, body)) = cur.as_mut() {
-                body.push_str(line);
-                body.push(' ');
+    let mut cur: Option<(String, String)> = None;
+    let mut in_code = false;
+    for line in content.lines() {
+        let t = line.trim_start();
+        let fence = t.starts_with("```");
+        let heading = t
+            .strip_prefix("## ")
+            .or_else(|| t.strip_prefix("### "))
+            .filter(|_| !in_code && !fence);
+        if fence {
+            in_code = !in_code;
+        }
+        if let Some(h) = heading {
+            if let Some((heading, body)) = cur.take() {
+                out.push(SopSection { sop: name, heading, body });
             }
+            cur = Some((h.trim().to_string(), String::new()));
+        } else if let Some((_, body)) = cur.as_mut() {
+            body.push_str(line);
+            body.push(' ');
         }
-        if let Some((heading, body)) = cur.take() {
-            out.push(SopSection {
-                sop: name,
-                heading,
-                body,
-            });
-        }
+    }
+    if let Some((heading, body)) = cur.take() {
+        out.push(SopSection { sop: name, heading, body });
     }
     out
 }
@@ -2076,6 +2086,22 @@ mod tests {
         assert!(text.to_lowercase().contains("preset"));
         // Not the whole doc — the top-of-file ERROR-CODE ENUM must be excluded.
         assert!(!text.contains("ERROR-CODE ENUM"));
+    }
+
+    /// The search index splits on the same headings `generate_sop_section`
+    /// reads: a `##` line inside a code block is not one.
+    #[test]
+    fn sop_index_ignores_headings_in_code_blocks() {
+        let content = "## A\ntext\n```sh\n## not a heading\n```\n### B\nmore\n";
+        let headings: Vec<String> = sections_of("t", content).into_iter().map(|s| s.heading).collect();
+        assert_eq!(headings, ["A", "B"]);
+    }
+
+    #[test]
+    fn sop_name_resolves_case_and_aliases() {
+        assert_eq!(sop_name("OSQUERY"), Some("osquery"));
+        assert_eq!(sop_name("managed-preferences"), Some("mcx"));
+        assert_eq!(sop_name("nope"), None);
     }
 
     /// A `# comment` inside a code block is not a heading: it neither starts

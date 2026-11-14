@@ -165,7 +165,7 @@ pub struct JamfSettings {
     #[serde(default)]
     pub enabled: bool,
 
-    /// Use deterministic UUIDs based on `PayloadType`
+    /// UUIDs are v5 of each `PayloadIdentifier`
     #[serde(default)]
     pub deterministic_uuids: bool,
 

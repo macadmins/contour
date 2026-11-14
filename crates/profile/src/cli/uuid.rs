@@ -16,7 +16,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub fn handle_uuid(
     paths: &[String],
     output: Option<&str>,
-    org_domain: Option<&str>,
     predictable: bool,
     config: Option<&ProfileConfig>,
     recursive: bool,
@@ -25,22 +24,10 @@ pub fn handle_uuid(
     dry_run: bool,
     output_mode: OutputMode,
 ) -> Result<()> {
-    // Fall back to .contour/config.toml when no --org and no profile.toml org
-    let contour_domain;
-    let effective_org = if org_domain.is_some() || config.is_some() {
-        org_domain
-    } else if let Some(cfg) = contour_core::config::ContourConfig::load_nearest() {
-        contour_domain = cfg.organization.domain;
-        Some(contour_domain.as_str())
-    } else {
-        None
-    };
-
     if should_batch_process_multi(paths) {
         handle_uuid_batch(
             paths,
             output,
-            effective_org,
             predictable,
             config,
             recursive,
@@ -67,7 +54,6 @@ pub fn handle_uuid(
         handle_uuid_single(
             path,
             output,
-            effective_org,
             predictable,
             config,
             output_mode,
@@ -78,7 +64,6 @@ pub fn handle_uuid(
 fn handle_uuid_batch(
     paths: &[String],
     output_dir: Option<&str>,
-    org_domain: Option<&str>,
     predictable: bool,
     config: Option<&ProfileConfig>,
     recursive: bool,
@@ -121,13 +106,11 @@ fn handle_uuid_batch(
     }
 
     let config_clone = config.cloned();
-    let org_domain_owned = org_domain.map(String::from);
 
     let uuid_file = |input: &Path, output_path: &Path| -> Result<()> {
         uuid_single_file_internal(
             input,
             output_path,
-            org_domain_owned.as_deref(),
             predictable,
             config_clone.as_ref(),
         )
@@ -156,29 +139,16 @@ fn handle_uuid_batch(
 fn uuid_single_file_internal(
     input: &Path,
     output: &Path,
-    org_domain: Option<&str>,
     predictable: bool,
     config: Option<&ProfileConfig>,
 ) -> Result<()> {
     let file = input.to_str().unwrap_or_default();
     let mut profile = parser::parse_profile_auto_unsign(file)?;
 
-    // Get settings from config or CLI (config takes precedence for domain)
-    let effective_org_domain = if let Some(cfg) = config {
-        Some(cfg.organization.domain.as_str())
-    } else {
-        org_domain
-    };
-
-    // Config precedence for predictable setting
-    let effective_predictable = if let Some(cfg) = config {
-        cfg.uuid.predictable
-    } else {
-        predictable
-    };
+    // `-p` asks for predictable UUIDs; profile.toml can ask for them too.
+    let effective_predictable = predictable || config.is_some_and(|c| c.uuid.predictable);
 
     let uuid_config = UuidConfig {
-        org_domain: effective_org_domain.map(String::from),
         predictable: effective_predictable,
         uppercase: config.is_none_or(|c| c.uuid.uppercase),
     };
@@ -205,7 +175,6 @@ fn uuid_single_file_internal(
 fn handle_uuid_single(
     file: &str,
     output: Option<&str>,
-    org_domain: Option<&str>,
     predictable: bool,
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
@@ -220,22 +189,10 @@ fn handle_uuid_single(
         println!("{}", "✓ Profile parsed successfully".green());
     }
 
-    // Get settings from config or CLI (config takes precedence for domain)
-    let effective_org_domain = if let Some(cfg) = config {
-        Some(cfg.organization.domain.as_str())
-    } else {
-        org_domain
-    };
-
-    // Config precedence for predictable setting
-    let effective_predictable = if let Some(cfg) = config {
-        cfg.uuid.predictable
-    } else {
-        predictable
-    };
+    // `-p` asks for predictable UUIDs; profile.toml can ask for them too.
+    let effective_predictable = predictable || config.is_some_and(|c| c.uuid.predictable);
 
     let uuid_config = UuidConfig {
-        org_domain: effective_org_domain.map(String::from),
         predictable: effective_predictable,
         uppercase: config.is_none_or(|c| c.uuid.uppercase),
     };

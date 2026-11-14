@@ -75,7 +75,7 @@ struct SynthesizeResult {
 pub fn handle_synthesize(
     paths: &[PathBuf],
     output: Option<&Path>,
-    org: Option<&str>,
+    org: &str,
     validate: bool,
     dry_run: bool,
     interactive: bool,
@@ -188,21 +188,7 @@ pub fn handle_synthesize(
         return Ok(());
     }
 
-    // Resolve org: CLI --org → .contour/config.toml → error.
-    // Refuse silent "com.example" defaulting — synthesize emits deployable
-    // mobileconfigs and an example-domain identifier is non-deployable.
-    let contour_org;
-    let effective_org = if let Some(o) = org {
-        o
-    } else if let Some(cfg) = contour_core::config::ContourConfig::load_nearest() {
-        contour_org = cfg.organization.domain;
-        contour_org.as_str()
-    } else {
-        anyhow::bail!(
-            "--org is required (e.g., --org com.yourorg)\n\
-             Alternatively, set organization.domain in .contour/config.toml"
-        );
-    };
+    let effective_org = org;
 
     // Phase 4: Validate + Build
     let mut results = Vec::new();
@@ -247,9 +233,14 @@ pub fn handle_synthesize(
         }
 
         // Build mobileconfig
-        let identifier = format!("{effective_org}.{}", plist_entry.domain);
+        // A domain already under the org (com.acme.thing) is its own identifier.
+        let identifier = if plist_entry.domain.starts_with(&format!("{effective_org}.")) {
+            plist_entry.domain.clone()
+        } else {
+            format!("{effective_org}.{}", plist_entry.domain)
+        };
         let display_name = plist_entry.title.clone();
-        let builder = ProfileBuilder::new(effective_org, &identifier).display_name(&display_name);
+        let builder = ProfileBuilder::new(&contour_core::org_name_for(effective_org), &identifier).uppercase(contour_core::uuid_uppercase()).display_name(&display_name);
         let xml = builder.build(&plist_entry.domain, plist_entry.dict.clone())?;
 
         // Determine output path

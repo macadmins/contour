@@ -269,8 +269,8 @@ fn optional_str(args: &Value, field: &str) -> Option<String> {
 
 /// Result cap. Large result sets cost the agent context without adding
 /// signal, so the search tools return the top slice plus an honest
-/// `truncated` flag rather than everything. `mscp_baseline` caps its
-/// sections too but emits no flag, and never goes below `DEFAULT_LIMIT`.
+/// `truncated` flag rather than everything; `mscp_baseline` caps its
+/// sections the same way.
 const DEFAULT_LIMIT: usize = 20;
 const MAX_LIMIT: usize = 100;
 
@@ -1017,6 +1017,12 @@ fn osquery_table_output() -> Value {
 
 fn osquery_table(args: &Value) -> Result<Value, ToolError> {
     let table = required_str(args, "table")?.to_lowercase();
+    if contour_core::osquery_validate::EXTENSION_TABLES.contains(&table.as_str()) {
+        return Err(ToolError::new(format!(
+            "{}; contour has no columns for it",
+            contour_core::osquery_validate::Problem::ExtensionTable { table }
+        )));
+    }
     let sources = table_sources();
     let source = *sources.get(&table).ok_or_else(|| {
         ToolError::with_suggestions(
@@ -1239,7 +1245,7 @@ fn mscp_baseline_input() -> Value {
         "type": "object",
         "properties": {
             "baseline": {"type": "string", "description": "Baseline name, e.g. cis_lvl1, stig, 800-53r5_high"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "description": "Max sections to return"}
+            "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "description": "Max sections to return (default 20)"}
         },
         "required": ["baseline"],
         "additionalProperties": false
@@ -1252,6 +1258,7 @@ fn mscp_baseline_output() -> Value {
         "properties": {
             "baseline": {"type": "string"},
             "rule_count": {"type": "integer"},
+            "truncated": {"type": "boolean"},
             "sections": {"type": "array", "items": {
                 "type": "object",
                 "properties": {
@@ -1261,7 +1268,7 @@ fn mscp_baseline_output() -> Value {
                 "required": ["section", "rules"]
             }}
         },
-        "required": ["baseline", "rule_count", "sections"]
+        "required": ["baseline", "rule_count", "truncated", "sections"]
     })
 }
 
@@ -1295,15 +1302,18 @@ fn mscp_baseline(args: &Value) -> Result<Value, ToolError> {
     }
 
     let rule_count: usize = sections.values().map(Vec::len).sum();
+    let limit = limit_of(args);
+    let truncated = sections.len() > limit;
     let section_json: Vec<Value> = sections
         .into_iter()
-        .take(limit_of(args).max(DEFAULT_LIMIT))
+        .take(limit)
         .map(|(section, rules)| json!({"section": section, "rules": rules}))
         .collect();
 
     Ok(json!({
         "baseline": edges[0].baseline,
         "rule_count": rule_count,
+        "truncated": truncated,
         "sections": section_json,
     }))
 }
@@ -1346,7 +1356,7 @@ fn sop(args: &Value) -> Result<Value, ToolError> {
     outcome.map_err(|e| ToolError::new(format!("{e:#}")))?;
 
     Ok(json!({
-        "topic": topic,
+        "topic": contour_core::help_agents::sop_name(&topic).unwrap_or(&topic),
         "section": section,
         "markdown": String::from_utf8_lossy(&buf),
     }))
@@ -1712,6 +1722,34 @@ mod tests {
                 .is_some_and(|m| m.contains("mcx rename")),
             "expected the mcx SOP body"
         );
+    }
+
+    #[test]
+    fn sop_returns_the_resolved_topic() {
+        let v = sop(&json!({"topic": "MANAGED-PREFERENCES"})).unwrap();
+        assert_eq!(v["topic"], "mcx");
+    }
+
+    #[test]
+    fn osquery_table_names_an_extension_table() {
+        let e = osquery_table(&json!({"table": "osquery_labels"})).unwrap_err();
+        assert!(format!("{e:?}").contains("osquery extension"), "{e:?}");
+    }
+
+    /// `limit` means the same in every tool: at least 1, at most MAX_LIMIT,
+    /// with `truncated` saying whether more exist.
+    #[test]
+    fn mscp_baseline_limit_matches_the_search_tools() {
+        let all = mscp_baseline(&json!({"baseline": "cis_lvl1"})).unwrap();
+        assert!(all["sections"].as_array().unwrap().len() > 1);
+        assert_eq!(all["truncated"], false);
+        for limit in [0, 1] {
+            let v = mscp_baseline(&json!({"baseline": "cis_lvl1", "limit": limit})).unwrap();
+            assert_eq!(v["sections"].as_array().unwrap().len(), 1, "limit {limit}");
+            assert_eq!(v["truncated"], true);
+        }
+        let s = osquery_search(&json!({"query": "file", "limit": 0})).unwrap();
+        assert_eq!(s["results"].as_array().unwrap().len(), 1);
     }
 
     #[test]

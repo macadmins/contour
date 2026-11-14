@@ -339,6 +339,14 @@ fn handle_table(table_name: &str, json: bool, out: &mut impl Write) -> Result<()
         if !fleet.is_empty() {
             return handle_fleet_only_table(table_name, &fleet, json, out);
         }
+        if contour_core::osquery_validate::EXTENSION_TABLES.contains(&table_name) {
+            anyhow::bail!(
+                "{}; contour has no columns for it",
+                contour_core::osquery_validate::Problem::ExtensionTable {
+                    table: table_name.to_string()
+                }
+            );
+        }
         anyhow::bail!(
             "Table '{table_name}' not found: it is in neither the upstream osquery \
              schema nor Fleet's. \
@@ -767,6 +775,12 @@ fn collect_yaml_files(path: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
 mod tests {
     use contour_core::osquery_validate::{EXTENSION_TABLES, Severity, check_query, extract_tables};
     use contour_core::trainer::queries as q;
+
+    #[test]
+    fn table_names_an_extension_table() {
+        let e = super::handle_table("osquery_labels", false, &mut Vec::new()).unwrap_err();
+        assert!(e.to_string().contains("osquery extension"), "{e}");
+    }
 
     /// Every SQL string the trainer prints must name real tables and columns.
     /// Queries over an extension table are skipped, and the test holds that

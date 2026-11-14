@@ -802,6 +802,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "walkdir",
  "windows-schema",
  "yaml_serde",

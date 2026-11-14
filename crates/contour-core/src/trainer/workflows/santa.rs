@@ -215,13 +215,13 @@ impl TrainerWorkflow for SantaWorkflow {
                      - mobileconfig: Standard MDM profile (default)\n\
                      - plist: Workspace ONE compatible\n\
                      - plist-full: Jamf Pro custom schema\n\n\
-                     Use `prep` for a complete deployment set that includes\n\
-                     both rule profiles and Santa configuration.",
+                     Use `prep` for the prerequisite profiles Santa needs\n\
+                     (system extension, TCC, service management, configuration).",
                 )
                 .with_commands(vec![
                     CommandPreview::new(
                         format!(
-                            "contour santa generate {} --org {} --deterministic-uuids --output {}",
+                            "contour santa generate {} --org {} --output {}",
                             output_dir.join("rules.yaml").display(),
                             org,
                             output_dir.join("santa-rules.mobileconfig").display()
@@ -230,24 +230,21 @@ impl TrainerWorkflow for SantaWorkflow {
                     ),
                     CommandPreview::new(
                         format!(
-                            "contour santa prep {} --org {} --output-dir {}",
-                            output_dir.join("rules.yaml").display(),
+                            "contour santa prep --org {} --output-dir {}",
                             org,
                             output_dir.join("profiles").display()
                         ),
-                        "Generate complete deployment set (rules + config)",
+                        "Generate the prerequisite profiles (extension, TCC, config)",
                     ),
                 ])
                 .with_action(StepAction::ContourCommand {
                     args: vec![
                         "santa".to_string(),
                         "prep".to_string(),
-                        output_dir.join("rules.yaml").display().to_string(),
                         "--org".to_string(),
                         org.clone(),
                         "--output-dir".to_string(),
                         output_dir.join("profiles").display().to_string(),
-                        "--deterministic-uuids".to_string(),
                     ],
                 }),
 
