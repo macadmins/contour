@@ -259,22 +259,18 @@ fn load_and_normalize(path: &Path, opts: &PlanOptions) -> Result<ConfigurationPr
         normalizer::normalize_profile(&mut profile, &cfg)?;
     }
     if opts.predictable {
-        regenerate_predictable_uuids(&mut profile, opts.org.as_deref())?;
+        regenerate_predictable_uuids(&mut profile)?;
     }
     Ok(profile)
 }
 
-/// Regenerate every PayloadUUID using v5 from `(org, payload_identifier)`
+/// Regenerate every PayloadUUID using v5 from the payload identifier
 /// so that two normalized profiles converge on the same UUID for the
 /// same logical payload. This is the crux of "honest plans": real
 /// content changes appear as IN_PLACE_UPDATE instead of REPLACE.
-fn regenerate_predictable_uuids(
-    profile: &mut ConfigurationProfile,
-    org: Option<&str>,
-) -> Result<()> {
+fn regenerate_predictable_uuids(profile: &mut ConfigurationProfile) -> Result<()> {
     use crate::uuid::{UuidConfig, regenerate_uuid};
     let cfg = UuidConfig {
-        org_domain: org.map(str::to_string),
         predictable: true,
         uppercase: true,
     };

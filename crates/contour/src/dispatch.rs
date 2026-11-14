@@ -660,17 +660,12 @@ fn resolve_santa_org(org: String) -> String {
     if org != "com.example" {
         return org;
     }
-    contour_core::config::ContourConfig::load_nearest()
-        .map(|c| c.organization.domain)
-        .unwrap_or(org)
+    contour_core::resolve_org(None).unwrap_or(org)
 }
 
 /// Same for optional org (santa add --org).
 fn resolve_santa_org_opt(org: Option<String>) -> Option<String> {
-    if org.is_some() {
-        return org;
-    }
-    contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
+    org.or_else(|| contour_core::resolve_org(None).ok())
 }
 
 /// Dispatch santa commands.
@@ -691,7 +686,8 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
             org,
             identifier,
             display_name,
-            deterministic_uuids,
+            deterministic_uuids: _,
+            no_deterministic_uuids,
             format,
             full_bundle,
             dry_run,
@@ -704,7 +700,7 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
                 &org,
                 identifier.as_deref(),
                 display_name.as_deref(),
-                deterministic_uuids,
+                !no_deterministic_uuids,
                 format,
                 full_bundle,
                 dry_run,
@@ -748,6 +744,7 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
             sync_url,
             machine_owner_plist,
             block_usb,
+            org,
             dry_run,
         } => santa::cli::config::run(
             output.as_deref(),
@@ -755,6 +752,7 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
             sync_url.as_deref(),
             machine_owner_plist.as_deref(),
             block_usb,
+            &resolve_santa_org(org),
             dry_run,
             output_mode,
         ),
@@ -1155,10 +1153,7 @@ fn dispatch_santa(action: santa::cli::Commands, verbose: bool, json: bool) -> Re
 
 /// Resolve org domain for mscp commands: CLI flag → ContourConfig.
 fn resolve_mscp_org(org: Option<String>) -> Option<String> {
-    if org.is_some() {
-        return org;
-    }
-    contour_core::config::ContourConfig::load_nearest().map(|c| c.organization.domain)
+    org.or_else(|| contour_core::resolve_org(None).ok())
 }
 
 /// Resolve org display name for mscp commands: CLI flag → ContourConfig.

@@ -14,8 +14,49 @@ pub fn to_writer_xml<W: Write, T: serde::Serialize>(
 ) -> anyhow::Result<()> {
     let mut buf = Vec::new();
     plist::to_writer_xml(&mut buf, value)?;
+    if let Some(profile) = in_profile_order(&buf) {
+        buf.clear();
+        plist::to_writer_xml(&mut buf, &profile)?;
+    }
     writer.write_all(&apple_escaped(buf))?;
     Ok(())
+}
+
+/// A configuration profile in the key order `profile normalize` writes, so a
+/// generated profile and its normalized copy are the same bytes. `None` for
+/// anything that is not a profile (DDM, commands, Munki plists).
+fn in_profile_order(xml: &[u8]) -> Option<plist::Value> {
+    let plist::Value::Dictionary(profile) = plist::from_bytes(xml).ok()? else {
+        return None;
+    };
+    if profile.get("PayloadType")?.as_string()? != "Configuration" {
+        return None;
+    }
+    let mut profile = ordered(
+        profile,
+        &["PayloadType", "PayloadVersion", "PayloadIdentifier", "PayloadUUID", "PayloadDisplayName", "PayloadContent"],
+    );
+    if let Some(plist::Value::Array(payloads)) = profile.get_mut("PayloadContent") {
+        for payload in payloads {
+            if let plist::Value::Dictionary(d) = payload {
+                *d = ordered(
+                    std::mem::take(d),
+                    &["PayloadType", "PayloadVersion", "PayloadIdentifier", "PayloadUUID"],
+                );
+            }
+        }
+    }
+    Some(plist::Value::Dictionary(profile))
+}
+
+/// `head` keys first in that order, then the rest sorted.
+fn ordered(dict: plist::Dictionary, head: &[&str]) -> plist::Dictionary {
+    let mut rest: Vec<_> = dict.into_iter().collect();
+    rest.sort_by(|a, b| {
+        let rank = |k: &str| head.iter().position(|h| *h == k).unwrap_or(head.len());
+        rank(&a.0).cmp(&rank(&b.0)).then_with(|| a.0.cmp(&b.0))
+    });
+    rest.into_iter().collect()
 }
 
 /// The plist crate's XML with `"` and `'` unescaped, or untouched.

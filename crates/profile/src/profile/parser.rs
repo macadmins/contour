@@ -472,7 +472,7 @@ fn wrap_bare_payload(dict: &mut plist::Dictionary, fixups: &mut Vec<String>) {
     );
     dict.insert(
         "PayloadUUID".to_string(),
-        plist::Value::String(uuid::Uuid::new_v4().to_string().to_uppercase()),
+        plist::Value::String(crate::uuid::predictable(&format!("{payload_identifier}.wrapper"))),
     );
     dict.insert(
         "PayloadDisplayName".to_string(),
@@ -563,7 +563,11 @@ fn fixup_missing_identity(dict: &mut plist::Dictionary, context: &str, fixups: &
     }
 
     if !dict.contains_key("PayloadUUID") {
-        let new_uuid = uuid::Uuid::new_v4().to_string().to_uppercase();
+        let identifier = dict
+            .get("PayloadIdentifier")
+            .and_then(plist::Value::as_string)
+            .unwrap_or_default();
+        let new_uuid = crate::uuid::predictable(identifier);
         dict.insert(
             "PayloadUUID".to_string(),
             plist::Value::String(new_uuid.clone()),
@@ -1007,6 +1011,33 @@ mod tests {
             }],
             additional_fields: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn fixups_derive_missing_uuids_from_identifiers() {
+        let bare = || {
+            let mut d = plist::Dictionary::new();
+            d.insert("PayloadType".into(), "com.apple.MCX".into());
+            d.insert("PayloadIdentifier".into(), "com.acme.mcx".into());
+            plist::Value::Dictionary(d)
+        };
+        let (mut a, mut b) = (bare(), bare());
+        fixup_profile_value(&mut a);
+        fixup_profile_value(&mut b);
+        assert_eq!(a, b, "repairing the same file twice must give the same UUIDs");
+
+        let outer = a.as_dictionary().unwrap();
+        let inner = outer["PayloadContent"].as_array().unwrap()[0]
+            .as_dictionary()
+            .unwrap();
+        assert_eq!(
+            outer["PayloadUUID"].as_string(),
+            Some(contour_profiles::deterministic_uuid("com.acme.mcx.wrapper").as_str())
+        );
+        assert_eq!(
+            inner["PayloadUUID"].as_string(),
+            Some(contour_profiles::deterministic_uuid("com.acme.mcx").as_str())
+        );
     }
 
     // ========== PlistFormat Detection Tests ==========

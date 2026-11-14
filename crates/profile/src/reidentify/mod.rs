@@ -132,7 +132,6 @@ fn reidentify_pattern(
 
     // The v5 namespace comes from the new prefix — the operator's org.
     let uuid_cfg = UuidConfig {
-        org_domain: Some(to.to_string()),
         predictable: true,
         uppercase: true,
     };
@@ -327,7 +326,6 @@ fn reidentify_name(profile: &mut ConfigurationProfile, org: &str) -> Result<Reid
 
     // Apply identifiers, build the UUID mapping (deterministic v5 from identifier).
     let uuid_cfg = UuidConfig {
-        org_domain: Some(org.to_string()),
         predictable: true,
         uppercase: true,
     };

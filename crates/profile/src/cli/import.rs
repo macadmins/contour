@@ -854,7 +854,6 @@ fn import_single_profile(
     if regen_uuid {
         let predictable = config.is_some_and(|c| c.uuid.predictable);
         let uuid_config = UuidConfig {
-            org_domain: org_domain.map(String::from),
             predictable,
             uppercase: config.is_none_or(|c| c.uuid.uppercase),
         };

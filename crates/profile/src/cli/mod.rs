@@ -835,10 +835,16 @@ pub enum Commands {
         )]
         output: Option<String>,
 
-        #[arg(long, help = "Organization reverse domain (e.g., com.yourorg)")]
+        /// Kept so existing scripts run; predictable UUIDs derive from each
+        /// payload's identifier, which already carries the org.
+        #[arg(long, hide = true)]
         org: Option<String>,
 
-        #[arg(short, long, help = "Generate predictable UUIDs")]
+        #[arg(
+            short,
+            long,
+            help = "Generate predictable UUIDs (v5 of each payload identifier, as profile generate writes)"
+        )]
         predictable: bool,
 
         #[arg(short, long, help = "Process directories recursively")]
@@ -1173,7 +1179,11 @@ pub enum Commands {
         #[arg(help = "Payload type(s) — one for generate, multiple for --create-recipe")]
         payload_type: Vec<String>,
 
-        #[arg(short, long, help = "Output file or directory")]
+        #[arg(
+            short,
+            long,
+            help = "Output file for one payload type; output directory with --recipe (a recipe can write several profiles)"
+        )]
         output: Option<String>,
 
         #[arg(long, help = "Organization reverse domain")]

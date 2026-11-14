@@ -24,8 +24,8 @@ Every gate has a typed non-zero exit; chain them in CI. `--dry-run` (import/norm
 uuid) and the default dry-run of `classify`/`reidentify` preview before `--write`.
 
 > **PRECONDITION — `--org`:** identity-rewriting commands (import, normalize, reidentify,
-> classify --sync-identity, duplicate) require an org domain (`--org`, `CONTOUR_ORG`, or
-> `.contour/config.toml`). Never `com.example`.
+> classify --sync-identity, duplicate) require an org domain (`--org`, `profile.toml`,
+> `CONTOUR_ORG`, or `.contour/config.toml`, in that order). Never `com.example`.
 
 ---
 

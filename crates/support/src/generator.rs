@@ -259,7 +259,7 @@ fn generate_brand(common: &CommonSettings, brand: &BrandEntry) -> Result<Generat
     // --- 1. Discover profile ---
     let discover_id = format!("nl.root3.support.{}.discover", brand_lower);
     let discover_payload = build_discover_payload(&settings, brand);
-    let discover_bytes = ProfileBuilder::new(settings.org, &discover_id)
+    let discover_bytes = ProfileBuilder::new(&contour_core::org_name_for(settings.org), &discover_id).uppercase(contour_core::uuid_uppercase())
         .display_name(settings.payload_display_name)
         .removal_disallowed(true)
         .build("nl.root3.support", discover_payload)?;
@@ -267,7 +267,7 @@ fn generate_brand(common: &CommonSettings, brand: &BrandEntry) -> Result<Generat
     // --- 2. Default profile ---
     let default_id = format!("nl.root3.support.{}.default", brand_lower);
     let default_payload = build_default_payload(&settings);
-    let default_bytes = ProfileBuilder::new(settings.org, &default_id)
+    let default_bytes = ProfileBuilder::new(&contour_core::org_name_for(settings.org), &default_id).uppercase(contour_core::uuid_uppercase())
         .display_name(settings.payload_display_name)
         .removal_disallowed(true)
         .build("nl.root3.support", default_payload)?;

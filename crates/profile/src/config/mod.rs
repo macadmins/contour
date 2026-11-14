@@ -336,6 +336,31 @@ impl FleetConfig {
     }
 }
 
+/// Resolve the org domain: CLI `--org` → `profile.toml` → `CONTOUR_ORG` →
+/// `.contour/config.toml` walked up from CWD. We refuse to default to
+/// "com.example" because the resulting PayloadIdentifier is not deployable.
+pub fn resolve_org(org: Option<&str>, config: Option<&ProfileConfig>) -> Result<String> {
+    if let Some(o) = org.map(ToString::to_string).or_else(|| config.map(|c| c.organization.domain.clone())) {
+        return Ok(o);
+    }
+    contour_core::config::resolve_org_with_anchor(None, None).map_err(|_e| {
+        anyhow::anyhow!(
+            "--org is required (e.g., --org com.yourorg)\n\
+             Alternatively, set CONTOUR_ORG, or organization.domain in \
+             profile.toml or .contour/config.toml"
+        )
+    })
+}
+
+/// `PayloadOrganization` for `domain`: the loaded profile.toml's name when
+/// its domain matches, then [`contour_core::org_name_for`].
+pub fn org_name_for(config: Option<&ProfileConfig>, domain: &str) -> String {
+    config
+        .filter(|c| c.organization.domain == domain)
+        .and_then(|c| c.organization.name.clone())
+        .unwrap_or_else(|| contour_core::org_name_for(domain))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

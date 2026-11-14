@@ -38,7 +38,7 @@ template = "{org}-{type}-{name}"  # Only used with scheme = "template"
 
 [uuid]
 predictable = false          # Use deterministic v5 UUIDs
-uppercase = true             # Uppercase UUID output
+uppercase = true             # Uppercase UUID output (every generator)
 
 [output]
 directory = "./output"       # Default output directory
@@ -426,7 +426,6 @@ contour profile uuid <PATHS>... [flags]
 |------|-------------|---------|
 | `<PATHS>...` | Profile file(s) or directory to process | **required** |
 | `-o, --output <PATH>` | Output file or directory | in-place |
-| `--org <DOMAIN>` | Organization reverse domain (for predictable UUIDs) | from `profile.toml` |
 | `-p, --predictable` | Generate deterministic v5 UUIDs | `false` |
 | `-r, --recursive` | Process directories recursively | `false` |
 | `--max-depth <N>` | Maximum directory depth (requires `--recursive`) | unlimited |
@@ -454,7 +453,7 @@ contour profile reidentify <PATHS>... --org <DOMAIN> [flags]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `<PATHS>...` | Profile file(s) or directory to process | **required** |
-| `--org <DOMAIN>` | Organization reverse domain (identifier prefix) | from `.contour/config.toml` |
+| `--org <DOMAIN>` | Organization reverse domain (identifier prefix) | from `profile.toml`, `CONTOUR_ORG` or `.contour/config.toml` |
 | `--scheme <SCHEME>` | `uuid` (sync identifier to `PayloadUUID`) or `name` (derive from display name) | `uuid` |
 | `-r, --recursive` | Process directories recursively | `false` |
 | `--max-depth <N>` | Maximum directory depth (requires `--recursive`) | unlimited |
@@ -713,7 +712,7 @@ contour profile plan <BASELINE> <PROPOSED> [flags]
 | `<PROPOSED>` | Proposed profile (file or directory) | **required** |
 | `-r, --recursive` | Walk directory pairs recursively | `false` |
 | `--org <DOMAIN>` | Organization reverse domain (used with `--predictable`) | none |
-| `--predictable` | Normalize both sides with v5 UUIDs derived from `(org, identifier)` before classifying. Collapses cosmetic UUID churn so `REPLACE` only fires on real `PayloadIdentifier` renames | `false` |
+| `--predictable` | Normalize both sides with v5 UUIDs derived from each payload identifier (the scheme `profile generate` writes) before classifying. Collapses cosmetic UUID churn so `REPLACE` only fires on real `PayloadIdentifier` renames | `false` |
 | `--format <text\|json>` | Output format | `text` |
 | `--accept-replace` | Treat `REPLACE` as a warning instead of a blocker | `false` |
 | `--accept-scope-change` | Treat `SCOPE_BROADENED` as a warning | `false` |
@@ -1022,12 +1021,11 @@ stale reference passes through silently.
 
 ##### How the new UUIDs are derived
 
-With `-p` / `--predictable` **and** `--org`, UUIDs are RFC 4122 v5, derived in
-two levels:
+With `-p` / `--predictable`, UUIDs are RFC 4122 v5 of each PayloadIdentifier,
+the scheme every contour generator uses (case from `[uuid] uppercase`):
 
 ```
-namespace = uuidv5(DNS,       <org domain>)
-new_uuid  = uuidv5(namespace, <PayloadIdentifier>)   # uppercased
+new_uuid = uuidv5(DNS, <PayloadIdentifier>)
 ```
 
 Reproducible outside contour, which makes it easy to assert in CI:
@@ -1035,18 +1033,17 @@ Reproducible outside contour, which makes it easy to assert in CI:
 ```bash
 python3 -c "
 import uuid
-ns = uuid.uuid5(uuid.NAMESPACE_DNS, 'com.acme')
-print(str(uuid.uuid5(ns, 'com.acme.scep.payload')).upper())
+print(str(uuid.uuid5(uuid.NAMESPACE_DNS, 'com.acme.scep.payload')).upper())
 "
-# 51F715A5-731C-535F-8B53-E52A574ADF15
+# 92947A38-7F7A-5640-BBCE-F81F40D4FCA8
 ```
 
 The merged envelope is derived the same way from `<org>.merged`.
 
-> **`-p` and `--merge` require an org domain.** The predictable path needs an
-> org domain to build its namespace, and the merged profile's identifier is
-> `<org>.merged` — so `link` errors out when neither `--org`, `profile.toml`,
-> nor `.contour/config.toml` provides one. There is no `com.example` fallback.
+> **`--merge` requires an org domain.** The merged profile's identifier is
+> `<org>.merged`, so `link --merge` errors out when neither `--org`,
+> `profile.toml`, `CONTOUR_ORG` nor `.contour/config.toml` provides one. There
+> is no `com.example` fallback.
 
 ##### Why predictable UUIDs matter
 

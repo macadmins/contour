@@ -269,7 +269,7 @@ pub fn handle_payload_extract(
         payload_type: "Configuration".to_string(),
         payload_version: 1,
         payload_identifier: format!("{orig_identifier}.extracted"),
-        payload_uuid: uuid::Uuid::new_v4().to_string().to_uppercase(),
+        payload_uuid: crate::uuid::predictable(&format!("{orig_identifier}.extracted")),
         payload_display_name: format!("{orig_display_name} (extracted)"),
         payload_content: extracted.clone(),
         additional_fields,
@@ -355,5 +355,55 @@ fn plist_value_to_json(value: &plist::Value) -> serde_json::Value {
             serde_json::Value::Object(obj)
         }
         _ => serde_json::Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_derives_the_uuid_from_the_new_identifier() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("in.mobileconfig");
+        std::fs::write(
+            &src,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>PayloadType</key><string>Configuration</string>
+<key>PayloadVersion</key><integer>1</integer>
+<key>PayloadIdentifier</key><string>com.acme.bundle</string>
+<key>PayloadUUID</key><string>11111111-1111-1111-1111-111111111111</string>
+<key>PayloadDisplayName</key><string>Bundle</string>
+<key>PayloadContent</key><array><dict>
+<key>PayloadType</key><string>com.apple.screensaver</string>
+<key>PayloadVersion</key><integer>1</integer>
+<key>PayloadIdentifier</key><string>com.acme.bundle.screensaver</string>
+<key>PayloadUUID</key><string>22222222-2222-2222-2222-222222222222</string>
+</dict></array>
+</dict></plist>"#,
+        )
+        .unwrap();
+        let out = dir.path().join("out.mobileconfig");
+        handle_payload_extract(
+            src.to_str().unwrap(),
+            &["com.apple.screensaver".to_string()],
+            Some(out.to_str().unwrap()),
+            "mobileconfig",
+            OutputMode::Human,
+        )
+        .unwrap();
+
+        let v: plist::Value = plist::from_file(&out).unwrap();
+        let d = v.as_dictionary().unwrap();
+        assert_eq!(
+            d["PayloadIdentifier"].as_string(),
+            Some("com.acme.bundle.extracted")
+        );
+        assert_eq!(
+            d["PayloadUUID"].as_string(),
+            Some(contour_profiles::deterministic_uuid("com.acme.bundle.extracted").as_str())
+        );
     }
 }

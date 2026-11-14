@@ -76,7 +76,7 @@ impl ProfileBuilder {
         let profile_uuid = case(deterministic_uuid(&self.identifier));
         let payload_uuid = case(deterministic_uuid(&payload_id));
 
-        // Build inner payload: specific content first, then metadata
+        // Insertion order does not matter: to_writer_xml writes the normalize order.
         let mut payload = Dictionary::new();
 
         for (k, v) in payload_content {
@@ -217,14 +217,20 @@ mod tests {
             .build("com.example.type", content)
             .unwrap();
 
-        let xml = String::from_utf8(result).unwrap();
-
-        let payload_content_pos = xml.find("<key>PayloadContent</key>").unwrap();
-        let payload_uuid_pos = xml.find("<key>PayloadUUID</key>").unwrap();
-        let payload_id_pos = xml.find("<key>PayloadIdentifier</key>").unwrap();
-
-        // PayloadContent should appear before outer PayloadUUID and PayloadIdentifier
-        assert!(payload_content_pos < payload_uuid_pos);
-        assert!(payload_content_pos < payload_id_pos);
+        // `profile normalize` order: identity keys first, the rest sorted.
+        let profile = plist::Value::from_reader(std::io::Cursor::new(result)).unwrap();
+        let profile = profile.as_dictionary().unwrap();
+        let keys: Vec<_> = profile.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "PayloadType", "PayloadVersion", "PayloadIdentifier", "PayloadUUID",
+                "PayloadDisplayName", "PayloadContent", "PayloadDescription", "PayloadEnabled",
+                "PayloadOrganization", "PayloadRemovalDisallowed", "PayloadScope",
+            ]
+        );
+        let payload = profile["PayloadContent"].as_array().unwrap()[0].as_dictionary().unwrap();
+        let keys: Vec<_> = payload.keys().map(String::as_str).take(4).collect();
+        assert_eq!(keys, ["PayloadType", "PayloadVersion", "PayloadIdentifier", "PayloadUUID"]);
     }
 }

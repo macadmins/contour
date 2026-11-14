@@ -26,7 +26,7 @@ impl Default for GeneratorOptions {
             identifier: "santa.rules".to_string(),
             display_name: "Santa Rules".to_string(),
             description: "Santa binary authorization rules".to_string(),
-            deterministic_uuids: false,
+            deterministic_uuids: true,
         }
     }
 }
@@ -38,7 +38,7 @@ impl GeneratorOptions {
             identifier: format!("{org}.santa.rules"),
             display_name: "Santa Rules".to_string(),
             description: "Santa binary authorization rules".to_string(),
-            deterministic_uuids: false,
+            deterministic_uuids: true,
         }
     }
 
@@ -82,7 +82,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     let profile_uuid = generate_uuid(options.deterministic_uuids, &options.identifier);
     let payload_uuid = generate_uuid(
         options.deterministic_uuids,
-        &format!("{}.payload", options.identifier),
+        &format!("{}.santa", options.identifier),
     );
 
     // Build Santa rules array
@@ -100,12 +100,16 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     );
     payload.insert(
         "PayloadUUID".to_string(),
-        Value::String(payload_uuid.to_string().to_uppercase()),
+        Value::String(payload_uuid.clone()),
     );
     payload.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
     payload.insert(
         "PayloadDisplayName".to_string(),
         Value::String("Santa Rules".to_string()),
+    );
+    payload.insert(
+        "PayloadOrganization".to_string(),
+        Value::String(contour_core::org_name_for(&options.org)),
     );
     payload.insert(
         "PayloadContent".to_string(),
@@ -125,7 +129,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     );
     profile.insert(
         "PayloadUUID".to_string(),
-        Value::String(profile_uuid.to_string().to_uppercase()),
+        Value::String(profile_uuid.clone()),
     );
     profile.insert(
         "PayloadDisplayName".to_string(),
@@ -137,7 +141,7 @@ pub fn generate(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> 
     );
     profile.insert(
         "PayloadOrganization".to_string(),
-        Value::String(options.org.clone()),
+        Value::String(contour_core::org_name_for(&options.org)),
     );
     profile.insert(
         "PayloadScope".to_string(),
@@ -196,7 +200,7 @@ pub fn generate_format(
 pub fn generate_payload_plist(rules: &RuleSet, options: &GeneratorOptions) -> Result<Vec<u8>> {
     let payload_uuid = generate_uuid(
         options.deterministic_uuids,
-        &format!("{}.payload", options.identifier),
+        &format!("{}.santa", options.identifier),
     );
 
     // Build Santa rules array
@@ -218,7 +222,7 @@ pub fn generate_payload_plist(rules: &RuleSet, options: &GeneratorOptions) -> Re
     );
     payload.insert(
         "PayloadUUID".to_string(),
-        Value::String(payload_uuid.to_string().to_uppercase()),
+        Value::String(payload_uuid.clone()),
     );
     payload.insert("PayloadVersion".to_string(), Value::Integer(1.into()));
     payload.insert(
@@ -322,13 +326,15 @@ fn policy_to_santa(p: &Policy) -> String {
     .to_string()
 }
 
-fn generate_uuid(deterministic: bool, seed: &str) -> Uuid {
-    if deterministic {
-        // UUID v5 with DNS namespace
-        Uuid::new_v5(&Uuid::NAMESPACE_DNS, seed.as_bytes())
+/// v5 of the payload identifier (the scheme every generator uses), or
+/// random; in the case `[uuid] uppercase` asks for.
+fn generate_uuid(deterministic: bool, identifier: &str) -> String {
+    let uuid = if deterministic {
+        contour_profiles::deterministic_uuid(identifier)
     } else {
-        Uuid::new_v4()
-    }
+        Uuid::new_v4().to_string().to_uppercase()
+    };
+    if contour_core::uuid_uppercase() { uuid } else { uuid.to_lowercase() }
 }
 
 #[cfg(test)]

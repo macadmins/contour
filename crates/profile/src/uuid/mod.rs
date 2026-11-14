@@ -1,7 +1,9 @@
 //! UUID generation and validation for profiles.
 //!
-//! Supports both random (v4) and predictable (v5) UUID generation based on
-//! organization domain and payload identifiers.
+//! Supports both random (v4) and predictable (v5) UUID generation. Predictable
+//! UUIDs are v5 of the payload identifier — the same scheme every generator
+//! uses ([`contour_profiles::deterministic_uuid`]), so a profile keeps its
+//! UUIDs whichever command wrote it last.
 
 use anyhow::Result;
 use uuid::Uuid;
@@ -9,8 +11,6 @@ use uuid::Uuid;
 /// Configuration for UUID generation.
 #[derive(Debug)]
 pub struct UuidConfig {
-    /// Organization domain for v5 UUID namespace.
-    pub org_domain: Option<String>,
     /// Use predictable v5 UUIDs instead of random v4.
     pub predictable: bool,
     /// Write UUIDs in uppercase (`[uuid] uppercase`, default true).
@@ -19,22 +19,22 @@ pub struct UuidConfig {
 
 pub fn generate_uuid(config: &UuidConfig, identifier: &str) -> Result<String> {
     let uuid = if config.predictable {
-        let Some(org_domain) = &config.org_domain else {
-            anyhow::bail!(
-                "predictable UUIDs require an organization domain: pass --org <domain>, \
-                 or set organization.domain in profile.toml or .contour/config.toml"
-            );
-        };
-        let namespace = create_namespace_from_domain(org_domain);
-        Uuid::new_v5(&namespace, identifier.as_bytes()).to_string()
+        contour_profiles::deterministic_uuid(identifier)
     } else {
-        Uuid::new_v4().to_string()
+        Uuid::new_v4().to_string().to_uppercase()
     };
-    Ok(if config.uppercase { uuid.to_uppercase() } else { uuid })
+    Ok(if config.uppercase { uuid } else { uuid.to_lowercase() })
 }
 
-fn create_namespace_from_domain(domain: &str) -> Uuid {
-    Uuid::new_v5(&Uuid::NAMESPACE_DNS, domain.as_bytes())
+/// `uuid` in the case profile.toml's `[uuid] uppercase` asks for, for
+/// commands that run without a loaded `UuidConfig`.
+pub fn cased(uuid: String) -> String {
+    if contour_core::uuid_uppercase() { uuid } else { uuid.to_lowercase() }
+}
+
+/// v5 of `identifier` (the scheme every generator uses), cased.
+pub fn predictable(identifier: &str) -> String {
+    cased(contour_profiles::deterministic_uuid(identifier))
 }
 
 pub fn is_valid_uuid(uuid: &str) -> bool {
@@ -91,7 +91,6 @@ mod tests {
     #[test]
     fn test_generate_predictable_uuid() {
         let config = UuidConfig {
-            org_domain: Some("com.example".to_string()),
             predictable: true,
             uppercase: true,
         };
@@ -103,25 +102,23 @@ mod tests {
         assert!(is_valid_uuid(&uuid1));
     }
 
+    /// Predictable UUIDs are the generators' scheme: v5 of the identifier.
+    /// The identifier already carries the org prefix, so no org is needed.
     #[test]
-    fn predictable_without_org_domain_is_an_error() {
+    fn predictable_uuids_match_the_generators() {
         let config = UuidConfig {
-            org_domain: None,
             predictable: true,
             uppercase: true,
         };
-
-        let err = generate_uuid(&config, "test.identifier").unwrap_err();
-        assert!(
-            err.to_string().contains("--org"),
-            "error should tell the user how to fix it, got: {err}"
+        assert_eq!(
+            generate_uuid(&config, "com.acme.appstore").unwrap(),
+            contour_profiles::deterministic_uuid("com.acme.appstore")
         );
     }
 
     #[test]
     fn test_generate_random_uuid() {
         let config = UuidConfig {
-            org_domain: None,
             predictable: false,
             uppercase: true,
         };
@@ -137,7 +134,6 @@ mod tests {
     #[test]
     fn test_regenerate_uuid_random_produces_new_uuid() {
         let config = UuidConfig {
-            org_domain: None,
             predictable: false,
             uppercase: true,
         };
@@ -185,7 +181,6 @@ mod tests {
     fn real_v5_uuid_is_not_placeholder() {
         // Predictable v5 from org_domain "com.example" + identifier "test.identifier"
         let cfg = UuidConfig {
-            org_domain: Some("com.example".to_string()),
             predictable: true,
             uppercase: true,
         };
@@ -206,7 +201,6 @@ mod tests {
     #[test]
     fn test_regenerate_uuid_predictable_is_stable() {
         let config = UuidConfig {
-            org_domain: Some("com.example".to_string()),
             predictable: true,
             uppercase: true,
         };
@@ -225,7 +219,6 @@ mod tests {
     fn uppercase_setting_picks_the_case() {
         for predictable in [true, false] {
             let cfg = |uppercase| UuidConfig {
-                org_domain: Some("com.example".to_string()),
                 predictable,
                 uppercase,
             };
