@@ -82,6 +82,8 @@ windows-schema.workspace = true
 
 [dev-dependencies]
 osquery-schema.workspace = true
+mscp-schema.workspace = true
+app-policy-schema.workspace = true
 tempfile.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true

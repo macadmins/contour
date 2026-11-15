@@ -136,14 +136,101 @@ impl Registry {
         serde_json::to_string(&parsed).map_err(err)
     }
 
+    /// Fields ranked against a phrase ("turn off airdrop"), best first, as a
+    /// JSON array of `{type_id, path, type, title, description, score}`. Only
+    /// types a form can author.
+    pub fn search(&self, query: &str, limit: usize) -> Result<String, JsError> {
+        let hits: Vec<serde_json::Value> = self
+            .inner
+            .rank_fields(query)
+            .into_iter()
+            .filter(|h| h.manifest.is_authorable())
+            .take(limit)
+            .map(|h| {
+                serde_json::json!({
+                    "type_id": h.manifest.payload_type,
+                    "path": h.field.path,
+                    "type": h.field.field_type.as_str(),
+                    "title": h.field.title,
+                    "description": h.field.description,
+                    "score": h.score,
+                })
+            })
+            .collect();
+        serde_json::to_string(&hits).map_err(err)
+    }
+
     /// Diagnostics for `values_json` against `type_id`, as a JSON array.
     pub fn validate(&self, type_id: &str, values_json: &str) -> Result<String, JsError> {
         let values: serde_json::Value = serde_json::from_str(values_json).map_err(err)?;
         serde_json::to_string(&contour_form::validate(&self.inner, type_id, &values)).map_err(err)
     }
 
+    /// Step one of request-to-document: the candidate keys for `request`
+    /// and the prompt for a model, as JSON `{system, user, schema, candidates}`.
+    /// The host makes the model call, constraining the reply to `schema`
+    /// where it can.
+    pub fn ask_prepare(
+        &self,
+        request: &str,
+        platform: Option<String>,
+        limit: usize,
+        prefer_declarations: bool,
+    ) -> Result<String, JsError> {
+        let opts = contour_form::ask::AskOptions {
+            platform: platform_arg(platform)?,
+            limit,
+            prefer_declarations,
+        };
+        serde_json::to_string(&contour_form::ask::prepare(&self.inner, request, &opts)).map_err(err)
+    }
+
+    /// Step two: the model's `reply` against the `candidates_json` that
+    /// `ask_prepare` returned. JSON with `outcome` of `documents`, `declined`,
+    /// or `retry` (send `message` back to the model and resolve again).
+    pub fn ask_resolve(
+        &self,
+        candidates_json: &str,
+        reply: &str,
+        org: &str,
+        platform: Option<String>,
+    ) -> Result<String, JsError> {
+        let candidates: Vec<contour_form::ask::Candidate> =
+            serde_json::from_str(candidates_json).map_err(err)?;
+        let opts = EmitOptions {
+            org: org.to_string(),
+            platform: platform_arg(platform)?,
+            ..Default::default()
+        };
+        serde_json::to_string(&contour_form::ask::resolve(&self.inner, &candidates, reply, &opts))
+            .map_err(err)
+    }
+
+    /// Documents for a flat list of settings across payload types, as JSON
+    /// `{documents, refused}`. `settings_json` is `[{type, path, value}]`;
+    /// text values are typed from the schema, and every refusal says what
+    /// would fix it.
+    pub fn emit_settings(
+        &self,
+        settings_json: &str,
+        org: &str,
+        platform: Option<String>,
+        os_version: Option<String>,
+    ) -> Result<String, JsError> {
+        let settings: Vec<contour_form::Setting> =
+            serde_json::from_str(settings_json).map_err(err)?;
+        let opts = EmitOptions {
+            org: org.to_string(),
+            platform: platform_arg(platform)?,
+            os_version,
+            ..Default::default()
+        };
+        serde_json::to_string(&contour_form::emit_settings(&self.inner, &settings, &opts))
+            .map_err(err)
+    }
+
     /// The deployable document(s) for `values_json`, as a JSON array of
-    /// `{label?, identifier, filename, format, scope?, body}`.
+    /// `{label?, identifier, filename, format, scope?, requirements, body}`.
     pub fn emit(
         &self,
         type_id: &str,

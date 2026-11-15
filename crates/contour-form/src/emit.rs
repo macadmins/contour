@@ -14,7 +14,7 @@
 //! defaulted. UUIDs derive from the identifier, so the same input yields the
 //! same bytes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Serialize;
 
@@ -65,7 +65,79 @@ pub struct Emitted {
     pub format: EmitFormat,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
+    pub requirements: Requirements,
     pub body: String,
+}
+
+/// What the keys in one emitted document ask of the device and of whoever
+/// delivers it. Read from the schema for exactly the keys that were set, so
+/// a split declaration's two documents can differ.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Requirements {
+    /// Per platform, the earliest OS on which the type and every key set
+    /// exist. An older device ignores the newer keys.
+    pub min_os: BTreeMap<&'static str, String>,
+    /// Keys that only take effect on a supervised device.
+    pub supervised: Vec<String>,
+    /// Text keys that hold a credential, by schema flag or by name. Their
+    /// values belong in the MDM's secret variables, not in a repository.
+    pub sensitive: Vec<String>,
+}
+
+// ponytail: follows dictionaries only. Keys inside an array of dictionaries
+// are not looked up; add when a caller needs their requirements.
+fn requirements(
+    m: &PayloadManifest,
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Requirements {
+    let by_path: HashMap<&str, &FieldDefinition> =
+        m.fields.values().map(|f| (f.path.as_str(), f)).collect();
+    let mut req = Requirements::default();
+    let mut raise = |platform: Platform, version: &str| {
+        // `n/a` and other non-versions never compare, so they are skipped.
+        let newer = match req.min_os.get(platform.as_str()) {
+            Some(have) => crate::version::at_least(have, version) == Some(false),
+            None => crate::version::parse(version).is_some(),
+        };
+        if newer {
+            req.min_os.insert(platform.as_str(), version.to_string());
+        }
+    };
+    for (platform, version) in &m.min_versions {
+        raise(*platform, version);
+    }
+
+    let mut supervised = Vec::new();
+    let mut sensitive = Vec::new();
+    let mut stack: Vec<(String, &serde_json::Value)> =
+        obj.iter().map(|(k, v)| (k.clone(), v)).collect();
+    while let Some((path, value)) = stack.pop() {
+        if let Some(f) = by_path.get(path.as_str()) {
+            for (platform, version) in &f.introduced_by_platform {
+                raise(*platform, version);
+            }
+            if f.flags.supervised {
+                supervised.push(path.clone());
+            }
+        }
+        // By name as well: the embedded Apple schema flags no key sensitive.
+        // Text only, so `allowPasswordSharing: false` is not a credential.
+        let leaf = path.rsplit('.').next().unwrap_or(&path);
+        if value.is_string()
+            && (by_path.get(path.as_str()).is_some_and(|f| f.flags.sensitive)
+                || crate::sensitive::is_known_sensitive_name(leaf))
+        {
+            sensitive.push(path.clone());
+        }
+        if let Some(children) = value.as_object() {
+            stack.extend(children.iter().map(|(k, v)| (format!("{path}.{k}"), v)));
+        }
+    }
+    supervised.sort();
+    sensitive.sort();
+    req.supervised = supervised;
+    req.sensitive = sensitive;
+    req
 }
 
 #[derive(Debug)]
@@ -184,6 +256,202 @@ pub fn emit(
         EmitFormat::Declaration => emit_declarations(m, kind, obj, opts, platform),
         EmitFormat::MobileConfig => emit_mobileconfig(m, kind, obj, opts, platform),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Settings in, documents out: the entry point for a caller that is not a form
+// ---------------------------------------------------------------------------
+
+/// One thing to set: a key of a payload type, and its value.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct Setting {
+    #[serde(rename = "type")]
+    pub type_id: String,
+    /// Dotted path of the key, as search and the FormSpec give it.
+    pub path: String,
+    pub value: serde_json::Value,
+}
+
+/// Why a setting, or a whole payload type, was not written, and what would
+/// fix it. Meant to be handed back to whoever chose the setting.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Refusal {
+    #[serde(rename = "type")]
+    pub type_id: String,
+    /// The key, or `""` when the payload type as a whole is refused.
+    pub path: String,
+    pub rule: String,
+    pub message: String,
+    /// The values the key accepts, when it has a fixed set.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allowed: Vec<String>,
+    /// The range the key accepts, when it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<[Option<f64>; 2]>,
+    /// The key of this type whose name is closest, for an unknown key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub did_you_mean: Option<String>,
+}
+
+/// What [`emit_settings`] produced.
+#[derive(Debug, Clone, Serialize)]
+pub struct Outcome {
+    pub documents: Vec<Emitted>,
+    pub refused: Vec<Refusal>,
+}
+
+/// A short identifier segment for a payload type: `com.apple.applicationaccess`
+/// gives `applicationaccess`, `com.apple.configuration.passcode.settings`
+/// gives `passcode`.
+fn intent_for(type_id: &str) -> String {
+    let words: Vec<&str> = type_id
+        .split('.')
+        .filter(|w| !matches!(*w, "com" | "apple" | "configuration" | "settings" | "managed"))
+        .collect();
+    let slug = words.join("-").to_lowercase();
+    if slug.is_empty() { "settings".into() } else { slug }
+}
+
+/// A value typed as the schema types the key. An agent or a text field sends
+/// `"false"` and `"12"`; a profile needs `<false/>` and `<integer>`. Text
+/// that does not read as the key's type is left alone, for validation to
+/// refuse by name.
+fn typed(field: &FieldDefinition, value: serde_json::Value) -> serde_json::Value {
+    let serde_json::Value::String(text) = &value else {
+        return value;
+    };
+    let text = text.trim();
+    match field.field_type {
+        FieldType::Boolean => match text.to_ascii_lowercase().as_str() {
+            "true" | "yes" | "on" => true.into(),
+            "false" | "no" | "off" => false.into(),
+            _ => value,
+        },
+        FieldType::Integer => text.parse::<i64>().map_or(value.clone(), Into::into),
+        FieldType::Real => text.parse::<f64>().map_or(value.clone(), Into::into),
+        _ => value,
+    }
+}
+
+/// Emit a flat list of settings, across payload types, in one call.
+///
+/// The shape an agent produces: it picked keys from a search and has a value
+/// for each. Settings are grouped by type, typed from the schema, validated
+/// and emitted, one document set per type. `opts.intent` names the document
+/// when every setting is of one type; otherwise each type names its own.
+///
+/// A type with any refused setting is not written: a document missing part
+/// of what was chosen is not the document that was asked for. Every refusal
+/// across every type comes back together, with the allowed values, the range
+/// or the nearest key name, so one correction round can fix them all.
+pub fn emit_settings(reg: &SchemaRegistry, settings: &[Setting], opts: &EmitOptions) -> Outcome {
+    let mut groups: BTreeMap<&str, Vec<&Setting>> = BTreeMap::default();
+    for s in settings {
+        groups.entry(s.type_id.as_str()).or_default().push(s);
+    }
+    let single = groups.len() == 1 && !opts.intent.trim().is_empty();
+    let mut out = Outcome {
+        documents: Vec::new(),
+        refused: Vec::new(),
+    };
+    let refuse = |type_id: &str, path: &str, rule: &str, message: String| Refusal {
+        type_id: type_id.to_string(),
+        path: path.to_string(),
+        rule: rule.to_string(),
+        message,
+        allowed: Vec::new(),
+        range: None,
+        did_you_mean: None,
+    };
+
+    for (type_id, group) in groups {
+        let Some(m) = reg.get(type_id).or_else(|| reg.get_by_name(type_id)) else {
+            out.refused.push(refuse(
+                type_id,
+                "",
+                "unknown-type",
+                format!("'{type_id}' is not a payload type in the schema"),
+            ));
+            continue;
+        };
+        let by_path: HashMap<&str, &FieldDefinition> =
+            m.fields.values().map(|f| (f.path.as_str(), f)).collect();
+
+        let mut values = serde_json::Map::new();
+        let before = out.refused.len();
+        for s in group {
+            let Some(field) = by_path.get(s.path.as_str()) else {
+                // The same key in another case, or the same leaf under another parent.
+                let leaf = s.path.rsplit('.').next().unwrap_or(&s.path);
+                let mut near: Vec<&str> = by_path
+                    .keys()
+                    .copied()
+                    .filter(|p| {
+                        p.eq_ignore_ascii_case(&s.path)
+                            || p.rsplit('.').next().is_some_and(|l| l.eq_ignore_ascii_case(leaf))
+                    })
+                    .collect();
+                near.sort_unstable();
+                let mut r = refuse(
+                    &m.payload_type,
+                    &s.path,
+                    "unknown-key",
+                    format!("'{}' is not a key of {}", s.path, m.payload_type),
+                );
+                r.did_you_mean = near.first().map(|p| (*p).to_string());
+                out.refused.push(r);
+                continue;
+            };
+            if let Err(conflict) = crate::FieldPath::parse(&s.path)
+                .insert_json(&mut values, typed(field, s.value.clone()))
+            {
+                out.refused.push(refuse(
+                    &m.payload_type,
+                    &s.path,
+                    "path-conflict",
+                    format!("{conflict}"),
+                ));
+            }
+        }
+
+        let values = serde_json::Value::Object(values);
+        let target = Target {
+            platform: opts.platform,
+            os_version: opts.os_version.clone(),
+        };
+        for d in validate_target(reg, &m.payload_type, &values, &target) {
+            if !d.blocks_emit {
+                continue;
+            }
+            let mut r = refuse(&m.payload_type, &d.path, d.rule, d.message);
+            if let Some(f) = by_path.get(d.path.as_str()) {
+                r.allowed = f.allowed_values.clone();
+                if f.range_min.is_some() || f.range_max.is_some() {
+                    r.range = Some([f.range_min, f.range_max]);
+                }
+            }
+            out.refused.push(r);
+        }
+        if out.refused.len() > before {
+            continue;
+        }
+
+        let opts = EmitOptions {
+            intent: if single {
+                opts.intent.clone()
+            } else {
+                intent_for(&m.payload_type)
+            },
+            ..opts.clone()
+        };
+        match emit(reg, &m.payload_type, &values, &opts) {
+            Ok(docs) => out.documents.extend(docs),
+            Err(e) => out
+                .refused
+                .push(refuse(&m.payload_type, "", "not-emitted", e.to_string())),
+        }
+    }
+    out
 }
 
 fn platform_flag(m: &PayloadManifest, p: Platform) -> bool {
@@ -343,15 +611,19 @@ fn declaration(
             serde_json::Value::String(s.payload_scope_value().into()),
         );
     }
+    let requirements = requirements(m, &payload);
     doc.insert("Payload".into(), serde_json::Value::Object(payload));
+    // Ends with a newline, as `profile normalize` writes a declaration.
     let body = serde_json::to_string_pretty(&serde_json::Value::Object(doc))
-        .map_err(|e| EmitError::Serialize(e.to_string()))?;
+        .map_err(|e| EmitError::Serialize(e.to_string()))?
+        + "\n";
     Ok(Emitted {
         label: label.map(str::to_string),
         identifier: id.to_string(),
         filename: format!("{id}.json"),
         format: EmitFormat::Declaration,
         scope,
+        requirements,
         body,
     })
 }
@@ -428,6 +700,11 @@ fn emit_mobileconfig(
     inner.insert("PayloadVersion".into(), plist::Value::Integer(1.into()));
     inner.insert("PayloadDisplayName".into(), display.clone().into());
     inner.insert("PayloadEnabled".into(), true.into());
+    inner.insert("PayloadOrganization".into(), org.into());
+    let inner = ordered(
+        inner,
+        &["PayloadType", "PayloadVersion", "PayloadIdentifier", "PayloadUUID"],
+    );
 
     let mut root = plist::Dictionary::new();
     root.insert("PayloadType".into(), "Configuration".into());
@@ -443,6 +720,18 @@ fn emit_mobileconfig(
     root.insert(
         "PayloadContent".into(),
         plist::Value::Array(vec![plist::Value::Dictionary(inner)]),
+    );
+
+    let root = ordered(
+        root,
+        &[
+            "PayloadType",
+            "PayloadVersion",
+            "PayloadIdentifier",
+            "PayloadUUID",
+            "PayloadDisplayName",
+            "PayloadContent",
+        ],
     );
 
     let mut buf = Vec::new();
@@ -464,8 +753,24 @@ fn emit_mobileconfig(
         filename: format!("{root_id}.mobileconfig"),
         format: EmitFormat::MobileConfig,
         scope,
+        requirements: requirements(m, obj),
         body,
     }])
+}
+
+/// `head` keys first in that order, then the rest sorted: the key order
+/// `profile normalize` writes, so an emitted profile is already in it.
+///
+/// The same function as `contour_profiles::xml::ordered`, kept inline for the
+/// reason the escape above is: contour-form stays free of native-only crates.
+/// `every_generator_agrees_with_normalize` holds the two together.
+fn ordered(dict: plist::Dictionary, head: &[&str]) -> plist::Dictionary {
+    let mut rest: Vec<_> = dict.into_iter().collect();
+    rest.sort_by(|a, b| {
+        let rank = |k: &str| head.iter().position(|h| *h == k).unwrap_or(head.len());
+        rank(&a.0).cmp(&rank(&b.0)).then_with(|| a.0.cmp(&b.0))
+    });
+    rest.into_iter().collect()
 }
 
 /// Convert a values object to a plist dictionary, consulting the schema.
@@ -586,6 +891,74 @@ mod tests {
             platform: Some(Platform::MacOS),
             ..Default::default()
         }
+    }
+
+    /// The shape an agent sends: keys of two types in one list, values as text.
+    #[test]
+    fn settings_across_types_emit_together_and_refusals_say_how_to_fix() {
+        let r = reg();
+        let settings = |v: serde_json::Value| -> Vec<Setting> { serde_json::from_value(v).unwrap() };
+        let o = EmitOptions {
+            org: "com.acme".into(),
+            platform: Some(Platform::MacOS),
+            ..Default::default()
+        };
+
+        let good = emit_settings(
+            &r,
+            &settings(json!([
+                {"type": "com.apple.applicationaccess", "path": "allowAirDrop", "value": "false"},
+                {"type": "com.apple.applicationaccess", "path": "allowCamera", "value": false},
+                {"type": "com.apple.configuration.passcode.settings", "path": "MinimumLength", "value": "12"},
+            ])),
+            &o,
+        );
+        assert!(good.refused.is_empty(), "{:?}", good.refused);
+        assert_eq!(good.documents.len(), 2);
+        let profile = good.documents.iter().find(|d| d.format == EmitFormat::MobileConfig).unwrap();
+        assert!(profile.body.contains("<key>allowAirDrop</key>\n\t\t\t<false/>"), "{}", profile.body);
+        let declaration = good.documents.iter().find(|d| d.format == EmitFormat::Declaration).unwrap();
+        assert!(declaration.body.contains("\"MinimumLength\": 12"), "{}", declaration.body);
+
+        // One bad key refuses its own type and leaves the other type alone.
+        let mixed = emit_settings(
+            &r,
+            &settings(json!([
+                {"type": "com.apple.applicationaccess", "path": "allowairdrop", "value": false},
+                {"type": "com.apple.configuration.softwareupdate.settings", "path": "AutomaticActions.InstallOSUpdates", "value": "Always"},
+                {"type": "com.apple.configuration.passcode.settings", "path": "MinimumLength", "value": 12},
+            ])),
+            &o,
+        );
+        assert_eq!(mixed.documents.len(), 1, "only the passcode declaration");
+        let unknown = mixed.refused.iter().find(|x| x.rule == "unknown-key").unwrap();
+        assert_eq!(unknown.did_you_mean.as_deref(), Some("allowAirDrop"));
+        let not_in_enum = mixed.refused.iter().find(|x| x.path == "AutomaticActions.InstallOSUpdates").unwrap();
+        assert!(not_in_enum.allowed.iter().any(|v| v == "AlwaysOn"), "{not_in_enum:?}");
+    }
+
+    /// The requirements are those of the keys that were set, not of the type.
+    #[test]
+    fn requirements_follow_the_keys_that_were_set() {
+        let r = reg();
+        let emit_one = |values| {
+            emit(&r, "com.apple.applicationaccess", &values, &opts("restrictions")).unwrap()[0]
+                .requirements
+                .clone()
+        };
+        let airdrop = emit_one(json!({"allowAirDrop": false}));
+        assert_eq!(airdrop.supervised, ["allowAirDrop"]);
+        assert!(airdrop.min_os.contains_key("macOS"), "{airdrop:?}");
+
+        let wifi = emit(
+            &r,
+            "com.apple.wifi.managed",
+            &json!({"SSID_STR": "Acme", "EncryptionType": "WPA2", "Password": "x"}),
+            &opts("wifi"),
+        )
+        .unwrap();
+        assert_eq!(wifi[0].requirements.sensitive, ["Password"]);
+        assert!(wifi[0].requirements.supervised.is_empty());
     }
 
     /// A key Apple types `<data>` must emit `<data>`.

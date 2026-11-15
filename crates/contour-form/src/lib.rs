@@ -14,6 +14,7 @@
 #![allow(dead_code, reason = "module under development")]
 
 pub mod annotations;
+pub mod ask;
 pub mod composed;
 pub mod emit;
 pub mod form;
@@ -25,10 +26,12 @@ pub mod path;
 // gated inside the file: `#![cfg(feature = "native")]`
 pub mod lookup;
 pub mod mscp_keys;
+pub mod mscp_rules;
 pub mod parse;
 pub mod parser;
 pub mod plist_parser;
 pub mod scope;
+pub mod sensitive;
 pub mod serializer;
 pub mod types;
 pub mod validate;
@@ -48,7 +51,9 @@ pub use types::{FieldDefinition, FieldType, OsSupportDetail, PayloadManifest, Pl
 
 // The contract, at the root. None of these functions takes a path.
 pub use annotations::{Annotation, Annotations};
-pub use emit::{EmitFormat, EmitOptions, Emitted, emit};
+pub use emit::{
+    EmitFormat, EmitOptions, Emitted, Outcome, Refusal, Requirements, Setting, emit, emit_settings,
+};
 pub use form::{Target, form, form_all, form_all_with, form_with};
 pub use formspec::{Document, FormNode, FormSpec};
 pub use parse::{Parsed, parse};
@@ -272,6 +277,91 @@ pub struct RegistryStats {
     pub prefs_count: usize,
     pub ddm_count: usize,
     pub total: usize,
+}
+
+/// Rank documents against a multi-word phrase: `(index into docs, score)`,
+/// best first, documents that match no word left out.
+///
+/// A document is `[name, context, text]`: the key's own name, what it
+/// belongs to, and its description. A word in the name counts three times,
+/// in the context twice, in the text once, each weighted by how rare the
+/// word is across all documents. Not tied to Apple payloads: any keyed
+/// schema with descriptions can be ranked.
+// ponytail: O(docs x words) lowercase scan per call (~14k fields). Build an
+// index once if this is ever called in a loop.
+pub fn rank_text(docs: &[[String; 3]], query: &str) -> Vec<(usize, f32)> {
+    let query = query.to_lowercase();
+    let mut words: Vec<&str> = query
+        .split(|c: char| !c.is_alphanumeric())
+        // A number is a value to set, not a word that names a key.
+        .filter(|w| w.len() > 1 && !w.chars().all(|c| c.is_ascii_digit()))
+        .map(stem)
+        .collect();
+    words.sort_unstable();
+    words.dedup();
+
+    // Per document: the weight each word matched with, 0 when it did not.
+    let weights: Vec<Vec<f32>> = docs
+        .iter()
+        .map(|doc| {
+            let [name, context, text] = doc.each_ref().map(|s| s.to_lowercase());
+            words
+                .iter()
+                .map(|w| {
+                    if name.contains(w) {
+                        3.0
+                    } else if context.contains(w) {
+                        2.0
+                    } else if text.contains(w) {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    let total = docs.len() as f32;
+    let rarity: Vec<f32> = (0..words.len())
+        .map(|i| {
+            let matched = weights.iter().filter(|w| w[i] > 0.0).count() as f32;
+            (1.0 + total / matched.max(1.0)).ln()
+        })
+        .collect();
+
+    let mut hits: Vec<(usize, f32)> = weights
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (i, w.iter().zip(&rarity).map(|(w, r)| w * r).sum::<f32>()))
+        .filter(|(_, score)| *score > 0.0)
+        .collect();
+    hits.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    hits
+}
+
+/// A word cut back far enough to be found inside its relatives: matching is
+/// by substring, so `install` finds `allowAppInstallation` where
+/// `installing` does not, and `character` finds `characters`.
+///
+/// Suffixes only, and never below four letters, so `string` stays whole.
+fn stem(word: &str) -> &str {
+    for suffix in ["ing", "ed", "s"] {
+        if let Some(root) = word.strip_suffix(suffix)
+            && root.len() >= 4
+        {
+            return root;
+        }
+    }
+    word
+}
+
+/// One field ranked by [`SchemaRegistry::rank_fields`].
+#[derive(Debug, Clone, Copy)]
+pub struct FieldHit<'a> {
+    pub manifest: &'a PayloadManifest,
+    pub field: &'a FieldDefinition,
+    pub score: f32,
 }
 
 impl SchemaRegistry {
@@ -605,6 +695,50 @@ impl SchemaRegistry {
                     })
             })
             .collect()
+    }
+
+    /// Rank every field against a multi-word phrase, best first.
+    ///
+    /// For "turn off airdrop": a substring search finds nothing, because no
+    /// field contains the phrase. [`rank_text`] scores each word on its own,
+    /// so `airdrop` decides the result and `turn` / `off` barely move it.
+    ///
+    /// Lexical only: it finds the words that were typed, not their synonyms.
+    pub fn rank_fields(&self, query: &str) -> Vec<FieldHit<'_>> {
+        let fields: Vec<(&PayloadManifest, &FieldDefinition)> = self
+            .manifests
+            .values()
+            .flat_map(|m| m.fields.values().map(move |f| (m, f)))
+            .collect();
+        let docs: Vec<[String; 3]> = fields
+            .iter()
+            .map(|(m, f)| {
+                [
+                    // The key's own name. Its parents are context: a long
+                    // path must not outrank a key for words in its ancestors.
+                    f.name.clone(),
+                    format!("{} {} {}", m.payload_type, m.title, f.path),
+                    format!("{} {}", f.title, f.description),
+                ]
+            })
+            .collect();
+        let mut hits: Vec<FieldHit<'_>> = rank_text(&docs, query)
+            .into_iter()
+            .map(|(i, score)| FieldHit {
+                manifest: fields[i].0,
+                field: fields[i].1,
+                score,
+            })
+            .collect();
+        // `manifests` is a HashMap: equal scores are ordered by name, not by
+        // the order this process happened to walk it in.
+        hits.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.manifest.payload_type.cmp(&b.manifest.payload_type))
+                .then_with(|| a.field.path.cmp(&b.field.path))
+        });
+        hits
     }
 
     /// Get manifests by category

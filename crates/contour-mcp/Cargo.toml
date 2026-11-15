@@ -26,6 +26,10 @@ mdm-schema = { path = "../mdm-schema" }
 osquery-schema = { path = "../osquery-schema" }
 mscp-schema = { path = "../mscp-schema" }
 contour-core = { path = "../contour-core" }
+# The form logic, in its pure build: no filesystem, process, env, net or
+# clock is compiled in, the same gate the wasm face links under. Search,
+# validate and emit return text; nothing here can write.
+contour-form = { path = "../contour-form", default-features = false }
 
 anyhow.workspace = true
 clap.workspace = true

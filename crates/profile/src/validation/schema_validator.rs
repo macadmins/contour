@@ -529,36 +529,30 @@ impl<'a> SchemaValidator<'a> {
                 continue;
             }
 
-            // Key is unknown — try fuzzy matching
-            if let Some(suggestion) = find_similar_key(key, manifest) {
-                let message = format!("Unknown key '{}'. Did you mean '{}'?", key, suggestion);
-                if self.options.strict {
-                    result.issues.push(ValidationIssue::error(
-                        &payload.payload_type,
-                        Some(index),
-                        Some(key),
-                        message,
-                        "UNKNOWN_KEY",
-                    ));
-                } else {
-                    result.issues.push(ValidationIssue::warning(
-                        &payload.payload_type,
-                        Some(index),
-                        Some(key),
-                        message,
-                        "UNKNOWN_KEY",
-                    ));
+            // Unknown in a payload type contour has a schema for. The device
+            // ignores such a key, so it is always reported: a warning by
+            // default, an error under --strict.
+            let message = match find_similar_key(key, manifest) {
+                Some(suggestion) => {
+                    format!("Unknown key '{key}'. Did you mean '{suggestion}'?")
                 }
-            } else if self.options.strict {
-                result.issues.push(ValidationIssue::error(
-                    &payload.payload_type,
-                    Some(index),
-                    Some(key),
-                    format!("Unknown key '{}' (strict mode)", key),
-                    "UNKNOWN_KEY",
-                ));
-            }
-            // Non-strict + no fuzzy match: silently allow (legitimate vendor/custom key)
+                None => format!(
+                    "Unknown key '{key}' is not in the schema for {} and is ignored by the device",
+                    payload.payload_type
+                ),
+            };
+            let issue = if self.options.strict {
+                ValidationIssue::error
+            } else {
+                ValidationIssue::warning
+            };
+            result.issues.push(issue(
+                &payload.payload_type,
+                Some(index),
+                Some(key),
+                message,
+                "UNKNOWN_KEY",
+            ));
         }
     }
 
@@ -1327,15 +1321,16 @@ mod tests {
             "Expected error for unknown key in strict mode"
         );
         assert!(
-            unknown_key_errors[0].message.contains("strict mode"),
-            "Expected strict mode mention, got: {}",
+            unknown_key_errors[0].message.contains("ignored by the device"),
+            "Expected the consequence in the message, got: {}",
             unknown_key_errors[0].message
         );
     }
 
     #[test]
-    fn test_custom_key_no_warning() {
-        // Completely unrelated key in non-strict mode — should be silently allowed
+    fn test_custom_key_warns() {
+        // No near match to suggest, but the schema knows this payload type and
+        // not this key: reported as a warning, never silently allowed.
         let manifest = test_manifest("com.apple.dock", &["tilesize", "orientation"]);
         let registry = registry_from_manifest(manifest);
         let validator = SchemaValidator::new(&registry);
@@ -1362,14 +1357,9 @@ mod tests {
             .into_iter()
             .filter(|w| w.code == "UNKNOWN_KEY")
             .collect();
-        assert!(
-            unknown_warnings.is_empty(),
-            "Custom key should not produce warnings in non-strict mode, got: {:?}",
-            unknown_warnings
-                .iter()
-                .map(|w| &w.message)
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(unknown_warnings.len(), 1);
+        assert!(unknown_warnings[0].message.contains("VendorCustomField"));
+        assert!(result.errors().is_empty(), "a warning, not an error");
     }
 
     #[test]
