@@ -1930,7 +1930,7 @@ fn prompt_field_value(field: &FieldDefinition) -> Option<String> {
                 Err(_) => None,
             }
         }
-        FieldType::Array | FieldType::Dictionary | FieldType::Data | FieldType::Date => {
+        FieldType::Array | FieldType::Dictionary | FieldType::Data | FieldType::Date | FieldType::Any => {
             println!(
                 "  {} {} ({}) — edit manually in TOML",
                 "⊘".dimmed(),
@@ -2196,7 +2196,7 @@ fn build_payload_from_schema(
                 .as_deref()
                 .and_then(parse_plist_date)
                 .map_or_else(|| Value::String(String::new()), Value::Date),
-            FieldType::String => Value::String(field.default.clone().unwrap_or_default()),
+            FieldType::String | FieldType::Any => Value::String(field.default.clone().unwrap_or_default()),
         }
     }
 

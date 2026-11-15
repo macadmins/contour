@@ -465,6 +465,7 @@ fn resolve_control(
         FieldType::Integer | FieldType::Real => (Control::Number, None, None, None),
         FieldType::Boolean => (Control::Toggle, None, None, None),
         FieldType::Data => (Control::File, None, None, None),
+        FieldType::Any => (Control::RawAny, None, None, None),
     }
 }
 

@@ -557,6 +557,7 @@ pub fn plist_tag_for(t: &FieldType) -> &'static str {
         FieldType::Data => "data",
         FieldType::Date => "date",
         FieldType::Real => "real",
+        FieldType::Any => "any type",
     }
 }
 

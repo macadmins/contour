@@ -200,6 +200,7 @@ pub fn handle_emit(
         org,
         intent: intent.to_string(),
         format: None,
+            keep_unknown: false,
         nesting: match (mcx, direct) {
             (true, false) => Some(Nesting::McxWrapped),
             (false, true) => Some(Nesting::Direct),

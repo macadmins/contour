@@ -52,6 +52,13 @@ pub struct EmitOptions {
     pub os_version: Option<String>,
     /// `PayloadDisplayName`; the schema title when absent.
     pub display_name: Option<String>,
+    /// Write what the schema does not know instead of refusing it: a key a
+    /// known payload type does not document, and a whole payload type the
+    /// schema does not have. For a profile someone already deploys, where an
+    /// undocumented key is usually deliberate. Each one is listed in
+    /// [`Outcome::kept`]. Values of keys the schema does know are still
+    /// checked and refused as usual.
+    pub keep_unknown: bool,
 }
 
 /// One emitted document.
@@ -234,7 +241,9 @@ pub fn emit(
             os_version: opts.os_version.clone(),
         },
     );
-    if diagnostics.iter().any(|d| d.blocks_emit) {
+    // An undocumented key nested in a value is written as given when the
+    // caller keeps what the schema does not know.
+    if diagnostics.iter().any(|d| d.blocks_emit && !(opts.keep_unknown && d.rule == "unknown-key")) {
         return Err(EmitError::Invalid(diagnostics));
     }
     let obj = values.as_object().expect("validate() guarantees an object");
@@ -298,6 +307,10 @@ pub struct Refusal {
 pub struct Outcome {
     pub documents: Vec<Emitted>,
     pub refused: Vec<Refusal>,
+    /// With [`EmitOptions::keep_unknown`]: what was written as given,
+    /// unchecked, because the schema does not know it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub kept: Vec<Refusal>,
 }
 
 /// A short identifier segment for a payload type: `com.apple.applicationaccess`
@@ -353,6 +366,7 @@ pub fn emit_settings(reg: &SchemaRegistry, settings: &[Setting], opts: &EmitOpti
     let mut out = Outcome {
         documents: Vec::new(),
         refused: Vec::new(),
+        kept: Vec::new(),
     };
     let refuse = |type_id: &str, path: &str, rule: &str, message: String| Refusal {
         type_id: type_id.to_string(),
@@ -366,6 +380,22 @@ pub fn emit_settings(reg: &SchemaRegistry, settings: &[Setting], opts: &EmitOpti
 
     for (type_id, group) in groups {
         let Some(m) = reg.get(type_id).or_else(|| reg.get_by_name(type_id)) else {
+            if opts.keep_unknown {
+                let mut values = serde_json::Map::new();
+                for s in &group {
+                    // ponytail: a conflicting path is skipped; no schema says which wins.
+                    let _ = crate::FieldPath::parse(&s.path).insert_json(&mut values, s.value.clone());
+                }
+                let intent = if single { opts.intent.clone() } else { intent_for(type_id) };
+                match passthrough(type_id, &values, &EmitOptions { intent, ..opts.clone() }) {
+                    Ok(doc) => {
+                        out.kept.push(refuse(type_id, "", "unknown-type", format!("'{type_id}' is not in the schema; its keys are written as given, unchecked")));
+                        out.documents.push(doc);
+                    }
+                    Err(e) => out.refused.push(refuse(type_id, "", "not-emitted", e.to_string())),
+                }
+                continue;
+            }
             out.refused.push(refuse(
                 type_id,
                 "",
@@ -378,9 +408,16 @@ pub fn emit_settings(reg: &SchemaRegistry, settings: &[Setting], opts: &EmitOpti
             m.fields.values().map(|f| (f.path.as_str(), f)).collect();
 
         let mut values = serde_json::Map::new();
+        // Keys the type does not document, kept aside to be written as given.
+        let mut extra = serde_json::Map::new();
         let before = out.refused.len();
         for s in group {
             let Some(field) = by_path.get(s.path.as_str()) else {
+                if opts.keep_unknown {
+                    let _ = crate::FieldPath::parse(&s.path).insert_json(&mut extra, s.value.clone());
+                    out.kept.push(refuse(&m.payload_type, &s.path, "unknown-key", format!("'{}' is not a documented key of {}; written as given, unchecked", s.path, m.payload_type)));
+                    continue;
+                }
                 // The same key in another case, or the same leaf under another parent.
                 let leaf = s.path.rsplit('.').next().unwrap_or(&s.path);
                 let mut near: Vec<&str> = by_path
@@ -423,6 +460,10 @@ pub fn emit_settings(reg: &SchemaRegistry, settings: &[Setting], opts: &EmitOpti
             if !d.blocks_emit {
                 continue;
             }
+            if opts.keep_unknown && d.rule == "unknown-key" {
+                out.kept.push(refuse(&m.payload_type, &d.path, d.rule, format!("{}; written as given, unchecked", d.message)));
+                continue;
+            }
             let mut r = refuse(&m.payload_type, &d.path, d.rule, d.message);
             if let Some(f) = by_path.get(d.path.as_str()) {
                 r.allowed = f.allowed_values.clone();
@@ -444,7 +485,14 @@ pub fn emit_settings(reg: &SchemaRegistry, settings: &[Setting], opts: &EmitOpti
             },
             ..opts.clone()
         };
-        match emit(reg, &m.payload_type, &values, &opts) {
+        match emit(reg, &m.payload_type, &values, &opts).and_then(|mut docs| {
+            if !extra.is_empty()
+                && let Some(first) = docs.first_mut()
+            {
+                first.body = add_keys(&first.body, first.format, &extra)?;
+            }
+            Ok(docs)
+        }) {
             Ok(docs) => out.documents.extend(docs),
             Err(e) => out
                 .refused
@@ -734,19 +782,7 @@ fn emit_mobileconfig(
         ],
     );
 
-    let mut buf = Vec::new();
-    plist::to_writer_xml(&mut buf, &plist::Value::Dictionary(root))
-        .map_err(|e| EmitError::Serialize(e.to_string()))?;
-    // Escape like Apple's writers (& < > only); see contour_profiles::xml.
-    // Kept inline: contour-form stays free of native-only crates. Same guard
-    // as there: keep the edit only if it parses to the same value.
-    let text = String::from_utf8(buf).map_err(|e| EmitError::Serialize(e.to_string()))?;
-    let fixed = text.replace("&quot;", "\"").replace("&apos;", "'");
-    let parse = |s: &str| plist::from_bytes::<plist::Value>(s.as_bytes()).ok();
-    let body = match (parse(&fixed), parse(&text)) {
-        (Some(a), Some(b)) if a == b => fixed,
-        _ => text,
-    };
+    let body = write_plist(root)?;
     Ok(vec![Emitted {
         label: None,
         identifier: root_id.clone(),
@@ -756,6 +792,131 @@ fn emit_mobileconfig(
         requirements: requirements(m, obj),
         body,
     }])
+}
+
+/// A profile as text, the way contour writes every profile.
+fn write_plist(root: plist::Dictionary) -> Result<String, EmitError> {
+    let mut buf = Vec::new();
+    plist::to_writer_xml(&mut buf, &plist::Value::Dictionary(root))
+        .map_err(|e| EmitError::Serialize(e.to_string()))?;
+    // Escape like Apple's writers (& < > only); see contour_profiles::xml.
+    // Kept inline: contour-form stays free of native-only crates. Same guard
+    // as there: keep the edit only if it parses to the same value.
+    let text = String::from_utf8(buf).map_err(|e| EmitError::Serialize(e.to_string()))?;
+    let fixed = text.replace("&quot;", "\"").replace("&apos;", "'");
+    let parse = |s: &str| plist::from_bytes::<plist::Value>(s.as_bytes()).ok();
+    Ok(match (parse(&fixed), parse(&text)) {
+        (Some(a), Some(b)) if a == b => fixed,
+        _ => text,
+    })
+}
+
+/// JSON to plist with no schema to consult: strings stay strings.
+fn plain_plist(v: &serde_json::Value) -> plist::Value {
+    use serde_json::Value as J;
+    match v {
+        J::Null => plist::Value::String(String::new()),
+        J::Bool(b) => plist::Value::Boolean(*b),
+        J::Number(n) => n.as_i64().map_or_else(|| plist::Value::Real(n.as_f64().unwrap_or(0.0)), |i| plist::Value::Integer(i.into())),
+        J::String(s) => plist::Value::String(s.clone()),
+        J::Array(a) => plist::Value::Array(a.iter().map(plain_plist).collect()),
+        J::Object(o) => plist::Value::Dictionary(o.iter().map(|(k, v)| (k.clone(), plain_plist(v))).collect()),
+    }
+}
+
+/// Keys the schema does not document, added to an emitted document's
+/// payload: the settings dictionary of a profile (inside the MCX wrapper
+/// where there is one), or `Payload` of a declaration.
+fn add_keys(body: &str, format: EmitFormat, extra: &serde_json::Map<String, serde_json::Value>) -> Result<String, EmitError> {
+    let bad = |what: &str| EmitError::Serialize(format!("adding undocumented keys: {what}"));
+    if format == EmitFormat::Declaration {
+        let mut v: serde_json::Value = serde_json::from_str(body).map_err(|e| bad(&e.to_string()))?;
+        let payload = v.get_mut("Payload").and_then(|p| p.as_object_mut()).ok_or_else(|| bad("no Payload"))?;
+        for (k, val) in extra {
+            payload.insert(k.clone(), val.clone());
+        }
+        let mut text = serde_json::to_string_pretty(&v).map_err(|e| bad(&e.to_string()))?;
+        text.push('\n');
+        return Ok(text);
+    }
+    let mut root: plist::Dictionary = plist::from_bytes(body.as_bytes()).map_err(|e| bad(&e.to_string()))?;
+    let inner = root
+        .get_mut("PayloadContent")
+        .and_then(plist::Value::as_array_mut)
+        .and_then(|a| a.first_mut())
+        .and_then(plist::Value::as_dictionary_mut)
+        .ok_or_else(|| bad("no payload"))?;
+    let mcx = inner.get("PayloadType").and_then(plist::Value::as_string) == Some("com.apple.ManagedClient.preferences");
+    let target = if mcx {
+        inner
+            .get_mut("PayloadContent")
+            .and_then(plist::Value::as_dictionary_mut)
+            .and_then(|d| d.values_mut().next())
+            .and_then(plist::Value::as_dictionary_mut)
+            .and_then(|d| d.get_mut("Forced"))
+            .and_then(plist::Value::as_array_mut)
+            .and_then(|a| a.first_mut())
+            .and_then(plist::Value::as_dictionary_mut)
+            .and_then(|d| d.get_mut("mcx_preference_settings"))
+            .and_then(plist::Value::as_dictionary_mut)
+            .ok_or_else(|| bad("no MCX settings"))?
+    } else {
+        inner
+    };
+    for (k, v) in extra {
+        target.insert(k.clone(), plain_plist(v));
+    }
+    let head = ["PayloadType", "PayloadVersion", "PayloadIdentifier", "PayloadUUID"];
+    if !mcx {
+        let sorted = ordered(std::mem::take(target), &head);
+        *target = sorted;
+    } else {
+        let sorted = ordered(std::mem::take(target), &[]);
+        *target = sorted;
+    }
+    write_plist(root)
+}
+
+/// A profile for a payload type the schema does not have: its keys as
+/// given, in contour's envelope.
+fn passthrough(
+    type_id: &str,
+    obj: &serde_json::Map<String, serde_json::Value>,
+    opts: &EmitOptions,
+) -> Result<Emitted, EmitError> {
+    identity::validate_org_domain(&opts.org).map_err(EmitError::Org)?;
+    let org = opts.org.trim();
+    let root_id = format!("{org}.{}", opts.intent.trim());
+    let payload_id = format!("{root_id}.payload");
+    let display = opts.display_name.clone().unwrap_or_else(|| type_id.to_string());
+    let mut inner: plist::Dictionary = obj.iter().map(|(k, v)| (k.clone(), plain_plist(v))).collect();
+    inner.insert("PayloadType".into(), type_id.into());
+    inner.insert("PayloadIdentifier".into(), payload_id.clone().into());
+    inner.insert("PayloadUUID".into(), identity::name_uuid(&payload_id).into());
+    inner.insert("PayloadVersion".into(), plist::Value::Integer(1.into()));
+    inner.insert("PayloadDisplayName".into(), display.clone().into());
+    inner.insert("PayloadEnabled".into(), true.into());
+    inner.insert("PayloadOrganization".into(), org.into());
+    let inner = ordered(inner, &["PayloadType", "PayloadVersion", "PayloadIdentifier", "PayloadUUID"]);
+    let mut root = plist::Dictionary::new();
+    root.insert("PayloadType".into(), "Configuration".into());
+    root.insert("PayloadVersion".into(), plist::Value::Integer(1.into()));
+    root.insert("PayloadIdentifier".into(), root_id.clone().into());
+    root.insert("PayloadUUID".into(), identity::name_uuid(&root_id).into());
+    root.insert("PayloadDisplayName".into(), display.into());
+    root.insert("PayloadOrganization".into(), org.into());
+    root.insert("PayloadScope".into(), Scope::System.payload_scope_value().into());
+    root.insert("PayloadContent".into(), plist::Value::Array(vec![plist::Value::Dictionary(inner)]));
+    let root = ordered(root, &["PayloadType", "PayloadVersion", "PayloadIdentifier", "PayloadUUID", "PayloadDisplayName", "PayloadContent"]);
+    Ok(Emitted {
+        label: None,
+        identifier: root_id.clone(),
+        filename: format!("{root_id}.mobileconfig"),
+        format: EmitFormat::MobileConfig,
+        scope: None,
+        requirements: Requirements::default(),
+        body: write_plist(root)?,
+    })
 }
 
 /// `head` keys first in that order, then the rest sorted: the key order
@@ -935,6 +1096,54 @@ mod tests {
         assert_eq!(unknown.did_you_mean.as_deref(), Some("allowAirDrop"));
         let not_in_enum = mixed.refused.iter().find(|x| x.path == "AutomaticActions.InstallOSUpdates").unwrap();
         assert!(not_in_enum.allowed.iter().any(|v| v == "AlwaysOn"), "{not_in_enum:?}");
+    }
+
+    /// Apple types each logging subsystem `<any>`; in practice it is a
+    /// dictionary of options, and that must not read as a wrong type.
+    #[test]
+    fn an_any_typed_value_takes_a_dictionary() {
+        let r = reg();
+        let out = emit_settings(
+            &r,
+            &[Setting {
+                type_id: "com.apple.system.logging".into(),
+                path: "Subsystems".into(),
+                value: json!({"com.apple.IPConfiguration": {"DEFAULT-OPTIONS": {"Level": {"Enable": "Info"}}}}),
+            }],
+            &opts(""),
+        );
+        assert!(!out.refused.iter().any(|x| x.rule == "type-mismatch"), "{:?}", out.refused);
+    }
+
+    /// A profile someone already deploys keeps what the schema does not
+    /// know, flagged, instead of being held back for it.
+    #[test]
+    fn keep_unknown_writes_undocumented_keys_and_types() {
+        let r = reg();
+        let set = |t: &str, p: &str, v: serde_json::Value| Setting { type_id: t.into(), path: p.into(), value: v };
+        let settings = [
+            set("com.apple.loginwindow", "DisableLoginItemsSuppression", json!(true)),
+            set("com.apple.loginwindow", "SHOWFULLNAME", json!(true)),
+            set("com.acme.vendor.app", "LicenseServer", json!("lic.acme.test")),
+        ];
+        let strict = emit_settings(&r, &settings, &opts(""));
+        assert!(strict.refused.iter().any(|x| x.rule == "unknown-key"));
+        assert!(strict.refused.iter().any(|x| x.rule == "unknown-type"));
+
+        let lenient = emit_settings(&r, &settings, &EmitOptions { keep_unknown: true, ..opts("") });
+        assert!(lenient.refused.is_empty(), "{:?}", lenient.refused);
+        assert_eq!(lenient.kept.len(), 2, "{:?}", lenient.kept);
+        let body = |t: &str| lenient.documents.iter().find(|d| d.body.contains(t)).map(|d| d.body.clone()).unwrap();
+        assert!(body("DisableLoginItemsSuppression").contains("SHOWFULLNAME"), "documented and undocumented keys in one payload");
+        assert!(body("com.acme.vendor.app").contains("<string>lic.acme.test</string>"));
+        // An undocumented key inside a documented dictionary is kept too.
+        let nested = emit_settings(&r, &[set("com.apple.security.scep", "PayloadContent", json!({"URL": "https://scep.acme.test", "ScepProxyOption": 1}))], &EmitOptions { keep_unknown: true, ..opts("") });
+        assert!(nested.refused.is_empty(), "{:?}", nested.refused);
+        assert!(nested.documents[0].body.contains("ScepProxyOption"));
+        assert!(nested.kept.iter().any(|k| k.path.ends_with("ScepProxyOption")), "{:?}", nested.kept);
+        // A known key's value is still checked.
+        let wrong = emit_settings(&r, &[set("com.apple.loginwindow", "SHOWFULLNAME", json!("maybe"))], &EmitOptions { keep_unknown: true, ..opts("") });
+        assert!(!wrong.refused.is_empty());
     }
 
     /// The requirements are those of the keys that were set, not of the type.

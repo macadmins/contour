@@ -398,6 +398,7 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             "date" => FieldType::Date,
             "array" => FieldType::Array,
             "dictionary" => FieldType::Dictionary,
+            "any" => FieldType::Any,
             _ => FieldType::String,
         };
         let fd = FieldDefinition {

@@ -214,6 +214,7 @@ fn field_to_json_schema(field: &FieldDefinition) -> Value {
         FieldType::Dictionary => (json!("object"), None),
         FieldType::Data => (json!("string"), Some("base64")),
         FieldType::Date => (json!("string"), Some("date-time")),
+        FieldType::Any => (json!(["string", "number", "boolean", "array", "object"]), None),
     };
 
     schema.insert("type".to_string(), type_val);

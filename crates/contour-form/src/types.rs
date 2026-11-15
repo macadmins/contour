@@ -290,6 +290,10 @@ pub enum FieldType {
     Data,
     Date,
     Real,
+    /// Apple's `<any>`: the value may be of any type, and is not checked.
+    /// `com.apple.system.logging` `Subsystems.ANY` is one: each subsystem
+    /// takes a dictionary of options.
+    Any,
 }
 
 impl FieldType {
@@ -303,6 +307,7 @@ impl FieldType {
             'x' => Some(FieldType::Data),
             't' => Some(FieldType::Date),
             'r' => Some(FieldType::Real),
+            'y' => Some(FieldType::Any),
             _ => None,
         }
     }
@@ -317,6 +322,7 @@ impl FieldType {
             FieldType::Data => "Data",
             FieldType::Date => "Date",
             FieldType::Real => "Real",
+            FieldType::Any => "Any",
         }
     }
 }

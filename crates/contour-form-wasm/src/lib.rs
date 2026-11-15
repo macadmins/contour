@@ -299,6 +299,7 @@ impl Registry {
             org: org.to_string(),
             intent: intent.to_string(),
             format: None,
+            keep_unknown: false,
             nesting: match nesting.as_deref() {
                 None => None,
                 Some("mcx") => Some(Nesting::McxWrapped),

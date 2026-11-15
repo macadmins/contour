@@ -399,6 +399,8 @@ fn check_value(
         ));
     };
     match f.field_type {
+        // Apple's `<any>`: nothing to check.
+        FieldType::Any => {}
         FieldType::Boolean => {
             if !v.is_boolean() {
                 type_err(out, "boolean");
