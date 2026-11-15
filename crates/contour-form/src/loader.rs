@@ -110,7 +110,23 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
                 }
                 for (key, mut field) in apple.fields {
                     match existing.fields.get(&key) {
-                        Some(prior) => field.flags.required &= prior.flags.required,
+                        Some(prior) => {
+                            field.flags.required &= prior.flags.required;
+                            // The same for what a key accepts: the Kerberos
+                            // variant fixes Type to Credential and the team to
+                            // apple, the general one does not. A merged key
+                            // accepts what either variant accepts, and is open
+                            // where either leaves it open.
+                            field.allowed_values = if prior.allowed_values.is_empty() || field.allowed_values.is_empty() {
+                                Vec::new()
+                            } else {
+                                let mut union = prior.allowed_values.clone();
+                                union.extend(field.allowed_values.iter().filter(|v| !prior.allowed_values.contains(v)).cloned());
+                                union
+                            };
+                            field.range_min = prior.range_min.zip(field.range_min).map(|(a, b)| a.min(b));
+                            field.range_max = prior.range_max.zip(field.range_max).map(|(a, b)| a.max(b));
+                        }
                         None => field.flags.required = false,
                     }
                     existing.fields.insert(key.clone(), field);

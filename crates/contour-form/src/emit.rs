@@ -1098,6 +1098,27 @@ mod tests {
         assert!(not_in_enum.allowed.iter().any(|v| v == "AlwaysOn"), "{not_in_enum:?}");
     }
 
+    /// Two Apple files describe com.apple.extensiblesso; the Kerberos one's
+    /// fixed values must not bind every SSO extension.
+    #[test]
+    fn a_variant_does_not_narrow_what_its_payload_type_accepts() {
+        let r = reg();
+        let set = |p: &str, v: serde_json::Value| Setting { type_id: "com.apple.extensiblesso".into(), path: p.into(), value: v };
+        let out = emit_settings(
+            &r,
+            &[
+                set("ExtensionIdentifier", json!("com.microsoft.CompanyPortalMac.ssoextension")),
+                set("TeamIdentifier", json!("UBF8T346G9")),
+                set("Type", json!("Redirect")),
+                set("URLs", json!(["https://login.microsoftonline.com"])),
+            ],
+            &opts(""),
+        );
+        assert!(!out.refused.iter().any(|x| x.rule == "not-in-enum"), "{:?}", out.refused);
+        let bogus = emit_settings(&r, &[set("Type", json!("Sideways"))], &opts(""));
+        assert!(bogus.refused.iter().any(|x| x.rule == "not-in-enum"), "Type still has a fixed set: {:?}", bogus.refused);
+    }
+
     /// Apple types each logging subsystem `<any>`; in practice it is a
     /// dictionary of options, and that must not read as a wrong type.
     #[test]
