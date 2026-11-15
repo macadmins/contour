@@ -20,6 +20,7 @@ pub mod emit;
 pub mod form;
 pub mod formspec;
 pub mod identity;
+pub mod intent;
 pub mod jsonschema;
 pub mod loader;
 pub mod path;

@@ -137,7 +137,8 @@ pub struct SettingEntry {
 }
 
 impl SettingEntry {
-    fn label(&self) -> String {
+    /// How a refusal names this entry: the prefix of each `resolve_all` error.
+    pub fn label(&self) -> String {
         if let Some(app) = &self.app {
             return format!("{app}/{}", self.key);
         }
