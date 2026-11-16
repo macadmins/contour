@@ -49,6 +49,11 @@ pub struct Intent {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Words that say what the intent took in along the way, so it still
+    /// says so when the choice is undone: `baseline:800-171`,
+    /// `recipe:okta`, and any the person or agent adds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org: Option<String>,
     pub platform: String,
