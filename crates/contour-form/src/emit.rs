@@ -329,7 +329,19 @@ fn intent_for(type_id: &str) -> String {
 /// `"false"` and `"12"`; a profile needs `<false/>` and `<integer>`. Text
 /// that does not read as the key's type is left alone, for validation to
 /// refuse by name.
-fn typed(field: &FieldDefinition, value: serde_json::Value) -> serde_json::Value {
+///
+/// A boolean for a text key with a fixed set of values is the value of that
+/// set that reads as it: YAML 1.1 reads an unquoted `On` as `true`, so mSCP's
+/// `Enable: On` for FileVault arrives as `true`, and Apple's key takes `On`.
+pub(crate) fn typed(field: &FieldDefinition, value: serde_json::Value) -> serde_json::Value {
+    if let (serde_json::Value::Bool(b), FieldType::String) = (&value, &field.field_type) {
+        let words: &[&str] = if *b { &["on", "yes", "true", "enabled"] } else { &["off", "no", "false", "disabled"] };
+        return field
+            .allowed_values
+            .iter()
+            .find(|a| words.contains(&a.to_ascii_lowercase().as_str()))
+            .map_or(value, |a| a.clone().into());
+    }
     let serde_json::Value::String(text) = &value else {
         return value;
     };
@@ -1117,6 +1129,21 @@ mod tests {
         assert!(!out.refused.iter().any(|x| x.rule == "not-in-enum"), "{:?}", out.refused);
         let bogus = emit_settings(&r, &[set("Type", json!("Sideways"))], &opts(""));
         assert!(bogus.refused.iter().any(|x| x.rule == "not-in-enum"), "Type still has a fixed set: {:?}", bogus.refused);
+    }
+
+    /// YAML 1.1 reads mSCP's `Enable: On` as `true`; FileVault's `Enable`
+    /// is text that takes `On` or `Off`.
+    #[test]
+    fn a_boolean_for_an_on_off_text_key_is_written_as_its_word() {
+        let r = reg();
+        let set = |v: serde_json::Value| Setting { type_id: "com.apple.MCX.FileVault2".into(), path: "Enable".into(), value: v };
+        let out = emit_settings(&r, &[set(json!(true))], &opts(""));
+        assert!(!out.refused.iter().any(|x| x.rule == "type-mismatch"), "{:?}", out.refused);
+        let xml = &out.documents[0].body;
+        assert!(xml.contains("<string>On</string>"), "{xml}");
+        let sorted = crate::intent::sort_baseline(&r, "800-171").unwrap();
+        let enable = sorted.settings.iter().find(|s| s.type_id == "com.apple.MCX.FileVault2" && s.path == "Enable").unwrap();
+        assert_eq!(enable.value, json!("On"), "the baseline's value reads as the page shows it");
     }
 
     /// Apple types each logging subsystem `<any>`; in practice it is a

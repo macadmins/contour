@@ -211,7 +211,7 @@ pub fn setting_for(reg: &SchemaRegistry, type_id: &str, key: &str, value: &Value
     Some(Setting {
         type_id: m.payload_type.clone(),
         path: field.path.clone(),
-        value: value.clone(),
+        value: crate::emit::typed(field, value.clone()),
     })
 }
 
@@ -257,4 +257,5 @@ pub fn sort_baseline(reg: &SchemaRegistry, name: &str) -> Result<SortedBaseline,
     }
     Ok(sorted)
 }
+
 
