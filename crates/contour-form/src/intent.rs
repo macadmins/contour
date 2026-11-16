@@ -80,6 +80,14 @@ pub struct Intent {
     /// the documents are rendered for deployment, never into this file.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub recipes: Recipes,
+    /// Payload types whose profile is also written as a DDM
+    /// `com.apple.configuration.legacy` declaration pointing at it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy: Vec<String>,
+    /// Where those profiles are served, for the declaration's `ProfileURL`:
+    /// `https://mdm.acme.com/profiles/{name}`, `{name}` the profile's file name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_url: Option<String>,
 }
 
 /// mSCP's remediation scripts for the rules of `baselines` that a profile
