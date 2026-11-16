@@ -145,15 +145,67 @@ fn index() -> &'static Index {
                 entry.1.push(e.rule_id);
             }
         }
+        let mut baselines: BTreeMap<(String, String), Vec<String>> = baselines.into_iter().map(|(key, (_, ids))| (key, ids)).collect();
+        add_branch_baselines(&mut rules, &mut docs, &mut settings, &mut baselines);
         Index {
             rules,
             docs,
             settings,
             fixes,
             coverage,
-            baselines: baselines.into_iter().map(|(key, (_, ids))| (key, ids)).collect(),
+            baselines,
         }
     })
+}
+
+/// A baseline mSCP has on a 1.x branch but not yet in 2.0: rule ids, the
+/// 2.0 names of renamed rules, and the rules 2.0 dropped with their keys.
+#[derive(serde::Deserialize)]
+struct BranchBaselines {
+    platform: String,
+    #[serde(default)]
+    renamed: BTreeMap<String, String>,
+    #[serde(default)]
+    rule: Vec<BranchRule>,
+    baselines: BTreeMap<String, BranchBaseline>,
+}
+
+#[derive(serde::Deserialize)]
+struct BranchRule {
+    id: String,
+    title: String,
+    settings: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BranchBaseline {
+    rules: Vec<String>,
+}
+
+/// BSI Indigo for iOS, from mSCP's `ios_26` branch (see the file). The
+/// dataset's own baseline of the same name, once there is one, wins.
+// ponytail: carried in contour until posture imports it; drop the file then.
+fn add_branch_baselines(
+    rules: &mut Vec<(String, String, bool)>,
+    docs: &mut Vec<[String; 3]>,
+    settings: &mut BTreeMap<(String, String), serde_json::Value>,
+    baselines: &mut BTreeMap<(String, String), Vec<String>>,
+) {
+    let Ok(branch) = toml::from_str::<BranchBaselines>(include_str!("mscp_indigo_ios_26.toml")) else { return };
+    let platform = platform_name(&branch.platform);
+    for r in branch.rule {
+        if !rules.iter().any(|x| x.0 == r.id) {
+            docs.push([r.title.clone(), r.id.replace('_', " "), String::new()]);
+            rules.push((r.id.clone(), r.title, false));
+        }
+        if let Ok(v) = serde_json::from_str(&r.settings) {
+            settings.entry((platform.clone(), r.id)).or_insert(v);
+        }
+    }
+    for (name, b) in branch.baselines {
+        let ids = b.rules.iter().map(|id| branch.renamed.get(id).cloned().unwrap_or_else(|| id.clone())).collect();
+        baselines.entry((platform.clone(), name)).or_insert(ids);
+    }
 }
 
 fn rule(index: &Index, platform: &str, i: usize, score: f32) -> Rule {
@@ -242,6 +294,22 @@ mod tests {
         let stig = baseline_for("ios", "ios_stig").unwrap();
         assert!(stig.iter().any(|r| r.enforced_by == "profile" && !r.keys().is_empty()));
         assert!(baselines_for("tvOS").is_empty());
+    }
+
+    /// BSI Indigo, from mSCP's ios_26 branch: every rule resolves, renamed
+    /// ones by their 2.0 name, dropped ones with their own keys.
+    #[test]
+    fn indigo_comes_from_the_ios_26_branch() {
+        for (name, count) in [("indigo_base", 79), ("indigo_high", 121)] {
+            let rules = baseline_for("iOS", name).unwrap();
+            assert_eq!(rules.len(), count, "{name}: every rule found");
+            assert!(rules.iter().filter(|r| r.enforced_by == "profile").count() > count * 8 / 10, "{name}");
+        }
+        let base = baseline_for("iOS", "indigo_base").unwrap();
+        let trust = base.iter().find(|r| r.rule_id == "os_disallow_enterprise_app_trust").unwrap();
+        assert_eq!(trust.keys(), [("com.apple.applicationaccess".to_string(), "allowEnterpriseAppTrust".to_string(), serde_json::json!(false))]);
+        assert!(base.iter().any(|r| r.rule_id == "system_settings_siri_disable"), "renamed to the 2.0 rule");
+        assert!(!baselines().iter().any(|b| b.starts_with("indigo")), "not a macOS baseline");
     }
 
     #[test]
