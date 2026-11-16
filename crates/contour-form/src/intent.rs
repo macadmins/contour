@@ -175,6 +175,8 @@ impl Intent {
 #[derive(Debug, Clone)]
 pub struct SortedBaseline {
     pub name: String,
+    /// The platform the baseline is for: `macOS`, `iOS`.
+    pub platform: String,
     pub rules: usize,
     /// Every setting of every rule in `by_profile`.
     pub settings: Vec<Setting>,
@@ -202,13 +204,14 @@ impl SortedBaseline {
     /// covers, what it leaves out, and which OS versions it is for.
     pub fn summary(&self) -> String {
         format!(
-            "mSCP baseline {} for macOS: {} of {} rules, the ones a profile can carry. Not included: {} enforced by a script or declaration, {} whose keys are not in the schema. {}",
+            "mSCP baseline {} for {}: {} of {} rules, the ones a profile can carry. Not included: {} enforced by a script or declaration, {} whose keys are not in the schema. {}",
             self.name,
+            self.platform,
             self.by_profile.len(),
             self.rules,
             self.not_by_profile.len(),
             self.not_in_schema.len(),
-            os_coverage()
+            os_coverage_for(&self.platform)
         )
     }
 }
@@ -216,14 +219,19 @@ impl SortedBaseline {
 /// Which macOS versions the baselines are for, in one sentence, from the
 /// rules themselves. `15.0` and `27.0` read as "macOS 15" and "macOS 27".
 pub fn os_coverage() -> String {
+    os_coverage_for("macOS")
+}
+
+/// The same for one platform's baselines.
+pub fn os_coverage_for(platform: &str) -> String {
     let major = |v: &str| v.split('.').next().unwrap_or(v).to_string();
-    match mscp_rules::macos_coverage() {
+    match mscp_rules::coverage_for(platform) {
         Some((oldest, newest)) => format!(
-            "For macOS {} and later only: mSCP has no rules for older versions. Built from the macOS {} rule set; each document states the minimum macOS its own keys need.",
+            "For {platform} {} and later only: mSCP has no rules for older versions. Built from the {platform} {} rule set; each document states the minimum {platform} its own keys need.",
             major(&oldest),
             major(&newest)
         ),
-        None => "The embedded dataset carries no mSCP rules.".to_string(),
+        None => format!("The embedded dataset carries no mSCP rules for {platform}."),
     }
 }
 
@@ -246,10 +254,22 @@ pub fn setting_for(reg: &SchemaRegistry, type_id: &str, key: &str, value: &Value
 }
 
 pub fn sort_baseline(reg: &SchemaRegistry, name: &str) -> Result<SortedBaseline, String> {
-    let rules = mscp_rules::baseline(name)
-        .ok_or_else(|| format!("no baseline named `{name}`; known: {}", mscp_rules::baselines().join(", ")))?;
+    sort_baseline_for(reg, "macOS", name)
+}
+
+/// One platform's baseline, sorted the same way: `iOS` `ios_stig`.
+pub fn sort_baseline_for(reg: &SchemaRegistry, platform: &str, name: &str) -> Result<SortedBaseline, String> {
+    let known = mscp_rules::baselines_for(platform);
+    let rules = mscp_rules::baseline_for(platform, name).ok_or_else(|| {
+        if known.is_empty() {
+            format!("mSCP has no baselines for {platform}")
+        } else {
+            format!("no {platform} baseline named `{name}`; known: {}", known.join(", "))
+        }
+    })?;
     let mut sorted = SortedBaseline {
         name: name.to_string(),
+        platform: platform.to_string(),
         rules: rules.len(),
         settings: Vec::new(),
         by_profile: Vec::new(),

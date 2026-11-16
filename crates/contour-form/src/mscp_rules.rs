@@ -49,23 +49,38 @@ impl Rule {
     }
 }
 
+/// The platforms mSCP writes rules for, as the dataset names them.
+const MAC: &str = "macOS";
+
 struct Index {
     /// `(rule id, title, has a declaration)`, one per rule.
     rules: Vec<(String, String, bool)>,
     docs: Vec<[String; 3]>,
-    /// Rule id to its parsed `mobileconfig_info`.
-    settings: BTreeMap<String, serde_json::Value>,
-    /// Rule id to its remediation script.
-    fixes: BTreeMap<String, String>,
-    /// Baseline name to its macOS rule ids, at the newest OS it is built for.
-    baselines: BTreeMap<String, Vec<String>>,
-    /// The oldest and newest macOS the rules are written for.
-    macos: Option<(String, String)>,
+    /// `(platform, rule id)` to its parsed `mobileconfig_info`, at the
+    /// newest OS version that platform's rule is written for.
+    settings: BTreeMap<(String, String), serde_json::Value>,
+    /// `(platform, rule id)` to its remediation script.
+    fixes: BTreeMap<(String, String), String>,
+    /// `(platform, baseline)` to its rule ids, at the newest OS it is built for.
+    baselines: BTreeMap<(String, String), Vec<String>>,
+    /// Per platform, the oldest and newest OS the rules are written for.
+    coverage: BTreeMap<String, (String, String)>,
 }
 
 /// `a` is a newer OS version than `b`. Not a version at all sorts oldest.
 fn newer(a: &str, b: &str) -> bool {
     crate::version::at_least(a, b) == Some(true) && crate::version::at_least(b, a) != Some(true)
+}
+
+/// The dataset's spelling of a platform: `ios` and `iOS` alike.
+fn platform_name(p: &str) -> String {
+    match p.to_ascii_lowercase().as_str() {
+        "macos" => "macOS".into(),
+        "ios" | "ipados" => "iOS".into(),
+        "visionos" => "visionOS".into(),
+        "tvos" => "tvOS".into(),
+        other => other.to_string(),
+    }
 }
 
 fn index() -> &'static Index {
@@ -85,45 +100,44 @@ fn index() -> &'static Index {
             ]);
             rules.push((r.rule_id, r.title, r.has_ddm_info));
         }
-        // A rule has a row per OS version; the newest one is the rule as it stands.
-        let mut macos: Option<(String, String)> = None;
-        let mut newest: BTreeMap<String, (String, Option<serde_json::Value>, Option<String>)> = BTreeMap::new();
+        // A rule has a row per platform and OS version; the newest one on a
+        // platform is the rule as it stands there.
+        let mut coverage: BTreeMap<String, (String, String)> = BTreeMap::new();
+        type Newest = BTreeMap<(String, String), (String, Option<serde_json::Value>, Option<String>)>;
+        let mut newest: Newest = BTreeMap::new();
         for p in mscp_schema::rule_payloads::read(mscp_schema::embedded_rule_payloads()).unwrap_or_default() {
-            if !p.platform.eq_ignore_ascii_case("macOS") {
-                continue;
+            let platform = platform_name(&p.platform);
+            let span = coverage.entry(platform.clone()).or_insert_with(|| (p.os_version.clone(), p.os_version.clone()));
+            if newer(&span.0, &p.os_version) {
+                span.0 = p.os_version.clone();
             }
-            macos = Some(match macos {
-                None => (p.os_version.clone(), p.os_version.clone()),
-                Some((oldest, latest)) => (
-                    if newer(&oldest, &p.os_version) { p.os_version.clone() } else { oldest },
-                    if newer(&p.os_version, &latest) { p.os_version.clone() } else { latest },
-                ),
-            });
-            if newest.get(&p.rule_id).is_some_and(|(have, _, _)| !newer(&p.os_version, have)) {
+            if newer(&p.os_version, &span.1) {
+                span.1 = p.os_version.clone();
+            }
+            let key = (platform, p.rule_id);
+            if newest.get(&key).is_some_and(|(have, _, _)| !newer(&p.os_version, have)) {
                 continue;
             }
             let parsed = p.mobileconfig_info.as_deref().and_then(|i| serde_json::from_str(i).ok());
             let fix = p.fix_script.filter(|f| !f.trim().is_empty());
-            newest.insert(p.rule_id, (p.os_version, parsed, fix));
+            newest.insert(key, (p.os_version, parsed, fix));
         }
         let mut settings = BTreeMap::new();
         let mut fixes = BTreeMap::new();
-        for (id, (_, parsed, fix)) in newest {
+        for (key, (_, parsed, fix)) in newest {
             if let Some(parsed) = parsed {
-                settings.insert(id.clone(), parsed);
+                settings.insert(key.clone(), parsed);
             }
             if let Some(fix) = fix {
-                fixes.insert(id, fix);
+                fixes.insert(key, fix);
             }
         }
 
-        let mut baselines: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+        let mut baselines: BTreeMap<(String, String), (String, Vec<String>)> = BTreeMap::new();
         for e in mscp_schema::baseline_edges::read(mscp_schema::embedded_baseline_edges()).unwrap_or_default() {
-            if !e.platform.as_deref().is_some_and(|p| p.eq_ignore_ascii_case("macOS")) {
-                continue;
-            }
+            let Some(platform) = e.platform.as_deref().map(platform_name) else { continue };
             let os = e.os_version.unwrap_or_default();
-            let entry = baselines.entry(e.baseline).or_insert_with(|| (os.clone(), Vec::new()));
+            let entry = baselines.entry((platform, e.baseline)).or_insert_with(|| (os.clone(), Vec::new()));
             if newer(&os, &entry.0) {
                 *entry = (os.clone(), Vec::new());
             }
@@ -136,15 +150,16 @@ fn index() -> &'static Index {
             docs,
             settings,
             fixes,
-            macos,
-            baselines: baselines.into_iter().map(|(name, (_, ids))| (name, ids)).collect(),
+            coverage,
+            baselines: baselines.into_iter().map(|(key, (_, ids))| (key, ids)).collect(),
         }
     })
 }
 
-fn rule(index: &Index, i: usize, score: f32) -> Rule {
+fn rule(index: &Index, platform: &str, i: usize, score: f32) -> Rule {
     let (rule_id, title, has_declaration) = &index.rules[i];
-    let settings = index.settings.get(rule_id);
+    let key = (platform.to_string(), rule_id.clone());
+    let settings = index.settings.get(&key);
     Rule {
         rule_id: rule_id.clone(),
         title: title.clone(),
@@ -157,40 +172,59 @@ fn rule(index: &Index, i: usize, score: f32) -> Rule {
         },
         settings: settings.cloned().unwrap_or_else(|| serde_json::json!([])),
         score,
-        fix_script: index.fixes.get(rule_id).cloned(),
+        fix_script: index.fixes.get(&key).cloned(),
     }
 }
 
-/// The rules whose title, id or discussion best match `query`, best first.
+/// The rules whose title, id or discussion best match `query`, best first,
+/// as they stand on macOS.
 pub fn matching(query: &str, limit: usize) -> Vec<Rule> {
     let index = index();
     crate::rank_text(&index.docs, query)
         .into_iter()
         .take(limit)
-        .map(|(i, score)| rule(index, i, score))
+        .map(|(i, score)| rule(index, MAC, i, score))
         .collect()
 }
 
 /// The oldest and the newest macOS version mSCP's rules here are written
 /// for, e.g. `("15.0", "27.0")`. Baselines are built from the newest.
 pub fn macos_coverage() -> Option<(String, String)> {
-    index().macos.clone()
+    coverage_for(MAC)
+}
+
+/// The same for any platform mSCP covers (`iOS`, `visionOS`).
+pub fn coverage_for(platform: &str) -> Option<(String, String)> {
+    index().coverage.get(&platform_name(platform)).cloned()
 }
 
 /// The names of the macOS baselines, e.g. `cis_lvl1`, `800-53r5_low`.
 pub fn baselines() -> Vec<String> {
-    index().baselines.keys().cloned().collect()
+    baselines_for(MAC)
+}
+
+/// The names of one platform's baselines: `ios_stig` and
+/// `cis_lvl1_enterprise` for iOS. Empty for a platform mSCP does not cover.
+pub fn baselines_for(platform: &str) -> Vec<String> {
+    let p = platform_name(platform);
+    index().baselines.keys().filter(|(bp, _)| *bp == p).map(|(_, name)| name.clone()).collect()
 }
 
 /// Every rule of one macOS baseline, in the baseline's own order. `None`
 /// when there is no baseline of that name.
 pub fn baseline(name: &str) -> Option<Vec<Rule>> {
+    baseline_for(MAC, name)
+}
+
+/// Every rule of one platform's baseline, as the rule stands there.
+pub fn baseline_for(platform: &str, name: &str) -> Option<Vec<Rule>> {
     let index = index();
-    let ids = index.baselines.get(name)?;
+    let p = platform_name(platform);
+    let ids = index.baselines.get(&(p.clone(), name.to_string()))?;
     Some(
         ids.iter()
             .filter_map(|id| index.rules.iter().position(|r| r.0 == *id))
-            .map(|i| rule(index, i, 0.0))
+            .map(|i| rule(index, &p, i, 0.0))
             .collect(),
     )
 }
@@ -198,6 +232,17 @@ pub fn baseline(name: &str) -> Option<Vec<Rule>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// iOS has baselines of its own, with its own rules' settings.
+    #[test]
+    fn ios_has_its_own_baselines() {
+        let ios = baselines_for("iOS");
+        assert!(ios.iter().any(|b| b == "ios_stig") && ios.iter().any(|b| b == "cis_lvl1_enterprise"), "{ios:?}");
+        assert!(!baselines().iter().any(|b| b == "ios_stig"), "not a macOS baseline");
+        let stig = baseline_for("ios", "ios_stig").unwrap();
+        assert!(stig.iter().any(|r| r.enforced_by == "profile" && !r.keys().is_empty()));
+        assert!(baselines_for("tvOS").is_empty());
+    }
 
     #[test]
     fn a_baseline_lists_its_rules_and_how_each_is_enforced() {
