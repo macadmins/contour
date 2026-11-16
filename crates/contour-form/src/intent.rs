@@ -88,6 +88,15 @@ pub struct Intent {
     /// `https://mdm.acme.com/profiles/{name}`, `{name}` the profile's file name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_url: Option<String>,
+    /// The OS version the devices run (`"27.2"`). What Apple removed by
+    /// then is left out of the documents, because the device ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_version: Option<String>,
+    /// Removed by `os_version` but written anyway, for older devices: a
+    /// payload type (`com.apple.SoftwareUpdate`) or a type and key
+    /// (`com.apple.applicationaccess forceDelayedSoftwareUpdates`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep_removed: Vec<String>,
 }
 
 /// mSCP's remediation scripts for the rules of `baselines` that a profile
