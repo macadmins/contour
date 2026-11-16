@@ -109,6 +109,12 @@ pub struct Intent {
     /// accepted by the person, unchecked by contour.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accept_unknown: Vec<String>,
+    /// Folders the settings came from, relative to this file
+    /// (`../sprouted/profiles/macos`): where to look again, offered as
+    /// folders to open. Rendering never reads them; the settings above are
+    /// the intent, whatever the folders hold now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
 }
 
 /// The payload types and tags an intent was written from.
