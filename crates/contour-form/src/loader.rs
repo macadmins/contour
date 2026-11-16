@@ -63,6 +63,24 @@ fn load_embedded_from(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>>
 /// Third-party domains are App Schema documents built from their vendors'
 /// own sources, which arrive in `capabilities.parquet` like everything
 /// else.
+/// The words every variant's title starts with ("Extensible Single Sign-On"
+/// for the general and the Kerberos file), else the payload type's last part
+/// ("MCX").
+fn merged_title(payload_type: &str, titles: &[String]) -> String {
+    let words: Vec<Vec<&str>> = titles.iter().map(|t| t.split_whitespace().collect()).collect();
+    let shared: Vec<&str> = words[0]
+        .iter()
+        .enumerate()
+        .take_while(|(i, w)| words.iter().all(|t| t.get(*i) == Some(*w)))
+        .map(|(_, w)| *w)
+        .collect();
+    if shared.is_empty() {
+        payload_type.rsplit('.').next().unwrap_or(payload_type).to_string()
+    } else {
+        shared.join(" ")
+    }
+}
+
 pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifest>> {
     let mut manifests: Vec<PayloadManifest> = Vec::new();
 
@@ -75,6 +93,8 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
     // Collect existing payload_types so we can merge, not duplicate
     let mut existing_types: std::collections::HashSet<String> =
         manifests.iter().map(|m| m.payload_type.clone()).collect();
+    // Each variant's own title, to name the merged payload honestly.
+    let mut variant_titles: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
 
     // MDM profiles from Apple's device-management repo (authoritative)
     // Preference domains ride along with profiles here: before the
@@ -95,6 +115,10 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
                 .find(|m| m.payload_type == cap.payload_type)
             {
                 let apple = capability_to_manifest(cap);
+                let seen = variant_titles.entry(cap.payload_type.clone()).or_default();
+                if !seen.contains(&apple.title) {
+                    seen.push(apple.title.clone());
+                }
                 // What arrives here is a second VARIANT of one payload type: com.apple.extensiblesso and its (kerberos) surface,
                 // or the six com.apple.MCX files. A variant's requirements
                 // hold for that variant alone — Realm and TeamIdentifier are
@@ -155,8 +179,24 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
             }
         } else {
             existing_types.insert(cap.payload_type.clone());
-            manifests.push(capability_to_manifest(cap));
+            let m = capability_to_manifest(cap);
+            variant_titles.insert(cap.payload_type.clone(), vec![m.title.clone()]);
+            manifests.push(m);
         }
+    }
+    // A type Apple describes in several documents (six for com.apple.MCX:
+    // Wi-Fi, mobile accounts, energy saver, time server…) is not any one of
+    // them: its title is what their titles share, else the type's own name,
+    // and its description names them all.
+    for m in &mut manifests {
+        let Some(titles) = variant_titles.get(&m.payload_type).filter(|t| t.len() > 1) else { continue };
+        m.title = merged_title(&m.payload_type, titles);
+        m.description = format!(
+            "Apple describes {} in {} documents: {}. One payload carries the keys of any of them.",
+            m.payload_type,
+            titles.len(),
+            titles.join(", ")
+        );
     }
 
     // DDM declarations — a later row of the same type replaces the earlier.
@@ -764,6 +804,19 @@ mod tests {
     use tempfile::TempDir;
 
     // ========== Embedded Manifests Tests ==========
+
+    /// A type Apple describes in several documents is titled for all of
+    /// them, not for whichever loaded first.
+    #[test]
+    fn a_payload_of_several_documents_is_not_titled_after_one() {
+        let manifests = load_embedded().expect("load embedded manifests");
+        let get = |t: &str| manifests.iter().find(|m| m.payload_type == t).unwrap();
+        let mcx = get("com.apple.MCX");
+        assert_eq!(mcx.title, "MCX");
+        assert!(mcx.description.contains("Time Server") || mcx.description.contains("time server"), "{}", mcx.description);
+        assert_eq!(get("com.apple.extensiblesso").title, "Extensible Single Sign-On");
+        assert_eq!(merged_title("com.acme.x", &["Wi-Fi Managed Settings".into(), "Energy Saver".into()]), "x");
+    }
 
     /// Every authorable schema states what it is.
     #[test]
