@@ -152,8 +152,8 @@ fn index() -> &'static Index {
             docs,
             settings,
             fixes,
-            coverage,
             baselines,
+            coverage,
         }
     })
 }
