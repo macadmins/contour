@@ -54,6 +54,10 @@ pub struct Intent {
     /// `recipe:okta`, and any the person or agent adds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// What the session held when the intent was last written: its payload
+    /// types and tags. What changed since is what the intent may not cover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub described_from: Option<DescribedFrom>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org: Option<String>,
     pub platform: String,
@@ -105,6 +109,15 @@ pub struct Intent {
     /// accepted by the person, unchecked by contour.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accept_unknown: Vec<String>,
+}
+
+/// The payload types and tags an intent was written from.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DescribedFrom {
+    #[serde(default)]
+    pub types: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// mSCP's remediation scripts for the rules of `baselines` that a profile
