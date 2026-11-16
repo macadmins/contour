@@ -88,6 +88,9 @@ pub struct Intent {
     /// `https://mdm.acme.com/profiles/{name}`, `{name}` the profile's file name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_url: Option<String>,
+    /// A wrapped profile's own address, by payload type, over `legacy_url`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub legacy_urls: BTreeMap<String, String>,
     /// The OS version the devices run (`"27.2"`). What Apple removed by
     /// then is left out of the documents, because the device ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
