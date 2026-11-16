@@ -97,6 +97,11 @@ pub struct Intent {
     /// (`com.apple.applicationaccess forceDelayedSoftwareUpdates`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keep_removed: Vec<String>,
+    /// Payload types written as given where the schema does not know them
+    /// (a vendor's domain contour has no schema for, or undocumented keys):
+    /// accepted by the person, unchecked by contour.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accept_unknown: Vec<String>,
 }
 
 /// mSCP's remediation scripts for the rules of `baselines` that a profile
