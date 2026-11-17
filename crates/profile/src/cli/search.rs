@@ -185,7 +185,7 @@ fn handle_polymorphic_search(
                 })
             }).collect::<Vec<_>>(),
             "field_matches": field_hits.iter().map(|(m, f, in_)| {
-                serde_json::json!({
+                with_facets(f, serde_json::json!({
                     "payload_type": m.payload_type,
                     "field": {
                         "name": f.name,
@@ -208,7 +208,7 @@ fn handle_polymorphic_search(
                         "description": f.description,
                     },
                     "matched_in": in_,
-                })
+                }))
             }).collect::<Vec<_>>(),
             "summary": {
                 "payloads_matched": payload_hits.len(),
@@ -314,7 +314,7 @@ fn handle_field_lookup(
         let entries: Vec<serde_json::Value> = matches
             .iter()
             .map(|(m, f)| {
-                serde_json::json!({
+                with_facets(f, serde_json::json!({
                     "payload_type": m.payload_type,
                     "title": m.title,
                     "category": m.category,
@@ -340,7 +340,7 @@ fn handle_field_lookup(
                         "title": f.title,
                         "description": f.description,
                     },
-                })
+                }))
             })
             .collect();
         println!("{}", serde_json::to_string_pretty(&entries)?);
@@ -394,6 +394,15 @@ fn handle_field_lookup(
         }
     }
     Ok(())
+}
+
+/// Add the dataset's facets (examples, value titles, keywords, note, docs
+/// link, app version, read-only) to a hit's `field` object.
+fn with_facets(f: &crate::schema::FieldDefinition, mut hit: serde_json::Value) -> serde_json::Value {
+    if let Some(field) = hit.get_mut("field").and_then(serde_json::Value::as_object_mut) {
+        field.extend(contour_form::facets_json(f));
+    }
+    hit
 }
 
 fn output_json(results: &[&PayloadManifest]) -> Result<()> {
