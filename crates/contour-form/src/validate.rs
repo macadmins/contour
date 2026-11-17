@@ -193,7 +193,47 @@ pub fn validate_target(
         return out;
     };
     check_object(m, None, "", obj, target, &mut out);
+    // The merge accepts what any variant accepts. A payload carrying one
+    // variant's fixed values (the Kerberos extension's identifier, team and
+    // type) is that variant, and is also held to what it requires.
+    if let Some((name, variant)) = matching_variant(m, obj) {
+        let mut own = Vec::new();
+        check_object(variant, None, "", obj, target, &mut own);
+        for d in own {
+            let adds = matches!(d.rule, "required-missing" | "not-in-enum" | "below-range" | "above-range")
+                && !out.iter().any(|o| o.path == d.path && o.rule == d.rule);
+            if adds {
+                out.push(Diagnostic {
+                    message: format!("{} (as the {name} variant of {})", d.message, m.payload_type),
+                    ..d
+                });
+            }
+        }
+    }
     out
+}
+
+/// The variant whose fixed values (top-level keys with one allowed value)
+/// the payload all carries, if one does.
+fn matching_variant<'a>(
+    m: &'a PayloadManifest,
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Option<(&'a str, &'a PayloadManifest)> {
+    m.variants.iter().find_map(|(name, v)| {
+        let name = name.as_deref()?;
+        let fixed: Vec<&FieldDefinition> = v
+            .fields
+            .values()
+            .filter(|f| f.depth == 0 && f.allowed_values.len() == 1)
+            .collect();
+        let carries = !fixed.is_empty()
+            && fixed.iter().all(|f| {
+                obj.get(&f.path).is_some_and(|value| {
+                    value.as_str().map_or_else(|| value.to_string(), str::to_string) == f.allowed_values[0]
+                })
+            });
+        carries.then_some((name, v))
+    })
 }
 
 /// Apple's replacement, where the schema names one.

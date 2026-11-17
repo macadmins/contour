@@ -199,6 +199,7 @@ pub fn parse_yaml_manifest(content: &str) -> Result<PayloadManifest> {
         fields,
         field_order,
         segments: vec![],
+        variants: Vec::new(),
     })
 }
 
@@ -332,6 +333,7 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
         fields,
         field_order,
         segments: vec![],
+        variants: Vec::new(),
     })
 }
 

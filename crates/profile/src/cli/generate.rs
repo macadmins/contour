@@ -2476,6 +2476,7 @@ mod tests {
             field_order: fields.iter().map(|f| f.path.clone()).collect(),
             fields: fields.into_iter().map(|f| (f.path.clone(), f)).collect(),
             segments: vec![],
+            variants: Vec::new(),
         }
     }
 
@@ -2605,6 +2606,7 @@ mod tests {
                 "PFC_SegmentedControl_0".to_string(),
             ],
             segments: vec![],
+            variants: Vec::new(),
         };
 
         // backfill=true: bare-generate scaffolding, where required fields
@@ -2644,6 +2646,7 @@ mod tests {
             fields: std::collections::HashMap::new(),
             field_order: vec![],
             segments: vec![],
+            variants: Vec::new(),
         };
 
         let mut overrides = std::collections::BTreeMap::new();

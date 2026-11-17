@@ -1065,6 +1065,7 @@ mod os_support_tests {
             fields: std::collections::HashMap::new(),
             field_order: vec![],
             segments: vec![],
+            variants: Vec::new(),
         };
         m.os_support.insert(
             Platform::MacOS,

@@ -76,6 +76,12 @@ pub struct PayloadManifest {
     pub field_order: Vec<String>,
     /// Segments grouping field names by category (from pfm_segments)
     pub segments: Vec<Segment>,
+    /// Each document Apple describes this payload type in, by variant, when
+    /// there are several (`com.apple.extensiblesso` and its `kerberos`
+    /// file). The manifest itself is their merge; validation also holds a
+    /// payload to the variant whose fixed values it carries. Empty for a
+    /// type with one document.
+    pub variants: Vec<(Option<String>, PayloadManifest)>,
 }
 
 /// Per-platform support detail for a payload — exposes the rich Apple
@@ -863,6 +869,7 @@ mod tests {
                 "AppIdentifier".to_string(),
             ],
             segments: vec![],
+            variants: Vec::new(),
         };
         assert_eq!(m.top_level_fields().len(), 1);
         // Path-based: the grandchild resolves under the full parent path …
@@ -998,6 +1005,7 @@ mod tests {
             fields,
             field_order,
             segments: vec![],
+            variants: Vec::new(),
         }
     }
 

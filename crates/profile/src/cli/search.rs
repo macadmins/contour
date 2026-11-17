@@ -512,6 +512,7 @@ mod kind_filter_tests {
             fields: std::collections::HashMap::new(),
             field_order: vec![],
             segments: vec![],
+            variants: Vec::new(),
         }
     }
 

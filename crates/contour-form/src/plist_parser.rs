@@ -68,6 +68,7 @@ pub fn parse_plist_manifest(content: &[u8]) -> Result<PayloadManifest> {
         fields,
         field_order,
         segments,
+        variants: Vec::new(),
     })
 }
 

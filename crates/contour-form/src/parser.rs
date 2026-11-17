@@ -133,6 +133,7 @@ fn parse_ddm_declaration_line(line: &str) -> Result<PayloadManifest> {
         fields: std::collections::HashMap::new(),
         field_order: Vec::new(),
         segments: vec![],
+        variants: Vec::new(),
     })
 }
 
@@ -237,6 +238,7 @@ fn parse_manifest_line(line: &str) -> Result<PayloadManifest> {
         fields: HashMap::new(),
         field_order: Vec::new(),
         segments: vec![],
+        variants: Vec::new(),
     })
 }
 

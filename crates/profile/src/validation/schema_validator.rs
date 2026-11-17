@@ -1088,6 +1088,7 @@ mod tests {
             fields,
             field_order,
             segments: Vec::new(),
+            variants: Vec::new(),
         }
     }
 
@@ -1477,6 +1478,7 @@ mod tests {
             fields,
             field_order,
             segments: Vec::new(),
+            variants: Vec::new(),
         }
     }
 

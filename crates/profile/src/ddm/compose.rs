@@ -888,6 +888,7 @@ mod tests {
             fields: manifest_fields,
             field_order,
             segments: vec![],
+            variants: Vec::new(),
         }
     }
 

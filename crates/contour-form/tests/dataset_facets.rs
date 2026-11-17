@@ -118,3 +118,29 @@ fn windows_read_only_nodes_are_refused() {
     assert!(outcome.documents.is_empty(), "a read-only node was written");
     assert!(outcome.refused.iter().any(|r| r.rule == "read-only"), "{:?}", outcome.refused);
 }
+
+/// A Kerberos SSO payload is held to the Kerberos file: Realm is required
+/// there. An Okta-style payload is not, though both share the payload type.
+#[test]
+fn a_payload_is_held_to_the_variant_it_carries() {
+    let r = reg();
+    let kerberos = serde_json::json!({
+        "ExtensionIdentifier": "com.apple.AppSSOKerberos.KerberosExtension",
+        "TeamIdentifier": "apple",
+        "Type": "Credential",
+    });
+    let diags = validate(&r, "com.apple.extensiblesso", &kerberos);
+    assert!(
+        diags.iter().any(|d| d.path == "Realm" && d.rule == "required-missing" && d.message.contains("kerberos")),
+        "{diags:?}"
+    );
+
+    let okta = serde_json::json!({
+        "ExtensionIdentifier": "com.okta.mobile.auth-service-extension",
+        "TeamIdentifier": "B7F62B65BN",
+        "Type": "Redirect",
+        "URLs": ["https://acme.okta.com"],
+    });
+    let diags = validate(&r, "com.apple.extensiblesso", &okta);
+    assert!(diags.iter().all(|d| d.path != "Realm"), "{diags:?}");
+}

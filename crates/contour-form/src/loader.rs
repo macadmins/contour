@@ -112,6 +112,9 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
         manifests.iter().map(|m| m.payload_type.clone()).collect();
     // Each variant's own title, to name the merged payload honestly.
     let mut variant_titles: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    // Each variant's own manifest, kept beside the merge for validation.
+    let mut own: std::collections::HashMap<String, Vec<(Option<String>, PayloadManifest)>> =
+        std::collections::HashMap::new();
 
     // MDM profiles from Apple's device-management repo (authoritative)
     // Preference domains ride along with profiles here: before the
@@ -123,6 +126,9 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
             mdm_schema::PayloadKind::MdmProfile | mdm_schema::PayloadKind::ManagedPreference
         )
     }) {
+        own.entry(cap.payload_type.clone())
+            .or_default()
+            .push((cap.variant.clone(), capability_to_manifest(cap)));
         if existing_types.contains(&cap.payload_type) {
             // Merge this variant's keys into the manifest an earlier variant
             // built. The later row wins where both define the same key;
@@ -206,6 +212,9 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
     // them: its title is what their titles share, else the type's own name,
     // and its description names them all.
     for m in &mut manifests {
+        if let Some(docs) = own.remove(&m.payload_type).filter(|d| d.len() > 1) {
+            m.variants = docs;
+        }
         let Some(titles) = variant_titles.get(&m.payload_type).filter(|t| t.len() > 1) else { continue };
         m.title = merged_title(&m.payload_type, titles);
         m.description = format!(
@@ -344,6 +353,7 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
             fields,
             field_order,
             segments: vec![],
+            variants: Vec::new(),
         }
     };
 
@@ -668,6 +678,7 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
         fields,
         field_order,
         segments: vec![],
+        variants: Vec::new(),
     }
 }
 

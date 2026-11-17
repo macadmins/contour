@@ -526,6 +526,7 @@ mod tests {
             fields: std::collections::HashMap::new(),
             field_order: vec![],
             segments: vec![],
+            variants: Vec::new(),
         };
         SchemaRegistry::from_manifests_for_test(vec![manifest])
     }
@@ -568,6 +569,7 @@ mod tests {
             fields: std::collections::HashMap::new(),
             field_order: vec![],
             segments: vec![],
+            variants: Vec::new(),
         };
         SchemaRegistry::from_manifests_for_test(vec![manifest])
     }
@@ -613,6 +615,7 @@ mod tests {
             fields: std::collections::HashMap::new(),
             field_order: vec![],
             segments: vec![],
+            variants: Vec::new(),
         }]);
         let v = profile(vec![payload("com.apple.SoftwareUpdate")]);
         let report = scan_deprecations(

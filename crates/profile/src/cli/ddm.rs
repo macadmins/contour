@@ -4446,6 +4446,7 @@ mod enum_validation_tests {
             fields,
             field_order,
             segments: vec![],
+            variants: Vec::new(),
         }])
     }
 
@@ -4622,6 +4623,7 @@ mod scaffold_value_tests {
             fields: HashMap::from([("Cadence".to_string(), field.clone())]),
             field_order: vec!["Cadence".to_string()],
             segments: vec![],
+            variants: Vec::new(),
         };
 
         let value = generate_field_value("Cadence", &field, &manifest, true);
