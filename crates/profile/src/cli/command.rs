@@ -391,7 +391,16 @@ pub fn handle_command_generate(
 }
 
 /// Parse a string value into the appropriate plist type.
+///
+/// A JSON array or object becomes a plist array or dictionary, so a command
+/// key that takes one can be set: `--set 'Updates=[{"ProductKey":"…"}]'`.
+/// Before, it was written as a string, which the device refuses.
 fn parse_plist_value(value: &str) -> plist::Value {
+    if (value.starts_with('[') || value.starts_with('{'))
+        && let Ok(v) = serde_json::from_str::<plist::Value>(value)
+    {
+        return v;
+    }
     match value {
         "true" => plist::Value::Boolean(true),
         "false" => plist::Value::Boolean(false),
@@ -978,5 +987,21 @@ mod tests {
             err.to_string().contains("Payload"),
             "error should mention the missing Payload: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod set_value_tests {
+    use super::*;
+
+    /// A JSON array of dictionaries sets ScheduleOSUpdate's Updates.
+    #[test]
+    fn a_json_value_becomes_an_array_or_dictionary() {
+        let v = parse_plist_value(r#"[{"ProductKey":"MSU_UPDATE_26B131_patch_27.2.1_minor","MaxUserDeferrals":3}]"#);
+        let first = v.as_array().and_then(|a| a.first()).and_then(plist::Value::as_dictionary).unwrap();
+        assert_eq!(first.get("ProductKey").and_then(plist::Value::as_string), Some("MSU_UPDATE_26B131_patch_27.2.1_minor"));
+        assert_eq!(first.get("MaxUserDeferrals").and_then(plist::Value::as_signed_integer), Some(3));
+        assert_eq!(parse_plist_value("[not json"), plist::Value::String("[not json".into()));
+        assert_eq!(parse_plist_value("42"), plist::Value::Integer(42.into()));
     }
 }
