@@ -619,10 +619,17 @@ fn emit_payload_info_json(
                 "title": f.title,
                 "description": f.description,
             });
-            entry
-                .as_object_mut()
-                .expect("json! object")
-                .extend(dynamic_keys_json(manifest, f));
+            let obj = entry.as_object_mut().expect("json! object");
+            obj.extend(dynamic_keys_json(manifest, f));
+            // The dataset's facets: examples with their source, labels for
+            // the allowed values, keywords, group, note, the vendor's page,
+            // the app version, read-only.
+            obj.extend(contour_form::facets_json(f));
+            if let Some(d) = node_details().get(&(manifest.payload_type.clone(), f.path.clone()))
+                && !d.access_type.is_empty()
+            {
+                obj.insert("access_type".into(), serde_json::json!(d.access_type));
+            }
             entry
         })
         .collect();
@@ -754,6 +761,9 @@ fn emit_payload_info_human(manifest: &PayloadManifest, full: bool, os: Option<Pl
         if f.flags.sensitive {
             markers.push("sensitive".red().to_string());
         }
+        if f.flags.read_only {
+            markers.push("read-only".yellow().to_string());
+        }
         let marker_str = if markers.is_empty() {
             String::new()
         } else {
@@ -767,12 +777,35 @@ fn emit_payload_info_human(manifest: &PayloadManifest, full: bool, os: Option<Pl
             plist_tag_for(&f.field_type).cyan(),
             marker_str
         );
-        if !f.allowed_values.is_empty() {
-            println!(
-                "{}  values: {}",
-                indent,
-                f.allowed_values.join(", ").dimmed()
-            );
+        match f.facets.value_titles.as_ref().filter(|t| t.len() == f.allowed_values.len()) {
+            Some(titles) => {
+                println!("{indent}  values:");
+                for (v, t) in f.allowed_values.iter().zip(titles) {
+                    println!("{}    {} — {}", indent, v.cyan(), t.dimmed());
+                }
+            }
+            None if !f.allowed_values.is_empty() => {
+                println!("{}  values: {}", indent, f.allowed_values.join(", ").dimmed());
+            }
+            None => {}
+        }
+        if !f.facets.examples.is_empty() {
+            let shown: Vec<String> = f
+                .facets
+                .examples
+                .iter()
+                .map(|e| e.value.as_str().map_or_else(|| e.value.to_string(), str::to_string))
+                .collect();
+            println!("{}  e.g.: {}", indent, shown.join(", ").dimmed());
+        }
+        if let Some(v) = &f.facets.app_introduced {
+            println!("{}  needs app version {}", indent, v.yellow());
+        }
+        if let Some(n) = &f.facets.note {
+            println!("{}  note: {}", indent, n.dimmed());
+        }
+        if let Some(u) = &f.facets.documentation_url {
+            println!("{}  docs: {}", indent, u.dimmed());
         }
         // The DDF's word, where the dataset carries it: value meanings beside
         // the bare numbers, dependencies, editions, Atomic.

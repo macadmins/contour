@@ -248,6 +248,20 @@ fn capabilities() -> &'static [Capability] {
 /// payload share no namespace, and blending them would put `BitLocker`
 /// beside `com.apple.security.FDERecoveryKeyEscrow` in one result list with
 /// nothing saying which protocol either belongs to.
+/// Windows nodes a profile cannot set (DDF AccessType without Add or
+/// Replace), as `(payload_type, key_path)`, with their access words.
+fn windows_read_only() -> &'static std::collections::HashMap<(String, String), Vec<String>> {
+    static CACHE: OnceLock<std::collections::HashMap<(String, String), Vec<String>>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        windows_schema::node_details::read(windows_schema::embedded_windows_node_details())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| !d.settable())
+            .map(|d| ((d.payload_type, d.key_path), d.access_type))
+            .collect()
+    })
+}
+
 fn windows_capabilities() -> &'static [Capability] {
     static CACHE: OnceLock<Vec<Capability>> = OnceLock::new();
     CACHE.get_or_init(|| {
@@ -945,7 +959,17 @@ fn schema_key_output() -> Value {
                                 "description": "The only values this key accepts. Anything else is refused at generate time."},
                     "min": {"type": "number"},
                     "max": {"type": "number"},
-                    "description": {"type": "string"}
+                    "description": {"type": "string"},
+                    "examples": {"type": "array", "description": "Values that show what the key takes, each {value, source}: apple:<example file>, app-schema:<domain> or annotation:<why>. Never a limit; every one passes the key's own type, allowed values, range and pattern."},
+                    "value_titles": {"type": "array", "items": {"type": "string"}, "description": "A label for each value in `allowed`, same order."},
+                    "sensitive": {"type": "boolean", "description": "The value is a credential: keep it in the MDM's secret variables."},
+                    "keywords": {"type": "array", "items": {"type": "string"}, "description": "Other words operators use for this key."},
+                    "group": {"type": "string"},
+                    "note": {"type": "string", "description": "A caveat the description does not cover."},
+                    "documentation_url": {"type": "string", "description": "The vendor's page for this key."},
+                    "app_introduced": {"type": "string", "description": "The app version that first reads the key (not an OS version)."},
+                    "read_only": {"type": "boolean", "description": "Windows: the device reports this node; a profile cannot set it."},
+                    "access_type": {"type": "array", "items": {"type": "string"}, "description": "Windows: the DDF AccessType of a read-only node."}
                 },
                 "required": ["name", "path", "type", "presence"]
             }},
@@ -1110,6 +1134,36 @@ fn schema_key(args: &Value) -> Result<Value, ToolError> {
                 && !d.trim().is_empty()
             {
                 out["description"] = json!(d);
+            }
+            // The dataset's facets: examples (never a limit), labels for the
+            // allowed values, credentials, keywords, group, note, the
+            // vendor's page, the app version.
+            let f = &k.facets;
+            if !f.examples.is_empty() {
+                out["examples"] = json!(f.examples);
+            }
+            if let Some(t) = f.value_titles.as_ref().filter(|t| Some(t.len()) == k.range_list.as_ref().map(Vec::len)) {
+                out["value_titles"] = json!(t);
+            }
+            if f.sensitive == Some(true) {
+                out["sensitive"] = json!(true);
+            }
+            if !f.keywords.is_empty() {
+                out["keywords"] = json!(f.keywords);
+            }
+            for (name, value) in [
+                ("group", &f.group),
+                ("note", &f.note),
+                ("documentation_url", &f.documentation_url),
+                ("app_introduced", &f.app_introduced),
+            ] {
+                if let Some(v) = value {
+                    out[name] = json!(v);
+                }
+            }
+            if let Some(access) = windows_read_only().get(&(cap.payload_type.clone(), k.key_path.clone().unwrap_or_else(|| key_path(k)))) {
+                out["read_only"] = json!(true);
+                out["access_type"] = json!(access);
             }
             out
         })
@@ -1745,6 +1799,27 @@ mod tests {
         let nowhere = schema_search(&json!({"query": "zzzznotathing"})).unwrap();
         assert_eq!(nowhere["count"], 0);
         assert!(nowhere.get("no_match_here_but").is_none());
+    }
+
+    /// A key's facets reach the agent: labels for the allowed values, the
+    /// vendor's page, and for Windows, a node it cannot set.
+    #[test]
+    fn schema_key_carries_the_datasets_facets() {
+        let v = schema_key(&json!({"payload_type": "corp.sap.privileges", "key": "BiometricsFallbackType"})).unwrap();
+        let k = &v["keys"][0];
+        assert_eq!(k["value_titles"].as_array().map(Vec::len), Some(3), "{k}");
+        assert!(k["documentation_url"].as_str().is_some_and(|u| u.contains("BiometricsFallbackType")));
+
+        let v = schema_key(&json!({"payload_type": "com.apple.screensaver", "key": "idleTime"})).unwrap();
+        assert!(v["keys"][0]["examples"][0]["source"].as_str().is_some_and(|s| s.starts_with("apple:")));
+
+        let v = schema_key(&json!({"payload_type": "BitLocker", "windows": true})).unwrap();
+        let status = v["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|k| k["path"].as_str().is_some_and(|p| p.starts_with("Status")) && k["read_only"] == true);
+        assert!(status.is_some(), "a BitLocker Status node marked read_only");
     }
 
     /// A key lookup in the wrong corpus points at the right one.

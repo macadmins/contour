@@ -873,6 +873,7 @@ dependencies = [
  "osquery-schema",
  "serde",
  "serde_json",
+ "windows-schema",
 ]
 
 [[package]]
