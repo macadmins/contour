@@ -150,6 +150,44 @@ pub const TOOLS: &[Tool] = &[
         handler: mscp_baseline,
     },
     Tool {
+        name: "contour.key.search",
+        title: "Find the key for a request",
+        description: "Rank individual keys against a plain-language request such as \
+                      \"turn off airdrop\" or \"minimum passcode length\". Each hit names \
+                      its payload type, the document format that carries it, its type and \
+                      allowed values, per-platform lifecycle, and the declaration key that \
+                      replaces it when one exists. Matches the words typed, not synonyms: \
+                      read the top few hits, and rephrase with the setting's own vocabulary \
+                      on a miss.",
+        input_schema: key_search_input,
+        output_schema: key_search_output,
+        handler: key_search,
+    },
+    Tool {
+        name: "contour.form.validate",
+        title: "Validate values for a payload type",
+        description: "Check a JSON object of values against one payload type's schema: \
+                      unknown keys, wrong types, values outside an enum or range, keys \
+                      removed on the target OS. Returns diagnostics by dotted path; \
+                      `blocks_emit` marks the ones that stop a document being written.",
+        input_schema: form_validate_input,
+        output_schema: form_validate_output,
+        handler: form_validate,
+    },
+    Tool {
+        name: "contour.form.emit",
+        title: "Write the document for a set of values",
+        description: "Turn validated values for one payload type into the deployable \
+                      document text: a JSON declaration or a .mobileconfig, chosen from the \
+                      schema, split into user and system declarations when the keys span \
+                      both channels. Returns the text and what it requires of the device; \
+                      it writes no file. Identifiers and UUIDs derive from `org` and \
+                      `intent`, so the same input gives the same bytes.",
+        input_schema: form_emit_input,
+        output_schema: form_emit_output,
+        handler: form_emit,
+    },
+    Tool {
         name: "contour.sop",
         title: "contour standard operating procedure",
         description: "The procedural SOP for a contour workflow — the same text as \
@@ -401,6 +439,292 @@ fn platforms_of(cap: &Capability) -> Vec<String> {
     p.sort();
     p.dedup();
     p
+}
+
+// ── contour.key.search / contour.form.* ──────────────────────────────
+
+/// The form registry over the same embedded tables as [`corpus`].
+fn form_registry(args: &Value) -> Result<&'static contour_form::SchemaRegistry, ToolError> {
+    static APPLE: OnceLock<Option<contour_form::SchemaRegistry>> = OnceLock::new();
+    static WINDOWS: OnceLock<Option<contour_form::SchemaRegistry>> = OnceLock::new();
+    let windows = args
+        .get("windows")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let (cell, bytes) = if windows {
+        (&WINDOWS, mdm_schema::embedded_windows_capabilities())
+    } else {
+        (&APPLE, mdm_schema::embedded_capabilities())
+    };
+    cell.get_or_init(|| contour_form::SchemaRegistry::from_parquet(bytes).ok())
+        .as_ref()
+        .ok_or_else(|| ToolError::new("the embedded schema could not be read"))
+}
+
+/// The declaration key that replaces `key` of an MDM payload type.
+fn ddm_key_for(payload_type: &str, key: &str) -> Option<Value> {
+    static REGISTRY: OnceLock<mdm_schema::migration::MigrationRegistry> = OnceLock::new();
+    let m = REGISTRY
+        .get_or_init(mdm_schema::migration::MigrationRegistry::new)
+        .get(payload_type)?;
+    let renamed = |pairs: &[(&'static str, &'static str)]| {
+        pairs.iter().find(|(old, _)| *old == key).map(|(_, new)| *new)
+    };
+    let (ddm_key, inverted) = if let Some(new) = renamed(m.inverted_keys) {
+        (new, true)
+    } else if let Some(new) = renamed(m.transformed_keys) {
+        (new, false)
+    } else if m.direct_keys.contains(&key) {
+        (key, false)
+    } else {
+        return None;
+    };
+    Some(json!({
+        "ddm_type": m.ddm_type,
+        "key": ddm_key,
+        // true: the declaration key means the opposite, so negate the value.
+        "inverted": inverted,
+    }))
+}
+
+fn per_platform(map: &std::collections::HashMap<contour_form::Platform, String>) -> Value {
+    let sorted: std::collections::BTreeMap<&str, &String> =
+        map.iter().map(|(p, v)| (p.as_str(), v)).collect();
+    json!(sorted)
+}
+
+fn key_search_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "The request in plain words, e.g. \"turn off airdrop\""},
+            "windows": {"type": "boolean", "description": "Search Microsoft's Windows CSP settings instead of Apple's keys"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "description": "Max keys to return (default 20)"}
+        },
+        "required": ["query"],
+        "additionalProperties": false
+    })
+}
+
+fn key_search_output() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer"},
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "payload_type": {"type": "string"},
+                        "format": {"type": "string", "description": "declaration, mobileconfig or syncml: the document that carries this key"},
+                        "path": {"type": "string", "description": "Dotted path of the key inside the payload"},
+                        "type": {"type": "string"},
+                        "allowed_values": {"type": "array", "items": {"type": "string"}},
+                        "description": {"type": "string"},
+                        "supervised": {"type": "boolean"},
+                        "introduced": {"type": "object", "description": "OS version per platform"},
+                        "deprecated": {"type": "object", "description": "OS version per platform"},
+                        "ddm_key": {"type": "object", "description": "The declaration key that replaces this one, when the migration registry maps it"},
+                        "superseded_by": {"type": "object", "description": "The declaration type that replaces this payload type, when one exists"},
+                        "score": {"type": "number"}
+                    },
+                    "required": ["payload_type", "format", "path", "type", "score"]
+                }
+            },
+            "rules": {
+                "type": "array",
+                "description": "Apple only: mSCP compliance rules (CIS, 800-53, STIG) whose title matches the request. `settings` are the payload type, keys and values the rule prescribes. `enforced_by: script` means no profile or declaration can do this: say so instead of choosing a key",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "rule_id": {"type": "string"},
+                        "title": {"type": "string"},
+                        "enforced_by": {"type": "string", "enum": ["profile", "declaration", "script"]},
+                        "settings": {"type": "array"},
+                        "score": {"type": "number"}
+                    },
+                    "required": ["rule_id", "title", "enforced_by", "settings", "score"]
+                }
+            }
+        },
+        "required": ["count", "results", "rules"]
+    })
+}
+
+fn key_search(args: &Value) -> Result<Value, ToolError> {
+    let query = required_str(args, "query")?;
+    let results: Vec<Value> = form_registry(args)?
+        .rank_fields(&query)
+        .into_iter()
+        .filter(|h| h.manifest.is_authorable())
+        .take(limit_of(args))
+        .map(|h| {
+            let (m, f) = (h.manifest, h.field);
+            let format = match m.kind {
+                Some(mdm_schema::PayloadKind::DdmDeclaration) => "declaration",
+                Some(
+                    mdm_schema::PayloadKind::CspSetting | mdm_schema::PayloadKind::AdmxPolicy,
+                ) => "syncml",
+                _ => "mobileconfig",
+            };
+            let mut hit = json!({
+                "payload_type": m.payload_type,
+                "format": format,
+                "path": f.path,
+                "type": f.field_type.as_str(),
+                "allowed_values": f.allowed_values,
+                "description": f.description,
+                "supervised": f.flags.supervised,
+                "introduced": per_platform(&f.introduced_by_platform),
+                "deprecated": per_platform(&f.deprecated_by_platform),
+                "score": h.score,
+            });
+            if let Some(obj) = hit.as_object_mut() {
+                obj.extend(contour_form::facets_json(f));
+            }
+            if let Some(k) = ddm_key_for(&m.payload_type, &f.path) {
+                hit["ddm_key"] = k;
+            }
+            if let Some(s) = superseded_by(&m.payload_type) {
+                hit["superseded_by"] = s;
+            }
+            hit
+        })
+        .collect();
+    let windows = args
+        .get("windows")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let rules = if windows {
+        Vec::new()
+    } else {
+        contour_form::mscp_rules::matching(&query, 5)
+    };
+    Ok(json!({ "count": results.len(), "results": results, "rules": rules }))
+}
+
+fn values_of(args: &Value) -> Result<&Value, ToolError> {
+    args.get("values")
+        .filter(|v| v.is_object())
+        .ok_or_else(|| ToolError::new("`values` is required and must be a JSON object"))
+}
+
+fn form_validate_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "description": "Payload or declaration type, e.g. com.apple.applicationaccess"},
+            "values": {"type": "object", "description": "Key/value pairs to check, nested as the payload nests them"}
+        },
+        "required": ["type", "values"],
+        "additionalProperties": false
+    })
+}
+
+fn form_validate_output() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "valid": {"type": "boolean", "description": "false when any diagnostic blocks emit"},
+            "diagnostics": {"type": "array", "items": {"type": "object"}}
+        },
+        "required": ["valid", "diagnostics"]
+    })
+}
+
+fn form_validate(args: &Value) -> Result<Value, ToolError> {
+    let type_id = required_str(args, "type")?;
+    let diagnostics = contour_form::validate(form_registry(args)?, &type_id, values_of(args)?);
+    Ok(json!({
+        "valid": !diagnostics.iter().any(|d| d.blocks_emit),
+        "diagnostics": diagnostics,
+    }))
+}
+
+fn form_emit_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "settings": {
+                "type": "array",
+                "description": "The usual input: one entry per key, across any number of payload types, exactly as contour.key.search returned them. Values may be text (\"false\", \"12\"); they are typed from the schema",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "path": {"type": "string"},
+                        "value": {}
+                    },
+                    "required": ["type", "path", "value"]
+                }
+            },
+            "type": {"type": "string", "description": "With `values`, in place of `settings`: one payload or declaration type"},
+            "values": {"type": "object", "description": "With `type`: key/value pairs, nested as the payload nests them"},
+            "org": {"type": "string", "description": "Reverse-DNS organisation domain, e.g. com.acme. Placeholders such as com.example are refused"},
+            "intent": {"type": "string", "description": "Short name for what the document does, e.g. passcode. Becomes part of the identifier. Required with `type`; with `settings` of several types each type names its own"},
+            "platform": {"type": "string", "description": "Platform whose rules decide the user/system split, e.g. macOS"},
+            "os_version": {"type": "string", "description": "With platform: refuse keys Apple removed by this OS version"}
+        },
+        "required": ["org"],
+        "additionalProperties": false
+    })
+}
+
+fn form_emit_output() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "documents": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "identifier": {"type": "string"},
+                        "filename": {"type": "string"},
+                        "format": {"type": "string"},
+                        "requirements": {"type": "object", "description": "min_os per platform, and the supervised and credential keys that were set"},
+                        "body": {"type": "string", "description": "The document text"}
+                    },
+                    "required": ["identifier", "filename", "format", "requirements", "body"]
+                }
+            },
+            "refused": {
+                "type": "array",
+                "description": "With `settings`: every setting that was not written and what would fix it (`allowed`, `range`, `did_you_mean`). A payload type with a refused setting gets no document; correct the settings and call again",
+                "items": {"type": "object"}
+            }
+        },
+        "required": ["documents", "refused"]
+    })
+}
+
+fn form_emit(args: &Value) -> Result<Value, ToolError> {
+    let platform = match optional_str(args, "platform") {
+        Some(p) => Some(
+            contour_form::Platform::from_cli_str(&p)
+                .ok_or_else(|| ToolError::new(format!("unknown platform `{p}`")))?,
+        ),
+        None => None,
+    };
+    let mut opts = contour_form::EmitOptions {
+        org: required_str(args, "org")?,
+        intent: optional_str(args, "intent").unwrap_or_default(),
+        platform,
+        os_version: optional_str(args, "os_version"),
+        ..Default::default()
+    };
+    if let Some(settings) = args.get("settings") {
+        let settings: Vec<contour_form::Setting> = serde_json::from_value(settings.clone())
+            .map_err(|e| ToolError::new(format!("`settings` must be a list of {{type, path, value}}: {e}")))?;
+        let outcome = contour_form::emit_settings(form_registry(args)?, &settings, &opts);
+        return Ok(json!({ "documents": outcome.documents, "refused": outcome.refused }));
+    }
+    let type_id = required_str(args, "type")?;
+    opts.intent = required_str(args, "intent")?;
+    let documents = contour_form::emit::emit(form_registry(args)?, &type_id, values_of(args)?, &opts)
+        .map_err(|e| ToolError::new(e.to_string()))?;
+    Ok(json!({ "documents": documents, "refused": [] }))
 }
 
 // ── contour.schema.search ────────────────────────────────────────────
@@ -1517,6 +1841,70 @@ mod tests {
         );
     }
     use super::*;
+
+    /// Request to key to document, without leaving the server.
+    #[test]
+    fn a_request_resolves_to_a_key_and_emits() {
+        let found = key_search(&json!({"query": "turn off airdrop", "limit": 5})).unwrap();
+        let hit = found["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["path"] == "allowAirDrop")
+            .expect("allowAirDrop in the top five");
+        assert_eq!(hit["payload_type"], "com.apple.applicationaccess");
+        assert_eq!(hit["format"], "mobileconfig");
+
+        // What the schema's text cannot say, the compliance rules can.
+        let siri = key_search(&json!({"query": "disable siri"})).unwrap();
+        let rule = siri["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["settings"].to_string().contains("allowAssistant"))
+            .expect("a rule that sets allowAssistant");
+        assert_eq!(rule["enforced_by"], "profile");
+        let sip = key_search(&json!({"query": "system integrity protection"})).unwrap();
+        let rule = sip["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["rule_id"] == "os_sip_enable")
+            .expect("the SIP rule");
+        assert_eq!(rule["enforced_by"], "script", "no profile turns SIP on");
+
+        // The legacy passcode key names its declaration replacement.
+        let legacy = key_search(&json!({"query": "passwordpolicy minLength"})).unwrap();
+        let min = legacy["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["payload_type"] == "com.apple.mobiledevice.passwordpolicy" && h["path"] == "minLength")
+            .expect("minLength found");
+        assert_eq!(min["ddm_key"]["key"], "MinimumLength");
+
+        let args = json!({"type": "com.apple.applicationaccess", "values": {"allowAirDrop": false},
+                          "org": "com.acme", "intent": "restrictions", "platform": "macOS"});
+        assert_eq!(form_validate(&args).unwrap()["valid"], true);
+        let doc = &form_emit(&args).unwrap()["documents"][0];
+        assert!(doc["body"].as_str().unwrap().contains("<key>allowAirDrop</key>"));
+        assert_eq!(doc["requirements"]["supervised"], json!(["allowAirDrop"]));
+
+        // The agent's shape: keys of two types as search returned them, text values.
+        let batch = form_emit(&json!({"org": "com.acme", "platform": "macOS", "settings": [
+            {"type": "com.apple.applicationaccess", "path": "allowAirDrop", "value": "false"},
+            {"type": "com.apple.configuration.passcode.settings", "path": "MinimumLength", "value": "12"},
+            {"type": "com.apple.applicationaccess", "path": "allowcamera", "value": false},
+        ]}))
+        .unwrap();
+        assert_eq!(batch["documents"].as_array().unwrap().len(), 1, "the type with a bad key is held back");
+        assert_eq!(batch["refused"][0]["did_you_mean"], "allowCamera");
+
+        let bad = json!({"type": "com.apple.applicationaccess", "values": {"allowMadeUp": false},
+                         "org": "com.acme", "intent": "restrictions"});
+        assert_eq!(form_validate(&bad).unwrap()["valid"], false);
+        assert!(form_emit(&bad).is_err(), "an unknown key must not be written");
+    }
 
     #[test]
     fn catalogue_names_are_unique_and_spec_legal() {

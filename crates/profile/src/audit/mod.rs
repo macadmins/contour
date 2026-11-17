@@ -9,7 +9,7 @@
 pub mod cert;
 pub mod entropy;
 pub mod route;
-pub mod sensitive;
+pub use contour_form::sensitive;
 
 use std::collections::BTreeSet;
 

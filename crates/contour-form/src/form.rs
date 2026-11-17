@@ -360,7 +360,23 @@ fn node(
             Presence::Optional
         }),
         default: f.default.as_deref().map(|d| typed_default(f.field_type, d)),
-        options: (!f.allowed_values.is_empty()).then(|| f.allowed_values.clone()),
+        options: (!f.allowed_values.is_empty()).then(|| {
+            f.allowed_values
+                .iter()
+                .map(|v| typed_default(f.field_type, v))
+                .collect()
+        }),
+        option_titles: f
+            .facets
+            .value_titles
+            .clone()
+            .filter(|t| t.len() == f.allowed_values.len()),
+        examples: (!f.facets.examples.is_empty()).then(|| f.facets.examples.clone()),
+        group: f.facets.group.clone(),
+        note: f.facets.note.clone(),
+        documentation_url: f.facets.documentation_url.clone(),
+        app_introduced: f.facets.app_introduced.clone(),
+        readonly: f.flags.read_only.then_some(true),
         range: (f.range_min.is_some() || f.range_max.is_some()).then_some(Range {
             min: f.range_min,
             max: f.range_max,
@@ -453,6 +469,13 @@ fn resolve_control(
                     children: Some(kids),
                     item: None,
                     annotations: None,
+                    option_titles: None,
+                    examples: None,
+                    group: None,
+                    note: None,
+                    documentation_url: None,
+                    app_introduced: None,
+                    readonly: None,
                 })),
             };
             (Control::List, None, item, None)
@@ -465,6 +488,7 @@ fn resolve_control(
         FieldType::Integer | FieldType::Real => (Control::Number, None, None, None),
         FieldType::Boolean => (Control::Toggle, None, None, None),
         FieldType::Data => (Control::File, None, None, None),
+        FieldType::Any => (Control::RawAny, None, None, None),
     }
 }
 

@@ -356,6 +356,40 @@ pub struct PayloadKey {
     pub asset_types: Option<Vec<String>>,
     /// Regex validation pattern from the `format` field.
     pub format: Option<String>,
+    /// What the dataset says about the key beyond its type and constraints:
+    /// examples, labels, credentials, grouping. Empty for older data.
+    #[serde(default)]
+    pub facets: KeyFacets,
+}
+
+/// Per-key facts from posture's `key_*` facet columns.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct KeyFacets {
+    /// Example values with their source. They never limit the key; every one
+    /// passes the key's own type, allowed values, range and pattern.
+    pub examples: Vec<KeyExample>,
+    /// The value is a credential (`key_sensitive`). `None`: not stated.
+    pub sensitive: Option<bool>,
+    /// One label per `range_list` value, same order.
+    pub value_titles: Option<Vec<String>>,
+    /// Words an operator may search with that the key's text lacks.
+    pub keywords: Vec<String>,
+    /// The group a form shows the key under.
+    pub group: Option<String>,
+    /// A caveat the description does not cover.
+    pub note: Option<String>,
+    /// The vendor's page for the key.
+    pub documentation_url: Option<String>,
+    /// The app version that first reads the key; not an OS version.
+    pub app_introduced: Option<String>,
+}
+
+/// One example value and where it came from (`apple:<file>`,
+/// `app-schema:<domain>`, `annotation:<why>`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeyExample {
+    pub value: serde_json::Value,
+    pub source: String,
 }
 
 impl PayloadKey {

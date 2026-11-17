@@ -1930,7 +1930,7 @@ fn prompt_field_value(field: &FieldDefinition) -> Option<String> {
                 Err(_) => None,
             }
         }
-        FieldType::Array | FieldType::Dictionary | FieldType::Data | FieldType::Date => {
+        FieldType::Array | FieldType::Dictionary | FieldType::Data | FieldType::Date | FieldType::Any => {
             println!(
                 "  {} {} ({}) — edit manually in TOML",
                 "⊘".dimmed(),
@@ -2196,7 +2196,7 @@ fn build_payload_from_schema(
                 .as_deref()
                 .and_then(parse_plist_date)
                 .map_or_else(|| Value::String(String::new()), Value::Date),
-            FieldType::String => Value::String(field.default.clone().unwrap_or_default()),
+            FieldType::String | FieldType::Any => Value::String(field.default.clone().unwrap_or_default()),
         }
     }
 
@@ -2456,6 +2456,7 @@ mod tests {
             deprecated_by_platform: std::collections::HashMap::new(),
             removed_by_platform: HashMap::default(),
             combinetype: None,
+            facets: mdm_schema::KeyFacets::default(),
         }
     }
 
@@ -2475,6 +2476,7 @@ mod tests {
             field_order: fields.iter().map(|f| f.path.clone()).collect(),
             fields: fields.into_iter().map(|f| (f.path.clone(), f)).collect(),
             segments: vec![],
+            variants: Vec::new(),
         }
     }
 
@@ -2577,6 +2579,7 @@ mod tests {
             deprecated_by_platform: std::collections::HashMap::new(),
             removed_by_platform: HashMap::default(),
             combinetype: None,
+            facets: mdm_schema::KeyFacets::default(),
         };
 
         let mut fields = std::collections::HashMap::new();
@@ -2603,6 +2606,7 @@ mod tests {
                 "PFC_SegmentedControl_0".to_string(),
             ],
             segments: vec![],
+            variants: Vec::new(),
         };
 
         // backfill=true: bare-generate scaffolding, where required fields
@@ -2642,6 +2646,7 @@ mod tests {
             fields: std::collections::HashMap::new(),
             field_order: vec![],
             segments: vec![],
+            variants: Vec::new(),
         };
 
         let mut overrides = std::collections::BTreeMap::new();

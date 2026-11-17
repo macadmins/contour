@@ -17,7 +17,12 @@ FailClosed = false
 EnableBadSignatureProtection = true
 EnablePageZeroProtection = true
 EnableSysxCache = true
-SyncBaseURL = "https://{{SANTA_SYNC_SERVER}}/api/santa/"
+# Santa runs standalone: no sync server is needed, and none is set here.
+# To use one, add under this table:
+#   SyncBaseURL = "https://<your sync server>/api/santa/"
+# and, under [profile.extra_fields], a link for blocked-binary details:
+#   EventDetailURL = "https://<your sync server>/blockables/%file_sha%"
+#   EventDetailText = "View details"
 MachineOwnerPlist = "/Library/Preferences/com.apple.mdm.plist"
 MachineOwnerKey = "UserShortName"
 MachineIDPlist = "/Library/Preferences/com.apple.mdm.plist"
@@ -27,11 +32,9 @@ EnableMachineIDDecoration = true
 
 [profile.extra_fields]
 AboutText = "Managed by IT Security"
-MoreInfoURL = "https://{{COMPANY_WIKI}}/santa"
+# MoreInfoURL = "https://<your wiki>/santa" adds a "More info" link to block dialogs.
 UnknownBlockMessage = "This application has not been approved. Contact IT if you need access."
 BannedBlockMessage = "This application is blocked by security policy."
-EventDetailURL = "https://{{SANTA_SYNC_SERVER}}/blockables/%file_sha%"
-EventDetailText = "View details"
 
 [[profile]]
 filename = "santa-tcc.mobileconfig"

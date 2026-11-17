@@ -31,6 +31,17 @@ fn key_os_value(arr: &arrow::array::StringArray, row: usize) -> Option<String> {
     Some(arr.value(row).to_string())
 }
 
+/// A JSON column's value at `row`, when the column exists and parses.
+fn json_at<T: serde::de::DeserializeOwned>(
+    col: Option<&arrow::array::StringArray>,
+    row: usize,
+) -> Option<T> {
+    let col = col?;
+    (!col.is_null(row))
+        .then(|| serde_json::from_str(col.value(row)).ok())
+        .flatten()
+}
+
 /// Arrow schema for `capabilities.parquet`.
 ///
 /// One row per (payload_type, platform, key) combination.
@@ -186,6 +197,17 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         let key_paths = batch
             .column_by_name("key_path")
             .map(|c| c.as_string::<i32>());
+        // posture's facet columns (v2026.11.17-2 on). Absent in older data,
+        // where every key reads with empty facets.
+        let text = |name: &str| batch.column_by_name(name).map(|c| c.as_string::<i32>());
+        let f_examples = text("key_examples");
+        let f_value_titles = text("key_value_titles");
+        let f_keywords = text("key_keywords");
+        let f_group = text("key_group");
+        let f_note = text("key_note");
+        let f_doc_url = text("key_documentation_url");
+        let f_app_introduced = text("key_app_introduced");
+        let f_sensitive = batch.column_by_name("key_sensitive").map(|c| c.as_boolean());
 
         for row in 0..num_rows {
             let pt = payload_types.value(row);
@@ -558,9 +580,60 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                 } else {
                     Some(formats.value(row).to_string())
                 },
+                facets: {
+                    let get = |c: Option<&arrow::array::StringArray>| {
+                        c.and_then(|a| (!a.is_null(row)).then(|| a.value(row).to_string()))
+                    };
+                    crate::types::KeyFacets {
+                        examples: json_at(f_examples, row).unwrap_or_default(),
+                        sensitive: f_sensitive
+                            .and_then(|a| (!a.is_null(row)).then(|| a.value(row))),
+                        value_titles: json_at(f_value_titles, row),
+                        keywords: json_at(f_keywords, row).unwrap_or_default(),
+                        group: get(f_group),
+                        note: get(f_note),
+                        documentation_url: get(f_doc_url),
+                        app_introduced: get(f_app_introduced),
+                    }
+                },
             });
         }
     }
 
     Ok(cap_map.into_values().collect())
+}
+
+#[cfg(test)]
+mod facet_tests {
+    use super::*;
+
+    fn key<'a>(caps: &'a [Capability], pt: &str, name: &str) -> &'a PayloadKey {
+        caps.iter()
+            .filter(|c| c.payload_type == pt)
+            .flat_map(|c| &c.keys)
+            .find(|k| k.name == name)
+            .unwrap_or_else(|| panic!("{pt} {name}"))
+    }
+
+    /// The embedded dataset's facet columns reach PayloadKey.
+    #[test]
+    fn facets_are_read_from_the_dataset() {
+        let caps = read(crate::embedded_capabilities()).unwrap();
+
+        let module = key(&caps, "com.apple.screensaver", "moduleName");
+        assert!(module.facets.examples.iter().any(|e| e.value == "Message"));
+        assert!(module.range_list.is_none(), "examples never limit the key");
+
+        let idle = key(&caps, "com.apple.screensaver", "idleTime");
+        assert!(idle.facets.examples.iter().any(|e| e.source.starts_with("apple:")));
+
+        let fallback = key(&caps, "corp.sap.privileges", "BiometricsFallbackType");
+        assert_eq!(fallback.facets.value_titles.as_ref().map(Vec::len), Some(3));
+
+        let password = key(&caps, "com.northpolesec.santa", "ClientAuthCertificatePassword");
+        assert_eq!(password.facets.sensitive, Some(true));
+
+        let biometrics = key(&caps, "corp.sap.privileges", "RequireBiometricAuthentication");
+        assert!(biometrics.facets.keywords.iter().any(|k| k == "Touch ID"));
+    }
 }

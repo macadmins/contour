@@ -4408,6 +4408,7 @@ mod enum_validation_tests {
                 deprecated_by_platform: HashMap::new(),
                 removed_by_platform: HashMap::default(),
                 combinetype: None,
+                facets: mdm_schema::KeyFacets::default(),
             }
         };
 
@@ -4445,6 +4446,7 @@ mod enum_validation_tests {
             fields,
             field_order,
             segments: vec![],
+            variants: Vec::new(),
         }])
     }
 
@@ -4604,6 +4606,7 @@ mod scaffold_value_tests {
             deprecated_by_platform: HashMap::new(),
             removed_by_platform: HashMap::default(),
             combinetype: None,
+            facets: mdm_schema::KeyFacets::default(),
         };
         let manifest = crate::schema::PayloadManifest {
             manifest_source: None,
@@ -4620,6 +4623,7 @@ mod scaffold_value_tests {
             fields: HashMap::from([("Cadence".to_string(), field.clone())]),
             field_order: vec!["Cadence".to_string()],
             segments: vec![],
+            variants: Vec::new(),
         };
 
         let value = generate_field_value("Cadence", &field, &manifest, true);

@@ -76,6 +76,12 @@ pub struct PayloadManifest {
     pub field_order: Vec<String>,
     /// Segments grouping field names by category (from pfm_segments)
     pub segments: Vec<Segment>,
+    /// Each document Apple describes this payload type in, by variant, when
+    /// there are several (`com.apple.extensiblesso` and its `kerberos`
+    /// file). The manifest itself is their merge; validation also holds a
+    /// payload to the variant whose fixed values it carries. Empty for a
+    /// type with one document.
+    pub variants: Vec<(Option<String>, PayloadManifest)>,
 }
 
 /// Per-platform support detail for a payload — exposes the rich Apple
@@ -277,6 +283,10 @@ pub struct FieldDefinition {
     /// e.g. `boolean-or`, `number-min`, `set-union`. Only meaningful for
     /// declaration types; `None` for plain MDM profile keys.
     pub combinetype: Option<String>,
+    /// What the dataset says beyond type and constraints: examples (never a
+    /// limit), labels for `allowed_values`, keywords, group, note, the
+    /// vendor's page, the app version that reads the key.
+    pub facets: mdm_schema::KeyFacets,
 }
 
 /// Field type enumeration
@@ -290,6 +300,10 @@ pub enum FieldType {
     Data,
     Date,
     Real,
+    /// Apple's `<any>`: the value may be of any type, and is not checked.
+    /// `com.apple.system.logging` `Subsystems.ANY` is one: each subsystem
+    /// takes a dictionary of options.
+    Any,
 }
 
 impl FieldType {
@@ -303,6 +317,7 @@ impl FieldType {
             'x' => Some(FieldType::Data),
             't' => Some(FieldType::Date),
             'r' => Some(FieldType::Real),
+            'y' => Some(FieldType::Any),
             _ => None,
         }
     }
@@ -317,6 +332,7 @@ impl FieldType {
             FieldType::Data => "Data",
             FieldType::Date => "Date",
             FieldType::Real => "Real",
+            FieldType::Any => "Any",
         }
     }
 }
@@ -330,6 +346,9 @@ pub struct FieldFlags {
     pub supervised: bool,
     /// Sensitive field (X flag) - contains password/credential
     pub sensitive: bool,
+    /// The device reports it; a profile cannot set it (a Windows node with
+    /// neither Add nor Replace in its DDF AccessType).
+    pub read_only: bool,
 }
 
 impl FieldFlags {
@@ -338,6 +357,7 @@ impl FieldFlags {
             required: s.contains('R'),
             supervised: s.contains('S'),
             sensitive: s.contains('X'),
+            read_only: false,
         }
     }
 }
@@ -802,6 +822,7 @@ mod tests {
                     required: false,
                     supervised: false,
                     sensitive: false,
+                    read_only: false,
                 },
                 title: String::new(),
                 description: String::new(),
@@ -816,6 +837,7 @@ mod tests {
                 deprecated_by_platform: HashMap::new(),
                 removed_by_platform: HashMap::new(),
                 combinetype: None,
+                facets: mdm_schema::KeyFacets::default(),
             }
         }
         let mut fields = HashMap::new();
@@ -847,6 +869,7 @@ mod tests {
                 "AppIdentifier".to_string(),
             ],
             segments: vec![],
+            variants: Vec::new(),
         };
         assert_eq!(m.top_level_fields().len(), 1);
         // Path-based: the grandchild resolves under the full parent path …
@@ -879,6 +902,7 @@ mod tests {
                     required: true,
                     supervised: false,
                     sensitive: false,
+                    read_only: false,
                 },
                 title: "Network Name".to_string(),
                 description: "The SSID of the network".to_string(),
@@ -893,6 +917,7 @@ mod tests {
                 deprecated_by_platform: std::collections::HashMap::new(),
                 removed_by_platform: std::collections::HashMap::new(),
                 combinetype: None,
+                facets: mdm_schema::KeyFacets::default(),
             },
         );
 
@@ -914,6 +939,7 @@ mod tests {
                     required: false,
                     supervised: false,
                     sensitive: true,
+                    read_only: false,
                 },
                 title: "Password".to_string(),
                 description: "Network password".to_string(),
@@ -928,6 +954,7 @@ mod tests {
                 deprecated_by_platform: std::collections::HashMap::new(),
                 removed_by_platform: std::collections::HashMap::new(),
                 combinetype: None,
+                facets: mdm_schema::KeyFacets::default(),
             },
         );
 
@@ -959,6 +986,7 @@ mod tests {
                 deprecated_by_platform: std::collections::HashMap::new(),
                 removed_by_platform: std::collections::HashMap::new(),
                 combinetype: None,
+                facets: mdm_schema::KeyFacets::default(),
             },
         );
 
@@ -977,6 +1005,7 @@ mod tests {
             fields,
             field_order,
             segments: vec![],
+            variants: Vec::new(),
         }
     }
 

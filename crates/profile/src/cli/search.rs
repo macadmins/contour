@@ -7,6 +7,8 @@
 //!   full detail (type, plist tag, default, allowed values) alongside its
 //!   payload_type, so an agent can answer "what type does Apple expect for
 //!   `<key>`?" in one CLI call.
+//! - A query of several words ("turn off airdrop") ranks fields by word,
+//!   best first, in the `--include-fields` shape with `matched_in: ["ranked"]`.
 //! - `--include-fields` (polymorphic): substring-matches at both the
 //!   payload AND field level. Returns categorized JSON
 //!   `{payload_matches: [...], field_matches: [...]}` with a `matched_in`
@@ -40,6 +42,9 @@ fn serialize_per_os_map(map: &std::collections::HashMap<Platform, String>) -> se
     serde_json::Value::Object(out)
 }
 
+/// How many ranked fields a multi-word query returns.
+const RANKED_LIMIT: usize = 20;
+
 /// Handle the `search` command.
 pub fn handle_search(
     query: Option<&str>,
@@ -67,7 +72,8 @@ pub fn handle_search(
 
     let q = query.expect("clap enforces a query when --field is unset");
 
-    if include_fields {
+    // A phrase is never a substring of anything, so it is ranked by word.
+    if include_fields || q.split_whitespace().nth(1).is_some() {
         return handle_polymorphic_search(&registry, q, kind, output_mode);
     }
 
@@ -99,6 +105,7 @@ fn handle_polymorphic_search(
     output_mode: OutputMode,
 ) -> Result<()> {
     let q = query.to_lowercase();
+    let ranked = q.split_whitespace().nth(1).is_some();
     let mut payload_hits: Vec<(&PayloadManifest, Vec<&'static str>)> = Vec::new();
     let mut field_hits: Vec<(&PayloadManifest, &FieldDefinition, Vec<&'static str>)> = Vec::new();
 
@@ -120,6 +127,9 @@ fn handle_polymorphic_search(
 
         // Field-level axes — sorted by field_order to keep output
         // deterministic and readable per payload.
+        if ranked {
+            continue;
+        }
         for name in &m.field_order {
             let Some(f) = m.fields.get(name) else {
                 continue;
@@ -141,11 +151,22 @@ fn handle_polymorphic_search(
     }
 
     payload_hits.sort_by(|a, b| a.0.payload_type.cmp(&b.0.payload_type));
-    field_hits.sort_by(|a, b| {
-        a.0.payload_type
-            .cmp(&b.0.payload_type)
-            .then(a.1.name.cmp(&b.1.name))
-    });
+    if ranked {
+        // Best first, and only the head: the tail is single common words.
+        field_hits = registry
+            .rank_fields(query)
+            .into_iter()
+            .filter(|h| kind_allows(h.manifest, kind))
+            .take(RANKED_LIMIT)
+            .map(|h| (h.manifest, h.field, vec!["ranked"]))
+            .collect();
+    } else {
+        field_hits.sort_by(|a, b| {
+            a.0.payload_type
+                .cmp(&b.0.payload_type)
+                .then(a.1.name.cmp(&b.1.name))
+        });
+    }
 
     if output_mode == OutputMode::Json {
         let json = serde_json::json!({
@@ -168,6 +189,7 @@ fn handle_polymorphic_search(
                     "payload_type": m.payload_type,
                     "field": {
                         "name": f.name,
+                        "path": f.path,
                         "type": f.field_type.as_str(),
                         "plist_tag": plist_tag_for(&f.field_type),
                         "required": f.flags.required,
@@ -300,6 +322,7 @@ fn handle_field_lookup(
                     "authorable": m.is_authorable(),
                     "field": {
                         "name": f.name,
+                        "path": f.path,
                         "type": f.field_type.as_str(),
                         "plist_tag": plist_tag_for(&f.field_type),
                         "required": f.flags.required,
@@ -489,6 +512,7 @@ mod kind_filter_tests {
             fields: std::collections::HashMap::new(),
             field_order: vec![],
             segments: vec![],
+            variants: Vec::new(),
         }
     }
 

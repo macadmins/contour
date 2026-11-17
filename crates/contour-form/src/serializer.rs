@@ -250,6 +250,7 @@ fn field_type_to_char(ft: &FieldType) -> char {
         FieldType::Data => 'x',
         FieldType::Date => 't',
         FieldType::Real => 'r',
+        FieldType::Any => 'y',
     }
 }
 

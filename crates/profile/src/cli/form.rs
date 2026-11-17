@@ -106,7 +106,13 @@ fn print_tree(spec: &crate::schema::formspec::FormSpec) {
             let opts = n
                 .options
                 .as_ref()
-                .map(|o| format!("  [{}]", o.join("|")))
+                .map(|o| {
+                    let shown: Vec<String> = o
+                        .iter()
+                        .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string))
+                        .collect();
+                    format!("  [{}]", shown.join("|"))
+                })
                 .unwrap_or_default();
             let badges = n
                 .annotations
@@ -200,6 +206,7 @@ pub fn handle_emit(
         org,
         intent: intent.to_string(),
         format: None,
+            keep_unknown: false,
         nesting: match (mcx, direct) {
             (true, false) => Some(Nesting::McxWrapped),
             (false, true) => Some(Nesting::Direct),

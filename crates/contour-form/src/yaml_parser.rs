@@ -199,6 +199,7 @@ pub fn parse_yaml_manifest(content: &str) -> Result<PayloadManifest> {
         fields,
         field_order,
         segments: vec![],
+        variants: Vec::new(),
     })
 }
 
@@ -291,6 +292,7 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
                     required,
                     supervised: false,
                     sensitive: false,
+                    read_only: false,
                 },
                 default: None,
                 allowed_values: Vec::new(),
@@ -308,6 +310,7 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
                 deprecated_by_platform: HashMap::new(),
                 removed_by_platform: HashMap::new(),
                 combinetype: None,
+                facets: mdm_schema::KeyFacets::default(),
             };
             field_order.push(def.path.clone());
             fields.insert(def.path.clone(), def);
@@ -330,6 +333,7 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
         fields,
         field_order,
         segments: vec![],
+        variants: Vec::new(),
     })
 }
 
@@ -622,6 +626,7 @@ fn parse_apple_field(field: &AppleField, depth: usize) -> FieldDefinition {
         sensitive: field
             .sensitive
             .unwrap_or_else(|| field.key.to_lowercase().contains("password")),
+        read_only: false,
     };
 
     // Parse default
@@ -658,6 +663,7 @@ fn parse_apple_field(field: &AppleField, depth: usize) -> FieldDefinition {
         deprecated_by_platform: HashMap::new(),
         removed_by_platform: HashMap::new(),
         combinetype: None,
+        facets: mdm_schema::KeyFacets::default(),
     }
 }
 
