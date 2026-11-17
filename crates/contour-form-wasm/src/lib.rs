@@ -147,14 +147,18 @@ impl Registry {
             .filter(|h| h.manifest.is_authorable())
             .take(limit)
             .map(|h| {
-                serde_json::json!({
+                let mut hit = serde_json::json!({
                     "type_id": h.manifest.payload_type,
                     "path": h.field.path,
                     "type": h.field.field_type.as_str(),
                     "title": h.field.title,
                     "description": h.field.description,
                     "score": h.score,
-                })
+                });
+                if let Some(obj) = hit.as_object_mut() {
+                    obj.extend(contour_form::facets_json(h.field));
+                }
+                hit
             })
             .collect();
         serde_json::to_string(&hits).map_err(err)

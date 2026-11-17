@@ -853,6 +853,7 @@ mod tests {
             deprecated_by_platform: std::collections::HashMap::new(),
             removed_by_platform: HashMap::default(),
             combinetype: None,
+            facets: mdm_schema::KeyFacets::default(),
         }
     }
 

@@ -311,6 +311,7 @@ fn parse_field(dict: &plist::Dictionary, depth: usize) -> Option<FieldDefinition
         required,
         supervised,
         sensitive,
+        read_only: false,
     };
 
     // Parse default value
@@ -350,6 +351,7 @@ fn parse_field(dict: &plist::Dictionary, depth: usize) -> Option<FieldDefinition
         deprecated_by_platform: HashMap::new(),
         removed_by_platform: HashMap::new(),
         combinetype: None,
+        facets: mdm_schema::KeyFacets::default(),
     })
 }
 

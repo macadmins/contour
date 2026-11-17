@@ -710,14 +710,19 @@ impl SchemaRegistry {
             .manifests
             .values()
             .flat_map(|m| m.fields.values().map(move |f| (m, f)))
+            // A node the device only reports is not something to set.
+            .filter(|(_, f)| !f.flags.read_only)
             .collect();
         let docs: Vec<[String; 3]> = fields
             .iter()
             .map(|(m, f)| {
                 [
-                    // The key's own name. Its parents are context: a long
-                    // path must not outrank a key for words in its ancestors.
-                    f.name.clone(),
+                    // The key's own name, and its keywords: other names an
+                    // operator uses for it ("Touch ID" for
+                    // RequireBiometricAuthentication). Its parents are
+                    // context: a long path must not outrank a key for words
+                    // in its ancestors.
+                    format!("{} {}", f.name, f.facets.keywords.join(" ")),
                     format!("{} {} {}", m.payload_type, m.title, f.path),
                     format!("{} {}", f.title, f.description),
                 ]
@@ -901,6 +906,43 @@ impl SchemaRegistry {
 }
 
 pub use path::{FieldPath, PathConflict};
+
+/// A field's dataset facets as JSON, only those it has: `examples` (each
+/// `{value, source}`, never a limit), `value_titles` (labels for
+/// `allowed_values`), `sensitive`, `keywords`, `group`, `note`,
+/// `documentation_url`, `app_introduced`. For search results an agent or a
+/// page reads.
+pub fn facets_json(f: &FieldDefinition) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::json;
+    let facets = &f.facets;
+    let mut out = serde_json::Map::new();
+    if !facets.examples.is_empty() {
+        out.insert("examples".into(), json!(facets.examples));
+    }
+    if let Some(t) = facets.value_titles.as_ref().filter(|t| t.len() == f.allowed_values.len()) {
+        out.insert("value_titles".into(), json!(t));
+    }
+    if f.flags.sensitive {
+        out.insert("sensitive".into(), json!(true));
+    }
+    if f.flags.read_only {
+        out.insert("read_only".into(), json!(true));
+    }
+    if !facets.keywords.is_empty() {
+        out.insert("keywords".into(), json!(facets.keywords));
+    }
+    for (name, value) in [
+        ("group", &facets.group),
+        ("note", &facets.note),
+        ("documentation_url", &facets.documentation_url),
+        ("app_introduced", &facets.app_introduced),
+    ] {
+        if let Some(v) = value {
+            out.insert(name.into(), json!(v));
+        }
+    }
+    out
+}
 
 #[cfg(test)]
 mod tests {

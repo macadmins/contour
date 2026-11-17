@@ -219,8 +219,32 @@ pub struct FormNode {
     pub presence: Option<Presence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
+    /// The allowed values, typed as the key takes them (numbers for an
+    /// integer key).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<String>>,
+    pub options: Option<Vec<serde_json::Value>>,
+    /// A label per option, same order, where the dataset gives them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub option_titles: Option<Vec<String>>,
+    /// Values that show what the key takes, with their source. Never a
+    /// limit: `options` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub examples: Option<Vec<mdm_schema::KeyExample>>,
+    /// The group a form shows the key under.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// A caveat the help text does not cover.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// The vendor's page for the key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation_url: Option<String>,
+    /// The app version that first reads the key (not an OS version).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_introduced: Option<String>,
+    /// The device reports it; a profile cannot set it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readonly: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<Range>,
     #[serde(skip_serializing_if = "Option::is_none")]

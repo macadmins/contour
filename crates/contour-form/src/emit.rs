@@ -89,6 +89,9 @@ pub struct Requirements {
     /// Text keys that hold a credential, by schema flag or by name. Their
     /// values belong in the MDM's secret variables, not in a repository.
     pub sensitive: Vec<String>,
+    /// Keys set that need a minimum version of the app that reads them,
+    /// by path ("RequireBiometricAuthentication" -> "2.5"). Not an OS.
+    pub app_versions: BTreeMap<String, String>,
 }
 
 // ponytail: follows dictionaries only. Keys inside an array of dictionaries
@@ -125,6 +128,9 @@ fn requirements(
             }
             if f.flags.supervised {
                 supervised.push(path.clone());
+            }
+            if let Some(v) = &f.facets.app_introduced {
+                req.app_versions.insert(path.clone(), v.clone());
             }
         }
         // By name as well: the embedded Apple schema flags no key sensitive.
@@ -451,6 +457,15 @@ pub fn emit_settings(reg: &SchemaRegistry, settings: &[Setting], opts: &EmitOpti
                 out.refused.push(r);
                 continue;
             };
+            if field.flags.read_only {
+                out.refused.push(refuse(
+                    &m.payload_type,
+                    &s.path,
+                    "read-only",
+                    format!("'{}' is reported by the device; a profile cannot set it", s.path),
+                ));
+                continue;
+            }
             if let Err(conflict) = crate::FieldPath::parse(&s.path)
                 .insert_json(&mut values, typed(field, s.value.clone()))
             {

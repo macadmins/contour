@@ -141,7 +141,12 @@ fn candidate(type_id: &str, n: &FormNode, required: bool) -> Candidate {
         key: format!("{type_id} {}", n.path),
         value_type: n.r#type.clone().unwrap_or_default(),
         required,
-        options: n.options.clone().unwrap_or_default(),
+        options: n
+            .options
+            .iter()
+            .flatten()
+            .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string))
+            .collect(),
         range: n.range.as_ref().map(|r| [r.min, r.max]),
         rule_sets: None,
         description: if help.chars().count() > 300 {

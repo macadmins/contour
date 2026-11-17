@@ -391,6 +391,14 @@ fn check_value(
     out: &mut Vec<Diagnostic>,
 ) {
     use serde_json::Value as J;
+    if f.flags.read_only {
+        out.push(Diagnostic::error(
+            path,
+            "read-only",
+            "the device reports this node; a profile cannot set it (DDF AccessType has neither Add nor Replace)".to_string(),
+        ));
+        return;
+    }
     let type_err = |out: &mut Vec<Diagnostic>, want: &str| {
         out.push(Diagnostic::error(
             path,

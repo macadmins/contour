@@ -426,6 +426,7 @@ mod tests {
             deprecated_by_platform: std::collections::HashMap::new(),
             removed_by_platform: std::collections::HashMap::new(),
             combinetype: None,
+            facets: mdm_schema::KeyFacets::default(),
         };
         let schema = field_to_json_schema(&string_field);
         assert_eq!(schema["type"], "string");
@@ -456,6 +457,7 @@ mod tests {
             deprecated_by_platform: std::collections::HashMap::new(),
             removed_by_platform: std::collections::HashMap::new(),
             combinetype: None,
+            facets: mdm_schema::KeyFacets::default(),
         };
         let schema = field_to_json_schema(&data_field);
         assert_eq!(schema["type"], "string");
@@ -486,6 +488,7 @@ mod tests {
             deprecated_by_platform: std::collections::HashMap::new(),
             removed_by_platform: std::collections::HashMap::new(),
             combinetype: None,
+            facets: mdm_schema::KeyFacets::default(),
         };
         let schema = field_to_json_schema(&date_field);
         assert_eq!(schema["type"], "string");

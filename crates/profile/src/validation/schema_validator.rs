@@ -1053,6 +1053,7 @@ mod tests {
                         required: false,
                         supervised: false,
                         sensitive: false,
+                        read_only: false,
                     },
                     title: String::new(),
                     description: String::new(),
@@ -1067,6 +1068,7 @@ mod tests {
                     deprecated_by_platform: std::collections::HashMap::new(),
                     removed_by_platform: HashMap::default(),
                     combinetype: None,
+                    facets: mdm_schema::KeyFacets::default(),
                 },
             );
             field_order.push(name.to_string());
@@ -1409,6 +1411,7 @@ mod tests {
                         required,
                         supervised: false,
                         sensitive: false,
+                        read_only: false,
                     },
                     title: String::new(),
                     description: String::new(),
@@ -1423,6 +1426,7 @@ mod tests {
                     deprecated_by_platform: std::collections::HashMap::new(),
                     removed_by_platform: HashMap::default(),
                     combinetype: None,
+                    facets: mdm_schema::KeyFacets::default(),
                 },
             );
             order.push(path);

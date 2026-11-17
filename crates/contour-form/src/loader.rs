@@ -47,7 +47,24 @@ pub fn load_embedded_beta() -> Result<Vec<PayloadManifest>> {
 pub fn load_embedded_windows() -> Result<Vec<PayloadManifest>> {
     let capabilities = mdm_schema::capabilities::read(mdm_schema::embedded_windows_capabilities())
         .context("Failed to read embedded Windows capabilities from Parquet")?;
-    Ok(capabilities.iter().map(capability_to_manifest).collect())
+    let mut manifests: Vec<PayloadManifest> = capabilities.iter().map(capability_to_manifest).collect();
+    // The DDF says which nodes a profile can set. A Get-only node (BitLocker
+    // Status) is reported by the device; an Exec node is run, not set.
+    let details = windows_schema::node_details::read(windows_schema::embedded_windows_node_details())
+        .unwrap_or_default();
+    let read_only: std::collections::HashSet<(&str, &str)> = details
+        .iter()
+        .filter(|d| !d.settable())
+        .map(|d| (d.payload_type.as_str(), d.key_path.as_str()))
+        .collect();
+    for m in &mut manifests {
+        for f in m.fields.values_mut() {
+            if read_only.contains(&(m.payload_type.as_str(), f.path.as_str())) {
+                f.flags.read_only = true;
+            }
+        }
+    }
+    Ok(manifests)
 }
 
 /// Shared body for [`load_embedded`] / [`load_embedded_beta`].
@@ -298,6 +315,7 @@ fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
                     deprecated_by_platform: HashMap::new(),
                     removed_by_platform: HashMap::new(),
                     combinetype: None,
+                    facets: mdm_schema::KeyFacets::default(),
                 },
             );
         }
@@ -473,7 +491,10 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
                 // Supervised-gated if the key's own supportedOS marks it
                 // supervised on any platform it supports.
                 supervised: key.supervised.values().any(|&s| s),
-                sensitive: false,
+                // The dataset's flag; emit adds keys whose name reads as a
+                // credential on top.
+                sensitive: key.facets.sensitive.unwrap_or(false),
+                read_only: false,
             },
             title: key.key_title.clone().unwrap_or_default(),
             description: key.key_description.clone().unwrap_or_default(),
@@ -538,6 +559,7 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
             deprecated_by_platform: convert_platform_map(&key.deprecated),
             removed_by_platform: convert_platform_map(&key.removed),
             combinetype: key.combinetype.clone(),
+            facets: key.facets.clone(),
         };
         field_order.push(key_path.clone());
         fields.insert(key_path, fd);

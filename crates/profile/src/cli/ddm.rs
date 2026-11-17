@@ -4408,6 +4408,7 @@ mod enum_validation_tests {
                 deprecated_by_platform: HashMap::new(),
                 removed_by_platform: HashMap::default(),
                 combinetype: None,
+                facets: mdm_schema::KeyFacets::default(),
             }
         };
 
@@ -4604,6 +4605,7 @@ mod scaffold_value_tests {
             deprecated_by_platform: HashMap::new(),
             removed_by_platform: HashMap::default(),
             combinetype: None,
+            facets: mdm_schema::KeyFacets::default(),
         };
         let manifest = crate::schema::PayloadManifest {
             manifest_source: None,

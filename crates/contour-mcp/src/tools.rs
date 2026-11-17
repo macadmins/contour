@@ -580,6 +580,9 @@ fn key_search(args: &Value) -> Result<Value, ToolError> {
                 "deprecated": per_platform(&f.deprecated_by_platform),
                 "score": h.score,
             });
+            if let Some(obj) = hit.as_object_mut() {
+                obj.extend(contour_form::facets_json(f));
+            }
             if let Some(k) = ddm_key_for(&m.payload_type, &f.path) {
                 hit["ddm_key"] = k;
             }
