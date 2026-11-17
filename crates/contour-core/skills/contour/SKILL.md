@@ -134,8 +134,12 @@ about each key. Use it instead of guessing:
   labels each value in the same order (`BiometricsFallbackType` 1 = "Ask for
   credentials only if biometrics are unavailable").
 - `examples` (each `{value, source}`) show what a value looks like and never
-  limit the key. A value that reads as a placeholder (`Example Name`) is
-  Apple's example text, not a value to deploy.
+  limit the key. A value that reads as a placeholder (`Example Name`,
+  `Example-Name.saver`, `com.example.*`) is example text: never deploy it.
+  Ask the person for the real value and replace it.
+- `profile generate` and `ddm generate` scaffolds usually fill a key with no
+  default from its first example. Review every scaffolded value with the
+  person; have them replace placeholders before the profile ships.
 - `sensitive: true` is a credential: put it in the MDM's secret variables,
   never in the repository.
 - `app_introduced` is the app version that first reads the key; an older app
