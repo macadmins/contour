@@ -60,9 +60,9 @@ curl -sf https://sofafeed.macadmins.io/v2/summary.json | jq -r --arg v 27.2.1 '
 
 ```bash
 # DDM, Apple's preferred path: enforce a version by a deadline
-echo '{"TargetOSVersion":"27.2.1","TargetLocalDateTime":"2026-12-01T18:00:00"}' > enforce.json
-contour profile ddm generate com.apple.configuration.softwareupdate.enforcement.specific \
-  --payload enforce.json --org com.acme -o enforce.json
+contour profile ddm generate softwareupdate.enforcement.specific \
+  --set TargetOSVersion=27.2.1 --set TargetLocalDateTime=2026-12-01T18:00:00 \
+  --org com.acme -o enforce.json
 
 # MDM command: install a specific update by product key
 contour profile command generate ScheduleOSUpdate \

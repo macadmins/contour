@@ -39,6 +39,7 @@ pub mod link;
 pub mod mcx;
 pub mod normalize;
 pub mod payload;
+pub mod values;
 pub mod plan;
 pub mod post_generate;
 pub mod reidentify;
@@ -1889,9 +1890,17 @@ pub enum DdmAction {
         #[arg(
             long,
             value_name = "FILE",
-            help = "JSON or TOML file whose key/values fill the declaration's Payload (e.g. {\"hello\":\"world\"} for management.properties). Merged over the schema skeleton."
+            help = "JSON or TOML file whose key/values fill the declaration's Payload (e.g. {\"hello\":\"world\"} for management.properties). Merged over the schema skeleton; --set wins over it."
         )]
         payload: Option<String>,
+
+        #[arg(
+            long = "set",
+            value_name = "PATH=VALUE",
+            num_args = 1,
+            help = "Set a Payload key (PATH=VALUE). A dotted PATH nests; VALUE takes the key's type (JSON for an array or dictionary)"
+        )]
+        sets: Vec<String>,
 
         #[arg(
             long,
@@ -2696,8 +2705,12 @@ pub enum CommandAction {
         /// Output file path
         #[arg(short, long)]
         output: Option<String>,
-        /// Set command parameters (KEY=VALUE)
-        #[arg(long = "set", value_name = "KEY=VALUE", num_args = 1)]
+        /// JSON or TOML file of the command's key/values; --set wins over it
+        #[arg(long, value_name = "FILE")]
+        payload: Option<String>,
+        /// Set a key (PATH=VALUE). A dotted PATH nests; VALUE takes the key's
+        /// type (JSON for an array or dictionary)
+        #[arg(long = "set", value_name = "PATH=VALUE", num_args = 1)]
         params: Vec<String>,
         /// Add a CommandUUID for tracking
         #[arg(long)]

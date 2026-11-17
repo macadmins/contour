@@ -257,6 +257,7 @@ pub fn handle_command_info(command_type: &str, output_mode: OutputMode) -> Resul
 pub fn handle_command_generate(
     command_type: &str,
     output: Option<&str>,
+    payload_file: Option<&str>,
     params: &[String],
     uuid: bool,
     base64_output: bool,
@@ -280,16 +281,26 @@ pub fn handle_command_generate(
         plist::Value::String(cmd.payload_type.clone()),
     );
 
-    // Parse --set KEY=VALUE params
-    for param in params {
-        let (key, value) = param.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!(
-                "Invalid parameter '{param}'. Expected KEY=VALUE format (e.g., --set PIN=123456)"
-            )
-        })?;
-
-        let plist_value = parse_plist_value(value);
-        command_dict.insert(key.to_string(), plist_value);
+    // The payload file, then each --set, typed by the command's schema and
+    // checked against it before anything is written.
+    let schema = command_schema(&cmd.payload_type)?;
+    let values = crate::cli::values::collect(payload_file, params, &schema)?;
+    let problems = crate::cli::values::check(&values, &schema);
+    if !problems.is_empty() {
+        let msg = format!(
+            "{} values do not fit its schema:\n  - {}",
+            cmd.payload_type,
+            problems.join("\n  - ")
+        );
+        if output_mode == OutputMode::Json {
+            contour_core::output::print_error_json(&msg, Some("SCHEMA_VIOLATION"));
+        }
+        return Err(contour_core::output::Reported(msg).into());
+    }
+    for (key, value) in values {
+        let v: plist::Value = serde_json::from_value(value)
+            .with_context(|| format!("'{key}' has no plist form (null?)"))?;
+        command_dict.insert(key, v);
     }
 
     // Build the top-level dict
@@ -390,29 +401,29 @@ pub fn handle_command_generate(
     Ok(())
 }
 
-/// Parse a string value into the appropriate plist type.
-///
-/// A JSON array or object becomes a plist array or dictionary, so a command
-/// key that takes one can be set: `--set 'Updates=[{"ProductKey":"…"}]'`.
-/// Before, it was written as a string, which the device refuses.
-fn parse_plist_value(value: &str) -> plist::Value {
-    if (value.starts_with('[') || value.starts_with('{'))
-        && let Ok(v) = serde_json::from_str::<plist::Value>(value)
-    {
-        return v;
-    }
-    match value {
-        "true" => plist::Value::Boolean(true),
-        "false" => plist::Value::Boolean(false),
-        _ => {
-            // Try integer
-            if let Ok(n) = value.parse::<i64>() {
-                return plist::Value::Integer(n.into());
-            }
-            // Otherwise string
-            plist::Value::String(value.to_string())
-        }
-    }
+/// A command's keys by path, from the dataset: type, required, allowed.
+fn command_schema(payload_type: &str) -> Result<std::collections::BTreeMap<String, crate::cli::values::KeyInfo>> {
+    let capabilities = mdm_schema::capabilities::read(mdm_schema::embedded_capabilities())
+        .context("Failed to read embedded capabilities from Parquet")?;
+    Ok(capabilities
+        .iter()
+        .filter(|c| c.kind == mdm_schema::PayloadKind::MdmCommand && c.payload_type == payload_type)
+        .flat_map(|c| &c.keys)
+        .map(|k| {
+            let path = k.key_path.clone().unwrap_or_else(|| match k.parent_key.as_deref() {
+                Some(p) if !p.is_empty() => format!("{p}.{}", k.name),
+                _ => k.name.clone(),
+            });
+            (
+                path,
+                crate::cli::values::KeyInfo {
+                    data_type: k.data_type.to_ascii_lowercase(),
+                    required: k.presence.eq_ignore_ascii_case("required"),
+                    allowed: k.range_list.clone().unwrap_or_default(),
+                },
+            )
+        })
+        .collect())
 }
 
 /// The decomposed result of an MDM `InstallProfile` command.
@@ -718,7 +729,7 @@ pub fn handle_command_generate_interactive(output_mode: OutputMode) -> Result<()
                     .with_context(|| format!("Prompt cancelled for {}", key.name))?;
 
                 if !val.is_empty() {
-                    command_dict.insert(key.name.clone(), parse_plist_value(&val));
+                    command_dict.insert(key.name.clone(), crate::cli::values::plist_value(&val, &key.data_type)?);
                 }
             } else {
                 // Optional non-bool: ask whether to set
@@ -755,7 +766,7 @@ pub fn handle_command_generate_interactive(output_mode: OutputMode) -> Result<()
                         .with_context(|| format!("Prompt cancelled for {}", key.name))?;
 
                     if !val.is_empty() {
-                        command_dict.insert(key.name.clone(), parse_plist_value(&val));
+                        command_dict.insert(key.name.clone(), crate::cli::values::plist_value(&val, &key.data_type)?);
                     }
                 }
             }
@@ -878,31 +889,15 @@ mod tests {
         );
     }
 
+    /// The interactive prompts type a typed answer by the key's type: an
+    /// untyped key takes JSON when it parses, text otherwise.
     #[test]
-    fn test_parse_plist_value_bool() {
-        assert_eq!(parse_plist_value("true"), plist::Value::Boolean(true));
-        assert_eq!(parse_plist_value("false"), plist::Value::Boolean(false));
-    }
-
-    #[test]
-    fn test_parse_plist_value_integer() {
-        assert_eq!(
-            parse_plist_value("123456"),
-            plist::Value::Integer(123_456.into())
-        );
-        assert_eq!(parse_plist_value("0"), plist::Value::Integer(0.into()));
-    }
-
-    #[test]
-    fn test_parse_plist_value_string() {
-        assert_eq!(
-            parse_plist_value("hello"),
-            plist::Value::String("hello".to_string())
-        );
-        assert_eq!(
-            parse_plist_value("com.example.wifi"),
-            plist::Value::String("com.example.wifi".to_string())
-        );
+    fn test_prompt_answers_take_the_keys_type() {
+        let v = |raw: &str, t: &str| crate::cli::values::plist_value(raw, t).unwrap();
+        assert_eq!(v("true", "boolean"), plist::Value::Boolean(true));
+        assert_eq!(v("123456", "integer"), plist::Value::Integer(123_456.into()));
+        assert_eq!(v("123456", "string"), plist::Value::String("123456".into()));
+        assert_eq!(v("com.acme.wifi", "string"), plist::Value::String("com.acme.wifi".into()));
     }
 
     #[test]
@@ -991,17 +986,26 @@ mod tests {
 }
 
 #[cfg(test)]
-mod set_value_tests {
+mod generate_value_tests {
     use super::*;
 
-    /// A JSON array of dictionaries sets ScheduleOSUpdate's Updates.
+    /// ScheduleOSUpdate's Updates takes an array of dictionaries from --set,
+    /// and the schema knows the command's keys.
     #[test]
-    fn a_json_value_becomes_an_array_or_dictionary() {
-        let v = parse_plist_value(r#"[{"ProductKey":"MSU_UPDATE_26B131_patch_27.2.1_minor","MaxUserDeferrals":3}]"#);
-        let first = v.as_array().and_then(|a| a.first()).and_then(plist::Value::as_dictionary).unwrap();
-        assert_eq!(first.get("ProductKey").and_then(plist::Value::as_string), Some("MSU_UPDATE_26B131_patch_27.2.1_minor"));
-        assert_eq!(first.get("MaxUserDeferrals").and_then(plist::Value::as_signed_integer), Some(3));
-        assert_eq!(parse_plist_value("[not json"), plist::Value::String("[not json".into()));
-        assert_eq!(parse_plist_value("42"), plist::Value::Integer(42.into()));
+    fn schedule_os_update_takes_its_updates() {
+        let schema = command_schema("ScheduleOSUpdate").unwrap();
+        assert_eq!(schema.get("Updates").map(|k| k.data_type.as_str()), Some("array"));
+        let values = crate::cli::values::collect(
+            None,
+            &[r#"Updates=[{"ProductKey":"MSU_UPDATE_26B131_patch_27.2.1_minor","InstallAction":"InstallASAP"}]"#.to_string()],
+            &schema,
+        )
+        .unwrap();
+        assert!(crate::cli::values::check(&values, &schema).is_empty());
+        let problems = crate::cli::values::check(
+            &crate::cli::values::collect(None, &["Upates=[]".to_string()], &schema).unwrap(),
+            &schema,
+        );
+        assert!(problems.iter().any(|p| p.contains("'Upates' is not a key")), "{problems:?}");
     }
 }

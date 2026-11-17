@@ -802,6 +802,7 @@ pub fn dispatch(
             CommandAction::Generate {
                 command_type,
                 output,
+                payload,
                 params,
                 uuid,
                 base64,
@@ -818,6 +819,7 @@ pub fn dispatch(
                     crate::cli::command::handle_command_generate(
                         command_type,
                         output.as_deref(),
+                        payload.as_deref(),
                         &params,
                         uuid,
                         base64,
@@ -1382,6 +1384,7 @@ pub fn dispatch(
                 identifier,
                 schema_path,
                 payload,
+                sets,
                 beta,
             } => {
                 let beta = beta || channel.is_beta();
@@ -1393,6 +1396,7 @@ pub fn dispatch(
                     identifier.as_deref(),
                     schema_path.as_deref(),
                     payload.as_deref(),
+                    &sets,
                     beta,
                     config.as_ref(),
                     output_mode,
