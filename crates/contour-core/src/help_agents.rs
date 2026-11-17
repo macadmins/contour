@@ -478,6 +478,7 @@ pub fn generate_index(cmd: &clap::Command, writer: &mut impl Write) -> Result<()
          - `--sop windows` — Windows CSP schema exploration (--windows on profile search/info)\n\
          - `--sop app-policy` — managed configuration of AI coding tools (Claude Code, OpenAI Codex, Cursor, Gemini Enterprise mobile). NOT Apple Intelligence — that is `--sop generative`\n\
          - `--sop beta-enrollment` — AppleSeed for IT beta declarations (offer/always-on/require/block)\n\
+         - `--sop os-versions` — latest Apple OS versions, builds, update product keys (SOFA lookup)\n\
          - `--sop mcx` — inspect/rename managed-preference (MCX) domains, incl. guided --interactive"
     )?;
     // schema-data is intentionally NOT advertised — it's a contour-developer
@@ -607,6 +608,7 @@ fn canonical_sop_name(tool: &str) -> &str {
         "maintain" | "maintenance" | "hygiene" | "collisions" | "collision" | "consolidate"
         | "audit" => "maintain",
         "windows" | "windows-csp" | "csp" | "ddf" | "admx" | "syncml" => "windows",
+        "os-versions" | "sofa" | "latest-os" | "os-updates" | "product-keys" => "os-versions",
         "beta-enrollment" | "appleseed" | "seeding" | "beta-program" | "beta-programs" => {
             "beta-enrollment"
         }
@@ -674,6 +676,10 @@ const SOP_BETA: &str = include_str!("../skills/contour/references/sop-beta.md");
 /// SOP_BETA_ENROLLMENT — AppleSeed for IT beta declarations. Carries the
 /// manual Apple Business Manager gate (.p7m -> DEP API -> seeding tokens)
 /// as an explicit, agent-drivable handoff, plus the four outcome modes.
+/// SOP_OS_VERSIONS — latest Apple OS versions from SOFA, looked up by the
+/// agent; contour itself makes no network call.
+const SOP_OS_VERSIONS: &str = include_str!("../skills/contour/references/sop-os-versions.md");
+
 const SOP_BETA_ENROLLMENT: &str =
     include_str!("../skills/contour/references/sop-beta-enrollment.md");
 
@@ -817,6 +823,7 @@ const SOPS: &[(&str, &str)] = &[
     ("windows", SOP_WINDOWS_CSP),
     ("app-policy", SOP_APP_POLICY),
     ("beta-enrollment", SOP_BETA_ENROLLMENT),
+    ("os-versions", SOP_OS_VERSIONS),
     ("profile-changes", SOP_PROFILE_CHANGES),
 ];
 

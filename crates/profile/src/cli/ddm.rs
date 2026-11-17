@@ -11,7 +11,7 @@ use crate::ddm::{
 };
 use crate::output::OutputMode;
 use crate::schema::SchemaRegistry;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use colored::Colorize;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -2495,6 +2495,7 @@ pub fn handle_ddm_generate(
     identifier: Option<&str>,
     schema_path: Option<&str>,
     payload_file: Option<&str>,
+    sets: &[String],
     beta: bool,
     config: Option<&ProfileConfig>,
     output_mode: OutputMode,
@@ -2525,28 +2526,25 @@ pub fn handle_ddm_generate(
     // Build the declaration
     let (mut payload, exclusive_choice) = build_top_level_payload(manifest, full);
 
-    // Merge an explicit payload file (JSON or TOML) over the schema skeleton —
-    // e.g. {"hello":"world"} fills a `com.apple.management.properties` Payload.
-    if let Some(pf) = payload_file {
-        let text =
-            std::fs::read_to_string(pf).with_context(|| format!("reading payload file '{pf}'"))?;
-        let is_toml = Path::new(pf)
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("toml"));
-        let map: serde_json::Map<String, serde_json::Value> = if is_toml {
-            let v: toml::Value =
-                toml::from_str(&text).with_context(|| format!("parsing TOML payload '{pf}'"))?;
-            serde_json::to_value(v)?
-                .as_object()
-                .cloned()
-                .unwrap_or_default()
-        } else {
-            serde_json::from_str(&text).with_context(|| format!("parsing JSON payload '{pf}'"))?
-        };
-        for (k, v) in map {
-            payload.insert(k, v);
-        }
-    }
+    // The payload file, then each --set, typed by the declaration's schema
+    // and merged over the skeleton. Validation below refuses what does not
+    // fit, before anything is written.
+    let schema: std::collections::BTreeMap<String, crate::cli::values::KeyInfo> = manifest
+        .fields
+        .values()
+        .map(|f| {
+            (
+                f.path.clone(),
+                crate::cli::values::KeyInfo {
+                    data_type: f.field_type.as_str().to_ascii_lowercase(),
+                    required: f.flags.required,
+                    allowed: f.allowed_values.clone(),
+                },
+            )
+        })
+        .collect();
+    let values = crate::cli::values::collect(payload_file, sets, &schema)?;
+    crate::cli::values::deep_merge(&mut payload.0, values);
 
     // Build identifier.
     // --identifier is used verbatim; otherwise domain: --org → profile.toml →
