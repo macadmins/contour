@@ -559,9 +559,10 @@ pub fn dispatch(
         Commands::Identities => {
             crate::cli::sign::handle_list_identities(output_mode)?;
         }
-        Commands::Variables { mdm } => {
-            crate::cli::variables::handle_variables(mdm.as_deref(), output_mode)?;
-        }
+        Commands::Variables { mdm, payload } => match payload {
+            Some(p) => crate::cli::variables::handle_secret_keys(&p, output_mode)?,
+            None => crate::cli::variables::handle_variables(mdm.as_deref(), output_mode)?,
+        },
         Commands::Link {
             paths,
             output,

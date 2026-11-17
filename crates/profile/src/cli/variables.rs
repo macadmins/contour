@@ -87,3 +87,81 @@ fn catalogue(flavour: MdmFlavour) -> Vec<String> {
             .collect(),
     }
 }
+
+/// A payload type's credential keys, each with the Fleet secret variable to
+/// put in its place. A key counts when the dataset marks it sensitive
+/// (`schema`) or its name reads as a credential (`name`; Apple's schema
+/// marks none).
+pub fn handle_secret_keys(payload_type: &str, output_mode: OutputMode) -> Result<()> {
+    let registry = crate::schema::SchemaRegistry::embedded()?;
+    let Some(m) = registry.get(payload_type).or_else(|| registry.get_by_name(payload_type)) else {
+        anyhow::bail!("no payload type `{payload_type}` in the embedded schema");
+    };
+    let keys = secret_keys(m);
+    if output_mode == OutputMode::Json {
+        let out: Vec<_> = keys
+            .iter()
+            .map(|(path, by, var)| serde_json::json!({"path": path, "by": by, "fleet": var}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"payload_type": m.payload_type, "keys": out}))?
+        );
+        return Ok(());
+    }
+    if keys.is_empty() {
+        println!("{}: no key holds a credential", m.payload_type);
+        return Ok(());
+    }
+    println!("{}", format!("{} credential keys", m.payload_type).bold().cyan());
+    for (path, by, var) in &keys {
+        println!("  {}  {}  ({by})", path.green(), var.dimmed());
+    }
+    Ok(())
+}
+
+/// `(path, "schema" | "name", "$FLEET_SECRET_<NAME>")`, in field order.
+fn secret_keys(m: &crate::schema::PayloadManifest) -> Vec<(String, &'static str, String)> {
+    m.field_order
+        .iter()
+        .filter_map(|p| m.fields.get(p))
+        .filter(|f| !matches!(f.field_type, crate::schema::FieldType::Dictionary | crate::schema::FieldType::Array))
+        .filter_map(|f| {
+            let by = if f.flags.sensitive {
+                "schema"
+            } else if contour_form::sensitive::is_known_sensitive_name(&f.name)
+                // A credential is free text or data: not a switch, not a
+                // choice from a fixed set (SystemModeCredentialsSource).
+                && matches!(f.field_type, crate::schema::FieldType::String | crate::schema::FieldType::Data)
+                && f.allowed_values.is_empty()
+            {
+                "name"
+            } else {
+                return None;
+            };
+            let name: String = f
+                .name
+                .chars()
+                .flat_map(|c| if c.is_ascii_alphanumeric() { c.to_uppercase().collect::<Vec<_>>() } else { vec!['_'] })
+                .collect();
+            Some((f.path.clone(), by, format!("$FLEET_SECRET_{name}")))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The dataset's flag and the name list both count, each said so.
+    #[test]
+    fn secret_keys_come_from_the_schema_and_from_names() {
+        let registry = crate::schema::SchemaRegistry::embedded().unwrap();
+        let santa = secret_keys(registry.get("com.northpolesec.santa").unwrap());
+        assert!(santa.iter().any(|(p, by, v)| p == "ClientAuthCertificatePassword"
+            && *by == "schema"
+            && v == "$FLEET_SECRET_CLIENTAUTHCERTIFICATEPASSWORD"));
+        let claude = secret_keys(registry.get("com.anthropic.claudecode").unwrap());
+        assert!(claude.iter().any(|(p, by, _)| p == "env.ANTHROPIC_API_KEY" && *by == "schema"));
+    }
+}

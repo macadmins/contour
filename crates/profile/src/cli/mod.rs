@@ -1119,6 +1119,11 @@ pub enum Commands {
             help = "MDM flavour to list (fleet|jamf|apple); defaults to the configured one"
         )]
         mdm: Option<String>,
+        #[arg(
+            long,
+            help = "List this payload type's credential keys and the secret variable to use for each"
+        )]
+        payload: Option<String>,
     },
 
     #[command(about = "Link UUID cross-references between profiles")]
