@@ -1,8 +1,10 @@
 //! Curated patterns for well-known sensitive field names.
 //!
-//! The embedded Apple schema marks no fields `sensitive`, so this table is the
-//! fallback that flags obvious credential keys (`Password`, `SharedSecret`, …)
-//! by name. Kept as a small constant list so it is easy to audit and extend.
+//! The dataset marks credentials where a source states them (`key_sensitive`:
+//! Claude Code's API keys, Santa's certificate password); Apple's own schema
+//! marks none. This table is the fallback that flags obvious credential keys
+//! (`Password`, `SharedSecret`, …) by name. Kept as a small constant list so it
+//! is easy to audit and extend.
 
 /// Case-insensitive substrings that mark a field name as a likely credential.
 ///

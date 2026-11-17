@@ -194,24 +194,48 @@ pub fn classify_payload(
     let mut secrets: Vec<SecretFinding> = Vec::new();
     let mut flagged_fields: BTreeSet<String> = BTreeSet::new();
 
-    // 1. schema_sensitive — schema marks the field sensitive (0 fields today).
+    // 1. schema_sensitive — the dataset marks the key a credential. Nested
+    // keys too (Claude Code's env.ANTHROPIC_API_KEY), and the domains a
+    // managed-preferences payload wraps, each against its own schema.
+    let mut schema_hits = Vec::new();
     if let Some(manifest) = registry.get(ptype) {
-        for (name, def) in &manifest.fields {
-            if def.flags.sensitive && payload.content.contains_key(name) {
-                secrets.push(SecretFinding {
-                    field: name.clone(),
-                    kind: SecretKind::SchemaSensitive,
-                    token: None,
-                    entropy: None,
-                });
-                flagged_fields.insert(name.clone());
+        sensitive_paths(manifest, None, &payload.content, &mut schema_hits);
+    }
+    if ptype == "com.apple.ManagedClient.preferences"
+        && let Some(plist::Value::Dictionary(domains)) = payload.content.get("PayloadContent")
+    {
+        for (domain, body) in domains {
+            let Some(manifest) = registry.get(domain) else { continue };
+            let Some(plist::Value::Array(forced)) = body.as_dictionary().and_then(|d| d.get("Forced")) else {
+                continue;
+            };
+            for item in forced {
+                if let Some(settings) = item
+                    .as_dictionary()
+                    .and_then(|d| d.get("mcx_preference_settings"))
+                    .and_then(plist::Value::as_dictionary)
+                {
+                    let mut found = Vec::new();
+                    sensitive_paths(manifest, None, settings.iter(), &mut found);
+                    schema_hits.extend(found.into_iter().map(|p| format!("PayloadContent.{domain}.{p}")));
+                }
             }
+        }
+    }
+    for field in schema_hits {
+        if flagged_fields.insert(field.clone()) {
+            secrets.push(SecretFinding {
+                field,
+                kind: SecretKind::SchemaSensitive,
+                token: None,
+                entropy: None,
+            });
         }
     }
 
     // 2. known_sensitive — well-known credential field name with a non-empty value.
     for (key, value) in &payload.content {
-        if sensitive::is_known_sensitive_name(key) && value_is_non_empty(value) {
+        if !flagged_fields.contains(key) && sensitive::is_known_sensitive_name(key) && value_is_non_empty(value) {
             secrets.push(SecretFinding {
                 field: key.clone(),
                 kind: SecretKind::KnownSensitive,
@@ -349,6 +373,48 @@ fn value_is_non_empty(v: &plist::Value) -> bool {
 
 /// Recursively tally `<data>` bytes and collect string values, attributing each
 /// to the top-level `key` it descends from.
+/// Paths under `entries` whose schema field is marked sensitive and whose
+/// value is non-empty. Dictionaries are followed by key; an array's
+/// elements by its one child (the element row, `<array>Item`).
+fn sensitive_paths<'a>(
+    manifest: &crate::schema::PayloadManifest,
+    prefix: Option<&str>,
+    entries: impl IntoIterator<Item = (&'a String, &'a plist::Value)>,
+    out: &mut Vec<String>,
+) {
+    for (key, value) in entries {
+        let path = prefix.map_or_else(|| key.clone(), |p| format!("{p}.{key}"));
+        visit_sensitive(manifest, path, value, out);
+    }
+}
+
+fn visit_sensitive(
+    manifest: &crate::schema::PayloadManifest,
+    path: String,
+    value: &plist::Value,
+    out: &mut Vec<String>,
+) {
+    match value {
+        plist::Value::Dictionary(d) => sensitive_paths(manifest, Some(&path), d.iter(), out),
+        plist::Value::Array(items) => {
+            let element = manifest
+                .fields
+                .values()
+                .find(|f| f.parent_key.as_deref() == Some(path.as_str()))
+                .map(|f| f.path.clone());
+            if let Some(element) = element {
+                for item in items {
+                    visit_sensitive(manifest, element.clone(), item, out);
+                }
+            }
+        }
+        v if value_is_non_empty(v) && manifest.fields.get(&path).is_some_and(|f| f.flags.sensitive) => {
+            out.push(path);
+        }
+        _ => {}
+    }
+}
+
 fn walk_value(
     key: &str,
     value: &plist::Value,
@@ -402,6 +468,33 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), v.clone()))
             .collect()
+    }
+
+    /// The dataset's sensitive flag reaches nested keys and the domains a
+    /// managed-preferences payload wraps: Claude Code's API key in `env`.
+    #[test]
+    fn schema_sensitive_reaches_wrapped_and_nested_keys() {
+        let mut env = plist::Dictionary::new();
+        env.insert("ANTHROPIC_API_KEY".into(), plist::Value::String("example-api-key-value".into()));
+        let mut settings = plist::Dictionary::new();
+        settings.insert("env".into(), plist::Value::Dictionary(env));
+        let mut forced_item = plist::Dictionary::new();
+        forced_item.insert("mcx_preference_settings".into(), plist::Value::Dictionary(settings));
+        let mut domain = plist::Dictionary::new();
+        domain.insert("Forced".into(), plist::Value::Array(vec![plist::Value::Dictionary(forced_item)]));
+        let mut domains = plist::Dictionary::new();
+        domains.insert("com.anthropic.claudecode".into(), plist::Value::Dictionary(domain));
+        let p = payload(
+            "com.apple.ManagedClient.preferences",
+            map(&[("PayloadContent", plist::Value::Dictionary(domains))]),
+        );
+        let a = classify_payload(0, &p, &registry());
+        assert!(
+            a.secrets.iter().any(|s| s.kind == SecretKind::SchemaSensitive
+                && s.field == "PayloadContent.com.anthropic.claudecode.env.ANTHROPIC_API_KEY"),
+            "{:?}",
+            a.secrets
+        );
     }
 
     /// Public-certificate payloads carry base64 cert material by design —

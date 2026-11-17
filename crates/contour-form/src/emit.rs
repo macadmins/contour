@@ -133,7 +133,8 @@ fn requirements(
                 req.app_versions.insert(path.clone(), v.clone());
             }
         }
-        // By name as well: the embedded Apple schema flags no key sensitive.
+        // By name as well: the dataset flags credentials only where a source
+        // states them, and Apple's schema states none.
         // Text only, so `allowPasswordSharing: false` is not a credential.
         let leaf = path.rsplit('.').next().unwrap_or(&path);
         if value.is_string()

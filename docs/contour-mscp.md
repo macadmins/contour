@@ -258,11 +258,11 @@ via `--preset` (a non-preset value passes through unchanged), so
 | Preset | Expands to | Framework |
 |--------|-----------|-----------|
 | `nist-high` / `nist-moderate` / `nist-low` | `800-53r5_high` / `_moderate` / `_low` | NIST 800-53 Rev 5 |
-| `nist-privacy` | `800-53r5_privacy` | NIST 800-53 Rev 5 (Privacy) |
 | `cui` | `800-171` | NIST 800-171 (CUI) |
 | `cmmc1` / `cmmc2` | `cmmc_lvl1` / `cmmc_lvl2` | CMMC 2.0 |
 | `stig` | `disa_stig` | DISA STIG (macOS) |
 | `ios-stig` | `ios_stig` | DISA STIG (iOS) |
+| `bsi-indigo-base` / `bsi-indigo-high` | `indigo_base` / `indigo_high` | BSI iNDIGO (iOS); generating needs an mSCP checkout that ships the baseline file |
 | `cis1` / `cis2` | `cis_lvl1` / `cis_lvl2` | CIS Benchmark (macOS) |
 | `cis1-byod` / `cis2-byod` | `cis_lvl1_byod` / `cis_lvl2_byod` | CIS Benchmark (iOS, BYOD) |
 | `cis1-enterprise` / `cis2-enterprise` | `cis_lvl1_enterprise` / `cis_lvl2_enterprise` | CIS Benchmark (iOS, Enterprise) |

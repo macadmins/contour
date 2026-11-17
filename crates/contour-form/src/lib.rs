@@ -58,7 +58,7 @@ pub use emit::{
 pub use form::{Target, form, form_all, form_all_with, form_with};
 pub use formspec::{Document, FormNode, FormSpec};
 pub use parse::{Parsed, parse};
-pub use validate::{Diagnostic, validate, validate_for, validate_target};
+pub use validate::{Diagnostic, validate, validate_for, validate_target, variant_diagnostics};
 
 /// Schema channel — selects the stable vs. pre-release (OS seed) dataset.
 ///

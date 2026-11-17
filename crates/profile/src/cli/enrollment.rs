@@ -81,8 +81,10 @@ fn load_skip_keys(platform: &str, os_version: Option<&str>, beta: bool) -> Resul
         .filter(|k| k.platform.eq_ignore_ascii_case(platform))
         .filter(|k| {
             if let Some(ver) = os_version {
-                let introduced_ok = k.introduced.as_deref().is_none_or(|intro| intro <= ver);
-                let not_removed = k.removed.as_deref().is_none_or(|rem| rem > ver);
+                // Compared as versions: as text, "10.13" <= "9.0". An
+                // unstated introduced (AppleID, TOS) is available.
+                let introduced_ok = k.introduced.as_deref().is_none_or(|intro| version_le(intro, ver));
+                let not_removed = k.removed.as_deref().is_none_or(|rem| !version_le(rem, ver));
                 introduced_ok && not_removed
             } else {
                 true
@@ -951,6 +953,12 @@ mod tests {
         assert!(!version_le("26.1", "26.0"));
         assert!(version_le("10.13.4", "10.14"));
         assert!(!version_le("27.0", "26.0"));
+        // The skip-key filter compares numerically: as text "10.10" <= "10.9",
+        // which offered 10.10 panes to a 10.9 Mac. Keys Apple gives no
+        // version (AppleID, TOS) stay.
+        let keys = load_skip_keys("macOS", Some("10.9"), false).unwrap();
+        assert!(keys.iter().all(|k| k.introduced.is_none()), "{:?}", keys.iter().map(|k| &k.key).collect::<Vec<_>>());
+        assert!(keys.iter().any(|k| k.key == "AppleID"));
     }
 
     #[test]

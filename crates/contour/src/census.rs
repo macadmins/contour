@@ -38,6 +38,10 @@ use std::collections::BTreeSet;
 pub struct Census {
     pub osquery_tables: usize,
     pub apple_keys: usize,
+    /// Keys with at least one example value (`key_examples`).
+    pub apple_keys_with_examples: usize,
+    /// Keys the dataset marks a credential (`key_sensitive`).
+    pub apple_sensitive_keys: usize,
     pub apple_payload_types: usize,
     pub mscp_rules: usize,
     pub mscp_rules_versioned: usize,
@@ -45,6 +49,8 @@ pub struct Census {
     pub skip_keys: usize,
     pub app_schemas: usize,
     pub windows_nodes: usize,
+    /// Nodes a profile cannot set (DDF AccessType without Add or Replace).
+    pub windows_read_only_nodes: usize,
     pub windows_csps: usize,
     pub app_policy_keys: usize,
     pub windows_app_templates: usize,
@@ -80,6 +86,14 @@ pub fn census() -> Result<Census> {
     let registry = contour_form::SchemaRegistry::embedded()?;
     let apple_payload_types = registry.stats().total;
     let apple_keys: usize = registry.all().map(|m| m.fields.len()).sum();
+    let apple_fields = || registry.all().flat_map(|m| m.fields.values());
+    let apple_keys_with_examples = apple_fields().filter(|f| !f.facets.examples.is_empty()).count();
+    let apple_sensitive_keys = apple_fields().filter(|f| f.facets.sensitive == Some(true)).count();
+    let windows_read_only_nodes = contour_form::SchemaRegistry::embedded_windows()?
+        .all()
+        .flat_map(|m| m.fields.values())
+        .filter(|f| f.flags.read_only)
+        .count();
 
     let win = mdm_schema::capabilities::read(mdm_schema::embedded_windows_capabilities())?;
     let windows_csps = win
@@ -137,6 +151,8 @@ pub fn census() -> Result<Census> {
     Ok(Census {
         osquery_tables,
         apple_keys,
+        apple_keys_with_examples,
+        apple_sensitive_keys,
         apple_payload_types,
         mscp_rules: mscp_schema::rule_meta::read(mscp_schema::embedded_rule_meta())?.len(),
         mscp_rules_versioned: mscp_schema::rules_versioned::read(
@@ -148,6 +164,7 @@ pub fn census() -> Result<Census> {
         skip_keys: mdm_schema::skip_keys::read(mdm_schema::embedded_skip_keys())?.len(),
         app_schemas,
         windows_nodes,
+        windows_read_only_nodes,
         windows_csps,
         app_policy_keys: app_policy_schema::app_policies::read(
             app_policy_schema::embedded_app_policies(),
@@ -167,9 +184,11 @@ impl Census {
     /// The human form: one figure per line, labelled, so a person can read it
     /// without counting separators in a sentence.
     pub fn report(&self) -> String {
-        let rows: [(&str, usize); 17] = [
+        let rows: [(&str, usize); 20] = [
             ("osquery tables", self.osquery_tables),
             ("Apple MDM keys", self.apple_keys),
+            ("  with example values", self.apple_keys_with_examples),
+            ("  marked sensitive", self.apple_sensitive_keys),
             ("Apple payload types", self.apple_payload_types),
             ("app schemas", self.app_schemas),
             ("Setup Assistant skip keys", self.skip_keys),
@@ -177,6 +196,7 @@ impl Census {
             ("mSCP rules (OS-versioned)", self.mscp_rules_versioned),
             ("mSCP baselines", self.mscp_baselines),
             ("Windows CSP nodes", self.windows_nodes),
+            ("  read-only (not settable)", self.windows_read_only_nodes),
             ("Windows CSPs", self.windows_csps),
             ("AI-tool policy keys", self.app_policy_keys),
             ("Windows app templates", self.windows_app_templates),
@@ -225,7 +245,8 @@ impl std::fmt::Display for Census {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} osquery tables · {} Apple MDM keys across {} payload types · \
+            "{} osquery tables · {} Apple MDM keys across {} payload types \
+             ({} with example values, {} marked sensitive) · \
              {} mSCP rules ({} OS-versioned) · {} baselines · {} skip keys · \
              {} app schemas · {} Windows CSP nodes across {} CSPs (`--windows`) · \
              {} AI-tool policy keys · {} Windows app templates ({} policies) · \
@@ -234,6 +255,8 @@ impl std::fmt::Display for Census {
             commas(self.osquery_tables),
             commas(self.apple_keys),
             commas(self.apple_payload_types),
+            commas(self.apple_keys_with_examples),
+            commas(self.apple_sensitive_keys),
             commas(self.mscp_rules),
             commas(self.mscp_rules_versioned),
             commas(self.mscp_baselines),
@@ -324,6 +347,9 @@ mod tests {
             ("osquery_tables", c.osquery_tables),
             ("apple_keys", c.apple_keys),
             ("apple_payload_types", c.apple_payload_types),
+            ("apple_keys_with_examples", c.apple_keys_with_examples),
+            ("apple_sensitive_keys", c.apple_sensitive_keys),
+            ("windows_read_only_nodes", c.windows_read_only_nodes),
             ("mscp_rules", c.mscp_rules),
             ("mscp_rules_versioned", c.mscp_rules_versioned),
             ("mscp_baselines", c.mscp_baselines),

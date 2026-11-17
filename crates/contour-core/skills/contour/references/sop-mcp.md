@@ -78,7 +78,7 @@ deterministic, and identical for a given build.
 | Tool | Answers |
 |---|---|
 | `contour.schema.search` | "which payload or key carries this setting?" |
-| `contour.schema.key` | "what are this payload's keys, where each sits (`path`, `parent`), platforms, and a starting snippet?" |
+| `contour.schema.key` | "what are this payload's keys, where each sits (`path`, `parent`), platforms, and a starting snippet?" — plus each key's `allowed` values with `value_titles`, `examples` (`{value, source}`, never a limit), `sensitive`, `app_introduced`, `note`, `documentation_url`, and `read_only` for a Windows node |
 | `contour.osquery.search` | "is there a table for this?" — `source: fleet` means it needs Fleet's agent |
 | `contour.osquery.table` | "what columns does this table have?" — plus Fleet's example, notes and docs link |
 | `contour.osquery.validate` | "do these tables and columns exist, and will this SQL run here?" |

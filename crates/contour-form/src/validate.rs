@@ -193,24 +193,37 @@ pub fn validate_target(
         return out;
     };
     check_object(m, None, "", obj, target, &mut out);
-    // The merge accepts what any variant accepts. A payload carrying one
-    // variant's fixed values (the Kerberos extension's identifier, team and
-    // type) is that variant, and is also held to what it requires.
-    if let Some((name, variant)) = matching_variant(m, obj) {
-        let mut own = Vec::new();
-        check_object(variant, None, "", obj, target, &mut own);
-        for d in own {
-            let adds = matches!(d.rule, "required-missing" | "not-in-enum" | "below-range" | "above-range")
-                && !out.iter().any(|o| o.path == d.path && o.rule == d.rule);
-            if adds {
-                out.push(Diagnostic {
-                    message: format!("{} (as the {name} variant of {})", d.message, m.payload_type),
-                    ..d
-                });
-            }
+    for d in variant_diagnostics(m, obj, target) {
+        if !out.iter().any(|o| o.path == d.path && o.rule == d.rule) {
+            out.push(d);
         }
     }
     out
+}
+
+/// What a payload's own variant requires beyond the merged manifest.
+///
+/// The merge accepts what any variant accepts. A payload carrying one
+/// variant's fixed values (the Kerberos extension's identifier, team and
+/// type) is that variant, and is also held to its required keys, allowed
+/// values and ranges. Empty when no variant matches.
+pub fn variant_diagnostics(
+    m: &PayloadManifest,
+    obj: &serde_json::Map<String, serde_json::Value>,
+    target: &Target,
+) -> Vec<Diagnostic> {
+    let Some((name, variant)) = matching_variant(m, obj) else {
+        return Vec::new();
+    };
+    let mut own = Vec::new();
+    check_object(variant, None, "", obj, target, &mut own);
+    own.into_iter()
+        .filter(|d| matches!(d.rule, "required-missing" | "not-in-enum" | "below-range" | "above-range"))
+        .map(|d| Diagnostic {
+            message: format!("{} (as the {name} variant of {})", d.message, m.payload_type),
+            ..d
+        })
+        .collect()
 }
 
 /// The variant whose fixed values (top-level keys with one allowed value)

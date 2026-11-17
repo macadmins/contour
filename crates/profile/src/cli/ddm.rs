@@ -2413,6 +2413,22 @@ fn generate_field_value(
         };
     }
 
+    // No default and no fixed set: the dataset's example (Apple's own
+    // declaration examples among them) beats `0` or `""`. Never for a
+    // credential.
+    if !field.flags.sensitive
+        && let Some(example) = field.facets.examples.iter().map(|e| &e.value).find(|v| {
+            matches!(
+                (field.field_type, v),
+                (FieldType::String, serde_json::Value::String(_))
+                    | (FieldType::Integer | FieldType::Real, serde_json::Value::Number(_))
+                    | (FieldType::Boolean, serde_json::Value::Bool(_))
+            )
+        })
+    {
+        return example.clone();
+    }
+
     match field.field_type {
         FieldType::Boolean => serde_json::Value::Bool(false),
         FieldType::Integer => serde_json::Value::Number(0.into()),
@@ -4652,6 +4668,30 @@ mod scaffold_value_tests {
             download, "Allowed",
             "scaffolded enum default must not carry embedded JSON quotes"
         );
+    }
+}
+
+#[cfg(test)]
+mod example_scaffold_tests {
+    use super::*;
+
+    /// A defaultless declaration key scaffolds as Apple's example value.
+    #[test]
+    fn a_declaration_scaffold_uses_apples_example() {
+        let registry = crate::schema::SchemaRegistry::embedded().unwrap();
+        let (m, f) = registry
+            .all()
+            .filter(|m| m.kind == Some(mdm_schema::PayloadKind::DdmDeclaration))
+            .flat_map(|m| m.fields.values().map(move |f| (m, f)))
+            .find(|(_, f)| {
+                f.default.is_none()
+                    && f.allowed_values.is_empty()
+                    && f.field_type == crate::schema::FieldType::String
+                    && f.facets.examples.iter().any(|e| e.source.starts_with("apple:") && e.value.is_string())
+            })
+            .expect("a declaration string key with an Apple example and no default");
+        let value = generate_field_value(&f.path, f, m, true);
+        assert!(f.facets.examples.iter().any(|e| e.value == value), "{} {}: {value}", m.payload_type, f.path);
     }
 }
 

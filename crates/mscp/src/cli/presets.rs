@@ -54,13 +54,6 @@ pub const PRESETS: &[MscpPreset] = &[
         os: OsArg::Macos,
         description: "NIST SP 800-53 Rev 5 — Low baseline.",
     },
-    MscpPreset {
-        name: "nist-privacy",
-        framework: "NIST 800-53 Rev 5",
-        keyword: "800-53r5_privacy",
-        os: OsArg::Macos,
-        description: "NIST SP 800-53 Rev 5 — Privacy overlay.",
-    },
     // NIST SP 800-171
     MscpPreset {
         name: "cui",
@@ -91,6 +84,22 @@ pub const PRESETS: &[MscpPreset] = &[
         keyword: "disa_stig",
         os: OsArg::Macos,
         description: "DISA STIG — macOS.",
+    },
+    MscpPreset {
+        name: "bsi-indigo-base",
+        framework: "BSI iNDIGO",
+        keyword: "indigo_base",
+        os: OsArg::Ios,
+        description: "BSI iOS Native Devices in Government Operations (iNDIGO) — Base settings. \
+                      Generating needs an mSCP checkout that ships the baseline file.",
+    },
+    MscpPreset {
+        name: "bsi-indigo-high",
+        framework: "BSI iNDIGO",
+        keyword: "indigo_high",
+        os: OsArg::Ios,
+        description: "BSI iOS Native Devices in Government Operations (iNDIGO) — High settings. \
+                      Generating needs an mSCP checkout that ships the baseline file.",
     },
     MscpPreset {
         name: "ios-stig",
@@ -262,6 +271,18 @@ pub fn handle_presets(mode: OutputMode) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every preset names a baseline the embedded dataset knows, BSI
+    /// iNDIGO among them (posture builds it from mSCP's rule tags).
+    #[test]
+    fn every_preset_names_a_known_baseline() {
+        let meta = mscp_schema::baseline_meta::read(mscp_schema::embedded_baseline_meta()).unwrap();
+        for p in PRESETS {
+            assert!(meta.iter().any(|m| m.baseline == p.keyword), "{} -> {}", p.name, p.keyword);
+        }
+        let (kw, os) = resolve(Some("bsi-indigo-high"), None, OsArg::Macos).unwrap();
+        assert_eq!((kw.as_str(), os), ("indigo_high", OsArg::Ios));
+    }
 
     #[test]
     fn find_preset_hits_known_and_misses_unknown() {

@@ -299,6 +299,32 @@ impl<'a> SchemaValidator<'a> {
             return;
         }
 
+        // A payload of one variant (the Kerberos SSO extension) is held to
+        // that variant's requirements as well as the merged schema's; the
+        // same check `contour form validate` makes.
+        let values: serde_json::Map<String, serde_json::Value> = payload
+            .content
+            .iter()
+            .map(|(k, v)| (k.clone(), crate::cli::payload::plist_value_to_json(v)))
+            .collect();
+        for d in contour_form::variant_diagnostics(manifest, &values, &contour_form::Target::default()) {
+            let field = (!d.path.is_empty()).then(|| d.path.clone());
+            if result
+                .issues
+                .iter()
+                .any(|i| i.payload_index == Some(index) && i.field == field)
+            {
+                continue;
+            }
+            result.issues.push(ValidationIssue::error(
+                &payload.payload_type,
+                Some(index),
+                field.as_deref(),
+                d.message,
+                "VARIANT_REQUIREMENT",
+            ));
+        }
+
         // Check required fields
         if self.options.check_required {
             self.check_required_fields(payload, index, manifest, result);
@@ -1004,6 +1030,54 @@ mod tests {
                 .as_deref(),
             Some("com.apple.wifi.managed")
         );
+    }
+
+    /// A Kerberos SSO payload is held to the Kerberos file (Realm required),
+    /// as `contour form validate` holds it; an Okta-style one is not.
+    #[test]
+    fn a_kerberos_payload_needs_its_realm() {
+        let profile = |content: &str| {
+            let xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>PayloadContent</key><array><dict>
+<key>PayloadType</key><string>com.apple.extensiblesso</string>
+<key>PayloadVersion</key><integer>1</integer>
+<key>PayloadIdentifier</key><string>com.acme.sso.payload</string>
+<key>PayloadUUID</key><string>11111111-1111-1111-1111-111111111111</string>
+{content}
+</dict></array>
+<key>PayloadDisplayName</key><string>SSO</string>
+<key>PayloadIdentifier</key><string>com.acme.sso</string>
+<key>PayloadType</key><string>Configuration</string>
+<key>PayloadUUID</key><string>22222222-2222-2222-2222-222222222222</string>
+<key>PayloadVersion</key><integer>1</integer>
+</dict></plist>"#
+            );
+            crate::profile::parser::parse_profile_from_bytes(xml.as_bytes()).unwrap()
+        };
+        let registry = SchemaRegistry::embedded().expect("embedded registry");
+        let validator = SchemaValidator::new(&registry);
+        let kerberos = profile(
+            "<key>ExtensionIdentifier</key><string>com.apple.AppSSOKerberos.KerberosExtension</string>\n\
+             <key>TeamIdentifier</key><string>apple</string>\n\
+             <key>Type</key><string>Credential</string>",
+        );
+        let result = validator.validate(&kerberos);
+        assert!(
+            result.issues.iter().any(|i| i.code == "VARIANT_REQUIREMENT" && i.field.as_deref() == Some("Realm")),
+            "{:?}",
+            result.issues
+        );
+        let okta = profile(
+            "<key>ExtensionIdentifier</key><string>com.okta.mobile.auth-service-extension</string>\n\
+             <key>TeamIdentifier</key><string>B7F62B65BN</string>\n\
+             <key>Type</key><string>Redirect</string>\n\
+             <key>URLs</key><array><string>https://acme.okta.com</string></array>",
+        );
+        let result = validator.validate(&okta);
+        assert!(result.issues.iter().all(|i| i.code != "VARIANT_REQUIREMENT"), "{:?}", result.issues);
     }
 
     /// The registry iterates in HashMap order, random per process and per

@@ -124,6 +124,29 @@ contour help-ai --sop <tool>                     # detailed SOP
 - `--fragment` for composable Fleet GitOps output
 - `--interactive` for guided workflows (not available in CI)
 
+## Choosing values
+
+`contour profile info <type> --json`, `profile search --json`,
+`contour.schema.key` and `contour.key.search` return what the schema knows
+about each key. Use it instead of guessing:
+
+- `allowed_values` / `allowed` is the only set a key accepts; `value_titles`
+  labels each value in the same order (`BiometricsFallbackType` 1 = "Ask for
+  credentials only if biometrics are unavailable").
+- `examples` (each `{value, source}`) show what a value looks like and never
+  limit the key. A value that reads as a placeholder (`Example Name`,
+  `Example-Name.saver`, `com.example.*`) is example text: never deploy it.
+  Ask the person for the real value and replace it.
+- `profile generate` and `ddm generate` scaffolds usually fill a key with no
+  default from its first example. Review every scaffolded value with the
+  person; have them replace placeholders before the profile ships.
+- `sensitive: true` is a credential: put it in the MDM's secret variables,
+  never in the repository.
+- `app_introduced` is the app version that first reads the key; an older app
+  ignores it. It is not an OS version.
+- `read_only: true` (Windows) is a node the device reports; do not set it.
+- `note` and `documentation_url` are the vendor's caveat and page; cite them.
+
 ## Embedded data (offline, no network)
 
 {{CENSUS}}
