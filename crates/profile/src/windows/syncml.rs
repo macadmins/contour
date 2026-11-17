@@ -129,6 +129,12 @@ pub enum WindowsError {
     ActionOnly {
         key: String,
     },
+    /// The DDF gives the node neither Add nor Replace: the device reports it
+    /// (Get) or runs it (Exec), and a profile cannot set it.
+    ReadOnly {
+        key: String,
+        access: String,
+    },
     /// The path contains an instance placeholder and none was supplied.
     InstanceRequired {
         path: String,
@@ -232,6 +238,10 @@ impl fmt::Display for WindowsError {
                 value,
                 data_type,
             } => write!(f, "{key}: '{value}' is not a valid {data_type}"),
+            WindowsError::ReadOnly { key, access } => write!(
+                f,
+                "{key} cannot be set by a profile: its DDF access is {access}, with neither Add nor Replace"
+            ),
             WindowsError::ActionOnly { key } => write!(
                 f,
                 "{key} is an action node — it executes rather than holding a value, \

@@ -605,6 +605,14 @@ fn resolve_one(
     let depends_on = detail.map(|d| d.dependencies.clone()).unwrap_or_default();
 
     let action = entry.action.as_deref().unwrap_or("set");
+    if action != "delete"
+        && let Some(d) = detail.filter(|d| !d.settable())
+    {
+        return Err(WindowsError::ReadOnly {
+            key: key_path.clone(),
+            access: d.access_type.join(", "),
+        });
+    }
 
     // Delete names a node to remove and carries no value or format.
     if action == "delete" {
