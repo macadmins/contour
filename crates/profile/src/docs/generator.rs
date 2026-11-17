@@ -129,6 +129,60 @@ pub fn generate_payload_doc(manifest: &PayloadManifest) -> Result<String> {
         writeln!(doc)?;
     }
 
+    // What the dataset says beyond the table: labelled values, examples, the
+    // app version a key needs, the vendor's caveat and page.
+    let detailed: Vec<_> = manifest
+        .field_order
+        .iter()
+        .filter_map(|p| manifest.fields.get(p))
+        .filter(|f| {
+            let x = &f.facets;
+            x.value_titles.is_some()
+                || !x.examples.is_empty()
+                || x.app_introduced.is_some()
+                || x.note.is_some()
+                || x.documentation_url.is_some()
+        })
+        .collect();
+    if !detailed.is_empty() {
+        writeln!(doc, "## Field details")?;
+        writeln!(doc)?;
+        for f in detailed {
+            let x = &f.facets;
+            writeln!(doc, "### `{}`", f.path)?;
+            writeln!(doc)?;
+            if let Some(titles) = x.value_titles.as_ref().filter(|t| t.len() == f.allowed_values.len()) {
+                writeln!(doc, "Values:")?;
+                writeln!(doc)?;
+                for (v, t) in f.allowed_values.iter().zip(titles) {
+                    writeln!(doc, "- `{v}`: {t}")?;
+                }
+                writeln!(doc)?;
+            }
+            if !x.examples.is_empty() {
+                let shown: Vec<String> = x
+                    .examples
+                    .iter()
+                    .map(|e| format!("`{}`", e.value.as_str().map_or_else(|| e.value.to_string(), str::to_string)))
+                    .collect();
+                writeln!(doc, "Examples: {}", shown.join(", "))?;
+                writeln!(doc)?;
+            }
+            if let Some(v) = &x.app_introduced {
+                writeln!(doc, "Needs app version {v} or later.")?;
+                writeln!(doc)?;
+            }
+            if let Some(n) = &x.note {
+                writeln!(doc, "> {n}")?;
+                writeln!(doc)?;
+            }
+            if let Some(u) = &x.documentation_url {
+                writeln!(doc, "Documentation: <{u}>")?;
+                writeln!(doc)?;
+            }
+        }
+    }
+
     // Sensitive fields warning
     let sensitive_fields: Vec<_> = manifest
         .fields
@@ -190,6 +244,20 @@ pub fn generate_payload_doc(manifest: &PayloadManifest) -> Result<String> {
 
     for field in required_fields {
         writeln!(doc, "    <key>{}</key>", field.name)?;
+        // A scalar example from the dataset beats a comment.
+        if let Some(value) = field.facets.examples.first().map(|e| &e.value) {
+            let line = match (field.field_type.as_str(), value) {
+                ("String", serde_json::Value::String(s)) => Some(format!("    <string>{s}</string>")),
+                ("Integer", serde_json::Value::Number(n)) => Some(format!("    <integer>{n}</integer>")),
+                ("Real", serde_json::Value::Number(n)) => Some(format!("    <real>{n}</real>")),
+                ("Boolean", serde_json::Value::Bool(b)) => Some(format!("    <{b}/>")),
+                _ => None,
+            };
+            if let Some(line) = line {
+                writeln!(doc, "{line}")?;
+                continue;
+            }
+        }
         match field.field_type.as_str() {
             "String" => writeln!(
                 doc,
@@ -940,5 +1008,21 @@ mod tests {
         assert!(doc.contains("## Platforms"));
         assert!(doc.contains("## Example"));
         assert!(doc.contains("```json"));
+    }
+}
+
+#[cfg(test)]
+mod facet_doc_tests {
+    use super::*;
+
+    /// Labelled values, examples and the docs link reach the markdown.
+    #[test]
+    fn a_payload_doc_carries_the_datasets_details() {
+        let registry = SchemaRegistry::embedded().unwrap();
+        let privileges = generate_payload_doc(registry.get("corp.sap.privileges").unwrap()).unwrap();
+        assert!(privileges.contains("- `1`: Ask for credentials only if biometrics are unavailable"));
+        assert!(privileges.contains("Documentation: <https://github.com/SAP/macOS-enterprise-privileges/wiki/"));
+        let screensaver = generate_payload_doc(registry.get("com.apple.screensaver").unwrap()).unwrap();
+        assert!(screensaver.contains("Examples: `Message`"), "{screensaver}");
     }
 }
