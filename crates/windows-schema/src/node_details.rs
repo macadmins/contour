@@ -53,6 +53,8 @@ pub fn read(bytes: &[u8]) -> Result<Vec<NodeDetail>> {
         let value_descriptions = s("value_descriptions")?;
         let dependencies = s("dependencies")?;
         let atomic = b("atomic_required")?;
+        // Absent before posture v2026.11.17-2.
+        let access = batch.column_by_name("access_type").map(|c| c.as_string::<i32>());
         for row in 0..batch.num_rows() {
             let vd: Vec<ValueDescription> = opt_str(value_descriptions, row)
                 .map(|j| serde_json::from_str(&j).context("parsing value_descriptions"))
@@ -73,6 +75,10 @@ pub fn read(bytes: &[u8]) -> Result<Vec<NodeDetail>> {
                 value_descriptions: vd,
                 dependencies: deps,
                 atomic_required: !atomic.is_null(row) && atomic.value(row),
+                access_type: access
+                    .and_then(|a| opt_str(a, row))
+                    .and_then(|j| serde_json::from_str(&j).ok())
+                    .unwrap_or_default(),
             });
         }
     }
@@ -82,6 +88,22 @@ pub fn read(bytes: &[u8]) -> Result<Vec<NodeDetail>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Get-only and Exec nodes are not settable; DDF says which.
+    #[test]
+    fn access_type_says_which_nodes_can_be_set() {
+        let all = read(crate::embedded_windows_node_details()).unwrap();
+        let status = all
+            .iter()
+            .find(|d| d.payload_type == "BitLocker" && d.key_path.starts_with("Status"))
+            .expect("BitLocker Status");
+        assert!(!status.settable(), "{:?}", status.access_type);
+        let allow = all
+            .iter()
+            .find(|d| d.payload_type == "BitLocker" && d.key_path == "AllowStandardUserEncryption")
+            .unwrap();
+        assert!(allow.settable(), "{:?}", allow.access_type);
+    }
 
     #[test]
     fn empty_bytes_read_as_no_rows() {

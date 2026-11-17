@@ -274,6 +274,19 @@ pub struct NodeDetail {
     pub value_descriptions: Vec<ValueDescription>,
     pub dependencies: Vec<NodeDependency>,
     pub atomic_required: bool,
+    /// DDF AccessType: `Add`, `Delete`, `Exec`, `Get`, `Replace`. Empty in
+    /// older data, where nothing is known and the node is treated as settable.
+    pub access_type: Vec<String>,
+}
+
+impl NodeDetail {
+    /// Whether a profile can set the node: its AccessType has `Add` or
+    /// `Replace`. A Get-only node is read (BitLocker `Status`), an Exec node
+    /// is run. Unknown (empty) counts as settable.
+    pub fn settable(&self) -> bool {
+        self.access_type.is_empty()
+            || self.access_type.iter().any(|a| a == "Add" || a == "Replace")
+    }
 }
 
 /// One allowed value and what Microsoft says it means.
