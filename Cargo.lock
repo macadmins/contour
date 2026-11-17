@@ -846,6 +846,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "toml",
  "windows-schema",
  "yaml_serde",
 ]
@@ -866,6 +867,7 @@ dependencies = [
  "anyhow",
  "clap",
  "contour-core",
+ "contour-form",
  "mdm-schema",
  "mscp-schema",
  "osquery-schema",
@@ -2530,6 +2532,7 @@ name = "profile"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "app-policy-schema",
  "assert_cmd",
  "base64 0.22.1",
  "chrono",
@@ -2547,6 +2550,7 @@ dependencies = [
  "inquire",
  "mdm-schema",
  "mimalloc",
+ "mscp-schema",
  "osquery-schema",
  "plist",
  "predicates",
