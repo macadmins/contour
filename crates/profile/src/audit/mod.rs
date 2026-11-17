@@ -408,10 +408,8 @@ fn visit_sensitive(
                 }
             }
         }
-        v if value_is_non_empty(v) => {
-            if manifest.fields.get(&path).is_some_and(|f| f.flags.sensitive) {
-                out.push(path);
-            }
+        v if value_is_non_empty(v) && manifest.fields.get(&path).is_some_and(|f| f.flags.sensitive) => {
+            out.push(path);
         }
         _ => {}
     }
