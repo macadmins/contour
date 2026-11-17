@@ -331,7 +331,7 @@ fn format_plist_value(value: &plist::Value) -> String {
 }
 
 /// Convert plist value to JSON
-fn plist_value_to_json(value: &plist::Value) -> serde_json::Value {
+pub(crate) fn plist_value_to_json(value: &plist::Value) -> serde_json::Value {
     match value {
         plist::Value::String(s) => serde_json::Value::String(s.clone()),
         plist::Value::Integer(i) => {
