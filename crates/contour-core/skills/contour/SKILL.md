@@ -76,6 +76,7 @@ Run `contour help-ai --sop <tool>` to get the detailed workflow:
 | MCP server, agent tooling, contour-mcp | `contour help-ai --sop mcp` |
 | Windows CSP, ADMX, DDF node lookup, DISA STIG policies | `contour help-ai --sop windows` |
 | Beta enrollment, AppleSeed for IT, seeding tokens | `contour help-ai --sop beta-enrollment` |
+| Latest OS versions, product keys (SOFA) | `contour help-ai --sop os-versions` |
 | Apple Intelligence: Writing Tools, Genmoji, external-intelligence (ChatGPT), `app.settings` | `contour help-ai --sop generative` |
 | AI coding tools' own settings: Claude Code, OpenAI Codex, Cursor, Gemini Enterprise mobile | `contour help-ai --sop app-policy` |
 | Apple's pre-release OS seed schema (beta channel) | `contour help-ai --sop beta` |
@@ -134,7 +135,7 @@ about each key. Use it instead of guessing:
   labels each value in the same order (`BiometricsFallbackType` 1 = "Ask for
   credentials only if biometrics are unavailable").
 - `examples` (each `{value, source}`) show what a value looks like and never
-  limit the key. A value that reads as a placeholder (`Example Name`,
+  limit the key. A placeholder-looking value (`Example Name`,
   `Example-Name.saver`, `com.example.*`) is example text: never deploy it.
   Ask the person for the real value and replace it.
 - `profile generate` and `ddm generate` scaffolds usually fill a key with no
@@ -145,7 +146,7 @@ about each key. Use it instead of guessing:
 - `app_introduced` is the app version that first reads the key; an older app
   ignores it. It is not an OS version.
 - `read_only: true` (Windows) is a node the device reports; do not set it.
-- `note` and `documentation_url` are the vendor's caveat and page; cite them.
+- Cite `note` and `documentation_url`: the vendor's caveat and page.
 
 ## Embedded data (offline, no network)
 
