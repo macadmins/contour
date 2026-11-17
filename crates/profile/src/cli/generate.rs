@@ -2014,6 +2014,17 @@ fn no_value_to_write(field: &FieldDefinition) -> Option<&'static str> {
     }
 }
 
+/// The field's first example that fits its type, as a plist value.
+fn example_value(field: &FieldDefinition) -> Option<Value> {
+    field.facets.examples.iter().find_map(|e| match (field.field_type, &e.value) {
+        (FieldType::String, serde_json::Value::String(s)) => Some(Value::String(s.clone())),
+        (FieldType::Integer, serde_json::Value::Number(n)) => n.as_i64().map(|i| Value::Integer(i.into())),
+        (FieldType::Real, serde_json::Value::Number(n)) => n.as_f64().map(Value::Real),
+        (FieldType::Boolean, serde_json::Value::Bool(b)) => Some(Value::Boolean(*b)),
+        _ => None,
+    })
+}
+
 fn under_an_array(manifest: &crate::schema::PayloadManifest, path: &str) -> bool {
     // Walked as segments: `com\.apple\.EnergySaver\.desktop\.Schedule` is
     // one key, and splitting the string at every `.` looked up fragments of it.
@@ -2158,6 +2169,16 @@ fn build_payload_from_schema(
                 }
                 return Value::Dictionary(inner);
             }
+        }
+
+        // No default: a scalar example from the dataset is a better start than
+        // `0` or `""` (it passes the key's own range and pattern). Never for
+        // a credential: an example secret has no place in a scaffold.
+        if field.default.is_none()
+            && !field.flags.sensitive
+            && let Some(v) = example_value(field)
+        {
+            return v;
         }
 
         // Leaf value — always respect the field type, use default where it makes sense
@@ -3120,5 +3141,20 @@ mod placeholder_key_tests {
             dynamic >= 5,
             "expected several dynamic-key schemas, saw {dynamic}"
         );
+    }
+}
+
+#[cfg(test)]
+mod example_scaffold_tests {
+    use super::*;
+
+    /// With no default, a scaffold writes the dataset's example, not `0`/`""`.
+    #[test]
+    fn a_scaffold_uses_an_example_where_there_is_no_default() {
+        let registry = crate::schema::SchemaRegistry::embedded().unwrap();
+        let m = registry.get("com.apple.screensaver").unwrap();
+        let dict = build_payload_from_schema(m, &std::collections::BTreeMap::new(), true, true);
+        assert_eq!(dict.get("moduleName").and_then(Value::as_string), Some("Message"));
+        assert_eq!(dict.get("idleTime").and_then(Value::as_signed_integer), Some(60));
     }
 }
