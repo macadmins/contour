@@ -376,6 +376,7 @@ fn node(
         note: f.facets.note.clone(),
         documentation_url: f.facets.documentation_url.clone(),
         app_introduced: f.facets.app_introduced.clone(),
+        ddm_equivalent: f.facets.ddm_equivalent.clone(),
         readonly: f.flags.read_only.then_some(true),
         range: (f.range_min.is_some() || f.range_max.is_some()).then_some(Range {
             min: f.range_min,
@@ -475,6 +476,7 @@ fn resolve_control(
                     note: None,
                     documentation_url: None,
                     app_introduced: None,
+                    ddm_equivalent: None,
                     readonly: None,
                 })),
             };

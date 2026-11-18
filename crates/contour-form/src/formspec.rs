@@ -242,6 +242,9 @@ pub struct FormNode {
     /// The app version that first reads the key (not an OS version).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_introduced: Option<String>,
+    /// The declaration (and key) Apple names in place of this profile key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ddm_equivalent: Option<mdm_schema::DdmEquivalent>,
     /// The device reports it; a profile cannot set it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly: Option<bool>,

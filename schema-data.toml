@@ -26,14 +26,14 @@ ref = ""
 # The release every crate's archive is fetched at. Its name and the first
 # characters of the archive's sha256 go into the request URL, so a cached
 # copy of another release cannot be served for this one.
-zip_release = "v2026.11.17-2"
+zip_release = "v2026.11.18-1"
 
 # The sha256 of each archive at `zip_release`. A downloaded archive that does
 # not match fails the build.
-sha256_mdm-schema = "e89744930ec0b2aee7f86b9db118dd81515b4d9b1783f0351d21ed420634cdbb"
+sha256_mdm-schema = "8f1bac9dbd4b22d73684fe2be51055ada39d472e862ea990470ebd28325844a3"
 # The beta channel: the OS seed while Apple has one out, the current
 # release between seeds. Now seed_OS-27.3 (Seed2). Keep this line; --beta needs it.
-sha256_mdm-schema-beta = "808fb53ac2614a1810a394c2d906d5999d9e68fe3da2c3dd4a832584f4ad2cdf"
+sha256_mdm-schema-beta = "e4270137e308007c433845f52c20158e8fdf84269325a1037d0ebcd798da3c5a"
 sha256_osquery-schema = "aded514110ee4965a901cb8ba6cd1ce950207b323d55dfde5d546d441c087ba3"
 sha256_mscp-schema = "34d55d781569cdbc09bd4e518e58f08784a2eeef0e88926aa5e03b84810ce677"
 sha256_windows-schema = "7005c2ca0e60aa8e8da1e341519d61585d6a98cbc8ce0e450a0f13bfcab37f55"

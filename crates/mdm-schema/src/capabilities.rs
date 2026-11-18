@@ -207,6 +207,8 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         let f_note = text("key_note");
         let f_doc_url = text("key_documentation_url");
         let f_app_introduced = text("key_app_introduced");
+        // v2026.11.18-1 on.
+        let f_ddm = text("key_ddm_equivalent");
         let f_sensitive = batch.column_by_name("key_sensitive").map(|c| c.as_boolean());
 
         for row in 0..num_rows {
@@ -594,6 +596,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                         note: get(f_note),
                         documentation_url: get(f_doc_url),
                         app_introduced: get(f_app_introduced),
+                        ddm_equivalent: json_at(f_ddm, row),
                     }
                 },
             });

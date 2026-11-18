@@ -144,3 +144,29 @@ fn a_payload_is_held_to_the_variant_it_carries() {
     let diags = validate(&r, "com.apple.extensiblesso", &okta);
     assert!(diags.iter().all(|d| d.path != "Realm"), "{diags:?}");
 }
+
+/// A deprecated restriction says where its setting went: the form node
+/// carries the declaration and key, and the deprecation warning names them.
+#[test]
+fn a_deprecated_key_names_its_declaration_key() {
+    let r = reg();
+    let target = Target {
+        platform: Some(contour_form::Platform::Ios),
+        os_version: Some("27.0".into()),
+    };
+    let spec = form(&r, "com.apple.applicationaccess", &target).unwrap();
+    let d = node(&spec.nodes, "blockedAppBundleIDs").ddm_equivalent.as_ref().unwrap();
+    assert_eq!(d.declaration, "com.apple.configuration.app.settings");
+    assert_eq!(d.key.as_deref(), Some("Allowed.DeniedApps"));
+
+    let values = serde_json::json!({ "blockedAppBundleIDs": ["com.acme.game"] });
+    let msg: Vec<String> = contour_form::validate_target(&r, "com.apple.applicationaccess", &values, &target)
+        .into_iter()
+        .filter(|d| d.path == "blockedAppBundleIDs")
+        .map(|d| d.message)
+        .collect();
+    assert!(
+        msg.iter().any(|m| m.contains("deprecated") && m.contains("`Allowed.DeniedApps`")),
+        "{msg:?}"
+    );
+}

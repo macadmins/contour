@@ -1965,7 +1965,12 @@ pub fn handle_ddm_map(name: Option<&str>, output_mode: OutputMode) -> Result<()>
                 .map(|(decl, keys)| (
                     decl.clone(),
                     keys.iter()
-                        .map(|(k, to)| serde_json::json!({"key": k, "ddm_key": to}))
+                        .map(|(k, d)| serde_json::json!({
+                            "key": k,
+                            "ddm_key": d.key,
+                            "inverted": d.inverted,
+                            "ddm_key_from": d.key_from,
+                        }))
                         .collect::<Vec<_>>()
                 ))
                 .collect::<std::collections::BTreeMap<_, _>>()
@@ -2045,9 +2050,10 @@ pub fn handle_ddm_map(name: Option<&str>, output_mode: OutputMode) -> Result<()>
         );
         for (decl, keys) in &moved {
             println!("  {}", decl.cyan());
-            for (k, to) in keys {
-                match to {
-                    Some(t) => println!("    {} {} {}", k.yellow(), "→".dimmed(), t),
+            for (k, d) in keys {
+                let flip = if d.inverted { " (inverted)" } else { "" };
+                match &d.key {
+                    Some(t) => println!("    {} {} {t}{flip}", k.yellow(), "→".dimmed()),
                     None => println!("    {}", k.yellow()),
                 }
             }
@@ -2056,15 +2062,15 @@ pub fn handle_ddm_map(name: Option<&str>, output_mode: OutputMode) -> Result<()>
     Ok(())
 }
 
-/// Keys of a profile payload that Apple deprecated in favour of a named
-/// declaration, grouped by that declaration, each with its matching key
-/// there when one is found.
-///
-/// The source is Apple's own note on the key — "Deprecated: use the
-/// declarative management `…` configuration." — so a new move in the data
-/// shows up here without a hand-kept list going stale.
-fn moved_keys(mdm_type: &str) -> std::collections::BTreeMap<String, Vec<(String, Option<String>)>> {
-    let mut out: std::collections::BTreeMap<String, Vec<(String, Option<String>)>> =
+/// Keys of a profile payload whose setting Apple moved to a named
+/// declaration, grouped by that declaration, from the dataset's
+/// `key_ddm_equivalent`: the declaration is the one Apple's text names, the
+/// key the one Apple names, the one of the same name, or posture's
+/// annotation. `key` is `None` when none of those says.
+fn moved_keys(
+    mdm_type: &str,
+) -> std::collections::BTreeMap<String, Vec<(String, mdm_schema::DdmEquivalent)>> {
+    let mut out: std::collections::BTreeMap<String, Vec<(String, mdm_schema::DdmEquivalent)>> =
         std::collections::BTreeMap::new();
     let Ok(registry) = SchemaRegistry::embedded() else {
         return out;
@@ -2072,56 +2078,14 @@ fn moved_keys(mdm_type: &str) -> std::collections::BTreeMap<String, Vec<(String,
     let Some(manifest) = registry.get(mdm_type) else {
         return out;
     };
-    const MARK: &str = "Deprecated: use the declarative management `";
-    for path in &manifest.field_order {
-        let Some(field) = manifest.fields.get(path) else {
-            continue;
-        };
-        let Some(rest) = field.description.split(MARK).nth(1) else {
-            continue;
-        };
-        let Some(decl) = rest
-            .split('`')
-            .next()
-            .filter(|d| d.starts_with("com.apple."))
-        else {
-            continue;
-        };
-        let to = registry
-            .get(decl)
-            .and_then(|target| matching_key(&field.name, target));
-        out.entry(decl.to_string())
-            .or_default()
-            .push((field.name.clone(), to));
+    for field in manifest.field_order.iter().filter_map(|p| manifest.fields.get(p)) {
+        if let Some(d) = &field.facets.ddm_equivalent {
+            out.entry(d.declaration.clone())
+                .or_default()
+                .push((field.path.clone(), d.clone()));
+        }
     }
     out
-}
-
-/// The key in `target` a restriction key corresponds to, by name alone:
-/// `allowGenmoji` → `AllowGenmoji`, `allowMailSummary` →
-/// `Apps.Mail.AllowSummary`. Exact after normalising, never fuzzy — a key
-/// that matches nothing is reported without a partner rather than paired
-/// with a guess.
-fn matching_key(restriction: &str, target: &contour_form::PayloadManifest) -> Option<String> {
-    let norm = |s: &str| s.to_ascii_lowercase();
-    let bare = |s: &str| {
-        let l = norm(s);
-        l.strip_prefix("allow").map(str::to_string).unwrap_or(l)
-    };
-    let want_full = norm(restriction);
-    let want_bare = bare(restriction);
-    let mut hits = target.field_order.iter().filter(|path| {
-        let segments: Vec<&str> = path.split('.').filter(|s| *s != "Apps").collect();
-        let Some((leaf, parents)) = segments.split_last() else {
-            return false;
-        };
-        let full: String = parents.iter().map(|p| norm(p)).collect::<String>() + &norm(leaf);
-        let stripped: String = parents.iter().map(|p| norm(p)).collect::<String>() + &bare(leaf);
-        full == want_full || stripped == want_bare
-    });
-    let first = hits.next()?.clone();
-    // Two candidates is no answer.
-    hits.next().is_none().then_some(first)
 }
 
 /// `ddm coverage` — how much of the legacy MDM surface has a declarative
@@ -3407,26 +3371,26 @@ mod tests {
         declaration_errors(&decl, &registry).1
     }
 
-    /// Apple's per-key deprecation notes drive the map: the intelligence
-    /// restrictions show up, nested targets are found, and a key with no
-    /// exact partner is listed without a guessed one.
+    /// The dataset's DDM equivalents drive the map: nested targets and keys
+    /// whose names differ.
     #[test]
     fn ddm_map_lists_keys_moved_to_other_declarations() {
         let moved = moved_keys("com.apple.applicationaccess");
         let ai = moved
             .get("com.apple.configuration.intelligence.settings")
             .expect("the intelligence declaration must be listed");
-        assert!(
-            ai.iter().any(|(k, to)| k == "allowMailSummary"
-                && to.as_deref() == Some("Apps.Mail.AllowSummary")),
-            "{ai:?}"
-        );
+        let to = |list: &[(String, mdm_schema::DdmEquivalent)], key: &str| {
+            list.iter().find(|(k, _)| k == key).and_then(|(_, d)| d.key.clone())
+        };
+        assert_eq!(to(ai, "allowMailSummary").as_deref(), Some("Apps.Mail.AllowSummary"));
         let siri = &moved["com.apple.configuration.siri.settings"];
-        assert!(
-            siri.iter()
-                .any(|(k, to)| k == "allowAssistant" && to.is_none()),
-            "{siri:?}"
+        assert_eq!(
+            to(siri, "allowAssistant").as_deref(),
+            Some("Enabled"),
+            "posture's annotation pairs keys whose names differ"
         );
+        let app = &moved["com.apple.configuration.app.settings"];
+        assert_eq!(to(app, "blockedAppBundleIDs").as_deref(), Some("Allowed.DeniedApps"));
     }
 
     fn intelligence_decl(payload: serde_json::Value) -> Declaration {

@@ -249,6 +249,17 @@ fn matching_variant<'a>(
     })
 }
 
+/// Where the setting went: the dataset's DDM equivalent (declaration and
+/// key), else Apple's "Removed: …" sentence. Empty when neither says.
+fn instead(f: &FieldDefinition) -> String {
+    if let Some(d) = &f.facets.ddm_equivalent {
+        return format!("; in declarative management use {}", d.describe());
+    }
+    replacement_hint(&f.description)
+        .map(|r| format!(". Apple says: {r}"))
+        .unwrap_or_default()
+}
+
 /// Apple's replacement, where the schema names one.
 ///
 /// A removed key's description often ends with a sentence naming what to use
@@ -293,9 +304,7 @@ fn availability_rules(f: &FieldDefinition, path: &str, target: &Target, out: &mu
     if let Some(gone) = f.removed_by_platform.get(&p) {
         match os {
             Some(os) if version::at_least(os, gone) == Some(true) => {
-                let instead = replacement_hint(&f.description)
-                    .map(|r| format!(". Apple says: {r}"))
-                    .unwrap_or_default();
+                let instead = instead(f);
                 out.push(Diagnostic::error(
                     path,
                     "key-removed-on-target",
@@ -314,9 +323,10 @@ fn availability_rules(f: &FieldDefinition, path: &str, target: &Target, out: &mu
                     "key-removed",
                     format!(
                         "'{}' was removed from {} at {gone} — on that version and later the device \
-                         ignores it. Pass --os-version to check your target",
+                         ignores it{}. Pass --os-version to check your target",
                         f.name,
-                        p.as_str()
+                        p.as_str(),
+                        instead(f)
                     ),
                 ));
                 return;
@@ -330,16 +340,17 @@ fn availability_rules(f: &FieldDefinition, path: &str, target: &Target, out: &mu
                 "key-deprecated-on-target",
                 format!(
                     "'{}' is deprecated on {} since {dep}; it still works on {os}, but Apple has \
-                     flagged it for removal",
+                     flagged it for removal{}",
                     f.name,
-                    p.as_str()
+                    p.as_str(),
+                    instead(f)
                 ),
             )),
             Some(_) => {}
             None => out.push(Diagnostic::warning(
                 path,
                 "key-deprecated",
-                format!("'{}' is deprecated on {} since {dep}", f.name, p.as_str()),
+                format!("'{}' is deprecated on {} since {dep}{}", f.name, p.as_str(), instead(f)),
             )),
         }
     }

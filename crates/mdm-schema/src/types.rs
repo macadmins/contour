@@ -382,6 +382,38 @@ pub struct KeyFacets {
     pub documentation_url: Option<String>,
     /// The app version that first reads the key; not an OS version.
     pub app_introduced: Option<String>,
+    /// Where this profile key's setting lives in declarative management.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ddm_equivalent: Option<DdmEquivalent>,
+}
+
+/// The declaration (and key in it) Apple names in place of a profile key
+/// (`key_ddm_equivalent`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DdmEquivalent {
+    /// The declaration type Apple's text names.
+    pub declaration: String,
+    /// The key's path in the declaration; `None` when unknown.
+    pub key: Option<String>,
+    /// The declaration key holds the opposite boolean.
+    #[serde(default)]
+    pub inverted: bool,
+    /// How `key` was found: `apple`, `name` or `annotation:<source>`.
+    pub key_from: Option<String>,
+}
+
+impl DdmEquivalent {
+    /// One line for a person or an agent: "`D` key `K` (inverted)".
+    pub fn describe(&self) -> String {
+        let mut s = format!("`{}`", self.declaration);
+        if let Some(k) = &self.key {
+            s.push_str(&format!(" key `{k}`"));
+        }
+        if self.inverted {
+            s.push_str(" (inverted: true there means false here)");
+        }
+        s
+    }
 }
 
 /// One example value and where it came from (`apple:<file>`,

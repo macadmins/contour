@@ -910,7 +910,8 @@ pub use path::{FieldPath, PathConflict};
 /// A field's dataset facets as JSON, only those it has: `examples` (each
 /// `{value, source}`, never a limit), `value_titles` (labels for
 /// `allowed_values`), `sensitive`, `keywords`, `group`, `note`,
-/// `documentation_url`, `app_introduced`. For search results an agent or a
+/// `documentation_url`, `app_introduced`, `ddm_equivalent` (the declaration
+/// and key Apple names in place of a profile key). For search results an agent or a
 /// page reads.
 pub fn facets_json(f: &FieldDefinition) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::json;
@@ -940,6 +941,9 @@ pub fn facets_json(f: &FieldDefinition) -> serde_json::Map<String, serde_json::V
         if let Some(v) = value {
             out.insert(name.into(), json!(v));
         }
+    }
+    if let Some(d) = &facets.ddm_equivalent {
+        out.insert("ddm_equivalent".into(), json!(d));
     }
     out
 }
