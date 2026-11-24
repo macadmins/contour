@@ -181,20 +181,48 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
                         existing.field_order.push(key);
                     }
                 }
-                existing.platforms = apple.platforms;
+                // The type is on every platform any of its documents is on.
+                let (a, b) = (&mut existing.platforms, &apple.platforms);
+                a.macos |= b.macos;
+                a.ios |= b.ios;
+                a.tvos |= b.tvos;
+                a.watchos |= b.watchos;
+                a.visionos |= b.visionos;
+                a.windows |= b.windows;
                 // Apple contributed these paths, so they — and only they —
                 // have a source that records availability.
                 existing.fields_recording_availability = apple.fields_recording_availability;
-                // The later variant's per-OS metadata replaces the
-                // earlier's.
-                existing.os_support = apple.os_support;
+                // Per platform, the earliest document decides when the type
+                // arrived (com.apple.MCX: 10.7, not Wi-Fi's 10.9). Last-wins
+                // left the type with whatever its last document said.
+                for (p, detail) in apple.os_support {
+                    match existing.os_support.get_mut(&p) {
+                        None => {
+                            existing.os_support.insert(p, detail);
+                        }
+                        Some(have) => {
+                            if let (Some(new), Some(old)) = (&detail.introduced, &have.introduced)
+                                && old != new
+                                && crate::version::at_least(old, new) == Some(true)
+                            {
+                                have.introduced = detail.introduced.clone();
+                            }
+                        }
+                    }
+                }
                 // The later variant's apply_mode wins when present;
                 // otherwise keep the value already on `existing`.
                 if apple.apply_mode.is_some() {
                     existing.apply_mode = apple.apply_mode;
                 }
-                if existing.min_versions.is_empty() {
-                    existing.min_versions = apple.min_versions;
+                for (p, v) in apple.min_versions {
+                    let earlier = existing
+                        .min_versions
+                        .get(&p)
+                        .is_none_or(|have| crate::version::at_least(have, &v) == Some(true));
+                    if earlier {
+                        existing.min_versions.insert(p, v);
+                    }
                 }
                 if !apple.description.is_empty() {
                     existing.description = apple.description;
@@ -902,6 +930,30 @@ mod tests {
         assert_eq!(required("TeamIdentifier"), Some(false));
         // And it is one field, not one per variant.
         assert_eq!(sso.field_order.iter().filter(|k| *k == "Realm").count(), 1);
+    }
+
+    /// A type Apple describes in several documents keeps their platforms and
+    /// OS data: every document's, the earliest version per platform. Keyed on
+    /// the type alone, the reader gave OS rows to the first document only and
+    /// the merge kept the last, so com.apple.MCX and com.apple.extensiblesso
+    /// named no platform and no target OS could gate them.
+    #[test]
+    fn a_multi_document_type_keeps_its_platforms_and_os_data() {
+        let manifests = load_embedded().expect("load embedded manifests");
+        let get = |t: &str| manifests.iter().find(|m| m.payload_type == t).unwrap();
+        let introduced = |m: &PayloadManifest, p: Platform| {
+            m.os_support.get(&p).and_then(|d| d.introduced.clone())
+        };
+
+        let mcx = get("com.apple.MCX");
+        assert_eq!(mcx.platforms.to_vec(), vec!["macOS"]);
+        assert_eq!(introduced(mcx, Platform::MacOS).as_deref(), Some("10.7"), "not Wi-Fi's 10.9");
+
+        let sso = get("com.apple.extensiblesso");
+        assert!(sso.platforms.macos && sso.platforms.ios && sso.platforms.visionos);
+        assert_eq!(introduced(sso, Platform::MacOS).as_deref(), Some("10.15"));
+        assert_eq!(introduced(sso, Platform::Ios).as_deref(), Some("13.0"));
+        assert_eq!(introduced(sso, Platform::VisionOS).as_deref(), Some("1.1"));
     }
 
     #[test]

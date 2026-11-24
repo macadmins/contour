@@ -113,8 +113,11 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
     // Group on (payload_type, variant); see the identity note below. Accumulate OS support and keys.
     let mut cap_map: indexmap::IndexMap<(String, Option<String>), Capability> =
         indexmap::IndexMap::new();
-    // Track which (payload_type, platform) combos we've already added OsSupport for
-    let mut seen_os: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    // Which (payload_type, variant, platform) already has its OsSupport. The
+    // variant belongs in it: keyed on the type alone, only the first of
+    // com.apple.MCX's six documents got OS rows and the rest got none.
+    let mut seen_os: std::collections::HashSet<(String, Option<String>, String)> =
+        std::collections::HashSet::new();
 
     for batch in reader {
         let batch = batch.context("Failed to read record batch")?;
@@ -288,7 +291,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                 });
 
             // Add OsSupport if not already seen for this (payload_type, platform)
-            let os_key = (pt.to_string(), platform_str.to_string());
+            let os_key = (pt.to_string(), variant.clone(), platform_str.to_string());
             if seen_os.insert(os_key) {
                 let parse_json_vec =
                     |col: &arrow::array::StringArray, row: usize| -> Option<Vec<String>> {
