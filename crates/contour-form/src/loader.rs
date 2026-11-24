@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 #[cfg(feature = "native")]
 use std::path::Path;
 
@@ -310,136 +309,7 @@ pub fn load_from_parquet(capabilities_bytes: &[u8]) -> Result<Vec<PayloadManifes
         }
     }
 
-    // Append supplemental preference domains used by mSCP but not yet in any upstream source.
-    manifests.extend(supplemental_prefs_manifests());
-
     Ok(manifests)
-}
-
-/// Preference domains commonly managed via profiles (mSCP, CIS benchmarks) but
-/// missing from the upstream ProfileManifests/ProfileCreator repo.
-fn supplemental_prefs_manifests() -> Vec<PayloadManifest> {
-    let make = |payload_type: &str, title: &str, desc: &str, keys: &[(&str, FieldType, &str)]| {
-        let mut fields = HashMap::new();
-        let mut field_order = Vec::new();
-        for (name, ft, fdesc) in keys {
-            // Flat: the name is the path.
-            field_order.push(name.to_string());
-            fields.insert(
-                name.to_string(),
-                FieldDefinition {
-                    name: name.to_string(),
-                    // Supplemental prefs are flat: the name is the path.
-                    path: name.to_string(),
-                    field_type: *ft,
-                    flags: FieldFlags::default(),
-                    title: name.to_string(),
-                    description: fdesc.to_string(),
-                    default: None,
-                    allowed_values: Vec::new(),
-                    range_min: None,
-                    range_max: None,
-                    subtype: None,
-                    format: None,
-                    asset_types: Vec::new(),
-                    allowed_scopes: std::collections::HashMap::new(),
-                    depth: 0,
-                    parent_key: None,
-                    platforms: vec![Platform::MacOS],
-                    min_version: None,
-                    deprecated_in: None,
-                    introduced_by_platform: HashMap::new(),
-                    deprecated_by_platform: HashMap::new(),
-                    removed_by_platform: HashMap::new(),
-                    combinetype: None,
-                    facets: mdm_schema::KeyFacets::default(),
-                },
-            );
-        }
-        PayloadManifest {
-            // Synthesized in code; nothing states provenance.
-            manifest_source: None,
-            // Synthesized from a preferences domain; nothing states
-            // availability.
-            fields_recording_availability: std::collections::BTreeSet::default(),
-            payload_type: payload_type.to_string(),
-            // A preference domain, as its category says. Left None, these
-            // were the only authorable schemas with no kind, and anything
-            // filtering by kind — `profile search --json`, an agent — skipped
-            // them.
-            kind: Some(mdm_schema::PayloadKind::ManagedPreference),
-            title: title.to_string(),
-            description: desc.to_string(),
-            platforms: Platforms {
-                macos: true,
-                ..Default::default()
-            },
-            min_versions: HashMap::new(),
-            os_support: HashMap::new(),
-            apply_mode: None,
-            category: "prefs".to_string(),
-            fields,
-            field_order,
-            segments: vec![],
-            variants: Vec::new(),
-        }
-    };
-
-    vec![
-        make(
-            "com.apple.Accessibility",
-            "Accessibility",
-            "Accessibility preference domain for macOS.",
-            &[
-                (
-                    "ReduceTransparencyEnabled",
-                    FieldType::Boolean,
-                    "Reduce transparency in the UI",
-                ),
-                (
-                    "IncreaseContrastEnabled",
-                    FieldType::Boolean,
-                    "Increase contrast in the UI",
-                ),
-                (
-                    "ReduceMotionEnabled",
-                    FieldType::Boolean,
-                    "Reduce motion effects",
-                ),
-                (
-                    "DifferentiateWithoutColor",
-                    FieldType::Boolean,
-                    "Differentiate without color",
-                ),
-                (
-                    "EnhancedBackgroundContrastEnabled",
-                    FieldType::Boolean,
-                    "Increase contrast between app content and the background",
-                ),
-                ("KeyRepeatEnabled", FieldType::Boolean, "Enable key repeat"),
-                (
-                    "KeyRepeatDelay",
-                    FieldType::Real,
-                    "Delay before key repeat starts",
-                ),
-                (
-                    "KeyRepeatInterval",
-                    FieldType::Real,
-                    "Interval between key repeats",
-                ),
-            ],
-        ),
-        make(
-            "com.apple.Terminal",
-            "Terminal",
-            "Terminal.app preference domain for macOS.",
-            &[(
-                "SecureKeyboardEntry",
-                FieldType::Boolean,
-                "Enable Secure Keyboard Entry to prevent other apps from intercepting keystrokes",
-            )],
-        ),
-    ]
 }
 
 /// [`map_platform`] over a map whose values are scope arrays.
@@ -686,6 +556,7 @@ fn capability_to_manifest(cap: &mdm_schema::Capability) -> PayloadManifest {
 
     PayloadManifest {
         manifest_source: cap.manifest_source.clone(),
+        ddm_equivalent: cap.ddm_equivalent.clone(),
         // Apple's schema states introduced/deprecated/removed; the
         // community manifests state nothing, and both arrive here as the
         // same nulls. Only the source tells them apart.
@@ -1115,11 +986,8 @@ mod tests {
 
         let has_apple = manifests.iter().any(|m| m.category == "apple");
         let has_apps = manifests.iter().any(|m| m.category == "apps");
-        let has_prefs = manifests.iter().any(|m| m.category == "prefs");
-
         assert!(has_apple, "Should have apple category manifests");
         assert!(has_apps, "Should have apps category manifests");
-        assert!(has_prefs, "Should have prefs category manifests");
     }
 
     // ========== Schema Format Tests ==========

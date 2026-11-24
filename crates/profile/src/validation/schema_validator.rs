@@ -1149,6 +1149,7 @@ mod tests {
         }
         PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: payload_type.to_string(),
             kind: None,
@@ -1539,6 +1540,7 @@ mod tests {
 
         PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.apple.configuration.passcode.settings".to_string(),
             kind: None,

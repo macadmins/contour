@@ -54,6 +54,7 @@ pub fn parse_plist_manifest(content: &[u8]) -> Result<PayloadManifest> {
 
     Ok(PayloadManifest {
         manifest_source: Some("profile-manifests".into()),
+        ddm_equivalent: None,
         // External schema: it does not state OS availability.
         fields_recording_availability: std::collections::BTreeSet::default(),
         kind: None,

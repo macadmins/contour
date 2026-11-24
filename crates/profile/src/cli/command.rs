@@ -20,6 +20,10 @@ struct MdmCommand {
     description: String,
     keys: Vec<MdmCommandKey>,
     platforms: Vec<String>,
+    /// "macOS 27.0, iOS 27.0": where Apple removed the command.
+    removed: Vec<String>,
+    /// What replaces it in declarative management.
+    ddm_equivalent: Option<mdm_schema::DdmEquivalent>,
 }
 
 /// A key within an MDM command.
@@ -66,6 +70,12 @@ fn load_commands() -> Result<Vec<MdmCommand>> {
                     description: cap.description.clone(),
                     keys: Vec::new(),
                     platforms,
+                    removed: cap
+                        .supported_os
+                        .iter()
+                        .filter_map(|os| os.removed.as_ref().map(|v| format!("{} {v}", os.platform.as_str())))
+                        .collect(),
+                    ddm_equivalent: cap.ddm_equivalent.clone(),
                 }
             });
 
@@ -273,6 +283,21 @@ pub fn handle_command_generate(
     })?;
 
     let cmd = &commands[idx];
+    // Apple removed the OS update commands in 27.0: the command is still
+    // written, for older devices, but the person is told where it went.
+    if !cmd.removed.is_empty() {
+        let instead = cmd
+            .ddm_equivalent
+            .as_ref()
+            .map(|d| format!("; in declarative management use {}", d.describe()))
+            .unwrap_or_default();
+        eprintln!(
+            "{} Apple removed {} at {}: devices on that version and later reject it{instead}",
+            "warning:".yellow(),
+            cmd.payload_type,
+            cmd.removed.join(", ")
+        );
+    }
 
     // Build the Command inner dict
     let mut command_dict = plist::Dictionary::new();

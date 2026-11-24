@@ -42,7 +42,9 @@ RETURN the versions, with `generated`.
 
 ## PROCEDURE update_product_keys(version)
 
-macOS only. `ScheduleOSUpdate` names an update by product key.
+macOS devices below 27.0 only. `ScheduleOSUpdate` names an update by
+product key, and Apple removed it, with the other OS update commands, in
+27.0: from 27.0 the declaration below is the only path.
 
 ```bash
 curl -sf https://sofafeed.macadmins.io/v2/summary.json | jq -r --arg v 27.2.1 '
@@ -59,17 +61,21 @@ curl -sf https://sofafeed.macadmins.io/v2/summary.json | jq -r --arg v 27.2.1 '
 ## Use the result
 
 ```bash
-# DDM, Apple's preferred path: enforce a version by a deadline
+# DDM, the only path from 27.0: enforce a version by a deadline
 contour profile ddm generate softwareupdate.enforcement.specific \
   --set TargetOSVersion=27.2.1 --set TargetLocalDateTime=2026-12-01T18:00:00 \
   --org com.acme -o enforce.json
 
-# MDM command: install a specific update by product key
+# Devices below 27.0 only: install a specific update by product key
 contour profile command generate ScheduleOSUpdate \
   --set 'Updates=[{"ProductKey":"MSU_UPDATE_26B131_patch_27.2.1_minor","InstallAction":"InstallASAP"}]' \
   -o update.plist
 ```
 
+- From 27.0, `com.apple.SoftwareUpdate` and `AvailableOSUpdates`,
+  `ScheduleOSUpdate`, `ScheduleOSUpdateScan`, `OSUpdateStatus` are gone: the
+  dataset's `ddm_equivalent` names each replacement (`contour profile info
+  <type> --json`). Status: subscribe to `softwareupdate.install-state`.
 - Leave `TargetBuildVersion` out unless the person names a build: one
   version has several builds and a wrong one never installs.
 - `--os-version <latest>` on `profile validate` / `form` checks keys against

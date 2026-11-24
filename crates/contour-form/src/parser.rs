@@ -119,6 +119,7 @@ fn parse_ddm_declaration_line(line: &str) -> Result<PayloadManifest> {
 
     Ok(PayloadManifest {
         manifest_source: None,
+        ddm_equivalent: None,
         // External schema: it does not state OS availability.
         fields_recording_availability: std::collections::BTreeSet::default(),
         kind: None,
@@ -224,6 +225,7 @@ fn parse_manifest_line(line: &str) -> Result<PayloadManifest> {
 
     Ok(PayloadManifest {
         manifest_source: None,
+        ddm_equivalent: None,
         // External schema: it does not state OS availability.
         fields_recording_availability: std::collections::BTreeSet::default(),
         kind: None,

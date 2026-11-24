@@ -245,6 +245,9 @@ pub struct FormNode {
     /// The declaration (and key) Apple names in place of this profile key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ddm_equivalent: Option<mdm_schema::DdmEquivalent>,
+    /// The key in the same payload Apple names in place of this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaced_by: Option<String>,
     /// The device reports it; a profile cannot set it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly: Option<bool>,
@@ -346,6 +349,10 @@ pub struct FormSpec {
     /// Raw per-platform scopes, where Apple stated them.
     pub scopes_by_platform: Option<BTreeMap<Platform, Vec<String>>>,
     pub nesting: Option<Nesting>,
+    /// Where this payload or command lives in declarative management, when
+    /// Apple names it (com.apple.SoftwareUpdate → softwareupdate.settings).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ddm_equivalent: Option<mdm_schema::DdmEquivalent>,
     pub nodes: Vec<FormNode>,
     pub envelope: Envelope,
 }

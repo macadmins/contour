@@ -651,6 +651,7 @@ fn emit_payload_info_json(
         "platforms": platforms,
         "os_filter": os.map(|p| p.as_str()),
         "os_support": os_support,
+        "ddm_equivalent": manifest.ddm_equivalent,
         "field_count": manifest.fields.len(),
         "fields_returned": fields.len(),
         "fields": fields,
@@ -1085,6 +1086,7 @@ mod os_support_tests {
     fn manifest() -> PayloadManifest {
         let mut m = PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.test.configuration.scopes".to_string(),
             kind: None,

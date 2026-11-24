@@ -945,6 +945,9 @@ pub fn facets_json(f: &FieldDefinition) -> serde_json::Map<String, serde_json::V
     if let Some(d) = &facets.ddm_equivalent {
         out.insert("ddm_equivalent".into(), json!(d));
     }
+    if let Some(k) = &facets.replaced_by {
+        out.insert("replaced_by".into(), json!(k));
+    }
     out
 }
 
@@ -1232,10 +1235,11 @@ mod tests {
 
     #[test]
     fn test_by_category_prefs() {
+        // "prefs" is for local custom schemas. The embedded data has none:
+        // its supplemental domains are posture's and file as "apple".
         let registry = SchemaRegistry::embedded().unwrap();
-
-        let prefs = registry.by_category("prefs");
-        assert!(!prefs.is_empty());
+        assert!(registry.by_category("prefs").is_empty());
+        assert!(registry.by_category("apple").iter().any(|m| m.payload_type == "com.apple.Terminal"));
     }
 
     #[test]

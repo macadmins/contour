@@ -385,6 +385,9 @@ pub struct KeyFacets {
     /// Where this profile key's setting lives in declarative management.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ddm_equivalent: Option<DdmEquivalent>,
+    /// The key in the same payload Apple names in place of this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_by: Option<String>,
 }
 
 /// The declaration (and key in it) Apple names in place of a profile key
@@ -400,12 +403,19 @@ pub struct DdmEquivalent {
     pub inverted: bool,
     /// How `key` was found: `apple`, `name` or `annotation:<source>`.
     pub key_from: Option<String>,
+    /// `declaration` is a status item to subscribe to, not a configuration.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub status_item: bool,
 }
 
 impl DdmEquivalent {
     /// One line for a person or an agent: "`D` key `K` (inverted)".
     pub fn describe(&self) -> String {
-        let mut s = format!("`{}`", self.declaration);
+        let mut s = if self.status_item {
+            format!("the `{}` status item", self.declaration)
+        } else {
+            format!("`{}`", self.declaration)
+        };
         if let Some(k) = &self.key {
             s.push_str(&format!(" key `{k}`"));
         }
@@ -517,6 +527,9 @@ pub struct Capability {
     pub csp_name: Option<String>,
     /// Upstream manifest source identifier.
     pub manifest_source: Option<String>,
+    /// Where this payload or command lives in declarative management.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ddm_equivalent: Option<DdmEquivalent>,
 }
 
 impl Capability {

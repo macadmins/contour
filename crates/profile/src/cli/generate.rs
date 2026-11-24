@@ -2484,6 +2484,7 @@ mod tests {
     fn full_manifest(fields: Vec<FieldDefinition>) -> crate::schema::PayloadManifest {
         crate::schema::PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.example.full".to_string(),
             kind: None,
@@ -2611,6 +2612,7 @@ mod tests {
         );
         let manifest = PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.apple.applicationaccess".to_string(),
             kind: None,
@@ -2654,6 +2656,7 @@ mod tests {
         // dicts. Nesting is `extra_fields`' job, applied by the caller.
         let manifest = PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.apple.loginwindow".to_string(),
             kind: None,

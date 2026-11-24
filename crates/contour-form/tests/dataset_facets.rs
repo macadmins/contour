@@ -170,3 +170,52 @@ fn a_deprecated_key_names_its_declaration_key() {
         "{msg:?}"
     );
 }
+
+/// Software update is DDM only from 27.0: the removed payload names its
+/// declaration, its keys the key there, and validation says so.
+#[test]
+fn software_update_points_to_declarative_management() {
+    let r = reg();
+    let target = Target {
+        platform: Some(contour_form::Platform::MacOS),
+        os_version: Some("27.0".into()),
+    };
+    let spec = form(&r, "com.apple.SoftwareUpdate", &target).unwrap();
+    let d = spec.ddm_equivalent.as_ref().expect("payload names its declaration");
+    assert_eq!(d.declaration, "com.apple.configuration.softwareupdate.settings");
+    let key = node(&spec.nodes, "AutomaticDownload").ddm_equivalent.as_ref().unwrap();
+    assert_eq!(key.key.as_deref(), Some("AutomaticActions.Download"));
+
+    let values = serde_json::json!({ "AutomaticDownload": false });
+    let msg: Vec<String> = contour_form::validate_target(&r, "com.apple.SoftwareUpdate", &values, &target)
+        .into_iter()
+        .filter(|d| d.rule == "payload-removed-on-target")
+        .map(|d| d.message)
+        .collect();
+    assert!(
+        msg.iter().any(|m| m.contains("com.apple.configuration.softwareupdate.settings")),
+        "{msg:?}"
+    );
+}
+
+/// A renamed key names its replacement in the same payload.
+#[test]
+fn a_renamed_key_names_its_replacement() {
+    let r = reg();
+    let spec = form(&r, "com.apple.familycontrols.contentfilter", &Target::default()).unwrap();
+    assert_eq!(
+        node(&spec.nodes, "whitelistEnabled").replaced_by.as_deref(),
+        Some("allowListEnabled")
+    );
+}
+
+/// Supplemental domains come from the dataset alone: Terminal is there, and
+/// Accessibility is posture's (the mSCP key), not a copy kept in code.
+#[test]
+fn supplemental_domains_come_from_the_dataset() {
+    let r = reg();
+    let terminal = form(&r, "com.apple.Terminal", &Target::default()).unwrap();
+    node(&terminal.nodes, "SecureKeyboardEntry");
+    let a11y = form(&r, "com.apple.Accessibility", &Target::default()).unwrap();
+    node(&a11y.nodes, "AXSAudioDonationSiriImprovementEnabled");
+}

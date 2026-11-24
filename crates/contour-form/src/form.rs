@@ -214,6 +214,7 @@ pub fn form_with(
         scopes_by_platform: (!scopes_by_platform.is_empty()).then_some(scopes_by_platform),
         nesting: default_nesting(kind),
         nodes,
+        ddm_equivalent: m.ddm_equivalent.clone(),
         envelope,
     })
 }
@@ -377,6 +378,7 @@ fn node(
         documentation_url: f.facets.documentation_url.clone(),
         app_introduced: f.facets.app_introduced.clone(),
         ddm_equivalent: f.facets.ddm_equivalent.clone(),
+        replaced_by: f.facets.replaced_by.clone(),
         readonly: f.flags.read_only.then_some(true),
         range: (f.range_min.is_some() || f.range_max.is_some()).then_some(Range {
             min: f.range_min,
@@ -477,6 +479,7 @@ fn resolve_control(
                     documentation_url: None,
                     app_introduced: None,
                     ddm_equivalent: None,
+                    replaced_by: None,
                     readonly: None,
                 })),
             };

@@ -185,6 +185,7 @@ pub fn parse_yaml_manifest(content: &str) -> Result<PayloadManifest> {
 
     Ok(PayloadManifest {
         manifest_source: Some("device-management".into()),
+        ddm_equivalent: None,
         // External schema: it does not state OS availability.
         fields_recording_availability: std::collections::BTreeSet::default(),
         kind: None,
@@ -319,6 +320,7 @@ fn parse_yaml_manifest_simplified(content: &str) -> Result<PayloadManifest> {
 
     Ok(PayloadManifest {
         manifest_source: Some("device-management".into()),
+        ddm_equivalent: None,
         // External schema: it does not state OS availability.
         fields_recording_availability: std::collections::BTreeSet::default(),
         kind: None,

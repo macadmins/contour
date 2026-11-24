@@ -4411,6 +4411,7 @@ mod enum_validation_tests {
 
         SchemaRegistry::from_manifests_for_test(vec![PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.test.configuration.enumcheck".to_string(),
             kind: None,
@@ -4588,6 +4589,7 @@ mod scaffold_value_tests {
         };
         let manifest = crate::schema::PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.test.configuration.scaffold".to_string(),
             kind: None,

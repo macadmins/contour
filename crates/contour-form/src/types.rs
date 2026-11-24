@@ -22,6 +22,11 @@ pub struct PayloadManifest {
     /// `None` for manifests built from a local directory, which state no
     /// provenance.
     pub manifest_source: Option<String>,
+    /// Where this payload or command lives in declarative management when
+    /// Apple names it (`ddm_equivalent`): com.apple.SoftwareUpdate and the OS
+    /// update commands, removed in 27.0, point to their declaration or
+    /// status item.
+    pub ddm_equivalent: Option<mdm_schema::DdmEquivalent>,
     /// The payload type identifier (e.g., "com.apple.wifi.managed")
     pub payload_type: String,
     /// What this schema describes: a profile payload, a DDM declaration, an
@@ -852,6 +857,7 @@ mod tests {
         );
         let m = PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             payload_type: "x".to_string(),
             kind: None,
             title: "x".to_string(),
@@ -992,6 +998,7 @@ mod tests {
 
         PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             payload_type: "com.apple.wifi.managed".to_string(),
             kind: None,
             title: "WiFi".to_string(),

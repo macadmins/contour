@@ -508,6 +508,7 @@ mod kind_filter_tests {
     fn manifest(kind: Option<K>) -> PayloadManifest {
         PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "X".into(),
             kind,

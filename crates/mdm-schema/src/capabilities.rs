@@ -212,6 +212,9 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
         let f_app_introduced = text("key_app_introduced");
         // v2026.11.18-1 on.
         let f_ddm = text("key_ddm_equivalent");
+        // v2026.11.24-1 on.
+        let f_replaced = text("key_replaced_by");
+        let f_payload_ddm = text("ddm_equivalent");
         let f_sensitive = batch.column_by_name("key_sensitive").map(|c| c.as_boolean());
 
         for row in 0..num_rows {
@@ -287,6 +290,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                             Some(col) if !col.is_null(row) => Some(col.value(row).to_string()),
                             _ => None,
                         },
+                        ddm_equivalent: json_at(f_payload_ddm, row),
                     }
                 });
 
@@ -600,6 +604,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Capability>> {
                         documentation_url: get(f_doc_url),
                         app_introduced: get(f_app_introduced),
                         ddm_equivalent: json_at(f_ddm, row),
+                        replaced_by: get(f_replaced),
                     }
                 },
             });

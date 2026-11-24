@@ -513,6 +513,7 @@ mod tests {
         );
         let manifest = PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: payload_type.to_string(),
             kind: None,
@@ -556,6 +557,7 @@ mod tests {
         );
         let manifest = PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: payload_type.to_string(),
             kind: None,
@@ -602,6 +604,7 @@ mod tests {
         );
         let schema = SchemaRegistry::from_manifests_for_test(vec![PayloadManifest {
             manifest_source: None,
+            ddm_equivalent: None,
             fields_recording_availability: std::collections::BTreeSet::default(),
             payload_type: "com.apple.SoftwareUpdate".to_string(),
             kind: None,

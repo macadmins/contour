@@ -164,9 +164,10 @@ pub fn validate_target(
                     "payload-removed-on-target",
                     format!(
                         "'{}' was removed from {} at {gone}; on {os} the device ignores the whole \
-                         payload",
+                         payload{}",
                         m.payload_type,
-                        p.as_str()
+                        p.as_str(),
+                        payload_instead(m)
                     ),
                 ));
                 return out;
@@ -177,9 +178,10 @@ pub fn validate_target(
                 "payload-removed",
                 format!(
                     "'{}' was removed from {} at {gone} — on that version and later the device \
-                     ignores it. Pass --os-version to check your target",
+                     ignores it{}. Pass --os-version to check your target",
                     m.payload_type,
-                    p.as_str()
+                    p.as_str(),
+                    payload_instead(m)
                 ),
             )),
         }
@@ -249,15 +251,28 @@ fn matching_variant<'a>(
     })
 }
 
+/// Where the payload went: its declaration or status item, from the dataset.
+fn payload_instead(m: &PayloadManifest) -> String {
+    m.ddm_equivalent
+        .as_ref()
+        .map(|d| format!("; declarative management is the only path from then on: use {}", d.describe()))
+        .unwrap_or_default()
+}
+
 /// Where the setting went: the dataset's DDM equivalent (declaration and
-/// key), else Apple's "Removed: …" sentence. Empty when neither says.
+/// key), else the key Apple names in this payload, else Apple's "Removed: …"
+/// sentence. When none says, that Apple names no replacement: the key is
+/// dropped, not migrated.
 fn instead(f: &FieldDefinition) -> String {
     if let Some(d) = &f.facets.ddm_equivalent {
-        return format!("; in declarative management use {}", d.describe());
+        let note = f.facets.note.as_deref().map(|n| format!(" ({n})")).unwrap_or_default();
+        return format!("; in declarative management use {}{note}", d.describe());
+    }
+    if let Some(k) = &f.facets.replaced_by {
+        return format!("; use `{k}` in this payload instead");
     }
     replacement_hint(&f.description)
-        .map(|r| format!(". Apple says: {r}"))
-        .unwrap_or_default()
+        .map_or_else(|| "; Apple names no replacement".to_string(), |r| format!(". Apple says: {r}"))
 }
 
 /// Apple's replacement, where the schema names one.
