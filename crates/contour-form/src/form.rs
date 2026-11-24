@@ -1131,19 +1131,22 @@ mod tests {
 
         // The dataset states a handful of domains itself, and labels them as
         // its own rather than borrowing another source's name.
-        let okta = form(&r, "com.okta.mobile", &Target::default()).unwrap();
-        assert_eq!(okta.source.dataset, "posture-supplemental");
+        let siri = form(&r, "com.apple.assistant.support", &Target::default()).unwrap();
+        assert_eq!(siri.source.dataset, "posture-supplemental");
         assert_eq!(
-            okta.source.upstream_ref, None,
+            siri.source.upstream_ref, None,
             "the dataset states these itself; there is no upstream to name"
         );
+        // App domains are App Schema documents curated from what deploys them.
+        let okta = form(&r, "com.okta.mobile", &Target::default()).unwrap();
+        assert_eq!(okta.source.dataset, "app-schema");
     }
 
     #[test]
     fn preference_domain_defaults_to_mcx() {
         // A preference domain the dataset states itself.
         let r = reg();
-        let spec = form(&r, "com.okta.mobile", &Target::default()).unwrap();
+        let spec = form(&r, "com.apple.assistant.support", &Target::default()).unwrap();
         assert_eq!(spec.kind, Kind::ManagedPreference);
         assert_eq!(spec.nesting, Some(Nesting::McxWrapped));
         assert_eq!(spec.source.dataset, "posture-supplemental");

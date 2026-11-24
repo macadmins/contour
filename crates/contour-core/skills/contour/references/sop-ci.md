@@ -89,7 +89,7 @@ For pinned versions (recommended in production CI):
 ```yaml
 - name: Install contour (pinned)
   env:
-    CONTOUR_VERSION: 0.5.1-beta.1
+    CONTOUR_VERSION: 0.5.1-beta.2
   run: |
     curl -fsSL -o contour.pkg \
       "https://github.com/macadmins/contour/releases/download/v${CONTOUR_VERSION}/contour-${CONTOUR_VERSION}.pkg"
